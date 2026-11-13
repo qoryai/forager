@@ -599,10 +599,12 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// Behind a wall, a runtime with resume gets the session's transcript directory,
 	// transcripts/<n>/ in the run directory, which the wall binds writable at
 	// resume.prefix inside: the session reads the transcript, and writes a restored one,
-	// there. It lies outside every place the enclosure binds.
-	var transcriptDir, transcriptUnder string
+	// there. It lies outside every place the enclosure binds. An absolute resume.prefix
+	// inside a writable mount's place is read in that mount, with no bind, and one inside
+	// a read-only mount's gets no transcript.
+	var transcriptAt transcriptRoot
 	if spec.Wall != nil {
-		if transcriptDir, transcriptUnder, err = makeTranscriptDir(rt, dir, n, spec.Dir, slices.Concat(plan.sources, r.wallOwn, r.setupBinds)); err != nil {
+		if transcriptAt, err = makeTranscriptDir(rt, dir, n, spec.Dir, slices.Concat(plan.sources, r.wallOwn, r.setupBinds), shown.Mounts); err != nil {
 			return fail(err)
 		}
 	}
@@ -651,7 +653,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// the paused run in the run answer's resume: the launch writes its transcript under
 	// the runtime's home and resumes it. A failure starts the runtime without a resume,
 	// with resumeLine on stderr once the session started.
-	prepared, resumeLine, restore := r.resumeLaunch(runCtx, rt, sessionDir, spec.Wall != nil, transcriptDir, inside, prepared)
+	prepared, resumeLine, restore := r.resumeLaunch(runCtx, rt, sessionDir, spec.Wall != nil, transcriptAt, inside, prepared)
 	// The session's setup commands run inside, after the runtime's preparation, and then
 	// start the launch as the runtime prepared it.
 	if prepared, err = withSetup(sessionDir, spec.SetupRunner, insideSetup(spec.SessionSpec.Setup, inside), prepared); err != nil {
@@ -734,6 +736,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	r.write(event.SessionStarted, r.sessionStarted(spec, rt, n, prepared, shown, neutral, interactive, cols, rows))
 	if resumeLine != "" {
 		r.writeLog("stderr", n, 0, []byte(neutral(resumeLine)+"\n"))
+	}
+	// A resume.prefix inside a read-only mount gets no transcript: one line, as for a
+	// transcript directory the wall does not bind.
+	if u := transcriptAt.unbound; u != nil {
+		r.writeLog("stderr", n, 0, []byte(neutral(noResume(u.Fix, u.Cause))+"\n"))
 	}
 	if r.remote != nil {
 		r.open.Report(r.launchLine(spec, n, prepared))
@@ -880,13 +887,13 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// does not, the session binds no directory, takes off the resume arguments it added,
 	// sends no transcript and writes one line, and with a restored transcript a second
 	// one: the runtime starts without a resume.
-	if checker, ok := enclosure.(wall.TranscriptChecker); ok && transcriptDir != "" {
-		unbound, err := checker.CheckTranscript(runCtx, wrapEnv, wall.Transcript{Path: transcriptDir, Under: transcriptUnder})
+	if checker, ok := enclosure.(wall.TranscriptChecker); ok && transcriptAt.bind != "" {
+		unbound, err := checker.CheckTranscript(runCtx, wrapEnv, transcriptAt.wallTranscript())
 		if err != nil {
 			return fail(accesskey.ShownError(err))
 		}
 		if unbound != nil {
-			transcriptDir, transcriptUnder = "", ""
+			transcriptAt = transcriptRoot{}
 			if restore != nil {
 				added := insideAll(restore.args, inside)
 				end := len(prepared.Args) - restore.after
@@ -935,7 +942,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		if err := samePlan(plan, again); err != nil {
 			return fail(err)
 		}
-		binds, err := wallBinds(enclosure, sock.Path(), r.authority, wall.Transcript{Path: transcriptDir, Under: transcriptUnder})
+		binds, err := wallBinds(enclosure, sock.Path(), r.authority, transcriptAt.wallTranscript())
 		if err != nil {
 			return fail(err)
 		}
@@ -950,7 +957,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			CA:    r.authority,
 			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: shown.Mounts, Limits: spec.Limits,
 			ProxyToken: r.relayToken,
-			Transcript: wall.Transcript{Path: transcriptDir, Under: transcriptUnder},
+			Transcript: transcriptAt.wallTranscript(),
 		})
 		if err != nil {
 			return fail(accesskey.ShownError(err))
@@ -983,7 +990,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if spec.Wall != nil {
 		trDir = shown.Dir
 	}
-	tr = r.sessionTranscript(rt, n, spec.Wall != nil, transcriptDir, launch.Env, trDir, masker, hidden, restore)
+	tr = r.sessionTranscript(rt, n, spec.Wall != nil, transcriptAt, launch.Env, trDir, masker, hidden, restore)
 	// The transcript's reads end before the join returns, on every path: the end of
 	// the runtime below, and a panic in between.
 	endTranscript := func() {}

@@ -335,10 +335,18 @@ type SessionSpec struct {
 	// starts it as SetupRunner, then the command's number from 1, then --, then the
 	// command's Args. Setup needs it; without Setup it is not used.
 	SetupRunner []string
-	// Mounts are what the enclosure shows of this machine, each at its path: the
-	// checkout around Dir, a composed home outside it. A mount, or Dir, inside another
-	// one of the same mode is reached through the outer one, which alone is bound; one of
-	// the other mode is a refused join, mount_mode_conflict. One whose path goes through a
+	// Mounts are what the enclosure shows of this machine, each at its path, or at its
+	// Target: the checkout around Dir, a composed home outside it. A mount, or Dir,
+	// inside another one of the same mode, by their paths on this machine, is reached
+	// through the outer one, which alone is bound; one of the other mode is a refused
+	// join, mount_mode_conflict. A mount with a Target, absolute, clean, apart from
+	// /qory and with no comma, double quote or newline, is bound by itself, and its path
+	// on this machine overlaps no other place's: mount_mode_conflict for the other mode,
+	// else mount_target_conflict. Inside, a read-only place may lie inside a writable
+	// one, such as a read-only file at /var/lib/agent-home/hooks.json in a writable
+	// directory at /var/lib/agent-home; a writable one inside a read-only one is
+	// mount_mode_conflict, and two at one place, or a Target that overlaps Dir or the
+	// session's directory, mount_target_conflict. One whose path goes through a
 	// link inside a writable one, and that does not resolve into it, is a refused join,
 	// whatever its mode, mount_through_link. Dir is writable, or read-only with
 	// WorkspaceReadOnly, and is bound at its path when no mount contains it. The session adds the session's directory in the run

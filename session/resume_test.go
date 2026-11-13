@@ -513,3 +513,188 @@ func TestAnUnwalledResumeChecksThePathAgainstThePattern(t *testing.T) {
 		t.Error("the transcript was restored")
 	}
 }
+
+// absoluteResumer is a runtime with resume whose transcript lies under the absolute
+// prefix, a home at a fixed place, at <prefix><session id>.jsonl; a line
+// {"type":"start",...} of its output is its dev.qory.runtime.started. Its program,
+// absoluteResumerScript, writes the transcript below $PREFIX, the prefix's directory on
+// this machine.
+func absoluteResumer(t *testing.T, prefix string) runtimes.Runtime {
+	t.Helper()
+	d := "version: 1\nruntime: resumer\nruntime_version: \"1\"\nsources:\n  output: {format: jsonl}\n" +
+		"resume:\n  path: " + prefix + "{session_id}.jsonl\n  prefix: " + prefix + "\n  args: [--resume, \"{session_id}\"]\n" +
+		"rules:\n  - source: output\n    match: {type: start}\n    type: dev.qory.runtime.started\n    data: {session_id: session_id, source: source}\n"
+	rt, err := runtimes.Described("resumer.yaml", []byte(d), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rt
+}
+
+// absoluteResumerScript prints the transcript it finds below $PREFIX and its arguments,
+// then its start, then appends two lines to its transcript.
+const absoluteResumerScript = `f="$PREFIX/0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e.jsonl"
+mkdir -p "${f%/*}"
+[ -f "$f" ] && echo "restored: $(cat "$f")"
+echo "args: $*"
+echo '{"type":"start","session_id":"0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e","source":"resume"}'
+echo '{"line":1}' >> "$f"
+sleep 0.3
+echo '{"line":2}' >> "$f"
+`
+
+// absoluteResumerSpec is a session of the absolute resumer with prefix, whose
+// transcript lies below dir on this machine, on the fake local link; the run answer's
+// resume restores "ok\n" at the prefix.
+func absoluteResumerSpec(t *testing.T, prefix, dir string) runSpec {
+	t.Helper()
+	sp, g := specGateway(t)
+	sp.Runtime, sp.Forwarder = absoluteResumer(t, prefix), nil
+	sp.Command, sp.Args = "/bin/sh", []string{"-c", absoluteResumerScript, "sh"}
+	sp.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "PREFIX=" + dir}
+	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+		a := linktest.RunAnswer(req)
+		a["resume"] = map[string]any{"run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", "session_id": "0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e", "path": prefix + "0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e.jsonl"}
+		return linktest.Reply{Status: 200, Body: a}
+	})
+	g.OnTranscript(func(string) linktest.Reply { return linktest.Reply{Status: 200, Body: []byte("ok\n")} })
+	session.SetTranscriptPoll(&sp.SessionSpec, 50*time.Millisecond)
+	return sp
+}
+
+// sentTranscript is the transcript a run sent, its chunks joined, each of the path.
+func sentTranscript(t *testing.T, evs []map[string]any, path string) string {
+	t.Helper()
+	var file []byte
+	for _, c := range ofType(evs, event.SessionTranscript) {
+		d := data(c)
+		if d["path"] != path || d["offset"] != float64(len(file)) {
+			t.Fatalf("chunk %v after %d bytes; want the path %s", d, len(file), path)
+		}
+		b, _ := base64.StdEncoding.DecodeString(d["bytes"].(string))
+		file = append(file, b...)
+	}
+	return string(file)
+}
+
+// TestARunWithAnAbsolutePrefixRestoresAndSendsItsTranscript pins a run with no wall
+// whose runtime's resume.prefix is absolute: the resume script writes the transcript at
+// its absolute path, whatever HOME is, the runtime resumes from it, and the session
+// sends the file under that path, which starts with /.
+func TestARunWithAnAbsolutePrefixRestoresAndSendsItsTranscript(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "agent-home", "sessions")
+	prefix := dir + "/"
+	sp := absoluteResumerSpec(t, prefix, dir)
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := events(t, res)
+	if out := runLogText(t, evs); !strings.Contains(out, "restored: ok\n") || !strings.Contains(out, "args: --resume 0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e\n") {
+		t.Errorf("the runtime's output %q", out)
+	}
+	if got, want := sentTranscript(t, evs, prefix+"0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e.jsonl"), "ok\n{\"line\":1}\n{\"line\":2}\n"; got != want {
+		t.Errorf("the transcript %q; want %q", got, want)
+	}
+}
+
+// TestAWalledAbsolutePrefixIsReadInItsWritableMount pins a walled run whose runtime's
+// resume.prefix is absolute and lies inside a writable mount's Target: the session
+// makes no transcript directory and the wall binds none; the session writes the restored
+// transcript in the mount on this machine, the runtime resumes from it, and the session
+// reads it there and sends it under its path inside.
+func TestAWalledAbsolutePrefixIsReadInItsWritableMount(t *testing.T) {
+	t.Setenv("QORY_TEST_HOST_ONLY", "1")
+	home := t.TempDir()
+	prefix := homeInside + "/sessions/"
+	sp := absoluteResumerSpec(t, prefix, filepath.Join(home, "sessions"))
+	w := &openWall{}
+	sp.Wall, sp.Image = w, "example.com/agent:1"
+	sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: home, Target: homeInside}}
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := events(t, res)
+	if out := runLogText(t, evs); !strings.Contains(out, "restored: ok\n") || !strings.Contains(out, "args: --resume 0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e\n") || strings.Contains(out, "without a resume") {
+		t.Errorf("the runtime's output %q", out)
+	}
+	if w.got.Transcript != (wall.Transcript{}) {
+		t.Errorf("the launch's transcript directory %+v; want none", w.got.Transcript)
+	}
+	if _, err := os.Stat(filepath.Join(res.Dir, "transcripts")); err == nil {
+		t.Error("the session made a transcript directory")
+	}
+	if got, want := sentTranscript(t, evs, prefix+"0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e.jsonl"), "ok\n{\"line\":1}\n{\"line\":2}\n"; got != want {
+		t.Errorf("the transcript %q; want %q", got, want)
+	}
+}
+
+// TestAWalledAbsolutePrefixInAReadOnlyMountGetsNoTranscript pins a walled run whose
+// runtime's absolute resume.prefix lies inside a read-only mount's Target: the runtime
+// starts without the resume arguments, the session restores nothing and sends no
+// transcript, and writes the line of a failed resume, then the line of no transcript.
+func TestAWalledAbsolutePrefixInAReadOnlyMountGetsNoTranscript(t *testing.T) {
+	t.Setenv("QORY_TEST_HOST_ONLY", "1")
+	home := t.TempDir()
+	prefix := homeInside + "/sessions/"
+	sp := absoluteResumerSpec(t, prefix, filepath.Join(t.TempDir(), "sessions"))
+	w := &openWall{}
+	sp.Wall, sp.Image = w, "example.com/agent:1"
+	sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: home, ReadOnly: true, Target: homeInside}}
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := events(t, res)
+	out := runLogText(t, evs)
+	fix := "Show resume.prefix in a writable mount, or use a descriptor whose resume.prefix lies outside read-only mounts"
+	cause := "resume.prefix " + prefix + " lies inside the mount " + home + ", shown at " + homeInside + ", read-only, so the runtime cannot write its transcript there"
+	failed := fix + ". The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: " + cause + "\n"
+	none := fix + ". A continuation of this run starts the runtime without a resume: " + cause + "\n"
+	if i, j := strings.Index(out, failed), strings.Index(out, none); i < 0 || j < i || !strings.Contains(out, "args: \n") || strings.Contains(out, "restored: ok") {
+		t.Errorf("the runtime's output %q\nwant %q, then %q", out, failed, none)
+	}
+	if n := len(ofType(evs, event.SessionTranscript)); n != 0 || w.got.Transcript != (wall.Transcript{}) {
+		t.Errorf("%d transcript chunks, the launch's transcript directory %+v; want none", n, w.got.Transcript)
+	}
+	if entries, _ := os.ReadDir(home); len(entries) != 0 {
+		t.Errorf("the read-only mount holds %v", entries)
+	}
+}
+
+// TestAWalledAbsolutePrefixOutsideEveryMountIsBound pins a walled run whose runtime's
+// absolute resume.prefix lies in no mount's place: the session makes its transcript
+// directory, writes the restored transcript there, and the wall binds it at the prefix;
+// and a mount whose place lies inside the prefix fails the session.
+func TestAWalledAbsolutePrefixOutsideEveryMountIsBound(t *testing.T) {
+	t.Setenv("QORY_TEST_HOST_ONLY", "1")
+	prefix := homeInside + "/sessions/"
+	sp := absoluteResumerSpec(t, prefix, filepath.Join(t.TempDir(), "sessions"))
+	w := &openWall{}
+	sp.Wall, sp.Image, sp.Mounts = w, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(res.Dir, "transcripts", "1")
+	if w.got.Transcript != (wall.Transcript{Path: dir, Under: homeInside + "/sessions"}) {
+		t.Errorf("the launch's transcript directory %+v; want %s at %s/sessions", w.got.Transcript, dir, homeInside)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e.jsonl")); err != nil || string(b) != "ok\n" {
+		t.Errorf("the restored transcript %q, %v", b, err)
+	}
+
+	sp = absoluteResumerSpec(t, prefix, filepath.Join(t.TempDir(), "sessions"))
+	w = &openWall{}
+	inner := t.TempDir()
+	sp.Wall, sp.Image = w, "example.com/agent:1"
+	sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: inner, Target: homeInside + "/sessions/2026"}}
+	err = runErr(sp)
+	if want := "Show the mount " + inner + " outside resume.prefix " + prefix + ", or at a place that contains it"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("a mount inside the prefix: %v; want %q", err, want)
+	}
+	if w.wrapped {
+		t.Error("the wall was wrapped")
+	}
+}

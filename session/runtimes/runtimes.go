@@ -266,7 +266,7 @@ type Resumes interface {
 // other than / inside one path name; Prefix, the directory the transcript must lie
 // under; Args, the arguments the session adds when it resumes, with {session_id}; and
 // After, optional, the argument Args follow, at the end when it is empty. Each path
-// starts with ~/, the runtime's home.
+// starts with ~/, the runtime's home, or with /, an absolute path.
 type Resume = descriptor.Resume
 
 // Parents is implemented by a runtime that reports which tool call started a subagent.

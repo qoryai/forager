@@ -93,21 +93,28 @@ func TestALaunchWithNoTranscriptDirectoryBindsNone(t *testing.T) {
 
 // TestATranscriptDirectoryThatOverlapsAMountIsRefused pins the refusals: a directory
 // that lies inside a mount, contains one or is not clean, a place below the home with a ..
-// name or that is absolute, and a home where the place inside overlaps a mount's place
-// inside or /qory.
+// name, an absolute place that is /, is not clean or overlaps a mount's place inside or
+// /qory, and a home where the place inside overlaps a mount's place inside or /qory.
 func TestATranscriptDirectoryThatOverlapsAMountIsRefused(t *testing.T) {
-	for name, change := range map[string]func(*Launch){
-		"inside the workspace":     func(l *Launch) { l.Transcript.Path = "/work/.claude" },
-		"contains a mount":         func(l *Launch) { l.Transcript.Path = "/home/dev" },
-		"the socket's directory":   func(l *Launch) { l.Transcript.Path = "/tmp/qory-run-1" },
-		"not clean":                func(l *Launch) { l.Transcript.Path = "/runs/x/../work" },
-		"relative":                 func(l *Launch) { l.Transcript.Path = "runs/x" },
-		"a .. name below home":     func(l *Launch) { l.Transcript.Under = "../.ssh" },
-		"absolute below home":      func(l *Launch) { l.Transcript.Under = "/etc" },
-		"a home in a mount":        func(l *Launch) { l.Env = append(l.Env, "HOME=/work") },
-		"a home that contains one": func(l *Launch) { l.Env = append(l.Env, "HOME=/"); l.Transcript.Under = "work" },
-		"a home under /qory":       func(l *Launch) { l.Env = append(l.Env, "HOME=/qory") },
-		"a relative home":          func(l *Launch) { l.Env = append(l.Env, "HOME=home") },
+	for name, c := range map[string]struct {
+		change func(*Launch)
+		want   string
+	}{
+		"inside the workspace":     {func(l *Launch) { l.Transcript.Path = "/work/.claude" }, `wall docker: the transcript directory "/work/.claude" overlaps the mount "/work"; the session makes it outside every mount`},
+		"contains a mount":         {func(l *Launch) { l.Transcript.Path = "/home/dev" }, `wall docker: the transcript directory "/home/dev" overlaps the mount "/home/dev/.qory/homes/work"; the session makes it outside every mount`},
+		"the socket's directory":   {func(l *Launch) { l.Transcript.Path = "/tmp/qory-run-1" }, `wall docker: the transcript directory "/tmp/qory-run-1" overlaps the mount "/tmp/qory-run-1"; the session makes it outside every mount`},
+		"not clean":                {func(l *Launch) { l.Transcript.Path = "/runs/x/../work" }, `wall docker: the transcript directory "/runs/x/../work" is not an absolute, clean path`},
+		"relative":                 {func(l *Launch) { l.Transcript.Path = "runs/x" }, `wall docker: the transcript directory "runs/x" is not an absolute, clean path`},
+		"a .. name below home":     {func(l *Launch) { l.Transcript.Under = "../.ssh" }, `wall docker: set the transcript's place to a clean path below the home or below /: "../.ssh" is not one`},
+		"the root":                 {func(l *Launch) { l.Transcript.Under = "/" }, `wall docker: set the transcript's place to a clean path below the home or below /: "/" is not one`},
+		"absolute, not clean":      {func(l *Launch) { l.Transcript.Under = "/var/../etc" }, `wall docker: set the transcript's place to a clean path below the home or below /: "/var/../etc" is not one`},
+		"absolute, in a mount":     {func(l *Launch) { l.Transcript.Under = "/work/.sessions" }, `wall docker: show no mount at, around or inside "/work/.sessions": the transcript directory is bound there, and it overlaps "/work"`},
+		"absolute, around a mount": {func(l *Launch) { l.Transcript.Under = "/home/dev/.qory" }, `wall docker: show no mount at, around or inside "/home/dev/.qory": the transcript directory is bound there, and it overlaps "/home/dev/.qory/homes/work"`},
+		"absolute, under /qory":    {func(l *Launch) { l.Transcript.Under = "/qory/sessions" }, `wall docker: show no mount at, around or inside "/qory/sessions": the transcript directory is bound there, and it overlaps "/qory"`},
+		"a home in a mount":        {func(l *Launch) { l.Env = append(l.Env, "HOME=/work") }, `wall docker: set HOME to a directory where "/work/.claude/projects" overlaps no mount: the transcript directory is bound there, and it overlaps "/work"`},
+		"a home that contains one": {func(l *Launch) { l.Env = append(l.Env, "HOME=/"); l.Transcript.Under = "work" }, `wall docker: set HOME to a directory where "/work" overlaps no mount: the transcript directory is bound there, and it overlaps "/work"`},
+		"a home under /qory":       {func(l *Launch) { l.Env = append(l.Env, "HOME=/qory") }, `wall docker: set HOME to a directory where "/qory/.claude/projects" overlaps no mount: the transcript directory is bound there, and it overlaps "/qory"`},
+		"a relative home":          {func(l *Launch) { l.Env = append(l.Env, "HOME=home") }, `wall docker: the home inside, "home" from the launch's HOME, is not an absolute path`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000"`}
@@ -118,9 +125,9 @@ func TestATranscriptDirectoryThatOverlapsAMountIsRefused(t *testing.T) {
 			}
 			defer e.Close(context.Background())
 			l := transcriptLaunch()
-			change(&l)
-			if _, err := e.Wrap(context.Background(), l); err == nil {
-				t.Error("the launch was wrapped")
+			c.change(&l)
+			if _, err := e.Wrap(context.Background(), l); err == nil || err.Error() != c.want {
+				t.Errorf("the wrap: %v; want %s", err, c.want)
 			} else if slices.ContainsFunc(rec.lines, func(l string) bool { return strings.Contains(l, " run --rm ") || strings.Contains(l, " create --rm ") }) {
 				t.Errorf("the agent's container was made: %v", err)
 			}
@@ -437,5 +444,48 @@ func TestTheAgentsGroupComesFromTheWallsUserOrTheImage(t *testing.T) {
 				t.Errorf("the tar has %+v; want uid 1000 and gid %d", got, want)
 			}
 		})
+	}
+}
+
+// TestAnAbsoluteTranscriptPlaceIsBoundThere pins a transcript directory whose place is
+// absolute, an absolute resume.prefix: the wall binds it there, whatever HOME is, makes
+// no directory between a home and the place, and checks each directory from / down to
+// it in the image, with a fix that names the directory alone when one cannot be
+// searched.
+func TestAnAbsoluteTranscriptPlaceIsBoundThere(t *testing.T) {
+	dir := tar.Header{Typeflag: tar.TypeDir, Mode: 0o755}
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000"`, heads: map[string]tar.Header{"/var": dir, "/var/lib": dir}}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, sys: rec}
+	e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close(context.Background())
+	l := transcriptLaunch("HOME=/home/agent")
+	l.Transcript.Under = "/var/lib/agent-home/sessions"
+	if unbound, err := e.(TranscriptChecker).CheckTranscript(context.Background(), l.Env, l.Transcript); unbound != nil || err != nil {
+		t.Fatalf("CheckTranscript: %+v, %v; want nil", unbound, err)
+	}
+	if _, err := e.Wrap(context.Background(), l); err != nil {
+		t.Fatal(err)
+	}
+	if create := agentCreate(rec); !strings.Contains(create, "--mount type=bind,src="+l.Transcript.Path+",dst=/var/lib/agent-home/sessions ") {
+		t.Errorf("the agent's docker create %q; want the bind at /var/lib/agent-home/sessions", create)
+	}
+	if got := copiedDirs(t, rec); len(got) != 0 {
+		t.Errorf("the tar has %+v; want no directory", got)
+	}
+
+	locked := tar.Header{Typeflag: tar.TypeDir, Mode: 0o700}
+	rec = &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000"`, heads: map[string]tar.Header{"/var": dir, "/var/lib": locked}}
+	d = &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, sys: rec}
+	e, err = d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close(context.Background())
+	unbound, err := e.(TranscriptChecker).CheckTranscript(context.Background(), l.Env, l.Transcript)
+	if err != nil || unbound == nil || unbound.Fix != `Let uid 1000 search "/var/lib" in the image` {
+		t.Errorf("CheckTranscript: %+v, %v; want the fix that names /var/lib", unbound, err)
 	}
 }

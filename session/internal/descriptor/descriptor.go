@@ -88,7 +88,8 @@ type Config struct {
 }
 
 // Resume is where the runtime writes the transcript of its session, and the arguments
-// that start the runtime again from it. Each path starts with ~/, the runtime's home.
+// that start the runtime again from it. Each path starts with ~/, the runtime's home,
+// or with /, an absolute path.
 type Resume struct {
 	// PathFrom is the member of a hook's input that contains the transcript's path,
 	// such as transcript_path; empty when the session takes the path from Path alone.
@@ -523,7 +524,7 @@ func (r *Resume) check() error {
 	}
 	for _, p := range []string{r.Prefix, r.Path} {
 		if slices.Contains(strings.Split(p, "/"), "..") {
-			return fmt.Errorf("resume: remove the .. segment from %s: the transcript lies under the runtime's home", accesskey.ShownValue(p, true))
+			return fmt.Errorf("resume: remove the .. segment from %s: the transcript lies under resume.prefix", accesskey.ShownValue(p, true))
 		}
 	}
 	if !strings.HasPrefix(r.Path, r.Prefix) {

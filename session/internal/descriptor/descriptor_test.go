@@ -834,6 +834,14 @@ func TestResumeDecodes(t *testing.T) {
 	if !reflect.DeepEqual(d.Resume, want) {
 		t.Errorf("a resume with * and after, without path_from = %+v; want %+v", d.Resume, want)
 	}
+	// An absolute prefix and path, a home at a fixed place, decode as they are.
+	d, err = descriptor.Parse("amp.yaml", []byte(resume("/var/lib/amp/s/{session_id}.jsonl", "/var/lib/amp/s/")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Resume == nil || d.Resume.Prefix != "/var/lib/amp/s/" || d.Resume.Path != "/var/lib/amp/s/{session_id}.jsonl" {
+		t.Errorf("an absolute resume = %+v", d.Resume)
+	}
 	b, err := fs.ReadFile(contracts.FS, "runtimes/claude/descriptor.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -846,12 +854,21 @@ func TestResumeDecodes(t *testing.T) {
 		t.Errorf("the claude descriptor's resume = %+v; want %+v", claude.Resume, want)
 	}
 	for name, doc := range map[string]string{
-		"a path outside the prefix": resume("~/.amp/other/{session_id}.jsonl", "~/.amp/s/"),
-		"a .. in the path":          resume("~/.amp/s/../{session_id}.jsonl", "~/.amp/s/"),
-		"a .. in the prefix":        resume("~/.amp/../s/{session_id}.jsonl", "~/.amp/../s/"),
+		"a path outside the prefix":              resume("~/.amp/other/{session_id}.jsonl", "~/.amp/s/"),
+		"a .. in the path":                       resume("~/.amp/s/../{session_id}.jsonl", "~/.amp/s/"),
+		"a .. in the prefix":                     resume("~/.amp/../s/{session_id}.jsonl", "~/.amp/../s/"),
+		"a path in the home, an absolute prefix": resume("~/.amp/s/{session_id}.jsonl", "/var/lib/amp/s/"),
+		"an absolute path, a prefix in the home": resume("/var/lib/amp/s/{session_id}.jsonl", "~/.amp/s/"),
+		"a .. in an absolute prefix":             resume("/var/lib/../s/{session_id}.jsonl", "/var/lib/../s/"),
 	} {
 		if _, err := descriptor.Parse("amp.yaml", []byte(doc)); err == nil || !strings.HasPrefix(err.Error(), "amp.yaml: resume: ") {
 			t.Errorf("%s: %v; want an error that starts with the fix", name, err)
+		}
+	}
+	// The schema holds a prefix to ~/ or /: a relative one, or / alone, is no descriptor.
+	for _, prefix := range []string{".amp/s/", "/"} {
+		if _, err := descriptor.Parse("amp.yaml", []byte(resume(prefix+"{session_id}.jsonl", prefix))); err == nil {
+			t.Errorf("the prefix %q was accepted", prefix)
 		}
 	}
 }

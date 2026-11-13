@@ -21,7 +21,7 @@ func TestTheResumeScriptWritesTheTranscriptThenResumes(t *testing.T) {
 	}
 	script := filepath.Join(dir, ResumeScript)
 	rel := ".agent/sessions/-w/it's.jsonl"
-	text := resumeScript("0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", transcript, rel, []string{"--resume", "s 1"})
+	text := resumeScript("0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", transcript, "~/"+rel, []string{"--resume", "s 1"})
 	if err := os.WriteFile(script, []byte(text), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestTheResumeScriptInsertsTheArgumentsAfterHead(t *testing.T) {
 	rel := ".rollouts/sessions/2026/11/13/rollout-a-s.jsonl"
 	launch := []string{"/bin/sh", "-c", `for a; do echo "[$a]"; done`, "sh", "exec", "--json", "it's a 'prompt'"}
 	at := resumeAt(launch[1:], "exec")
-	text := resumeScriptAt("0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", transcript, rel, []string{"resume", "s 1"}, 1+at)
+	text := resumeScriptAt("0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", transcript, "~/"+rel, []string{"resume", "s 1"}, 1+at)
 	if err := os.WriteFile(script, []byte(text), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +100,55 @@ func TestTheResumeScriptInsertsTheArgumentsAfterHead(t *testing.T) {
 	}
 	if out, want := run(blocked), "[exec]\n[--json]\n[it's a 'prompt']\n"; out != want {
 		t.Errorf("without a resume the runtime got %q; want %q", out, want)
+	}
+}
+
+// TestTheResumeScriptWritesAnAbsolutePath pins the script of an absolute resume.path:
+// it writes the transcript at that path, whatever HOME is, and with a directory it
+// cannot write, the line of a failed resume names the directory and the runtime starts
+// without the resume arguments.
+func TestTheResumeScriptWritesAnAbsolutePath(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, ResumeTranscript)
+	if err := os.WriteFile(transcript, []byte("{\"a\":1}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func(dst string) (string, string) {
+		t.Helper()
+		script := filepath.Join(dir, ResumeScript)
+		text := resumeScript("0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", transcript, dst, []string{"resume", "s 1"})
+		if err := os.WriteFile(script, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("/bin/sh", script, "/bin/sh", "-c", `for a; do echo "[$a]"; done`, "sh")
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%v: %s", err, stderr.String())
+		}
+		return string(out), stderr.String()
+	}
+	dst := filepath.Join(t.TempDir(), "codex-home", "sessions", "2026", "rollout-a-s.jsonl")
+	if out, stderr := run(dst); out != "[resume]\n[s 1]\n" || stderr != "" {
+		t.Errorf("the runtime got %q, stderr %q; want the resume arguments", out, stderr)
+	}
+	if b, err := os.ReadFile(dst); err != nil || string(b) != "{\"a\":1}\n" {
+		t.Errorf("the transcript at its path: %q %v", b, err)
+	}
+	blocked := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocked, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dst = filepath.Join(blocked, "rollout-a-s.jsonl")
+	out, stderr := run(dst)
+	if out != "" {
+		t.Errorf("the runtime got %q; want no resume arguments", out)
+	}
+	want := "Check that " + blocked + " is writable. The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: the copy to " + dst + " failed"
+	if !strings.HasSuffix(strings.TrimSuffix(stderr, "\n"), want) {
+		t.Errorf("stderr %q; want its last line %q", stderr, want)
 	}
 }
 

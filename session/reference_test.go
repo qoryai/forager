@@ -279,7 +279,9 @@ func TestARunWhoseImageByReferenceCannotHoldDoesNotStart(t *testing.T) {
 	w = &targetWall{}
 	sp.Wall, sp.Image, sp.ImagesAllow = w, "example.com/agent:1", []string{"registry.example/"}
 	sp.Mounts = []wall.Mount{{Path: "/workspace/tools", ReadOnly: true}}
-	if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "overlaps /workspace") || len(w.pulls) != 0 || w.wrapped {
+	want := "/workspace/tools is shown at the same path inside, which overlaps the workspace of a run whose policy " +
+		"sets its image by reference, where the workspace inside is /workspace"
+	if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), want) || len(w.pulls) != 0 || w.wrapped {
 		t.Errorf("a mount at /workspace: %v; the wall pulled %+v, wrapped %v", err, w.pulls, w.wrapped)
 	}
 }
@@ -417,5 +419,48 @@ func TestAPluginLinkToTheWorkspaceInsideIsNoRun(t *testing.T) {
 	}
 	if len(w.pulls) != 0 || w.wrapped {
 		t.Errorf("the wall pulled %+v, wrapped %v", w.pulls, w.wrapped)
+	}
+}
+
+// TestATargetAtTheWorkspaceInsideOfAnImageByReferenceIsNoRun pins that a run whose
+// policy names its image by reference, which sees its workspace at /workspace, refuses
+// a mount whose Target is, holds or lies inside /workspace, mount_target_conflict, with
+// the mount and the workspace as passed; and keeps a Target elsewhere.
+func TestATargetAtTheWorkspaceInsideOfAnImageByReferenceIsNoRun(t *testing.T) {
+	home := t.TempDir()
+	for _, target := range []string{"/workspace", "/workspace/home", "/"} {
+		w := &targetWall{}
+		sp, g := specGateway(t, "FAKE_EXIT=0")
+		byReference(g)
+		sp.Wall, sp.Image, sp.Images, sp.ImagesAllow = w, "base", images, []string{"registry.example/agents/"}
+		sp.Mounts = []wall.Mount{{Path: home, Target: target}}
+		err := runErr(sp)
+		if target == "/" {
+			// / holds /qory, which the target check refuses first.
+			if err == nil || !strings.HasPrefix(err.Error(), "Set the target of the mount "+home+" to a place apart from /qory") {
+				t.Errorf("the target /: %v", err)
+			}
+			continue
+		}
+		r := refusalOf(t, "mount_target_conflict", err)
+		want := "the mount " + home + " at " + target + " overlaps the workspace " + sp.Dir + " of a run whose policy sets its " +
+			"image by reference, where the workspace inside is /workspace: a mount's target can't overlap the workspace inside"
+		if !slices.Equal(r.Names, []string{home, sp.Dir}) || r.Detail != want {
+			t.Errorf("the target %s: names %q, detail %q", target, r.Names, r.Detail)
+		}
+		if w.wrapped {
+			t.Errorf("the target %s: the wall was wrapped", target)
+		}
+	}
+	w := &targetWall{}
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	byReference(g)
+	sp.Wall, sp.Image, sp.Images, sp.ImagesAllow = w, "base", images, []string{"registry.example/agents/"}
+	sp.Mounts = []wall.Mount{{Path: home, Target: "/var/lib/agent-home"}}
+	if _, err := run(context.Background(), sp); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(w.got.Mounts, wall.Mount{Path: home, Target: "/var/lib/agent-home"}) || w.got.Dir != "/workspace" {
+		t.Errorf("mounts %v, working directory %q", w.got.Mounts, w.got.Dir)
 	}
 }

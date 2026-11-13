@@ -190,7 +190,10 @@ type Launch struct {
 	// Mounts are the files and directories of the host the run lists: the checkout
 	// around Dir, a composed home, the run directory read-only. The enclosure shows each
 	// at the same path, or at its Target, and nothing of the host besides them and Dir.
-	// From the session, none lies inside another, and one of them holds Dir.
+	// From the session, no two are at one place inside, their paths on the host overlap
+	// only where neither has a Target, and one of them holds Dir. A read-only one may lie
+	// inside a writable one by their places inside, and comes after it in the list: the
+	// list is in the order of the places inside, fewer names first.
 	Mounts []Mount
 	// Limits are the resources the agent gets; the zero value leaves each to the
 	// adapter's engine.
@@ -203,17 +206,18 @@ type Launch struct {
 // Transcript is a directory of this machine that the session makes for one session,
 // in the run directory and outside every mount, where the runtime writes the transcript
 // of its session. The enclosure binds it writable at Under below the home of the
-// agent's user inside, so the session reads the transcript, and writes a restored one,
-// on this machine. The session checks that no mount contains it or lies inside it; an
+// agent's user inside, or at Under when it is absolute, so the session reads the
+// transcript, and writes a restored one, on this machine. The session checks that no mount contains it or lies inside it; an
 // adapter returns an error for a launch where one does, by path, or where its place inside is,
 // contains or lies inside another mount's place inside or a path the adapter binds for
 // itself, such as /qory for [Docker].
 type Transcript struct {
 	// Path is the directory on this machine, absolute and clean; empty binds none.
 	Path string
-	// Under is its place inside, relative to the home of the agent's user, clean, with
-	// no .. name: the runtime descriptor's resume.prefix without its ~/, such as
-	// .claude/projects for Claude Code.
+	// Under is its place inside, clean, with no .. name: relative to the home of the
+	// agent's user, the runtime descriptor's resume.prefix without its ~/, such as
+	// .claude/projects for Claude Code; or absolute, an absolute resume.prefix, such
+	// as /var/lib/agent/sessions. Each without its last /.
 	Under string
 }
 
@@ -256,8 +260,11 @@ type Mount struct {
 	Path string
 	// ReadOnly says the enclosure cannot change it.
 	ReadOnly bool
-	// Target is the path inside the enclosure it is shown at, absolute and apart from
-	// the wall's paths, such as /qory; empty is Path. The session sets it for the workspace of a
+	// Target is the path inside the enclosure it is shown at: absolute, clean, apart
+	// from the wall's paths, such as /qory, and with no comma, double quote or newline;
+	// empty is Path. A caller sets it in SessionSpec.Mounts, such as a writable
+	// directory at /var/lib/agent-home and a read-only file at
+	// /var/lib/agent-home/hooks.json, and the session sets it for the workspace of a
 	// run whose image is named by its reference, /workspace.
 	Target string
 }
