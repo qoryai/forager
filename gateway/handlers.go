@@ -140,6 +140,9 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	g.used[req.RunID] = true
 	g.mu.Unlock()
 	lr, recorded, err := g.open(req, how)
+	if g.cfg.afterOpen != nil {
+		g.cfg.afterOpen()
+	}
 	if err != nil {
 		if r.Context().Err() != nil {
 			// The session gave up waiting for its answer: the run did not open, and its

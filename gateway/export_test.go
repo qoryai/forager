@@ -125,6 +125,21 @@ func SetRenewClock(c *Config, clock run.Clock) { c.renewClock = clock }
 // SetOpened sets what is called once a run on the one address opened.
 func SetOpened(c *Config, f func()) { c.opened = f }
 
+// SetAfterOpen sets what is called once a run's open returns, before its run request is
+// answered.
+func SetAfterOpen(c *Config, f func()) { c.afterOpen = f }
+
+// OpensStopped reports whether Close stopped the tries of the runs that open.
+func OpensStopped(g *Gateway) bool { return g.openCtx.Err() != nil }
+
+// Used reports whether the run id is used at the gateway: a run request named it, and
+// its run has a record, open or not.
+func Used(g *Gateway, runID string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.used[runID]
+}
+
 // WaitOpens waits for the run requests the gateway is answering to be answered.
 func WaitOpens(g *Gateway) { g.opens.Wait() }
 

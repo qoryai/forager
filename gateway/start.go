@@ -559,7 +559,7 @@ func (g *Gateway) reserved() []string {
 // past its tries opens and then ends as a live one; a run still live ends at once,
 // without an exit, which a resend of its record completes as gateway_lost, and lets go
 // of its secret, proxy, tools and credentials. Each run's events are flushed toward the
-// server within [stream.CloseWait] (or the Config's own bound), whatever ctx allows,
+// server within [stream.CloseWait] (or the bound in the Config), whatever ctx allows,
 // whose values alone pass on; then the link's directory is removed and the proxy
 // stops. The Delivery is what the runs came to: their undelivered events, and who
 // closed a run that ended at the gateway, and how it ended. Close again waits for the

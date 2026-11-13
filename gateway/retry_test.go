@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -139,7 +141,7 @@ func gaps(seen []seenRequest) []time.Duration {
 // TestTheTriesOfQoryApiaryAsARunOpens pins the tries of the run's registration as a
 // run opens, with test waits of 100 milliseconds, 200 milliseconds and 10 seconds and a
 // window of 5 seconds, which fit 3 tries whatever the time a try takes: a signed 503 or
-// 429 rate_limited, an unsigned 5xx and no answer are asked again, every try with the
+// 429 rate_limited, an unsigned 5xx and no answer are tried again, every try with the
 // same bytes, its time included, and an answer on a later try
 // opens the run, whose record has one run.registered, its first line; a refusal with
 // any other code, an unsigned answer other than a 5xx, a signed answer without a code
@@ -397,11 +399,81 @@ func TestARefusalBeforeCloseKeepsItsAnswer(t *testing.T) {
 		{"a 410 after Close", live, gone, server.ErrNotAccepted, false},
 		{"a 503 without Close", live, live, unavailable, false},
 		{"a session that went", gone, gone, unavailable, false},
+		{"a 503 after Close, with no session's request", nil, gone, unavailable, true},
+		{"no failure after Close", live, gone, nil, false},
 	} {
 		stopped, err := gateway.StoppedByClose(c.request, c.opens, c.err)
 		if stopped != c.stopped || errors.Is(err, gateway.ErrClosing) != c.stopped || !errors.Is(err, c.err) {
 			t.Errorf("%s: stopped %v with %v; want %v", c.name, stopped, err, c.stopped)
 		}
+	}
+}
+
+// TestCloseStopsTheTriesOfALocalRegistration pins a gateway that closes while a run's
+// registration on the local link keeps failing with a 503: Close returns within
+// seconds, the run request gets a 503 without a code, no run opens, and the run's
+// record is removed.
+func TestCloseStopsTheTriesOfALocalRegistration(t *testing.T) {
+	ctl := newControl(t)
+	cfg := gateway.Config{Server: ctl.server()}
+	gateway.SetOpenTries(&cfg, []time.Duration{100 * time.Millisecond}, time.Minute)
+	h := start(t, cfg)
+	s := script(ctl)
+	unavailable := make([]apiaryReply, 1000)
+	for i := range unavailable {
+		unavailable[i] = coded(503, "unavailable")
+	}
+	s.then(runPath, unavailable...)
+	closed := make(chan time.Duration, 1)
+	go func() {
+		for len(s.requests(runPath)) < 3 {
+			time.Sleep(10 * time.Millisecond)
+		}
+		start := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		h.g.Close(ctx)
+		closed <- time.Since(start)
+	}()
+	runID := event.NewRunID()
+	_, err := h.tryOpen(server.LinkRunRequest{RunID: runID})
+	if took := <-closed; took > 3*time.Second {
+		t.Errorf("Close took %v; want it within 3s", took)
+	}
+	var ref *accesskey.Refusal
+	var failed *server.StatusError
+	if errors.As(err, &ref) || !errors.As(err, &failed) || failed.Status != http.StatusServiceUnavailable {
+		t.Errorf("the run request: %v; want a 503 without a code", err)
+	}
+	if _, err := os.Stat(filepath.Join(h.dir, "runs", runID)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the run's record after Close: %v", err)
+	}
+}
+
+// TestAFinalRefusalAfterCloseStartsKeepsItsAnswer pins a final refusal of the run's
+// registration, a 409 run_id_used, whose run request is answered after Close started:
+// the session gets the refusal with its code, not a 503, and the run id stays used.
+func TestAFinalRefusalAfterCloseStartsKeepsItsAnswer(t *testing.T) {
+	ctl := newControl(t)
+	cfg := gateway.Config{Server: ctl.server()}
+	var h *harness
+	gateway.SetAfterOpen(&cfg, func() {
+		go h.g.Close(context.Background())
+		for !gateway.OpensStopped(h.g) {
+			time.Sleep(5 * time.Millisecond)
+		}
+	})
+	h = start(t, cfg)
+	s := script(ctl)
+	s.then(runPath, coded(409, "run_id_used"))
+	runID := event.NewRunID()
+	_, err := h.tryOpen(server.LinkRunRequest{RunID: runID})
+	var ref *accesskey.Refusal
+	if !errors.As(err, &ref) || ref.Code != "run_id_used" || ref.Status != http.StatusConflict || ref.From != accesskey.FromApiary {
+		t.Errorf("the run request: %v; want the server's 409 run_id_used", err)
+	}
+	if !gateway.Used(h.g, runID) {
+		t.Error("the run id is free again; want it used")
 	}
 }
 
