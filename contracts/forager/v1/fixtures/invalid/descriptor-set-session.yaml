@@ -1,0 +1,17 @@
+# A rule may not set session: the session sets it.
+version: 1
+runtime: example
+runtime_version: "1.0.0"
+sources:
+  output: {format: jsonl}
+rules:
+  - source: output
+    match: {type: start}
+    type: dev.qory.runtime.started
+    data: {session_id: id}
+    set: {source: startup}
+  - source: output
+    match: {type: done}
+    type: dev.qory.runtime.turn_finished
+    set: {session: 1}
+    from_started: [session_id]

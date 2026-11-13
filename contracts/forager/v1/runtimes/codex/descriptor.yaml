@@ -1,0 +1,105 @@
+# Codex 0.167.2, the OpenAI coding agent, started as codex exec --json. The rules were
+# written against the JSON lines codex exec --json prints on its standard output, as
+# recorded on runs of 0.167.2 for decision 521, and the source of codex-rs at
+# 17a0e6f63f (2026-10-21). The fixtures beside this file are written by hand in that
+# shape.
+#
+# Codex has no hook a forwarder can be installed as, so the standard output is the only
+# source. codex exec --json prints thread.started first, with the thread's id, the id
+# codex exec resume takes. The lines of a turn, turn.started, item.*, turn.completed,
+# turn.failed and error, contain no thread id, so the rules of the turn take session_id
+# from the session's dev.qory.runtime.started (from_started).
+version: 1
+runtime: codex
+title: Codex
+runtime_version: "0.167.2"
+sources:
+  output:
+    format: jsonl
+# On SIGINT, codex exec interrupts its turn before it exits; it has no handler for
+# SIGTERM, which ends it at once (exec/src/lib.rs:1190-1196, 1308-1320).
+stop:
+  signal: SIGINT
+# Codex reads its model key from the variable of model.keys, below. The denied variables
+# move where requests go (OPENAI_BASE_URL, the *_BASE_URL and *_URL_OVERRIDE variables,
+# CODEX_OSS_PORT, and CODEX_EXEC_SERVER_URL and the CODEX_EXEC_SERVER_NOISE_* variables,
+# which move where commands run, exec-server/src/environment.rs), add a
+# header (CODEX_INTERNAL_ORIGINATOR_OVERRIDE), set another key for Codex (CODEX_API_KEY,
+# CODEX_ACCESS_TOKEN), change the trust of TLS connections (CODEX_CA_CERTIFICATE), or
+# move its home and state (CODEX_HOME, CODEX_SQLITE_HOME). Each is in the 0.167.2 binary.
+# A composer sets CODEX_HOME through the launch's fixed variables, which denies does
+# not cover.
+secrets:
+  denies: [OPENAI_BASE_URL, CODEX_AUTHAPI_BASE_URL, CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL,
+           CODEX_AGENT_IDENTITY_JWKS_BASE_URL, CODEX_APP_SERVER_CHATGPT_BASE_URL,
+           CODEX_CLOUD_TASKS_BASE_URL, CODEX_OSS_BASE_URL, CODEX_OSS_PORT,
+           CODEX_REFRESH_TOKEN_URL_OVERRIDE, CODEX_REVOKE_TOKEN_URL_OVERRIDE,
+           CODEX_EXEC_SERVER_URL, CODEX_EXEC_SERVER_NOISE_REGISTRY_URL,
+           CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID, CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN,
+           CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID, CODEX_INTERNAL_ORIGINATOR_OVERRIDE,
+           CODEX_API_KEY,
+           CODEX_ACCESS_TOKEN, CODEX_CA_CERTIFICATE, CODEX_HOME, CODEX_SQLITE_HOME]
+# Codex sends OpenAI's Responses format through the provider qory of config.fixed,
+# below, for an API key and for a subscription login's token alike: the provider reads
+# the key from OPENAI_API_KEY, its env_key, and sends it as a bearer. The session sets
+# the start key's endpoint in model_providers.qory.base_url, as a --config pair. A
+# composer writes the run's model id as --model and its effort value in
+# model_reasoning_effort, as a --config pair.
+model:
+  formats: [openai-responses]
+  model: {flag: --model}
+  effort:
+    run: {setting: model_reasoning_effort, values: [none, low, medium, high, xhigh, max, ultra]}
+  endpoint: {setting: model_providers.qory.base_url}
+  keys:
+    - {format: openai-responses, auth: {scheme: bearer}, variable: OPENAI_API_KEY}
+    - {format: openai-responses, auth: {scheme: bearer, oauth: true}, variable: OPENAI_API_KEY}
+# Codex takes a setting as --config key=value, the value in TOML, over every config.toml.
+# The provider qory sends every request to the start key's endpoint with the key from
+# OPENAI_API_KEY; Codex's built-in provider would send the key to paths outside the
+# model API and open WebSockets. The other settings turn off what reaches hosts other
+# than the endpoint: plugins, apps, analytics, feedback, the update check, the
+# OpenTelemetry logs, traces and metrics, and web search. features.connectors, the
+# legacy name of apps, is not set: Codex 0.167.2 prints a deprecation error for it.
+config:
+  flag: --config
+  fixed:
+    model_provider: qory
+    model_providers.qory.name: qory
+    model_providers.qory.wire_api: responses
+    model_providers.qory.env_key: OPENAI_API_KEY
+    features.plugins: false
+    features.apps: false
+    analytics.enabled: false
+    feedback.enabled: false
+    check_for_update_on_startup: false
+    otel.exporter: none
+    otel.trace_exporter: none
+    otel.metrics_exporter: none
+    web_search: disabled
+rules:
+  # thread.started has no member for how the session started. codex exec --json starts
+  # a session, so source is startup.
+  - source: output
+    match: {type: thread.started}
+    type: dev.qory.runtime.started
+    data:
+      session_id: thread_id
+    set:
+      source: startup
+  - source: output
+    match: {type: turn.completed}
+    type: dev.qory.runtime.turn_finished
+    from_started: [session_id]
+  # turn.failed has the error's message and no kind of error, so error is unknown.
+  - source: output
+    match: {type: turn.failed}
+    type: dev.qory.runtime.turn_failed
+    data:
+      message: error.message
+    set:
+      error: unknown
+    from_started: [session_id]
+  # No rule maps an error line: Codex 0.167.2 prints one for each retry of a request,
+  # "Reconnecting... 1/5", in a turn that may still finish, and prints turn.failed for
+  # every turn that fails.

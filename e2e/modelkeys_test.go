@@ -37,6 +37,7 @@ import (
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/session/runtimes/claude"
+	"github.com/qoryai/forager/session/runtimes/codex"
 	"github.com/qoryai/forager/wall"
 )
 
@@ -526,14 +527,27 @@ type keysSession struct {
 	// file and --.
 	qory string
 	link []string
+	// joinFails, when set, expects the join to return an error: run returns it in
+	// keysOutcome.joined in place of failing the test.
+	joinFails bool
+	// codex, when set, is a folder that [codexFolder] makes: the launch starts Codex
+	// 0.167.2 through its codex-run script, as codex exec --json with the prompt last,
+	// in place of Claude Code, with CODEX_HOME at [codexHome] as a fixed value of the
+	// launch, as qory sets it.
+	codex string
 }
 
-// run opens the run, joins one session of Claude Code and closes the run as qory does:
-// paused with model_key_limit and the session's exit code after a session the
-// session stopped for that reason, else with the session's state and exit code.
+// run opens the run, joins one session of Claude Code, or of Codex, and closes the run
+// as qory does: paused with model_key_limit or model_key_switch, or failed with
+// model_key_unauthorized, and the session's exit code after a session the session
+// stopped for that reason, else with the session's state and exit code.
 func (s keysSession) run(t *testing.T) keysOutcome {
 	t.Helper()
-	rt, err := claude.New()
+	newRuntime := claude.New
+	if s.codex != "" {
+		newRuntime = codex.New
+	}
+	rt, err := newRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,6 +578,12 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 		Dir:     dir,
 		Stdin:   strings.NewReader(""),
 	}
+	if s.codex != "" {
+		join.Command = filepath.Join(s.codex, codexRun)
+		join.Args = slices.Concat(codexArgs, s.args, []string{s.prompt})
+		join.Mounts = append(join.Mounts, wall.Mount{Path: s.codex, ReadOnly: true})
+		join.LaunchFixed = []string{"CODEX_HOME=" + codexHome}
+	}
 	if s.qory != "" {
 		join.Args = append(append(append([]string{"run", "agent-env", filepath.Join(s.qory, "kept")}, s.link...), "--", join.Command), join.Args...)
 		join.Command = filepath.Join(s.qory, "qory")
@@ -582,6 +602,9 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 		}
 		join.Forwarder = []string{exe, modeForward}
 	}
+	if join.Env == nil && s.codex != "" {
+		join.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+	}
 	if join.Env == nil {
 		join.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "DISABLE_AUTOUPDATER=1",
 			"ANTHROPIC_AUTH_TOKEN=", apiKeyStandIn + "="}
@@ -597,16 +620,21 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 	outcome := session.Outcome{State: event.StateFailed, ExitCode: -1}
 	switch {
 	case o.joined != nil || o.res.RunClosed:
-	case o.res.Reason == event.ReasonModelKeyLimit:
-		outcome = session.Outcome{State: event.StatePaused, Reason: event.ReasonModelKeyLimit, ExitCode: o.res.ExitCode}
+	case o.res.Reason == event.ReasonModelKeyLimit || o.res.Reason == event.ReasonModelKeySwitch:
+		outcome = session.Outcome{State: event.StatePaused, Reason: o.res.Reason, ExitCode: o.res.ExitCode}
+	case o.res.Reason == event.ReasonModelKeyUnauthorized:
+		outcome = session.Outcome{State: event.StateFailed, Reason: o.res.Reason, ExitCode: o.res.ExitCode}
 	default:
 		outcome = session.Outcome{State: o.res.State, ExitCode: o.res.ExitCode}
 	}
 	_, o.closed = r.Close(ctx, outcome)
 	closeGateway()
 	o.out, o.errs, o.lines = out.String(), errs.String(), lines.String()
-	if o.joined != nil {
-		t.Fatalf("the join: %v\nstdout:\n%s\nstderr:\n%s", o.joined, o.out, o.errs)
+	if o.joined != nil && s.joinFails {
+		return o
+	}
+	if o.joined != nil || s.joinFails {
+		t.Fatalf("the join: %v, want an error %v\nstdout:\n%s\nstderr:\n%s", o.joined, s.joinFails, o.out, o.errs)
 	}
 	f, err := os.Open(filepath.Join(o.res.Dir, "events.jsonl"))
 	if err != nil {

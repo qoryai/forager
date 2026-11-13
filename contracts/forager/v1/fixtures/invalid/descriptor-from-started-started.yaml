@@ -1,0 +1,18 @@
+# A rule that produces dev.qory.runtime.started may not take a field from the
+# session's start.
+version: 1
+runtime: example
+runtime_version: "1.0.0"
+sources:
+  output: {format: jsonl}
+rules:
+  - source: output
+    match: {type: start}
+    type: dev.qory.runtime.started
+    data: {session_id: id}
+    set: {source: startup}
+  - source: output
+    match: {type: resumed}
+    type: dev.qory.runtime.started
+    set: {source: resume}
+    from_started: [session_id]

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -465,6 +467,63 @@ func TestRuntimesJSONHasModelOnlyWhenDescribed(t *testing.T) {
 	}
 }
 
+// TestRuntimesJSONListsTheConfigKeys pins config in runtimes.json: the Codex entry has
+// the flag --config and the 13 keys of its config.fixed in the descriptor's order,
+// without their values, and Claude Code's entry, whose descriptor has no config, has
+// no config member. A descriptor's key order reaches the file whether it is YAML or
+// JSON.
+func TestRuntimesJSONListsTheConfigKeys(t *testing.T) {
+	b, err := fs.ReadFile(contracts.FS, descriptor.RuntimesFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Runtimes []map[string]any `json:"runtimes"`
+	}
+	if err := json.Unmarshal(b, &f); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"flag": "--config", "fixed": []any{
+		"model_provider", "model_providers.qory.name", "model_providers.qory.wire_api", "model_providers.qory.env_key",
+		"features.plugins", "features.apps", "analytics.enabled", "feedback.enabled", "check_for_update_on_startup",
+		"otel.exporter", "otel.trace_exporter", "otel.metrics_exporter", "web_search",
+	}}
+	seen := 0
+	for _, rt := range f.Runtimes {
+		switch rt["name"] {
+		case "codex":
+			seen++
+			if !reflect.DeepEqual(rt["config"], want) {
+				t.Errorf("codex config is %v; want %v", rt["config"], want)
+			}
+		case "claude":
+			seen++
+			if c, ok := rt["config"]; ok {
+				t.Errorf("claude has config %v; want no config member", c)
+			}
+		}
+	}
+	if seen != 2 {
+		t.Errorf("runtimes.json has %d of codex and claude; want both", seen)
+	}
+	for name, doc := range map[string]string{
+		"amp.yaml": "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
+			"config: {flag: --set, fixed: {z.last: 1, a.first: true, m.mid: x}}\n" +
+			"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n",
+		"amp.json": `{"version": 1, "runtime": "amp", "runtime_version": "1", "sources": {"output": {"format": "jsonl"}},
+			"config": {"flag": "--set", "fixed": {"z.last": 1, "a.first": true, "m.mid": "x"}},
+			"rules": [{"source": "output", "match": {"type": "end"}, "type": "dev.qory.runtime.ended", "data": {"reason": "why"}}]}`,
+	} {
+		d, err := descriptor.Parse(name, []byte(doc))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := d.Config.Keys; !reflect.DeepEqual(got, []string{"z.last", "a.first", "m.mid"}) {
+			t.Errorf("%s: keys %q; want the document's order", name, got)
+		}
+	}
+}
+
 // TestRuntimesJSONIsGenerated pins that runtimes.json is exactly what the descriptors
 // the contract ships render to, so the file a server vendors cannot drift from them.
 func TestRuntimesJSONIsGenerated(t *testing.T) {
@@ -651,7 +710,7 @@ func TestRuntimesJSONShape(t *testing.T) {
 		t.Fatalf("%d runtimes for %d descriptors", len(runtimes), len(dirs))
 	}
 	for i, r := range runtimes {
-		rt := members("runtime", r, []string{"name", "title", "reserves", "denies", "credential_files", "declares", "one_of", "fixed", "egress_hosts"}, "model", "resume")
+		rt := members("runtime", r, []string{"name", "title", "reserves", "denies", "credential_files", "declares", "one_of", "fixed", "egress_hosts"}, "model", "config", "resume")
 		if rs, ok := rt["resume"]; ok {
 			resume := members("resume", rs, []string{"prefix", "path"})
 			prefix, _ := resume["prefix"].(string)
@@ -814,7 +873,7 @@ func TestConfigDecodes(t *testing.T) {
 	want := &descriptor.Config{Flag: "--config", Fixed: map[string]any{
 		"model_provider": "qory", "model_providers.qory.name": "qory", "model_providers.qory.wire_api": "responses",
 		"features.plugins": false, "stream_max_retries": int64(5),
-	}}
+	}, Keys: []string{"model_provider", "model_providers.qory.name", "model_providers.qory.wire_api", "features.plugins", "stream_max_retries"}}
 	if !reflect.DeepEqual(d.Config, want) {
 		t.Errorf("Config = %#v; want %#v", d.Config, want)
 	}
@@ -829,6 +888,9 @@ func TestConfigDecodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// encoding/json writes a map's keys sorted, so the JSON document has them in that
+	// order.
+	want.Keys = slices.Sorted(maps.Keys(want.Fixed))
 	if !reflect.DeepEqual(fromJSON.Config, want) {
 		t.Errorf("Config from JSON = %#v; want %#v", fromJSON.Config, want)
 	}
@@ -876,5 +938,88 @@ func TestConfigDecodes(t *testing.T) {
 	}
 	if _, err := descriptor.Parse("amp.yaml", []byte(fmt.Sprintf(settings, "a", "ab.c"))); err != nil {
 		t.Errorf("model a, endpoint ab.c: %v", err)
+	}
+}
+
+// fieldsDoc is a descriptor whose start gets source from set, and whose turn lines,
+// which contain no session id, take it from the session's start.
+const fieldsDoc = `version: 1
+runtime: example
+runtime_version: "1.0.0"
+sources:
+  output: {format: jsonl}
+rules:
+  - source: output
+    match: {type: start}
+    type: dev.qory.runtime.started
+    data: {session_id: id}
+    set: {source: startup}
+  - source: output
+    match: {type: done}
+    type: dev.qory.runtime.turn_finished
+    from_started: [session_id]
+  - source: output
+    match: {type: failed}
+    type: dev.qory.runtime.turn_failed
+    data: {message: error.message}
+    set: {error: unknown}
+    from_started: [session_id]
+`
+
+// TestARuleSetsFieldsAndListsWhatTheStartGives pins set and from_started: a field of
+// set has the descriptor's value whatever the record contains, a rule's from_started
+// reaches its event for the session to fill, and a rule may have no data.
+func TestARuleSetsFieldsAndListsWhatTheStartGives(t *testing.T) {
+	d, err := descriptor.Parse("example.yaml", []byte(fieldsDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		record map[string]any
+		want   descriptor.Event
+	}{
+		{map[string]any{"type": "start", "id": "s1", "source": "other"},
+			descriptor.Event{Type: "dev.qory.runtime.started", Data: map[string]any{"session_id": "s1", "source": "startup"}}},
+		{map[string]any{"type": "done"},
+			descriptor.Event{Type: "dev.qory.runtime.turn_finished", Data: map[string]any{}, FromStarted: []string{"session_id"}}},
+		{map[string]any{"type": "failed", "error": map[string]any{"message": "boom"}},
+			descriptor.Event{Type: "dev.qory.runtime.turn_failed", Data: map[string]any{"message": "boom", "error": "unknown"}, FromStarted: []string{"session_id"}}},
+	} {
+		got := d.Map(descriptor.Record{Source: "output", Record: c.record})
+		if len(got) != 1 || !reflect.DeepEqual(got[0], c.want) {
+			t.Errorf("%v: %+v; want %+v", c.record, got, c.want)
+		}
+	}
+	got := d.Map(descriptor.Record{Source: "output", Record: map[string]any{"type": "done"}})
+	got[0].FromStarted[0] = "changed"
+	if again := d.Map(descriptor.Record{Source: "output", Record: map[string]any{"type": "done"}}); again[0].FromStarted[0] != "session_id" {
+		t.Error("a change to an event's FromStarted reached the rule")
+	}
+}
+
+// TestAFieldComesFromOneMember pins that a field in two of data, set and from_started
+// is refused, and that the schema refuses from_started on a hook rule and on a rule of
+// dev.qory.runtime.started, a field other than session_id in it, set of a field the
+// session sets or to an object, and a rule with none of the three.
+func TestAFieldComesFromOneMember(t *testing.T) {
+	for name, rule := range map[string]string{
+		"data and set":          "    data: {message: error.message}\n    set: {message: x}\n",
+		"data and from_started": "    data: {session_id: id}\n    from_started: [session_id]\n",
+		"set and from_started":  "    set: {session_id: s}\n    from_started: [session_id]\n",
+	} {
+		doc := fieldsDoc + "  - source: output\n    match: {type: other}\n    type: dev.qory.runtime.turn_failed\n" + rule
+		_, err := descriptor.Parse("example.yaml", []byte(doc))
+		if err == nil || !strings.Contains(err.Error(), "set the field") {
+			t.Errorf("%s: %v; want a refusal", name, err)
+		}
+	}
+	for _, name := range []string{"from-started-hooks", "from-started-started", "from-started-agent-id", "set-session", "set-object", "rule-no-fields"} {
+		bad, err := fs.ReadFile(contracts.FS, "fixtures/invalid/descriptor-"+name+".yaml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := descriptor.Parse("descriptor.yaml", bad); err == nil {
+			t.Errorf("descriptor-%s was accepted", name)
+		}
 	}
 }

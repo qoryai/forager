@@ -635,6 +635,18 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if prepared, err = rt.Prepare(attach); err != nil {
 		return fail(fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), accesskey.ShownError(err)))
 	}
+	// A runtime that reads its settings as TOML gets its descriptor's config.fixed and,
+	// for an endpoint that is a setting, the start key's endpoint, before the launch's
+	// arguments. A later argument that sets one of them would win, so such a launch
+	// fails first.
+	if c, ok := rt.(runtimes.ArgsChecker); ok {
+		if err := c.CheckArgs(prepared.Args); err != nil {
+			return fail(err)
+		}
+	}
+	if prepared.Args, err = configArgs(rt, key, prepared.Args); err != nil {
+		return fail(fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), accesskey.ShownError(err)))
+	}
 	// The run's first session whose runtime has resume continues the runtime session of
 	// the paused run in the run answer's resume: the launch writes its transcript under
 	// the runtime's home and resumes it. A failure starts the runtime without a resume,

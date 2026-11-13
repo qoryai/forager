@@ -228,6 +228,20 @@ type Effort = descriptor.Effort
 // the runtime reads it from, or Setting, a dotted key of its settings.
 type Endpoint = descriptor.Endpoint
 
+// Configs is implemented by a runtime that reads its settings as TOML, a descriptor's
+// config. It is optional and checked by type assertion, so [Runtime] keeps its methods:
+// the session passes no setting to a runtime without it.
+type Configs interface {
+	// Config is the runtime's config, a copy, and true; the zero Config and false when
+	// the runtime has none.
+	Config() (Config, bool)
+}
+
+// Config is a descriptor's config: Flag, the argument that takes one key=value pair,
+// such as --config, and Fixed, the settings the session passes in every launch, each
+// dotted key with a string, a bool or an int64.
+type Config = descriptor.Config
+
 // Record is one unit of what a program reports.
 type Record = descriptor.Record
 
@@ -330,11 +344,18 @@ func (bare) Headless([]string) bool { return false }
 // the contract's schema. installers are the ones the descriptor may name; one it names
 // that is not among them is an error.
 func Described(name string, document []byte, installers map[string]Installer) (Runtime, error) {
+	return DescribedWithArgs(name, document, installers, nil)
+}
+
+// DescribedWithArgs is [Described] with check, a refusal of launch arguments that
+// override a setting the session passes through flags only this runtime has, which
+// CheckArgs runs after the check of the descriptor's config.flag; nil for none.
+func DescribedWithArgs(name string, document []byte, installers map[string]Installer, check ArgsCheck) (Runtime, error) {
 	d, err := descriptor.Parse(name, document)
 	if err != nil {
 		return nil, err
 	}
-	r := &described{d: d}
+	r := &described{d: d, check: check}
 	if h := d.Sources.Hooks; h != nil {
 		r.install = installers[h.Install]
 		if r.install == nil {
@@ -363,6 +384,7 @@ type described struct {
 	install  Installer
 	stop     Stop
 	headless []string
+	check    ArgsCheck
 }
 
 // Name is the descriptor's runtime.
@@ -483,6 +505,15 @@ func (r *described) Resume() (Resume, bool) {
 	out := *r.d.Resume
 	out.Args = slices.Clone(out.Args)
 	return out, true
+}
+
+// Config is the descriptor's config, a copy, and true; the zero Config and false when
+// it has none.
+func (r *described) Config() (Config, bool) {
+	if r.d.Config == nil {
+		return Config{}, false
+	}
+	return Config{Flag: r.d.Config.Flag, Fixed: maps.Clone(r.d.Config.Fixed)}, true
 }
 
 // Model is the descriptor's model section, a copy, and true; the zero ModelPlaces and
