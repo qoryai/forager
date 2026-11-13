@@ -2286,9 +2286,9 @@ directory with every character other than an ASCII letter or digit replaced by `
 with a `..` segment, and no file over 67108864 bytes (64 MiB), with a wall or without
 one. Without a wall it reaches `resume.prefix` under the runtime's home through any
 symbolic link, such as a `~/.claude/projects` that is a link, and reads no path with a
-symbolic link among the names below `resume.prefix`. The session that restored a paused run's transcript
-reads `resume.path` instead, under the paused run's slug (§The run API, The transcript of
-a paused run).
+symbolic link among the names below `resume.prefix`. The session that restored a paused
+run's transcript reads `resume.path` instead, under the paused run's slug (§The run API,
+The transcript of a paused run).
 
 Each line the session writes about a transcript is one `dev.qory.run.log` line of the
 session, with `stream: stderr`, of the form `<fix>. A continuation of this run starts

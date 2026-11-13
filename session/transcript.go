@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -459,38 +458,41 @@ var errLinked = errors.New("the transcript's path is a symbolic link or no regul
 // readUnlinked reads the file at rel below base from offset on, and returns its bytes
 // and the file's size. A run with no wall reads with base the directory of
 // resume.prefix under the home, so a symbolic link in the home's path or among the
-// names of resume.prefix is followed. It opens the file through an os.Root of base, so
-// no name leads out of it, and fails on a path below base any of whose names is a
-// symbolic link, or that is no regular file, checked before the open and again on the
-// open file. It opens the file without blocking, so a FIFO put at rel between the check
-// and the open ends the read at once with [errLinked] instead of waiting for a writer.
-// A file over [maxTranscript] bytes is [errTooLarge], as behind a wall.
+// names of resume.prefix is followed ([openDirFollowing]). Each directory of rel below
+// base opens with [openDirAt], and the file with O_NOFOLLOW and O_NONBLOCK, each by a
+// descriptor of the directory above it: a symbolic link among the names below base is
+// [errLinked], and a FIFO at base, at a directory or at the file fails the open at once
+// instead of waiting for a writer. The open file that is no regular file is
+// [errLinked], and one over [maxTranscript] bytes is [errTooLarge], as behind a wall.
 func readUnlinked(base, rel string, offset int64) ([]byte, int64, error) {
-	root, err := os.OpenRoot(base)
+	dirFD, err := openDirFollowing(base)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer root.Close()
-	at := ""
-	var fi fs.FileInfo
-	for s := range strings.SplitSeq(rel, "/") {
-		at = path.Join(at, s)
-		if fi, err = root.Lstat(at); err != nil {
+	names := strings.Split(rel, "/")
+	for _, name := range names[:len(names)-1] {
+		next, err := openDirAt(dirFD, name)
+		unix.Close(dirFD)
+		switch {
+		case errors.Is(err, unix.ELOOP), errors.Is(err, unix.ENOTDIR):
+			return nil, 0, errLinked
+		case err != nil:
 			return nil, 0, err
 		}
-		if fi.Mode()&fs.ModeSymlink != 0 {
-			return nil, 0, errLinked
-		}
+		dirFD = next
 	}
-	if !fi.Mode().IsRegular() {
+	fd, err := unix.Openat(dirFD, names[len(names)-1], unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
+	unix.Close(dirFD)
+	switch {
+	case errors.Is(err, unix.ELOOP):
 		return nil, 0, errLinked
-	}
-	f, err := root.OpenFile(rel, os.O_RDONLY|unix.O_NONBLOCK|unix.O_NOCTTY, 0)
-	if err != nil {
+	case err != nil:
 		return nil, 0, err
 	}
+	f := os.NewFile(uintptr(fd), rel)
 	defer f.Close()
-	if fi, err = f.Stat(); err != nil {
+	fi, err := f.Stat()
+	if err != nil {
 		return nil, 0, err
 	}
 	if !fi.Mode().IsRegular() {
