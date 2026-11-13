@@ -208,6 +208,18 @@ func (g *Group) JoinKey() string {
 	return name
 }
 
+// SetActive makes the key name active, whether or not it is in cooldown or out, for a
+// gateway that reopens a run whose session joined with name: the session goes on with
+// the key it has. A key in cooldown or out then gets no request, as [Group.Pick]
+// reports. A name of no key of the group changes nothing.
+func (g *Group) SetActive(name string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if i := g.index(name); i >= 0 {
+		g.active = i
+	}
+}
+
 // pick is [Group.Pick], with another key made active only when move is true. Called
 // with g.mu held.
 func (g *Group) pick(move bool) (string, bool) {

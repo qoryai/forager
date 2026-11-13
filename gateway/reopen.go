@@ -270,6 +270,11 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 		lr.px.SetNoModelKey()
 	case open != nil && open.model != "":
 		lr.px.SetModelKey(open.model)
+		if lr.keys.Has(open.model) {
+			// The open session goes on with the key it joined with, which the group
+			// made of the start key's state does not know.
+			lr.keys.SetActive(open.model)
+		}
 	}
 	if numbered {
 		// The run's first join request closed the stack proxy.
