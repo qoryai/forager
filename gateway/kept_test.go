@@ -274,7 +274,8 @@ func TestARefusedJoinSentAgainGetsItsRefusalAgain(t *testing.T) {
 
 // TestACAIsKeptUntilTheRunsFinalEnd pins the CA files of a run on the one address:
 // Close keeps them, which ends the run with no final event; the run's final end
-// removes them: the session's run.exited, and the server's end member, stopped.
+// removes them with every other file kept to reopen the run: the session's run.exited,
+// and the server's end member, stopped.
 func TestACAIsKeptUntilTheRunsFinalEnd(t *testing.T) {
 	caOf := func(dir string) (bool, bool) {
 		return exists(filepath.Join(dir, "ca.pem")), exists(filepath.Join(dir, "ca.key"))
@@ -297,16 +298,13 @@ func TestACAIsKeptUntilTheRunsFinalEnd(t *testing.T) {
 		runID := event.NewRunID()
 		e := r.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true})
 		dir := filepath.Join(r.cfg.Dir, "runs", runID)
-		if pem, key := caOf(dir); !pem || !key {
-			t.Fatalf("a live run: ca.pem %v, ca.key %v", pem, key)
+		if pem, key := caOf(dir); !pem || !key || !exists(filepath.Join(dir, "given.jsonl")) {
+			t.Fatalf("a live run: ca.pem %v, ca.key %v, given.jsonl missing", pem, key)
 		}
 		if got := e.post(t, exited(runID)); got.status != http.StatusAccepted {
 			t.Fatalf("the last batch: %d %s", got.status, got.body)
 		}
-		eventually(t, "the CA files removed", func() bool {
-			pem, key := caOf(dir)
-			return !pem && !key
-		})
+		eventually(t, "the kept files removed", func() bool { return len(keptLeft(r.cfg.Dir, runID)) == 0 })
 	})
 	t.Run("stopped", func(t *testing.T) {
 		c := gatewayControl(t)
@@ -315,16 +313,12 @@ func TestACAIsKeptUntilTheRunsFinalEnd(t *testing.T) {
 		e := r.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true})
 		c.end.Store(&server.ServerEnd{State: "cancelled"})
 		eventually(t, "the 410", func() bool { return e.post(t, heartbeat(runID)).status == http.StatusGone })
-		dir := filepath.Join(r.cfg.Dir, "runs", runID)
-		eventually(t, "the CA files removed", func() bool {
-			pem, key := caOf(dir)
-			return !pem && !key
-		})
+		eventually(t, "the kept files removed", func() bool { return len(keptLeft(r.cfg.Dir, runID)) == 0 })
 	})
 }
 
 // fakeRecord makes a run record under dir/runs with events.jsonl of the event types
-// given, changed at changed, and a run request and CA files with fake contents.
+// given, changed at changed, and every file kept to reopen a run with fake contents.
 func fakeRecord(t *testing.T, dir string, changed time.Time, types ...string) string {
 	t.Helper()
 	runID := event.NewRunID()
@@ -340,7 +334,7 @@ func fakeRecord(t *testing.T, dir string, changed time.Time, types ...string) st
 	if err := os.WriteFile(events, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"request.json", "ca.pem", "ca.key"} {
+	for _, name := range finalNames {
 		if err := os.WriteFile(filepath.Join(rec, name), []byte("fake "+name+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -352,7 +346,7 @@ func fakeRecord(t *testing.T, dir string, changed time.Time, types ...string) st
 }
 
 // TestTheSweepRemovesTheCAOfRecordsNoRunIsOpenOn pins the CA key sweep: at Start and
-// on each tick it removes the run request and the CA files of a record the gateway
+// on each tick it removes the files kept to reopen a run of a record the gateway
 // does not hold whose events.jsonl has not changed for longer than the sweep's age,
 // with a final event or without; a record that changed since and the record of a run
 // the gateway holds keep theirs.
@@ -366,7 +360,7 @@ func TestTheSweepRemovesTheCAOfRecordsNoRunIsOpenOn(t *testing.T) {
 	cfg := gateway.Config{Dir: dir}
 	gateway.SetCASweep(&cfg, time.Hour, time.Minute)
 	r := startRemote(t, nil, cfg)
-	gone := func(runID string) bool { return len(secretsLeft(dir, runID)) == 0 }
+	gone := func(runID string) bool { return len(keptLeft(dir, runID)) == 0 }
 	eventually(t, "the sweep at Start", func() bool { return gone(atStart) })
 
 	// A run the gateway holds, its record unchanged as long, with CA files.

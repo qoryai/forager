@@ -139,7 +139,7 @@ func (g *Gateway) reopen(c *reopenCall, runID string, p presented) {
 // final is true for a failure that does not pass with time ([reopenFinal] for the
 // attach): a record that cannot be reopened, a run configuration Forager does not
 // accept, or an attach that ends the run. A failure that may pass leaves the record as
-// Suspend leaves it; one that does not removes its run request and CA files too
+// Suspend leaves it; one that does not removes every file kept to reopen it too
 // ([stream.RemoveKept]). After a panic past step 1, the run's stream, tools, proxy
 // and key reporter are let go of, as for a failure that may pass, and the panic goes
 // on.
@@ -297,12 +297,12 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 	return lr, false, nil
 }
 
-// dropKept removes the run request and the CA files from the record dir of the run
+// dropKept removes the files kept to reopen a run from the record dir of the run
 // runID, whose reopen failed for good ([stream.RemoveKept]), reports a removal that
 // fails, and returns err.
 func (g *Gateway) dropKept(runID, dir string, err error) error {
 	if rerr := stream.RemoveKept(dir); rerr != nil {
-		g.report(fmt.Sprintf("run %s: removing its CA files and run request: %v", runID, rerr))
+		g.report(fmt.Sprintf("run %s: removing the files kept to reopen it: %v", runID, rerr))
 	}
 	return err
 }

@@ -26,9 +26,25 @@ import (
 	"github.com/qoryai/forager/sink"
 )
 
-// secretNames are the kept files a run's final end removes: the run request and the
-// CA files.
+// secretNames are the run request and the CA files, which a record kept for a reopen
+// has whatever else happened in the run.
 var secretNames = []string{"request.json", "ca.pem", "ca.key"}
+
+// finalNames are the kept files a run's final end removes: every file a separate gateway
+// keeps to reopen the run.
+var finalNames = []string{"request.json", "ca.pem", "ca.key", "given.jsonl", "joins.jsonl", "model-key-limit", "held.jsonl"}
+
+// keptLeft are those of finalNames still in the record directory of the run of runID
+// under dir.
+func keptLeft(dir, runID string) []string {
+	var left []string
+	for _, name := range finalNames {
+		if exists(filepath.Join(dir, "runs", runID, name)) {
+			left = append(left, name)
+		}
+	}
+	return left
+}
 
 // secretsLeft are those of secretNames still in the record directory of the run of
 // runID under dir.
@@ -104,7 +120,7 @@ func TestAMarkWithNoKeyGroupIsIgnored(t *testing.T) {
 // TestARecordThatCannotReopenEndsWithoutAnAttach pins a suspended run whose record a
 // reopen cannot read: one no longer marked answered, one with a final event, and one
 // whose CA key does not read back. The first batch is a 410 run_closed, no attach
-// reaches Qory Apiary, and the run request and the CA files go.
+// reaches Qory Apiary, and every file kept to reopen it goes.
 func TestARecordThatCannotReopenEndsWithoutAnAttach(t *testing.T) {
 	for name, change := range map[string]func(t *testing.T, dir string){
 		"not answered": func(t *testing.T, dir string) {
@@ -146,7 +162,7 @@ func TestARecordThatCannotReopenEndsWithoutAnAttach(t *testing.T) {
 			if got := len(c.attached()); got != 1 {
 				t.Errorf("%d attaches; want the open's alone", got)
 			}
-			if left := secretsLeft(cfg.Dir, runID); len(left) > 0 {
+			if left := keptLeft(cfg.Dir, runID); len(left) > 0 {
 				t.Errorf("the record keeps %v", left)
 			}
 		})
@@ -198,7 +214,7 @@ func TestAReopenWhoseAttachIsRefused(t *testing.T) {
 		if got := len(c.attached()); got != attaches {
 			t.Errorf("%d attaches after the final failure; want %d", got, attaches)
 		}
-		if left := secretsLeft(cfg.Dir, runID); len(left) > 0 {
+		if left := keptLeft(cfg.Dir, runID); len(left) > 0 {
 			t.Errorf("the record keeps %v", left)
 		}
 	})
@@ -438,8 +454,8 @@ func TestATerminatedHostAfterAReopen(t *testing.T) {
 }
 
 // TestTheSweepReadsTheRunDirectories pins the CA key sweep of a separate gateway whose
-// records RunDir makes as <directory>/<run id>: the sweep removes the run request and
-// the CA files of a record there that has not changed for longer than its age.
+// records RunDir makes as <directory>/<run id>: the sweep removes the files kept to
+// reopen a run of a record there that has not changed for longer than its age.
 func TestTheSweepReadsTheRunDirectories(t *testing.T) {
 	dir := t.TempDir()
 	runs := filepath.Join(dir, "runs")
@@ -448,7 +464,7 @@ func TestTheSweepReadsTheRunDirectories(t *testing.T) {
 	cfg := gateway.Config{RunDir: func(id string) string { return filepath.Join(runs, id) }}
 	gateway.SetCASweep(&cfg, time.Hour, time.Minute)
 	r := startRemote(t, nil, cfg)
-	eventually(t, "the sweep at Start", func() bool { return len(secretsLeft(dir, old)) == 0 })
+	eventually(t, "the sweep at Start", func() bool { return len(keptLeft(dir, old)) == 0 })
 	gateway.SweepCA(r.g, time.Now())
 	if left := secretsLeft(dir, fresh); len(left) != len(secretNames) {
 		t.Errorf("the record changed now keeps only %v", left)

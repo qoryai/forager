@@ -36,13 +36,13 @@ const (
 	limitMark   = "model-key-limit"
 )
 
-// The CA key sweep (the user's "545 (a)", 2026-11-13): a gateway removes the CA files
-// and the run request of a run record it does not hold whose events.jsonl has not
-// changed for more than caSweepAge, at Start and every caSweepEvery. A live run's
-// session sends a heartbeat at least every server.MaxInterval, 300 s, so its record
-// changes at least 3 times within caSweepAge; a record that does not is of a run that
-// no session reopens, and its key goes from the disk. A record with a final event is
-// never reopened, so its key goes too.
+// The CA key sweep (the user's "545 (a)", 2026-11-13): a gateway removes the files kept
+// to reopen a run, the CA files and the run request among them, of a run record it does
+// not hold whose events.jsonl has not changed for more than caSweepAge, at Start and
+// every caSweepEvery. A live run's session sends a heartbeat at least every
+// server.MaxInterval, 300 s, so its record changes at least 3 times within caSweepAge;
+// a record that does not is of a run that no session reopens, and its key goes from the
+// disk. A record with a final event is never reopened, so its key goes too.
 const (
 	caSweepEvery = 10 * time.Minute
 	caSweepAge   = 15 * time.Minute
@@ -353,7 +353,7 @@ func (g *Gateway) stopSweep() {
 	g.sweepStop = nil
 }
 
-// sweep removes the run request and the CA files ([stream.RemoveKept]) from each
+// sweep removes the files kept to reopen a run ([stream.RemoveKept]) from each
 // record under [Gateway.sweptDir] that meets all of these: it is the record directory
 // of its name's run, the gateway does not hold its run, and its events.jsonl has not
 // changed for more than age as of now. A record without events.jsonl counts the time
@@ -409,10 +409,10 @@ func (g *Gateway) sweep(now time.Time, age time.Duration) {
 		delete(g.sweeping, id)
 		g.mu.Unlock()
 		if err != nil {
-			g.report(fmt.Sprintf("run %s: removing its CA files and run request: %v", accesskey.ShownValue(id, false), err))
+			g.report(fmt.Sprintf("run %s: removing the files kept to reopen it: %v", accesskey.ShownValue(id, false), err))
 			continue
 		}
-		g.report(fmt.Sprintf("run %s: removed its CA files and run request: its record has not changed for %s", accesskey.ShownValue(id, false), age))
+		g.report(fmt.Sprintf("run %s: removed the files kept to reopen it: its record has not changed for %s", accesskey.ShownValue(id, false), age))
 	}
 }
 

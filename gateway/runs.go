@@ -377,10 +377,10 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 			g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, accesskey.ShownError(cerr)))
 		}
 		if remote {
-			// A run that did not open is never reopened: its CA key and run request go
-			// from the disk.
+			// A run that did not open is never reopened: the files kept to reopen it, its
+			// CA key and run request among them, go from the disk.
 			if rerr := stream.RemoveKept(st.Dir()); rerr != nil {
-				g.report(fmt.Sprintf("run %s: removing its CA files and run request: %v", req.RunID, rerr))
+				g.report(fmt.Sprintf("run %s: removing the files kept to reopen it: %v", req.RunID, rerr))
 			}
 		}
 		cancel()
@@ -1090,10 +1090,10 @@ func (lr *linkRun) end(e ending) {
 		}
 		lr.result, lr.err = lr.st.Close(lr.g.base)
 		if lr.remote && !e.keep {
-			// The run ended for good: no gateway reopens it, and its CA key and run
-			// request go from the disk.
+			// The run ended for good: no gateway reopens it, and the files kept to reopen
+			// it, its CA key and run request among them, go from the disk.
 			if err := stream.RemoveKept(lr.st.Dir()); err != nil {
-				lr.g.report(fmt.Sprintf("run %s: removing its CA files and run request: %v", lr.id, err))
+				lr.g.report(fmt.Sprintf("run %s: removing the files kept to reopen it: %v", lr.id, err))
 			}
 		}
 		lr.cancel()
