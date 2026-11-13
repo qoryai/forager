@@ -2315,10 +2315,12 @@ func TestAReopenWhoseAttachFails(t *testing.T) {
 
 // TestConnectionsThatWaitOnAReopenAreNotBounded pins the bound of 64 connections of one
 // source whose run key has not been admitted, for connections that wait on a reopen:
-// a connection counts against the bound only until its run key verifies (the user's
-// "547 (a)"). With the attach answered 503, 40 relay connections and 30 reloads from
-// one address wait on the reopen of one run; none of them is closed, the one address
-// counts none of them, and each gets its answer once the attach is answered.
+// a connection counts against its source's bound only until its run key verifies (the
+// user's "547 (a)"), and against the bound in all until the run is live. With the
+// attach answered 503, 40 relay connections and 30 reloads from one address wait on the
+// reopen of one run; none of them is closed, the one address counts each of them in
+// all and none of its source, and each gets its answer once the attach is answered;
+// then the one address counts none of them.
 func TestConnectionsThatWaitOnAReopenAreNotBounded(t *testing.T) {
 	const relays, reloads = 40, 30
 	if relays+reloads <= gateway.MaxSourceConns {
@@ -2334,6 +2336,7 @@ func TestConnectionsThatWaitOnAReopenAreNotBounded(t *testing.T) {
 	c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusServiceUnavailable, Code: "unavailable"})
 	after := before.restart(t, cfg)
 	attaches := len(c.attached())
+	const source = "127.0.0.1:0"
 
 	results := make(chan string, relays+reloads)
 	relay := func() {
@@ -2367,14 +2370,14 @@ func TestConnectionsThatWaitOnAReopenAreNotBounded(t *testing.T) {
 			}
 		}
 		time.Sleep(200 * time.Millisecond)
-		eventually(t, "the connections' admission", func() bool { return gateway.PendingConns(after.g) == 0 })
+		eventually(t, "the connections' release from their source's count", func() bool { return gateway.SourceConns(after.g, source) == 0 })
 	}
 	// Every connection is bound and waits on the reopen, whose attach is tried again and
-	// again; the one address counts none of them.
+	// again; the one address counts each of them in all, and none of its source.
 	eventually(t, "the reopen's tries", func() bool { return len(c.attached()) > attaches+5 })
 	time.Sleep(500 * time.Millisecond)
-	if n := gateway.PendingConns(after.g); n != 0 {
-		t.Errorf("%d connections counted against the bounds while they wait on the reopen", n)
+	if n, s := gateway.PendingConns(after.g), gateway.SourceConns(after.g, source); n != relays+reloads || s != 0 {
+		t.Errorf("%d connections counted in all and %d of their source while they wait on the reopen; want %d and 0", n, s, relays+reloads)
 	}
 	if len(results) > 0 {
 		t.Fatalf("an answer before the reopen: %s", <-results)
@@ -2391,6 +2394,7 @@ func TestConnectionsThatWaitOnAReopenAreNotBounded(t *testing.T) {
 			t.Fatal("a connection got no answer")
 		}
 	}
+	eventually(t, "the connections' admission", func() bool { return gateway.PendingConns(after.g) == 0 })
 }
 
 // TestARecordFromBeforeIsNotReopened pins a run record with no request.json, as a

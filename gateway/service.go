@@ -293,7 +293,7 @@ func (s *service) bind(c *tls.Conn, r *bufio.Reader, admit, vouch, release func(
 			return false
 		}
 		r.Discard(len(line))
-		return s.g.relayRun(c, r, value, admit, word == link.StackPreamble)
+		return s.g.relayRun(c, r, value, admit, release, word == link.StackPreamble)
 	}
 	c.SetDeadline(time.Time{})
 	return s.edgeQ.deliver(&boundConn{linkConn: linkConn{Conn: c, r: r}, ekm: ekm, admit: admit, vouch: vouch, release: release})
