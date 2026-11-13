@@ -1078,6 +1078,15 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The gateway writes `dev.qory.run.target_write` for each git push over HTTP that the
+  run's proxy reads, on a host it terminates or in a plain request: `started` as the
+  push goes to the host, then `changed`, `refused` or `cut`. It reads the report status
+  in a copy of git's answer, side-band and side-band-64k included, up to 4 MiB, and
+  passes every byte on to the session unchanged. At least one ref `ok` is `changed`;
+  an unpack error, every ref `ng` or a `4xx` is `refused`; a `5xx`, a fatal error, an
+  answer it cannot read, a transport failure or the run's end is `cut`. A write still
+  open when the run ends is `cut` before `dev.qory.run.exited`, whether the gateway
+  ends the run or the session closes it. README §The events, Writes to a target.
 - Several model keys of one provider per run, a key group (docs/credentials.md, Several
   keys of one provider). On a provider's `429` the proxy puts the active key in
   cooldown, sends the request again with the next key, and passes the refusal only when

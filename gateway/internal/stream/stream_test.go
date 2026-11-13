@@ -319,6 +319,31 @@ func TestHeldEgressFollowsAStartAloneInItsBatch(t *testing.T) {
 	}
 }
 
+// TestTargetWritesKeepTheirPlaceWithEgress pins a run.target_write as a run.egress is
+// held: one before run.started waits for it, and one under a Hold waits with the
+// egress, so a write's started, its request's egress and its end keep their order.
+func TestTargetWritesKeepTheirPlaceWithEgress(t *testing.T) {
+	s := New(Config{Dir: t.TempDir()})
+	runID := event.NewRunID()
+	r, _ := s.Open(runID)
+	r.Emit(event.RunTargetWrite, map[string]any{"state": "started"})
+	r.Emit(event.RunEgress, egress("one.example"))
+	r.Accept([]event.Event{sessionEvent(runID, event.RunStarted, map[string]any{}), sessionEvent(runID, event.PolicyApplied, map[string]any{"digest": "a"})})
+	h := r.Hold()
+	r.Emit(event.RunTargetWrite, map[string]any{"state": "changed"})
+	r.Await(h, appliedDigest("b"), event.RunEgress)
+	r.Accept([]event.Event{
+		sessionEvent(runID, event.RunLog, map[string]any{}),
+		sessionEvent(runID, event.PolicyApplied, map[string]any{"digest": "b"}),
+	})
+	r.Close(context.Background())
+	rec := readRecord(t, r.Dir())
+	contiguous(t, runID, rec)
+	if got := strings.Join(types(rec), " "); got != "run.started run.policy_applied run.target_write run.egress run.log run.policy_applied run.target_write" {
+		t.Errorf("the record: %s", got)
+	}
+}
+
 // appliedDigest matches a run.policy_applied of that digest.
 func appliedDigest(digest string) func(*event.Event) bool {
 	return func(ev *event.Event) bool {

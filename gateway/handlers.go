@@ -510,6 +510,11 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	shownStarted(evs)
+	if closes(evs) {
+		// The session closes the run: each write still open ends cut before the
+		// session's final event, as at the gateway's end of the run.
+		lr.writes.cutOpen()
+	}
 	if _, err := lr.st.Accept(evs); err != nil {
 		if end, ended := lr.gone(); ended {
 			gone(w, end)
@@ -536,6 +541,11 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 		// The session's run.exited or run.refused: the run's gateway side ends.
 		lr.end(ending{code: accesskey.CodeRunClosed, from: accesskey.FromGateway})
 	}
+}
+
+// closes reports whether evs holds a run's final event, a run.exited or a run.refused.
+func closes(evs []event.Event) bool {
+	return slices.ContainsFunc(evs, func(ev event.Event) bool { return ev.Type == event.RunExited || ev.Type == event.RunRefused })
 }
 
 // stopModelKeyLimit is the body of the answer to a batch after the proxy passed a

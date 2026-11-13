@@ -2268,8 +2268,10 @@ in `dev.qory.run.egress`. No event contains a ref, a commit or the system's mess
 
 When the run ends at the gateway, the gateway closes the run's proxy, then writes `cut`
 for each write still open, then `dev.qory.run.exited`, so every `started` has its end
-before `dev.qory.run.exited`. A write the gateway sees end after that point has no
-further event. When the gateway stops during a write, the write may have no end in the
+before `dev.qory.run.exited`. When the session closes the run, the gateway writes `cut`
+for each write still open before the events of the batch that has the session's
+`dev.qory.run.exited` or `dev.qory.run.refused`. A write the gateway sees end after that
+point has no further event. When the gateway stops during a write, the write may have no end in the
 record (§The server, After Forager stops unexpectedly): a receiver reads a `started`
 with no end in a run that ended as `cut`.
 
@@ -2277,7 +2279,7 @@ with no end in a run that ended as `cut`.
 proxy passes them on to the session, and changes, delays and holds back none of them.
 The answer is a sequence of pkt-lines (four hex digits of length, then the data). With
 side-band or side-band-64k, which the first pkt-line's first byte shows, band 1 contains
-the report status in pkt-lines of its own, band 2 progress, which is skipped, and band
+the report status, itself in pkt-lines, band 2 progress, which is skipped, and band
 3 a fatal error. The report is `unpack ok` or `unpack <error>`, then `ok <ref>` or
 `ng <ref> <reason>` per ref, with `option` lines after an `ok` under report-status-v2,
 then a flush. An answer with a `Content-Encoding` other than `identity`, a pkt-line
@@ -2501,7 +2503,8 @@ A restart). The local link writes none of them.
 - `model-key-limit`: an empty file, present while the run's proxy has passed a model
   provider's limit refusal to the session (§The gateway's link, A stop in a batch's
   answer).
-- `held.jsonl`: the gateway's `dev.qory.run.egress` events that waited for
+- `held.jsonl`: the gateway's `dev.qory.run.egress` and `dev.qory.run.target_write`
+  events that waited for
   `dev.qory.run.started` when the gateway stopped, one per line. The reopen reads it
   back and removes it.
 

@@ -203,6 +203,9 @@ type Proxy struct {
 	runAPI atomic.Pointer[RunAPI]
 	// keys, when set, is the run's key group ([Proxy.SetKeyGroup]).
 	keys atomic.Pointer[keyGroup]
+	// writes, when set, gets each state of each git push the proxy reads
+	// ([Proxy.ObserveWrites]).
+	writes atomic.Pointer[func(Write)]
 }
 
 // tunnel is one open connection: the decision that opened it and the ends to close.
@@ -1063,6 +1066,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// ends: deferred before the body's close, it runs after it.
 	tr := p.transport()
 	defer tr.CloseIdleConnections()
+	// A git push is recorded as it starts, and as cut unless its answer ends it.
+	push := p.beginWrite(r, d.Host, d.RequestID)
+	defer push.cut()
 	resp, err := tr.RoundTrip(out)
 	if err != nil {
 		d = failed(d, err)
@@ -1076,6 +1082,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	d.Outcome, d.Status = Connected, resp.StatusCode
 	p.observe(d)
+	push.answer(resp)
 	defer resp.Body.Close()
 	// The request went upstream without its Upgrade, so a 101 answers no upgrade it
 	// asked for: the host's connection is closed, and the client's after a 502.

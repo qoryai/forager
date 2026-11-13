@@ -378,6 +378,12 @@ leave `Env` out of git's environment. `Env` contains `NO_PROXY=localhost,127.0.0
 and git sends a request to a host that `NO_PROXY` lists past `http.proxy`, so a harness
 host on loopback would not go through the stack proxy.
 
+A git push through the host proxy, to a host the run's proxy terminates, gets the
+gateway's `dev.qory.run.target_write` (`event.RunTargetWrite`): `event.WriteStarted` as
+the push goes to the host, then `event.WriteChanged`, `event.WriteRefused` or
+`event.WriteCut` from git's answer. The session writes none, and a link batch with one
+is refused. See the contract's README, §The events, Writes to a target.
+
 Write the host work as steps, one at a time, so a reader shows each step, the step that
 failed and its lines. A session with no runtime may join during a `copy` step, and the
 steps of that join start and end inside the `copy` step:
