@@ -14,8 +14,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,9 +53,22 @@ var (
 // says and answers every request with its arguments and the request's path.
 const envTool = "GATEWAY_TEST_TOOL"
 
+// envToolDir, when set beside envTool, makes the tool ignore SIGTERM, so the gateway
+// stops it with SIGKILL after its grace; and while the directory it names contains the
+// file hold, the tool writes a file named by its process id there and never listens.
+const envToolDir = "GATEWAY_TEST_TOOL_DIR"
+
 func TestMain(m *testing.M) {
 	if os.Getenv(envTool) != "serve" {
 		os.Exit(m.Run())
+	}
+	if dir := os.Getenv(envToolDir); dir != "" {
+		signal.Ignore(syscall.SIGTERM)
+		if _, err := os.Stat(filepath.Join(dir, "hold")); err == nil {
+			os.WriteFile(filepath.Join(dir, strconv.Itoa(os.Getpid())), nil, 0o600)
+			time.Sleep(time.Hour)
+			os.Exit(1)
+		}
 	}
 	ln, err := net.Listen("unix", os.Getenv(link.EnvToolListen))
 	if err != nil {

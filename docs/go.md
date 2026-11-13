@@ -836,17 +836,19 @@ server's answer to a batch carries the outcome the run's starter gave, it ends t
 `stopped` with that state and reason, as a direct node's gateway does. A gateway that
 starts again attaches again a run whose session never got its run answer.
 
-`Close` of a separate gateway keeps its runs: it suspends each live run, flushes its
-events, writes no `dev.qory.run.exited`, and keeps the run's record. Its
-`Delivery` then has `RunClosed` false. A gateway that you `Start` again with the same
-`Dir`, on the same `Listen`, reopens each such run at the first request of it: it
-attaches the run again and goes on numbering the record, and the session goes on. A
-request gets a `503` while the reopen is tried, and a `410` `run_closed` when it fails
-for good. A record from a gateway that did not keep its runs is not reopened: the
-requests of the run get a `410` `run_closed`. The contract lists the files a reopen
-reads, their mode and when they are removed in
-[The record files](../contracts/forager/v1/README.md#the-record-files), and describes
-the reopen in the paragraph A restart of
+`Close` of a separate gateway keeps its runs: it stops every open and reopen in flight,
+a `503` to each and to every request of a run from then on, and at the same time
+suspends every live run in parallel, flushes its events, writes no
+`dev.qory.run.exited`, and keeps the run's record, within 27 seconds. Its `Delivery`
+then has `RunClosed` false. A gateway that you `Start` again with the same `Dir`, on the
+same `Listen`, reopens each such run at the first request of it: it attaches the run
+again and goes on numbering the record, and the session goes on. A request waits for the
+reopen while its connection stays open, and gets a `503` when the reopen fails in a way
+that may pass, and a `410` `run_closed` when it fails for good. A record from a gateway
+that did not keep its runs is not reopened: the requests of the run get a `410`
+`run_closed`. The contract lists the files a reopen reads, their mode and when they are
+removed in [The record files](../contracts/forager/v1/README.md#the-record-files), and
+describes the reopen in the paragraph A restart of
 [The gateway's link](../contracts/forager/v1/README.md#the-gateways-link).
 
 `Start` refuses, before anything starts, what it cannot serve: a `Listen` that is not

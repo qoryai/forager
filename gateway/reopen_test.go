@@ -1,9 +1,11 @@
 package gateway_test
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -26,9 +28,25 @@ import (
 	"github.com/qoryai/forager/sink"
 )
 
-// secretNames are the kept files a run's final end removes: the run request and the
-// CA files.
+// secretNames are the run request and the CA files, which a record kept for a reopen
+// has whatever else happened in the run.
 var secretNames = []string{"request.json", "ca.pem", "ca.key"}
+
+// finalNames are the kept files a run's final end removes: every file a separate gateway
+// keeps to reopen the run.
+var finalNames = []string{"request.json", "ca.pem", "ca.key", "given.jsonl", "joins.jsonl", "model-key-limit", "held.jsonl"}
+
+// keptLeft are those of finalNames still in the record directory of the run of runID
+// under dir.
+func keptLeft(dir, runID string) []string {
+	var left []string
+	for _, name := range finalNames {
+		if exists(filepath.Join(dir, "runs", runID, name)) {
+			left = append(left, name)
+		}
+	}
+	return left
+}
 
 // secretsLeft are those of secretNames still in the record directory of the run of
 // runID under dir.
@@ -104,7 +122,7 @@ func TestAMarkWithNoKeyGroupIsIgnored(t *testing.T) {
 // TestARecordThatCannotReopenEndsWithoutAnAttach pins a suspended run whose record a
 // reopen cannot read: one no longer marked answered, one with a final event, and one
 // whose CA key does not read back. The first batch is a 410 run_closed, no attach
-// reaches Qory Apiary, and the run request and the CA files go.
+// reaches Qory Apiary, and every file kept to reopen it goes.
 func TestARecordThatCannotReopenEndsWithoutAnAttach(t *testing.T) {
 	for name, change := range map[string]func(t *testing.T, dir string){
 		"not answered": func(t *testing.T, dir string) {
@@ -146,7 +164,7 @@ func TestARecordThatCannotReopenEndsWithoutAnAttach(t *testing.T) {
 			if got := len(c.attached()); got != 1 {
 				t.Errorf("%d attaches; want the open's alone", got)
 			}
-			if left := secretsLeft(cfg.Dir, runID); len(left) > 0 {
+			if left := keptLeft(cfg.Dir, runID); len(left) > 0 {
 				t.Errorf("the record keeps %v", left)
 			}
 		})
@@ -198,10 +216,230 @@ func TestAReopenWhoseAttachIsRefused(t *testing.T) {
 		if got := len(c.attached()); got != attaches {
 			t.Errorf("%d attaches after the final failure; want %d", got, attaches)
 		}
-		if left := secretsLeft(cfg.Dir, runID); len(left) > 0 {
+		if left := keptLeft(cfg.Dir, runID); len(left) > 0 {
 			t.Errorf("the record keeps %v", left)
 		}
 	})
+}
+
+// TestAReopenWhoseSecretsFail pins a reopen that fails in its decide step, at the fetch
+// of the run's secrets: a 5xx is a failure that may pass, a 503 with no body, the
+// record kept, and the session's next batch reopens the run once the secrets are
+// answered; any other 4xx, such as a 409 secrets_not_allowed, is final, a 410
+// run_closed, and every file kept to reopen the run goes.
+func TestAReopenWhoseSecretsFail(t *testing.T) {
+	for name, c := range map[string]struct {
+		status int
+		body   string
+	}{
+		"5xx": {http.StatusServiceUnavailable, ""},
+		"4xx": {http.StatusConflict, `{"error":"secrets_not_allowed"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctl := gatewayControl(t)
+			serveKeyGroup(ctl)
+			node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost"}}}
+			cfg := gateway.Config{Dir: t.TempDir(), Policy: node}
+			before := startRemote(t, ctl, cfg)
+			runID := event.NewRunID()
+			e := before.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true})
+			ctl.mu.Lock()
+			ctl.secretsAnswer = func(server.SecretsRequest, string) (int, []byte) { return c.status, []byte(c.body) }
+			asked := len(ctl.secretsRequests)
+			ctl.mu.Unlock()
+			e.r = before.restart(t, cfg)
+			got := e.post(t, heartbeat(runID))
+			ctl.mu.Lock()
+			if len(ctl.secretsRequests) == asked {
+				t.Error("the reopen sent no secrets request")
+			}
+			ctl.mu.Unlock()
+			if c.status >= 500 {
+				if got.status != http.StatusServiceUnavailable || len(got.body) != 0 {
+					t.Errorf("a batch whose reopen's secrets got a %d: %d %s", c.status, got.status, got.body)
+				}
+				if left := secretsLeft(cfg.Dir, runID); len(left) != len(secretNames) {
+					t.Errorf("the record keeps only %v", left)
+				}
+				ctl.mu.Lock()
+				ctl.secretsAnswer = nil
+				ctl.mu.Unlock()
+				if got := e.post(t, heartbeat(runID)); got.status != http.StatusAccepted {
+					t.Errorf("the next batch, the secrets answered: %d %s", got.status, got.body)
+				}
+				return
+			}
+			if got.status != http.StatusGone || got.refusal()["error"] != "run_closed" {
+				t.Errorf("a batch whose reopen's secrets got a %d: %d %s", c.status, got.status, got.body)
+			}
+			if left := keptLeft(cfg.Dir, runID); len(left) > 0 {
+				t.Errorf("the record keeps %v", left)
+			}
+		})
+	}
+}
+
+// TestCloseStopsAReopenPastItsAttach pins a reopen in flight past its attach when the
+// gateway closes, waiting on the fetch of its run's secrets or for its tool to listen:
+// Close stops it and returns within seconds, the batch that waited gets a 503 with no
+// body, the run keeps its record, and the gateway that starts next reopens it.
+func TestCloseStopsAReopenPastItsAttach(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []string{"secrets", "tool"} {
+		t.Run(step, func(t *testing.T) {
+			tools := t.TempDir()
+			t.Setenv(envTool, "serve")
+			t.Setenv(envToolDir, tools)
+			c := gatewayControl(t)
+			serveToolAndKeys(c)
+			cfg := gateway.Config{Dir: t.TempDir(), Tools: []gateway.Tool{{Name: "svc", Command: []string{exe}, Serves: []string{"svc.example"}}}}
+			before := startRemote(t, c, cfg)
+			runID := event.NewRunID()
+			e := before.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true})
+			after := before.restart(t, cfg)
+			e.r = after
+			got := make(chan answer, 1)
+			if step == "secrets" {
+				asked := blockSecrets(t, c)
+				go func() { got <- e.post(t, heartbeat(runID)) }()
+				select {
+				case <-asked:
+				case <-time.After(10 * time.Second):
+					t.Fatal("no secrets request")
+				}
+			} else {
+				if err := os.WriteFile(filepath.Join(tools, "hold"), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				go func() { got <- e.post(t, heartbeat(runID)) }()
+				eventually(t, "the tool that does not listen", func() bool {
+					entries, _ := os.ReadDir(tools)
+					return len(entries) > 1
+				})
+			}
+			begin := time.Now()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			after.g.Close(ctx)
+			// A tool that ignores SIGTERM goes at its SIGKILL, after the tool package's
+			// stopGrace of 5 seconds.
+			if took := time.Since(begin); took > 10*time.Second {
+				t.Errorf("Close took %s", took)
+			}
+			if a := <-got; a.status != http.StatusServiceUnavailable || len(a.body) != 0 {
+				t.Errorf("the batch while Close stopped the reopen: %d %s", a.status, a.body)
+			}
+			if left := secretsLeft(cfg.Dir, runID); len(left) != len(secretNames) {
+				t.Errorf("the record keeps only %v", left)
+			}
+			os.Remove(filepath.Join(tools, "hold"))
+			c.mu.Lock()
+			c.secretsAnswer = nil
+			c.mu.Unlock()
+			e.r = startRemote(t, c, cfg)
+			if a := e.post(t, heartbeat(runID)); a.status != http.StatusAccepted {
+				t.Errorf("a batch at the gateway that starts next: %d %s", a.status, a.body)
+			}
+		})
+	}
+}
+
+// TestCloseSuspendsBesideTheOpensItStops pins Close in its worst case, in real time:
+// a live run whose tool ignores SIGTERM and whose last batch the server has not
+// accepted, a reopen that resent an event the server does not accept and waits for its
+// tool to listen, and an open that waits for its tool to listen. Close returns within
+// the 40 seconds of the container's stop grace (the user's "543 (a)"), the waiting
+// requests get a 503 with no body, the live run and the reopened one keep their
+// records, and the open's record goes.
+//
+// The bounds, run side by side from the start of Close:
+//   - the live run: its two proxies close within 1 s each, its tool goes at its SIGKILL
+//     after the tool package's stopGrace of 5 s and within 5 s more, 10 s, and its
+//     stream flushes the batch the server does not accept within stream.CloseWait,
+//     15 s: 2 + 10 + 15 = 27 s;
+//   - the reopen: its tool 10 s, then its stream's flush 15 s, 25 s, and the one
+//     address closes after it within 1 s: 26 s;
+//   - the open: its tool 10 s.
+//
+// So Close takes 27 s at most. In series, the opens and the reopens first, then the one
+// address, then the suspends, it took up to 25 + 1 + 27 = 53 s. Measured on a laptop on
+// 2026-11-13, where each tool went at its SIGKILL at once: 20 s, and 40 s in series.
+func TestCloseSuspendsBesideTheOpensItStops(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := t.TempDir()
+	t.Setenv(envTool, "serve")
+	c := gatewayControl(t)
+	serveToolAndKeys(c)
+	var fail atomic.Bool
+	failDeliveries(c, &fail)
+	svc := []gateway.Tool{{Name: "svc", Command: []string{exe}, Serves: []string{"svc.example"}}}
+	first := gateway.Config{Dir: t.TempDir(), Tools: svc}
+	gateway.SetCloseWait(&first, 300*time.Millisecond)
+	before := startRemote(t, c, first)
+	reopened := event.NewRunID()
+	e := before.open(t, runKeyFor(t, reopened, nil), server.LinkRunRequest{Wall: true})
+	eventually(t, "the first batch at the server", func() bool { return len(c.lines(t)) == 2 })
+	fail.Store(true)
+	if got := e.post(t, heartbeat(reopened)); got.status != http.StatusAccepted {
+		t.Fatalf("the batch before the stop: %d %s", got.status, got.body)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if d, err := before.g.Close(ctx); d.RunClosed {
+		t.Fatalf("the first gateway's Close: %+v, %v", d, err)
+	}
+
+	// From here on every tool ignores SIGTERM.
+	t.Setenv(envToolDir, tools)
+	cfg := gateway.Config{Dir: first.Dir, Tools: svc}
+	r := startRemote(t, c, cfg)
+	e.r = r
+	live := event.NewRunID()
+	l := r.open(t, runKeyFor(t, live, nil), server.LinkRunRequest{Wall: true})
+	if got := l.post(t, heartbeat(live)); got.status != http.StatusAccepted {
+		t.Fatalf("the live run's batch: %d %s", got.status, got.body)
+	}
+	if err := os.WriteFile(filepath.Join(tools, "hold"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opened := event.NewRunID()
+	opening, reopening := make(chan answer, 1), make(chan answer, 1)
+	go func() { opening <- r.tryOpen(t, runKeyFor(t, opened, nil), server.LinkRunRequest{Wall: true}) }()
+	go func() { reopening <- e.post(t, heartbeat(reopened)) }()
+	eventually(t, "the two tools that do not listen", func() bool {
+		entries, _ := os.ReadDir(tools)
+		return len(entries) > 2
+	})
+
+	begin := time.Now()
+	d, err := r.g.Close(ctx)
+	took := time.Since(begin)
+	t.Logf("Close took %s: %+v, %v", took, d, err)
+	if took > 40*time.Second {
+		t.Errorf("Close took %s; want it within 40s", took)
+	}
+	if d.RunClosed {
+		t.Errorf("Close closed a run: %+v", d)
+	}
+	for name, got := range map[string]<-chan answer{"run request": opening, "batch that reopens": reopening} {
+		if a := <-got; a.status != http.StatusServiceUnavailable || len(a.body) != 0 {
+			t.Errorf("the %s: %d %s; want a 503 without a body", name, a.status, a.body)
+		}
+	}
+	for _, runID := range []string{live, reopened} {
+		if left := secretsLeft(cfg.Dir, runID); len(left) != len(secretNames) {
+			t.Errorf("run %s keeps only %v", runID, left)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(cfg.Dir, "runs", opened)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the record of the open Close stopped: %v", err)
+	}
 }
 
 // TestAReopenWhoseOwedEventsWait pins the resend of the events Qory Apiary did not
@@ -438,8 +676,8 @@ func TestATerminatedHostAfterAReopen(t *testing.T) {
 }
 
 // TestTheSweepReadsTheRunDirectories pins the CA key sweep of a separate gateway whose
-// records RunDir makes as <directory>/<run id>: the sweep removes the run request and
-// the CA files of a record there that has not changed for longer than its age.
+// records RunDir makes as <directory>/<run id>: the sweep removes the files kept to
+// reopen a run of a record there that has not changed for longer than its age.
 func TestTheSweepReadsTheRunDirectories(t *testing.T) {
 	dir := t.TempDir()
 	runs := filepath.Join(dir, "runs")
@@ -448,7 +686,7 @@ func TestTheSweepReadsTheRunDirectories(t *testing.T) {
 	cfg := gateway.Config{RunDir: func(id string) string { return filepath.Join(runs, id) }}
 	gateway.SetCASweep(&cfg, time.Hour, time.Minute)
 	r := startRemote(t, nil, cfg)
-	eventually(t, "the sweep at Start", func() bool { return len(secretsLeft(dir, old)) == 0 })
+	eventually(t, "the sweep at Start", func() bool { return len(keptLeft(dir, old)) == 0 })
 	gateway.SweepCA(r.g, time.Now())
 	if left := secretsLeft(dir, fresh); len(left) != len(secretNames) {
 		t.Errorf("the record changed now keeps only %v", left)

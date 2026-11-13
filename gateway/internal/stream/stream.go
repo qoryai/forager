@@ -628,19 +628,17 @@ func syncDirs(dirs ...string) error {
 // [Run.Discard] and [Stream.Reclaim] remove them by name.
 var keptFiles = []string{"request.json", "ca.pem", "ca.key", "given.jsonl", "joins.jsonl", "model-key-limit", heldFile}
 
-// secretFiles are the kept files whose contents may act for the run: the run request,
-// whose image references may contain a registry's credentials, and the run's CA
-// certificate and key.
-var secretFiles = []string{"ca.key", "ca.pem", "request.json"}
+// KeptFiles is the names of the files [RemoveKept] removes, in order.
+func KeptFiles() []string { return slices.Clone(keptFiles) }
 
-// RemoveKept removes the run request and the CA files ([secretFiles]) from the run
-// record directory dir, then syncs dir when it removed one: a run that ended for good,
-// which no gateway reopens. A file that does not exist is no error, nor is a dir that
-// does not exist.
+// RemoveKept removes every file the gateway keeps to reopen a run ([keptFiles]) from
+// the run record directory dir, then syncs dir when it removed one: a run that ended
+// for good, which no gateway reopens. events.jsonl, the delivery state and the lock
+// stay. A file that does not exist is no error, nor is a dir that does not exist.
 func RemoveKept(dir string) error {
 	removed := false
 	var errs []error
-	for _, name := range secretFiles {
+	for _, name := range keptFiles {
 		err := os.Remove(filepath.Join(dir, name))
 		switch {
 		case err == nil:

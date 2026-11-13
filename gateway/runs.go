@@ -113,6 +113,11 @@ type linkRun struct {
 	// suspended is true once the gateway's Close suspended the run ([linkRun.suspend]):
 	// it does not end here, and a gateway that starts again reopens it.
 	suspended bool
+	// answering is true from the moment the run's open or reopen puts it into the
+	// gateway's runs until it is armed: while the run request's handler marks the record
+	// answered and writes the run answer, and while a reopen ends. Close leaves the run
+	// to [Gateway.settle], which suspends it after it is armed.
+	answering bool
 
 	// done is closed once the run's gateway side is over and its stream flushed; result
 	// and err are then set.
@@ -377,10 +382,10 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 			g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, accesskey.ShownError(cerr)))
 		}
 		if remote {
-			// A run that did not open is never reopened: its CA key and run request go
-			// from the disk.
+			// A run that did not open is never reopened: the files kept to reopen it, its
+			// CA key and run request among them, go from the disk.
 			if rerr := stream.RemoveKept(st.Dir()); rerr != nil {
-				g.report(fmt.Sprintf("run %s: removing its CA files and run request: %v", req.RunID, rerr))
+				g.report(keptNotRemoved(req.RunID, st.Dir(), rerr))
 			}
 		}
 		cancel()
@@ -507,8 +512,13 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	if how.request != nil && how.request.Err() != nil {
 		return fail(how.request.Err())
 	}
+	// The steps past the attach end when Close starts, as the tries do: a run Close cuts
+	// does not open, and its run request gets a 503.
+	steps, stopSteps := context.WithCancel(ctx)
+	defer stopSteps()
+	defer context.AfterFunc(g.openCtx, stopSteps)()
 	var ca *proxy.CA
-	ca, err = lr.decide(ctx, decision{wall: req.Wall, narrowing: req.Narrowing, images: req.Images, fetched: fetched, labels: decideLabels}, func(*run.Run) (*proxy.CA, error) {
+	ca, err = lr.decide(ctx, steps, decision{wall: req.Wall, narrowing: req.Narrowing, images: req.Images, fetched: fetched, labels: decideLabels}, func(*run.Run) (*proxy.CA, error) {
 		ca, err := proxy.NewCA(req.RunID)
 		if err != nil || !remote {
 			return ca, err
@@ -520,6 +530,11 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		}
 		return ca, nil
 	})
+	if g.openCtx.Err() != nil {
+		// Close started: the run does not open, whether its steps failed or not, and
+		// nothing of it is kept, so the run request that comes again opens it.
+		return fail(closing(err))
+	}
 	if err != nil {
 		return fail(err)
 	}
@@ -585,8 +600,10 @@ func (e holdError) Unwrap() error { return e.error }
 // called when the run's policy needs one, which the proxy ends TLS with; the start key;
 // and the key group, which on the one address keeps the mark of a passed limit refusal
 // in the run's record ([markLimit]). It returns the authority, nil for none. ctx is the
-// run's: the tools stop when it ends.
-func (lr *linkRun) decide(ctx context.Context, d decision, authority func(*run.Run) (*proxy.CA, error)) (*proxy.CA, error) {
+// run's, which the key reporter runs under; steps is that of the fetch of the run's
+// values and of the wait for its tools to listen, which the caller ends as Close starts,
+// so Close does not wait for them.
+func (lr *linkRun) decide(ctx, steps context.Context, d decision, authority func(*run.Run) (*proxy.CA, error)) (*proxy.CA, error) {
 	g := lr.g
 	var selects []run.Selection
 	if lr.remote {
@@ -611,7 +628,7 @@ func (lr *linkRun) decide(ctx context.Context, d decision, authority func(*run.R
 		lr.live.holds(r.RunConfiguration())
 		lr.posts.SetRunDigest(r.RunConfiguration())
 	}
-	if err := r.Hold(ctx); err != nil {
+	if err := r.Hold(steps); err != nil {
 		if passing(err) {
 			return nil, holdError{err}
 		}
@@ -620,7 +637,7 @@ func (lr *linkRun) decide(ctx context.Context, d decision, authority func(*run.R
 	// The tools, started before the proxy is: a tool that does not listen is no run.
 	// They are stopped after the proxy is closed, so no request reaches a tool that is
 	// gone.
-	if lr.tools, err = r.StartTools(ctx); err != nil {
+	if lr.tools, err = r.StartTools(steps); err != nil {
 		return nil, err
 	}
 	pol := r.Policy()
@@ -1090,10 +1107,10 @@ func (lr *linkRun) end(e ending) {
 		}
 		lr.result, lr.err = lr.st.Close(lr.g.base)
 		if lr.remote && !e.keep {
-			// The run ended for good: no gateway reopens it, and its CA key and run
-			// request go from the disk.
+			// The run ended for good: no gateway reopens it, and the files kept to reopen
+			// it, its CA key and run request among them, go from the disk.
 			if err := stream.RemoveKept(lr.st.Dir()); err != nil {
-				lr.g.report(fmt.Sprintf("run %s: removing its CA files and run request: %v", lr.id, err))
+				lr.g.report(keptNotRemoved(lr.id, lr.st.Dir(), err))
 			}
 		}
 		lr.cancel()
@@ -1108,10 +1125,11 @@ func (lr *linkRun) end(e ending) {
 // ending the run, once: the run is not ended or suspended here, its timer stops, and in
 // the background it lets go of what it holds, as [linkRun.end] does, then its stream
 // is suspended under lr.batch, so no batch is numbered meanwhile ([stream.Run.Suspend]):
-// no session.exited, no run.exited, and its record's files kept. It never blocks.
+// no session.exited, no run.exited, and its record's files kept. A run not yet armed is
+// left to [Gateway.settle] ([linkRun.answering]). It never blocks.
 func (lr *linkRun) suspend() {
 	lr.mu.Lock()
-	if lr.ended || !lr.opened || lr.suspended {
+	if lr.ended || !lr.opened || lr.suspended || lr.answering {
 		lr.mu.Unlock()
 		return
 	}
@@ -1246,9 +1264,16 @@ func (lr *linkRun) compute() refreshed {
 	}
 	given = append(given, applied)
 	doc, digest := policyDocument(pol)
+	// The reload answer's image reference has no user information, at an open and at a
+	// reopen alike: a reopen decides the run by request.json, whose references have
+	// none, so the answer's bytes, and its digest, stay the same across a restart.
+	img := lr.image()
+	if img != nil {
+		img.Ref = withoutUserInfo(img.Ref)
+	}
 	body, _ := json.Marshal(reloadAnswerDoc{
 		Version: 1, Policy: doc, Digest: digest, Variables: variables(lr.r.Variables()),
-		Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(), Image: lr.image(), Applied: applied,
+		Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(), Image: img, Applied: applied,
 	})
 	sum := sha256.Sum256(body)
 	return refreshed{given: given, body: body, digest: "sha256=" + hex.EncodeToString(sum[:])}
