@@ -745,7 +745,7 @@ func (a *linkAnswer) refusal(what string) error {
 		return &endError{Refusal: &accesskey.Refusal{Code: e.Code, Status: a.status, Detail: what, From: e.From, Text: accesskey.ShownValue(doc.Message, false)}, end: e}
 	}
 	if a.status >= http.StatusInternalServerError && (doc.Error == "" || doc.Error == CodeInternal) {
-		return &StatusError{What: what, Status: a.status, Message: accesskey.ShownValue(doc.Message, false)}
+		return &StatusError{What: what, Status: a.status, Message: accesskey.ShownValue(doc.Message, false), Code: doc.Error}
 	}
 	if r := accesskey.ReadRefusal(a.status, a.body); r != nil {
 		r.Detail, r.From, r.Text = what, a.from(), accesskey.ShownValue(doc.Message, false)
@@ -787,6 +787,8 @@ type StatusError struct {
 	Status int
 	// Message is the text of the failure the answer's body carries, empty for none.
 	Message string
+	// Code is the code of a 5xx answer's body: empty for none, or internal.
+	Code string
 }
 
 func (e *StatusError) Error() string { return fmt.Sprintf("%s: status %d", e.What, e.Status) }

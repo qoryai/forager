@@ -100,9 +100,10 @@ var closeWait = 15 * time.Second
 // shorter.
 var finalWait = 180 * time.Second
 
-// joinWindow is how long a join request is sent again after a try with no answer or a
-// 503: the 120 seconds a separate gateway's restart may take. joinWaits are the waits
-// between the tries, the last one repeated. Tests set both shorter.
+// joinWindow is how long a join request behind a separate gateway is sent again after
+// a try with no answer or a 503 with no code: the 120 seconds a separate gateway's
+// restart may take. joinWaits are the waits between the tries, the last one repeated.
+// Tests set both shorter.
 var (
 	joinWindow = 120 * time.Second
 	joinWaits  = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -231,6 +232,44 @@ func TestAJoinSentAgainGetsItsAnswerAgain(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestARefusedJoinSentAgainGetsItsRefusalAgain pins the replay of a join answered 403
+// on the one address: the run's last join, refused with placeholder_conflict and with
+// no session.exited numbered, sent again with the same passes, model_key and
+// model_credential, gets the same 403, and nothing new is numbered or written; once
+// the refused join's session.exited is numbered, the next join is session 2.
+func TestARefusedJoinSentAgainGetsItsRefusalAgain(t *testing.T) {
+	t.Setenv("GATEWAY_TEST_SECRET", "s3cret-value-of-the-test")
+	c := gatewayControl(t)
+	c.serveDocument(`{"version":1}`, 'a')
+	r := startRemote(t, c, gateway.Config{
+		Credentials: []gateway.Credential{{Name: "api", Env: "GATEWAY_TEST_SECRET", Hosts: []string{"api.example"}, Scheme: "bearer", Placeholders: []string{"API_TOKEN"}}},
+		Policy:      &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}}, Credentials: []gateway.PolicyCredential{{Name: "api"}}},
+	})
+	runID := event.NewRunID()
+	e := r.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{})
+	dir := filepath.Join(r.cfg.Dir, "runs", runID)
+	joinPath := "/qory-link/run-configuration/" + runID + "/sessions"
+	conflicting := []byte(`{"version":1,"passes":["HOME","API_TOKEN"],"model_key":false}`)
+	for i := range 2 {
+		a := r.do(t, e.key, http.MethodPost, joinPath, conflicting)
+		if a.status != http.StatusForbidden || a.refusal()["error"] != "placeholder_conflict" || !slices.Equal(anyStrings(a.refusal()["names"]), []string{"API_TOKEN"}) {
+			t.Fatalf("join try %d: %d %s", i+1, a.status, a.body)
+		}
+	}
+	if got := lineMaps(t, filepath.Join(dir, "joins.jsonl")); len(got) != 1 || got[0]["session"] != float64(1) || got[0]["accepted"] != false {
+		t.Errorf("joins.jsonl %v; want the one refused join", got)
+	}
+	refusedJoin := ev(runID, event.SessionExited, map[string]any{"session": 1, "state": "failed", "exit_code": -1, "reason": "placeholder_conflict", "duration_ms": 0})
+	if got := e.post(t, refusedJoin); got.status != http.StatusAccepted {
+		t.Fatalf("the refused join's session.exited: %d %s", got.status, got.body)
+	}
+	a := r.do(t, e.key, http.MethodPost, joinPath, []byte(`{"version":1,"passes":["HOME"],"model_key":false}`))
+	var joined server.LinkJoinAnswer
+	if json.Unmarshal(a.body, &joined); a.status != http.StatusOK || joined.Session != 2 {
+		t.Errorf("the join after the refused one: %d %s", a.status, a.body)
+	}
 }
 
 // TestACAIsKeptUntilTheRunsFinalEnd pins the CA files of a run on the one address:

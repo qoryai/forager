@@ -130,9 +130,9 @@ At each `Join` the session:
 1. starts the join step, `join session <n>`, and sends the join request: the names,
    never the values, of the variables it passes a value for, and the session's model
    credential when `ModelCredential` is set; the answer has the session's number, 1 for
-   the run's first join. After a try that gets no answer, or a `503`, the session
-   flushes the run's events and sends the same join request again, for up to 120
-   seconds: a separate gateway may be restarting;
+   the run's first join. Behind a separate gateway, after a try that gets no answer,
+   or a `503` with no code, the session flushes the run's events and sends the same
+   join request again, for up to 120 seconds: the gateway may be restarting;
 2. checks the session's places, prepares the runtime and resolves the variables, then
    ends the join step `succeeded` with `-1`;
 3. records `dev.qory.session.started`, with the runtime, the command, `terminal`, the

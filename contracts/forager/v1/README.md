@@ -4355,22 +4355,28 @@ join that the gateway answers with a `403`, or that fails those checks, writes
 `reason` and `duration_ms: 0`, and no `dev.qory.session.started` (§Sequence, The run and
 its sessions). The run stays open.
 
-The session sends a join request again, unchanged, after a try that gets no answer
-(the connection does not open, its TLS or its binding fails, or it resets or times
-out) and after a `503` with no code: a separate gateway may be restarting. It tries for
-up to 120 seconds, with waits of 1, 2, 4 and 8 seconds, then 8 seconds each. Before
-each try after the first it flushes its batches, so the previous session's
-`dev.qory.session.exited` reaches the gateway before the join. Every other answer, a
-`400`, `403` or `410` among them, it takes as the answer to the join. A join with no
-answer after 120 seconds fails as after one try.
+Behind a separate gateway, the session sends a join request again, unchanged, after a
+try that gets no answer (the connection does not open, its TLS or its binding fails, or
+it resets or times out) and after a `503` with no code: the gateway may be restarting.
+It tries for up to 120 seconds, with waits of 1, 2, 4 and 8 seconds, then 8 seconds
+each. Before each try after the first it flushes its batches, so the previous session's
+`dev.qory.session.exited` reaches the gateway before the join; a batch the gateway did
+not accept is posted again at each of these waits, so a gateway back within the 120
+seconds gets the batch and then the join within one wait. Every other answer, a `400`,
+`403` or `410` among them, it takes as the answer to the join. A join with no answer
+after 120 seconds fails as after one try. On the local link the session sends a join
+request once.
 
 Behind a separate gateway, a join request that repeats the last join the gateway
-accepted gets that join's `200` again, with the same session number and model key, and
-nothing is numbered anew. A join request repeats the last join when that join's
-session has neither started nor exited and the request has the same `passes`,
-`model_key` and `model_credential`. The gateway writes each join it numbers to
-`joins.jsonl` before it sends the join's answer (The record files), so a repeated join
-request gets the same `200` from the gateway that starts again.
+numbered gets that join's answer again, and nothing is numbered anew: for a join
+answered `200`, the same `200`, with the same session number and model key; for a join
+answered `403` `placeholder_conflict`, the same `403`, as long as the request's
+`passes` still contain a placeholder of a credential or a tool the gateway holds for
+the run. A join request repeats the last join when that join's session has neither
+started nor exited and the request has the same `passes`, `model_key` and
+`model_credential`. The gateway writes each join it numbers to `joins.jsonl` before it
+sends the join's answer (The record files), so a repeated join request gets the same
+answer from the gateway that starts again.
 
 **Events.** The session posts its events to `events.url`, in batches cut as toward the
 server (§The server, Delivery), with `Content-Type: application/cloudevents-batch+json`.
