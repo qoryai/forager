@@ -483,10 +483,11 @@ func TestTheSweepKeepsTheCAOfARunThatOpens(t *testing.T) {
 	r.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true})
 }
 
-// TestTheOpeningMarkIsTheRequests pins the mark of a run that opens as each run request's
-// own entry: when a request gives the run id up and a later request of the same run id
-// marks it before the first request's mark is removed, the removal leaves the later
-// request's mark, and the sweep keeps the record's files until that mark goes.
+// TestTheOpeningMarkIsTheRequests pins the mark of a run that opens as an entry each
+// run request sets and removes: when a request gives the run id up and a later
+// request of the same run id marks it before the first request's mark is removed, the
+// removal leaves the later request's mark, and the sweep keeps the record's files
+// until that mark goes.
 func TestTheOpeningMarkIsTheRequests(t *testing.T) {
 	dir := t.TempDir()
 	r := startRemote(t, nil, gateway.Config{Dir: dir})

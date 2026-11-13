@@ -142,7 +142,7 @@ type Gateway struct {
 	// opening are the run requests whose open is in flight, by run id, from before the
 	// open makes the run's record until the request is answered. Each request removes
 	// its entry alone: a later request of the same run id, once the first gave the run
-	// id up, has an entry of its own. reopening are the reopens of suspended runs in
+	// id up, has a separate entry. reopening are the reopens of suspended runs in
 	// flight, by run id. A reopen is added here before it reads the run's CA files. The
 	// CA key sweep removes no file of a run in opening, reopening or runs
 	// ([Gateway.sweep]).

@@ -1431,8 +1431,8 @@ release may change what an existing document does, and says so under Upgrading.
   skips a run from the arrival of its run request until its run answer, as it skips a
   run the gateway holds or reopens. A run request that comes while the sweep removes
   the files of a record of its run id gets a `503` with no body, as the run's other
-  requests do. Each run request's mark is its own: a request that gives up the run id
-  leaves the mark of a later request of the same run id. A removal that panics clears
+  requests do. A run request that gives up its run id removes only the mark it set,
+  not the mark of a later request of the same run id. A removal that panics clears
   the sweep's mark of the run, so the run's requests get no `503` from then on.
 - The model keys reporter sent a report again after a report that succeeded, with
   nothing changed since. A change that came during the 1-second gap after a report, or
