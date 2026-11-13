@@ -30,8 +30,7 @@ func TestCodexIsARuntime(t *testing.T) {
 // TestCodexReadsItsKeyFromOpenAIAPIKey pins the model section: the Responses format,
 // the model id as --model, the effort in model_reasoning_effort with its seven values,
 // the endpoint in the provider's base_url, and OPENAI_API_KEY for an API key and for a
-// subscription login's token alike. Codex has no resume until its transcript can lie
-// outside the runtime's home.
+// subscription login's token alike.
 func TestCodexReadsItsKeyFromOpenAIAPIKey(t *testing.T) {
 	rt, err := codex.New()
 	if err != nil {
@@ -55,10 +54,21 @@ func TestCodexReadsItsKeyFromOpenAIAPIKey(t *testing.T) {
 	if !reflect.DeepEqual(m, want) {
 		t.Errorf("model %+v; want %+v", m, want)
 	}
-	if _, ok := rt.(runtimes.Resumes); ok {
-		if _, has := rt.(runtimes.Resumes).Resume(); has {
-			t.Error("Codex has a resume; its transcript lies outside the runtime's home")
-		}
+}
+
+// TestCodexResumesItsRolloutBelowCodexHome pins the resume: the rollout below
+// ${CODEX_HOME}/sessions/ in dated directories, CODEX_HOME the home variable, no hook
+// path, and codex exec resume <thread id>, the arguments right after exec.
+func TestCodexResumesItsRolloutBelowCodexHome(t *testing.T) {
+	rt, err := codex.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs, ok := rt.(runtimes.Resumes).Resume()
+	want := runtimes.Resume{HomeVar: "CODEX_HOME", Prefix: "${CODEX_HOME}/sessions/", Path: "${CODEX_HOME}/sessions/*/*/*/rollout-*-{session_id}.jsonl",
+		Args: []string{"resume", "{session_id}"}, After: "exec"}
+	if !ok || !reflect.DeepEqual(rs, want) {
+		t.Errorf("resume %+v, %v; want %+v", rs, ok, want)
 	}
 }
 

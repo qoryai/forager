@@ -723,6 +723,9 @@ func TestRuntimesJSONShape(t *testing.T) {
 		if want := map[string]any{"prefix": "~/.claude/projects/", "path": "~/.claude/projects/{cwd_slug}/{session_id}.jsonl"}; rt["name"] == "claude" && !reflect.DeepEqual(rt["resume"], want) {
 			t.Errorf("the claude runtime's resume is %v; want %v", rt["resume"], want)
 		}
+		if want := map[string]any{"prefix": "${CODEX_HOME}/sessions/", "path": "${CODEX_HOME}/sessions/*/*/*/rollout-*-{session_id}.jsonl"}; rt["name"] == "codex" && !reflect.DeepEqual(rt["resume"], want) {
+			t.Errorf("the codex runtime's resume is %v; want %v", rt["resume"], want)
+		}
 		if rt["name"] != dirs[i].Name() || rt["title"] == "" {
 			t.Errorf("runtime %d is %v, %v; want %s and a title", i, rt["name"], rt["title"], dirs[i].Name())
 		}

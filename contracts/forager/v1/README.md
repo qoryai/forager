@@ -5239,7 +5239,10 @@ names below this run's resolved `resume.prefix`, as many names as the descriptor
 is written at `/var/lib/qory-codex-home/sessions/2026/11/13/rollout-<time>-<id>.jsonl`
 behind a wall. A `resume.path` that is not absolute, has an empty, `.` or `..` name, or
 whose names above those are not the names of `resume.prefix` after `${<home_var>}/`,
-`sessions` for Codex, is a failed resume. A hook input whose
+`sessions` for Codex, is a failed resume. When the runtime starts with the
+descriptor's `resume.args`, its first `dev.qory.runtime.started` has `source` `resume`
+where the descriptor's rule gives `startup`: Codex prints the same `thread.started`
+for `codex exec` and `codex exec resume`, and its rule sets `startup`. A hook input whose
 `resume.path_from` is the path of a file other than `<session id>.jsonl`, under any slug, writes
 one line, `Check that the runtime resumes
 from <path>. The session reads the restored transcript there, and <path_from> of the

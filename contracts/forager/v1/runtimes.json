@@ -213,7 +213,11 @@
         ]
       },
       "fixed": {},
-      "egress_hosts": []
+      "egress_hosts": [],
+      "resume": {
+        "prefix": "${CODEX_HOME}/sessions/",
+        "path": "${CODEX_HOME}/sessions/*/*/*/rollout-*-{session_id}.jsonl"
+      }
     }
   ]
 }

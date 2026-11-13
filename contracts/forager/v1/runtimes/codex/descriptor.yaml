@@ -77,9 +77,23 @@ config:
     otel.trace_exporter: none
     otel.metrics_exporter: none
     web_search: disabled
+# Codex writes the transcript of its session, the rollout, below CODEX_HOME, which a
+# composer sets through the launch's fixed variables: sessions/<yyyy>/<mm>/<dd>/
+# rollout-<time>-<thread id>.jsonl. codex exec resume <thread id> finds the rollout by
+# the id, in its state database or else by the file's name below $CODEX_HOME/sessions,
+# so a continuation restores the rollout alone, never queue_1.sqlite or state_5.sqlite,
+# whose rows start turns or set the model, the provider and the rollout's path. A
+# composer passes --model on every launch, a resumed one included.
+resume:
+  home_var: CODEX_HOME
+  path: ${CODEX_HOME}/sessions/*/*/*/rollout-*-{session_id}.jsonl
+  prefix: ${CODEX_HOME}/sessions/
+  args: [resume, "{session_id}"]
+  after: exec
 rules:
   # thread.started has no member for how the session started. codex exec --json starts
-  # a session, so source is startup.
+  # a session, so source is startup; the session writes resume for a launch it started
+  # with resume.args.
   - source: output
     match: {type: thread.started}
     type: dev.qory.runtime.started

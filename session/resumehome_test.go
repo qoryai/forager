@@ -20,7 +20,8 @@ import (
 // homer is a runtime with resume, written as data alone, whose transcript lies below
 // its home in HOMER_HOME, its resume.home_var, as Codex writes its rollouts below
 // CODEX_HOME: in a directory for each date, with the session id at the end of the
-// file's name. Its arguments follow exec.
+// file's name. Its arguments follow exec, and its start has source startup, as
+// Codex's does.
 const homer = `version: 1
 runtime: homer
 runtime_version: "1"
@@ -36,7 +37,8 @@ rules:
   - source: output
     match: {type: start}
     type: dev.qory.runtime.started
-    data: {session_id: session_id, source: source}
+    data: {session_id: session_id}
+    set: {source: startup}
 `
 
 // homerScript is the homer's program: it prints the transcript it finds below
@@ -91,7 +93,8 @@ func homerSpec(t *testing.T, homeVar, paused string) runSpec {
 // below another HOMER_HOME: the session restores it at the same names below this run's,
 // through the link, the runtime resumes with the arguments after exec, and the session
 // sends the file under its path below this run's HOMER_HOME, the restored bytes first.
-// A run with no resume finds and sends the file the runtime makes there.
+// The runtime's start, whose rule sets source startup, has source resume. A run with no
+// resume finds and sends the file the runtime makes there, and its start has startup.
 func TestAnUnwalledHomeVariableResumesBelowALinkedHome(t *testing.T) {
 	real := t.TempDir()
 	link := filepath.Join(t.TempDir(), "home")
@@ -117,6 +120,7 @@ func TestAnUnwalledHomeVariableResumesBelowALinkedHome(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(real, ".homer", "sessions", below)); err != nil || !strings.HasPrefix(string(b), "ok\n") {
 		t.Errorf("the restored file %q, %v", b, err)
 	}
+	startedFrom(t, evs, "resume")
 
 	other := link + "/.homer-new"
 	sp = homerSpec(t, other, "")
@@ -125,8 +129,19 @@ func TestAnUnwalledHomeVariableResumesBelowALinkedHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	made := other + "/sessions/2026/11/13/rollout-t-" + rolloutID + ".jsonl"
-	if path, file := transcriptOf(t, events(t, res)); path != made || file != "{\"line\":1}\n{\"line\":2}\n" {
+	evs = events(t, res)
+	if path, file := transcriptOf(t, evs); path != made || file != "{\"line\":1}\n{\"line\":2}\n" {
 		t.Errorf("with no resume, the transcript %s %q; want %s", path, file, made)
+	}
+	startedFrom(t, evs, "startup")
+}
+
+// startedFrom checks that evs have one dev.qory.runtime.started, with source.
+func startedFrom(t *testing.T, evs []map[string]any, source string) {
+	t.Helper()
+	started := ofType(evs, "dev.qory.runtime.started")
+	if len(started) != 1 || data(started[0])["source"] != source {
+		t.Errorf("dev.qory.runtime.started is %v; want one, from %s", started, source)
 	}
 }
 
@@ -163,6 +178,7 @@ func TestAWalledHomeVariableFollowsTheMountRules(t *testing.T) {
 		if got, want := sentTranscript(t, evs, homeInside+"/sessions/"+below), "ok\n{\"line\":1}\n{\"line\":2}\n"; got != want {
 			t.Errorf("the transcript %q; want %q", got, want)
 		}
+		startedFrom(t, evs, "resume")
 	})
 	t.Run("read-only mount", func(t *testing.T) {
 		home := t.TempDir()
@@ -183,6 +199,7 @@ func TestAWalledHomeVariableFollowsTheMountRules(t *testing.T) {
 		if n := len(ofType(evs, event.SessionTranscript)); n != 0 {
 			t.Errorf("%d transcript chunks; want none", n)
 		}
+		startedFrom(t, evs, "startup")
 	})
 	t.Run("no mount", func(t *testing.T) {
 		sp := homerSpec(t, homeInside, paused)
@@ -207,7 +224,8 @@ func TestAWalledHomeVariableFollowsTheMountRules(t *testing.T) {
 // HOMER_HOME, is unset, empty, relative, or has a .. name, with a wall and without one:
 // the runtime starts without the resume arguments, the session restores nothing and
 // sends no transcript, and writes the line of a failed resume and the line of no
-// transcript, each starting with the fix that contains the variable's name.
+// transcript, each starting with the fix that contains the variable's name. The
+// runtime's start keeps source startup.
 func TestAHomeVariableWithNoUsableValueGetsNoResume(t *testing.T) {
 	fix := "Set HOMER_HOME to an absolute path in the launch's environment, with no . or .. name and no space, *, $, { or }"
 	for _, c := range []struct{ value, cause string }{
@@ -243,6 +261,7 @@ func TestAHomeVariableWithNoUsableValueGetsNoResume(t *testing.T) {
 				if _, err := os.Stat(filepath.Join(res.Dir, "transcripts")); err == nil {
 					t.Error("the session made a transcript directory")
 				}
+				startedFrom(t, evs, "startup")
 			})
 		}
 	}
