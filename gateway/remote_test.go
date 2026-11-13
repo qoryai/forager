@@ -2277,6 +2277,40 @@ func TestAReopenWhoseAttachFails(t *testing.T) {
 			t.Errorf("%d attaches; want 2", got)
 		}
 	})
+	t.Run("Close", func(t *testing.T) {
+		// Close cuts the reopen's tries: the batch gets a 503, the run keeps its CA files,
+		// and the gateway that starts next reopens it.
+		c := gatewayControl(t)
+		cfg := gateway.Config{Dir: t.TempDir()}
+		gateway.SetOpenTries(&cfg, []time.Duration{50 * time.Millisecond}, time.Minute)
+		before := startRemote(t, c, cfg)
+		runID := event.NewRunID()
+		e := before.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{})
+		c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusServiceUnavailable, Code: "unavailable"})
+		after := before.restart(t, cfg)
+		e.r = after
+		got := make(chan answer, 1)
+		go func() { got <- e.post(t, heartbeat(runID)) }()
+		eventually(t, "three attaches after the restart", func() bool { return len(c.attached()) >= 4 })
+		begin := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		after.g.Close(ctx)
+		cancel()
+		if took := time.Since(begin); took > 5*time.Second {
+			t.Errorf("Close took %s", took)
+		}
+		if a := <-got; a.status != http.StatusServiceUnavailable || len(a.body) != 0 {
+			t.Errorf("the batch while Close cut the tries: %d %s", a.status, a.body)
+		}
+		if !exists(filepath.Join(cfg.Dir, "runs", runID, "ca.key")) {
+			t.Error("the run's CA key went with a reopen that Close cut")
+		}
+		c.attachRefusal.Store(nil)
+		e.r = startRemote(t, c, cfg)
+		if a := e.post(t, heartbeat(runID)); a.status != http.StatusAccepted {
+			t.Errorf("a batch at the gateway that starts next: %d %s", a.status, a.body)
+		}
+	})
 }
 
 // TestARecordFromBeforeIsNotReopened pins a run record with no request.json, as a

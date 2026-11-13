@@ -169,13 +169,15 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 		return fail(true, err)
 	}
 
-	// The attach's tries end when the gateway's Close starts.
+	// The attach's tries end when the gateway's Close starts. Only the result of the
+	// tries decides: a final refusal keeps its 410, even when Close started after it,
+	// and tries that Close cut end in a failure that may pass, a 503.
 	ask, stopAsk := context.WithCancel(g.openCtx)
 	defer stopAsk()
 	how := opening{remote: true, runKey: p.raw, key: p.key, deadline: g.openDeadline()}
 	rc, digest, _, labels, err := g.attach(ask, conf, runID, how)
 	if err != nil {
-		return fail(ask.Err() == nil && !passing(err), codeless(err))
+		return fail(!passing(err), codeless(err))
 	}
 
 	lr.mu.Lock()
