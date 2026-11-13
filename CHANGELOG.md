@@ -1103,27 +1103,33 @@ release may change what an existing document does, and says so under Upgrading.
   (contract README §Credentials, Several model keys, and §The server, The model keys):
   - A ChatGPT subscription's `x-codex-primary-*` and `x-codex-secondary-*` headers:
     `-window-minutes` 300 is `five_hour` and 10080 is `seven_day`, `-used-percent` is
-    the utilization, and the reset is `-reset-at`, else the answer's arrival plus
-    `-reset-after-seconds`. Another length is written to the log of limit answers and
-    is no window. On a `429` with `x-codex-rate-limit-reached-type`, the windows at
-    100 percent or more are `rejected`.
+    the utilization, and the reset is `-reset-at` when it is after the answer's
+    arrival, else the arrival plus `-reset-after-seconds`. Another length is written
+    to the log of limit answers and is no window. A `429` rejects the windows at 100
+    percent or more.
   - An OpenAI API key's `x-ratelimit-{limit,remaining,reset}-{requests,tokens}`, the
     windows `requests` and `tokens`, with a reset after a duration such as `6m0s`.
-  - An error body's `error.code`; `insufficient_quota` is the window `spend_limit`. The
-    log line of a limit answer has the error code after the error type, when there is
-    one.
+  - An error body's `error.code`. The quota codes `insufficient_quota`,
+    `credit_balance_exhausted`, `organization_spend_limit_exceeded`,
+    `project_spend_limit_exceeded` and `organization_usage_limit_exceeded`, and the
+    type `insufficient_quota` with no code, are the window `spend_limit`. The log line
+    of a limit answer has the error code after the error type, when there is one.
   - In the streamed `200` of a `POST` to the endpoint's path and `/responses`, a
-    `response.failed` event with the code `rate_limit_exceeded` or `insufficient_quota`
-    puts the key in cooldown.
+    `response.failed` event with the code `rate_limit_exceeded`, `slow_down` or a quota
+    code puts the key in cooldown. Its data may be up to 1 MiB; every other event keeps
+    4096 bytes.
 
+  The gateway reads the `x-codex-*` and `x-ratelimit-*` headers for this format alone.
   The proxy sends no `openai-responses` request again with another key, and keeps no
-  copy of its body. The provider's first `429`, or a limit event in the stream, puts
-  the key in cooldown and stops the group: the `429` reaches Codex, each later request
-  with the placeholder gets the proxy's `429`, with no `Retry-After`, until the
-  session's join ends, and the gateway's answer to the session's next batch has `stop`,
-  `model_key_limit`. Keys of another format are sent again with the next key, as
-  before. The shapes of the API key's headers, the `429` bodies and the stream event
-  follow Codex's source at `17a0e6f63f`, and are not yet measured.
+  copy of its body. The active key changes only at a join. The provider's first `429`,
+  a limit event in the stream, or a cooldown of the active key during the session, from
+  a model keys report's answer or at its Use up to percentage, stops the group: a `429`
+  of the provider reaches Codex, each later request with the placeholder gets the
+  proxy's `429`, with no `Retry-After`, until the session's join ends, and the gateway's
+  answer to the session's next batch has `stop`, `model_key_limit`. Keys of another
+  format are sent again with the next key, as before. The shapes of the API key's
+  headers, the `429` bodies and the stream event follow Codex's source at `17a0e6f63f`,
+  and were not measured on an API key (probe 521, item 8).
 - Several model keys of one provider per run, a key group (docs/credentials.md, Several
   keys of one provider). On a provider's `429` the proxy puts the active key in
   cooldown, sends the request again with the next key, and passes the refusal only when
@@ -1133,8 +1139,8 @@ release may change what an existing document does, and says so under Upgrading.
   run's key group is at its provider's limit or at its Use up to percentage, or the
   gateway could not send a refused request again with the next key (a request over 8
   MiB, a key whose credential does not cover the path, or an openai-responses request,
-  which keeps one key for its session), and the gateway sends no more model requests in
-  this session.` The gateway
+  whose session keeps one key), and the gateway sends no more model requests in this
+  session.` The gateway
   reports each key's limit windows to the control plane with a signed `POST
   <run.url>/<run_id>/model-keys`, and skips a key the answer has in cooldown. The
   gateway leaves out an answer's entry observed more than 300 seconds after the

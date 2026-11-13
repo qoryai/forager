@@ -254,7 +254,9 @@ body up to 8 MiB for this; a larger body goes once.
 Keys of the format `openai-responses` keep one key for each session, because Codex
 sends its reasoning encrypted for one account. The proxy sends no such request again:
 the provider's first `429` puts the key in cooldown and reaches Codex, and the run
-pauses as below, also when another key is out of cooldown.
+pauses as below, also when another key is out of cooldown. The active key changes only
+when a session joins: a key that goes into cooldown during a session for another
+reason, such as its Use up to percentage, pauses the run the same way.
 
 A key with `use_up_to_percent` is also in cooldown while a window in its
 `use_up_to_windows` is at or above the percentage, until that window resets. The

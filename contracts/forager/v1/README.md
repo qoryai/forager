@@ -1075,15 +1075,14 @@ nothing of the refusal to the session, and:
 1. Puts the key in cooldown. The cooldown ends at the reset in the refusal: the latest
    `-reset` of the windows whose status in the refusal's `anthropic-ratelimit-unified-*`
    headers is `rejected`; for a ChatGPT subscription, the latest reset of the
-   `x-codex-*` windows at 100 percent or more, when the refusal has
-   `x-codex-rate-limit-reached-type`; for an API key, the latest reset of the header
-   families whose `remaining` is 0, or `retry-after` seconds after the refusal. After a
-   refusal with no reset, the cooldown ends at the key's `schedule_resets_at`, or at
-   that time plus 7 days once it has passed; for a key without `schedule_resets_at`, it
-   ends `pause_for_s` seconds after the refusal, or, for a key without `pause_for_s`,
-   60 seconds after it for an API key and 3600 seconds for a subscription. The gateway
-   takes a reset, or a `retry-after`, of at most 31 days after the answer arrived: a
-   later one counts as 31 days after the answer.
+   `x-codex-*` windows at 100 percent or more; for an API key, the latest reset of the
+   header families whose `remaining` is 0, or `retry-after` seconds after the refusal.
+   After a refusal with no reset, the cooldown ends at the key's `schedule_resets_at`,
+   or at that time plus 7 days once it has passed; for a key without
+   `schedule_resets_at`, it ends `pause_for_s` seconds after the refusal, or, for a key
+   without `pause_for_s`, 60 seconds after it for an API key and 3600 seconds for a
+   subscription. The gateway takes a reset, or a `retry-after`, of at most 31 days
+   after the answer arrived: a later one counts as 31 days after the answer.
 2. Makes another key of the group that is not in cooldown the active key: the key with
    `chosen`; else the first key, by the order, with no known reset or a reset that has
    passed; else the key with the closest reset, keys whose resets fall in the same
@@ -1110,9 +1109,13 @@ its reasoning encrypted for one account, so a request with another key could fai
 proxy keeps no copy of such a request's body and sends no such request again. The
 provider's first limit refusal puts the key in cooldown, as in step 1, and the proxy
 passes the refusal to the session; the proxy's `429` and the `stop` then follow, as for
-any refusal it passes. The gateway stops the group before the cooldown makes another
-key active, so no request of the session goes with another key. Codex 0.167.2 ends its turn on a refusal of a usage limit or a quota, and
-retries another `429` only after a `Retry-After`, so the proxy's `429` ends its retries.
+any refusal it passes. The key stays the active key until the next join, which makes
+another key active as in step 2. A key that goes into cooldown during a session with no
+refusal, from the answer to a model keys report or at its Use up to percentage, stops
+the group the same way: the proxy sets no other key, and returns its `429`. So no
+request of the session goes with another key. Codex 0.167.2 ends its turn on a refusal
+of a usage limit or a quota, and retries another `429` only after a `Retry-After`, so
+the proxy's `429` ends its retries.
 
 A provider may also end a streaming `200` with a limit event. The proxy reads the
 stream of one request alone: a `POST` with the group's placeholder to the stream path of
@@ -1123,17 +1126,21 @@ field is `error` and whose `data` is an error of the type `rate_limit_error`,
 `{"type":"error","error":{"type":"rate_limit_error"}}`. For `openai-responses` the path
 is the endpoint's path and `/responses`, such as `/backend-api/codex/responses`, and
 the limit event is one whose `event` field is `response.failed` or absent, and whose
-`data` has the type `response.failed` and an error code `rate_limit_exceeded` or
-`insufficient_quota`,
+`data` has the type `response.failed` and an error code that Codex reads as a limit:
+`rate_limit_exceeded` or `slow_down`, or one of the quota codes below, which are
+`spend_limit`, such as
 `{"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded"}}}`. The
 same words in any other event, such as a text delta, and in an answer to any other
-request do not count. The proxy reads an event whose `data` is at most 4096 bytes. The
-proxy then puts the key in cooldown and makes the next key the active key, as in steps 1
-and 2, and passes the stream on as it came. For `anthropic-messages` the run does not
-pause: Claude Code 2.1.316 sends the same request again without streaming about 20 ms
-later, and that request gets the next key. For `openai-responses` the gateway stops the
-group as after a refusal it passed, before the cooldown: Codex retries a stream's rate
-limit, and each retry gets the proxy's `429`. A runtime that does not send the
+request do not count. The proxy reads an event whose lines and `data` are each at most
+4096 bytes, and, for `openai-responses`, an event whose `event` field is
+`response.failed` up to 1 MiB (1,048,576 bytes): the event can repeat the request's
+instructions and tools. A longer event is passed on unread. The proxy then puts the key
+in cooldown and passes the stream on as it came. For `anthropic-messages` the next key
+becomes the active key, as in step 2, and the run does not pause: Claude Code 2.1.316
+sends the same request again without streaming about 20 ms later, and that request gets
+the next key. For `openai-responses` the key stays active and the gateway stops the
+group as after a refusal it passed: Codex retries a stream's rate limit, and each retry
+gets the proxy's `429`. A runtime that does not send the
 request again ends its session as it ends one after any failed request.
 
 The active key stays active across the run's sessions and joins. A key in cooldown in the
@@ -3495,11 +3502,17 @@ Each entry of `keys` is one key and one limit window:
   `error_code` is `enforced_spend_limit_reached` is `spend_limit`. A ChatGPT
   subscription's two windows, `x-codex-primary-*` and `x-codex-secondary-*`, are
   `five_hour` when their `-window-minutes` is 300 and `seven_day` when it is 10080; the
-  `-used-percent` is the utilization, and the reset is `-reset-at`, in epoch seconds, or
-  else the response's arrival plus `-reset-after-seconds`. An OpenAI API key's two
+  `-used-percent` is the utilization, and the reset is `-reset-at`, in epoch seconds,
+  when it is after the response's arrival, or else the arrival plus
+  `-reset-after-seconds`. A limit refusal rejects each such window at 100 percent or
+  more. An OpenAI API key's two
   header families, `x-ratelimit-{limit,remaining,reset}-{requests,tokens}`, are
   `requests` and `tokens`, with a reset after a duration such as `6m0s`, and an error
-  whose `code` is `insufficient_quota` is `spend_limit`. A limit refusal with no window
+  whose `code` is `insufficient_quota`, `credit_balance_exhausted`,
+  `organization_spend_limit_exceeded`, `project_spend_limit_exceeded` or
+  `organization_usage_limit_exceeded`, or whose `type` is `insufficient_quota` with no
+  code, is `spend_limit`. The gateway reads the `x-codex-*` and `x-ratelimit-*` headers
+  for a group of the format `openai-responses` alone. A limit refusal with no window
   is `key`. These 11 are the windows. The gateway writes a header with any other infix,
   a `-representative-claim` header with any other value, an `x-codex-*` window of any
   other length but 0 minutes, which is no window, and an `x-ratelimit-*` header of any
