@@ -1239,8 +1239,8 @@ release may change what an existing document does, and says so under Upgrading.
   and `failed` with `model_key_unauthorized` after a last session with that reason.
   Each model keys report lists the keys out after a `401` in `unauthorized`. A
   separate gateway keeps the stop's reason and those keys in the run's record,
-  `model-keys-unauthorized.json`, so a gateway that starts again answers with the same
-  stop, leaves those keys out of its first secrets request, and renews each key whose
+  `model-keys-unauthorized.json`, so a gateway that starts again puts the same stop in
+  its answers, leaves those keys out of its first secrets request, and renews each key whose
   renewal was pending in a request that names it alone.
 - A model key from the control plane with `paths` is set on those paths alone (README
   §Credentials, Paths and an account header of a model key). Another path of its host
@@ -1443,8 +1443,8 @@ release may change what an existing document does, and says so under Upgrading.
 #### Changed
 
 - The gateway renews each model key in a secrets request that names it alone, with or
-  without a `401`; the other credentials still go together. The server answers a whole
-  request `409` when it cannot seal one of its names, so a model key it refused
+  without a `401`; the other credentials still go together. The server returns `409` to a
+  whole request when it cannot seal one of its names, so a model key it refused
   blocked the renewal of every credential in its request, such as a forge token.
 - The gateway waits 30 seconds for the answer to a secrets request
   (`server.SecretsTimeout`), up from 10: the control plane may refresh a model key's

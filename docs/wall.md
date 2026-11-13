@@ -392,8 +392,8 @@ up in its parent, so two binds of one root are allowed.
   inside none of `/qory`, `/var/lib/docker`, `/proc`, `/sys`, `/dev`, `/etc/hosts`,
   `/etc/hostname`, `/etc/resolv.conf` and `/sbin/docker-init`, so it is neither `/`,
   `/etc` nor `/sbin`. A `Target` that breaks these rules fails the join with an error
-  that starts with the fix. A mount with a `Target` is always bound on its own line,
-  never reached through another bind, and its path on this machine is, contains and
+  that starts with the fix. A mount with a `Target` is always bound, never reached
+  through another bind, and its path on this machine is, contains and
   lies inside no other place's: of the other mode that is `mount_mode_conflict`,
   otherwise `mount_target_conflict`.
 

@@ -968,7 +968,7 @@ on. It waits at least 30 seconds between two requests for one entry. A request l
 only the entries that are due, in the document's order, with entries due within 30
 seconds of each other in one request, under the digest it computes of the run
 configuration in force, a reload's once the reload is committed. A model key goes in a
-request that names it alone, since the server answers a whole request `409` when it
+request that names it alone, since the server returns `409` to a whole request when it
 cannot seal one of its names. A value without `expires_at` is never asked for again,
 after a `401` either: a model key without it leaves the run's key group after a `401`
 on the model API's path (Keys out after a 401, below).
@@ -1275,8 +1275,8 @@ After a `401` on the model API's path:
    until a renewal brings a key back (§The server, The model keys).
 
 A separate gateway keeps the stop's reason and the keys out after a `401` in the run's
-record, so a gateway that starts again (§The server, A gateway that restarts) answers
-with the same stop. Its first secrets request leaves those keys out, and it renews each
+record, so a gateway that starts again (§The gateway's link, A restart) puts the same
+stop in its answers. Its first secrets request leaves those keys out, and it renews each
 key whose renewal was pending in a request that names it alone. When no credential of
 the run is left to request, it sends no secrets request.
 
