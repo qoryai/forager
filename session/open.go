@@ -87,7 +87,11 @@ type Run struct {
 	joining     sync.Mutex
 	numbered    int
 	maybeJoined bool
-	lastExit    int
+	// unflushed is true when the flush at the end of the last join returned before the
+	// gateway accepted the session's last events: behind a separate gateway the next
+	// join is sent only once they are accepted, [Run.tryJoin].
+	unflushed bool
+	lastExit  int
 	// lastReason is the reason of the dev.qory.session.exited of the run's last
 	// session, empty for none: the close's model_key_limit follows only
 	// model_key_limit.

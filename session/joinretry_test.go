@@ -3,6 +3,7 @@ package session_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -184,6 +185,93 @@ func TestAJoinWaitsForAGatewayBackWithinTheWindow(t *testing.T) {
 	closed, err := r.Close(ctx, session.Outcome{State: "succeeded"})
 	if err != nil || closed.Undelivered != 0 {
 		t.Errorf("closed %+v, %v", closed, err)
+	}
+}
+
+// TestAJoinWaitsForTheLastSessionsEvents pins the join after one whose flush ended
+// before the gateway accepted the session's last events, behind a separate gateway:
+// the next join request is sent only once the gateway accepted the previous session's
+// dev.qory.session.exited, so a gateway that restarted in between never takes it for a
+// repeat of the join before it, refused with 403 or answered 200. When the events are
+// still not accepted at the window's end, the join fails with no request sent.
+func TestAJoinWaitsForTheLastSessionsEvents(t *testing.T) {
+	cw := session.SetCloseWait(300 * time.Millisecond)
+	t.Cleanup(func() { session.SetCloseWait(cw) })
+	t.Cleanup(session.SetJoinRetry(5*time.Second, 100*time.Millisecond, 200*time.Millisecond, 400*time.Millisecond))
+	for _, c := range []struct {
+		name  string
+		first linktest.Reply
+		// downFor is how long the batches with session 1's session.exited are dropped,
+		// from the first.
+		downFor time.Duration
+		// joins is how many join requests the gateway gets.
+		joins int
+	}{
+		{"refused", linktest.Reply{Status: 403, Body: linktest.Refusal("placeholder_conflict", "gateway", "HOME")}, 1500 * time.Millisecond, 2},
+		{"accepted", linktest.Reply{Status: 200, Body: map[string]any{"version": 1, "session": 1}}, 1500 * time.Millisecond, 2},
+		{"past the window", linktest.Reply{Status: 200, Body: map[string]any{"version": 1, "session": 1}}, time.Minute, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sp, g, _ := remoteSpec(t, 0)
+			var mu sync.Mutex
+			var since, accepted, second time.Time
+			g.OnJoin(func(linktest.Join) linktest.Reply {
+				mu.Lock()
+				defer mu.Unlock()
+				if len(g.Joins()) == 1 {
+					return c.first
+				}
+				second = time.Now()
+				return linktest.Reply{Status: 200, Body: map[string]any{"version": 1, "session": 2}}
+			})
+			g.OnBatch(func(evs []map[string]any) linktest.Reply {
+				mu.Lock()
+				defer mu.Unlock()
+				if !slices.ContainsFunc(ofType(evs, "dev.qory.session.exited"), func(e map[string]any) bool { return data(e)["session"] == float64(1) }) {
+					return linktest.Reply{Status: 200}
+				}
+				if since.IsZero() {
+					since = time.Now()
+				}
+				if time.Since(since) < c.downFor {
+					return linktest.Reply{Drop: true}
+				}
+				if accepted.IsZero() {
+					accepted = time.Now()
+				}
+				return linktest.Reply{Status: 200}
+			})
+			ctx := context.Background()
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			first, err := r.Join(ctx, sp.SessionSpec)
+			if (c.first.Status == 200) != (err == nil) {
+				t.Fatalf("session 1: %+v, %v", first, err)
+			}
+			res, err := r.Join(ctx, sp.SessionSpec)
+			if got := len(g.Joins()); got != c.joins {
+				t.Errorf("%d join requests, want %d", got, c.joins)
+			}
+			if c.joins == 1 {
+				if err == nil || !strings.HasPrefix(err.Error(), "Join again once the gateway is back") {
+					t.Errorf("the join past the window: %+v, %v", res, err)
+				}
+				return
+			}
+			if err != nil || res.Session != 2 {
+				t.Fatalf("session 2: %+v, %v", res, err)
+			}
+			mu.Lock()
+			if accepted.IsZero() || !second.After(accepted) {
+				t.Errorf("the second join came at %v, session 1's session.exited was accepted at %v", second, accepted)
+			}
+			mu.Unlock()
+			if closed, err := r.Close(ctx, session.Outcome{State: "succeeded"}); err != nil || closed.Undelivered != 0 {
+				t.Errorf("closed %+v, %v", closed, err)
+			}
+		})
 	}
 }
 

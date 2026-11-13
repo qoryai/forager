@@ -162,7 +162,7 @@ func (r *Run) join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	// dev.qory.session.exited, or the run ended.
 	flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeWait)
 	defer cancel()
-	if r.posts.Flush(flushCtx) != nil {
+	if r.unflushed = r.posts.Flush(flushCtx) != nil; r.unflushed {
 		r.open.Report(fmt.Sprintf("the gateway did not accept the session's last events within %s; the next join may be refused", closeWait))
 	}
 	return res, err
@@ -268,7 +268,7 @@ func (r *Run) joinRequest(ctx context.Context, s runSpec, step *Step) (*server.L
 	// answer under a key the run key does not name may follow a join the gateway
 	// numbered.
 	var status *server.StatusError
-	if unanswered || !errors.As(err, &status) && !errors.As(err, &ref) {
+	if unanswered || !errors.Is(err, errJoinUnsent) && !errors.As(err, &status) && !errors.As(err, &ref) {
 		r.maybeJoined = true
 	}
 	step.end(event.StateFailed, -1)
@@ -288,11 +288,27 @@ func (r *Run) joinRequest(ctx context.Context, s runSpec, step *Step) (*server.L
 // with the same session number and model key or 403 with the same refusal, and
 // nothing numbered anew.
 //
+// The same answer may also come to a join that is no repeat: a join request equal to
+// the last one, sent before the gateway accepted the last session's
+// dev.qory.session.exited. So behind a separate gateway, when the flush at the end of
+// the last join returned before the gateway accepted the session's last events, the
+// first try waits until a flush returns, for up to joinWindow ([Run.flushJoin]); when
+// the window ends first, the join fails with nothing sent.
+//
 // On the local link the gateway runs in qory's process and a try fails only when that
 // gateway is gone, so the request is sent once.
 func (r *Run) tryJoin(ctx context.Context, req server.LinkJoinRequest) (*server.LinkJoinAnswer, bool, error) {
 	window, cancel := context.WithTimeout(ctx, joinWindow)
 	defer cancel()
+	if r.remote != nil && r.unflushed {
+		if _, ok := r.flushJoin(window, 0); !ok {
+			if err := ctx.Err(); err != nil {
+				return nil, false, err
+			}
+			return nil, false, fmt.Errorf("Join again once the gateway is back: it did not accept the run's last events within %s, so %w.", joinWindow, errJoinUnsent)
+		}
+		r.unflushed = false
+	}
 	unanswered := false
 	for i := 0; ; i++ {
 		answer, err := r.link.Join(ctx, r.disc.Run.URL, r.id, req)
@@ -313,23 +329,30 @@ func (r *Run) tryJoin(ctx context.Context, req server.LinkJoinRequest) (*server.
 	}
 }
 
-// pauseJoin waits the i-th of joinWaits, the last one repeated, then flushes the
-// session's batches, so the previous session's dev.qory.session.exited reaches the
-// gateway before the join. A flush that has not returned after the next wait is called
-// again: each call ends the link sink's wait between two tries of a batch, so a gateway
-// back after a restart gets the batch within one wait, not up to sink.MaxBackoff
-// later. It returns the index of the last wait, and false when the window ends first.
+// pauseJoin waits the i-th of joinWaits, then flushes the session's batches
+// ([Run.flushJoin]) from the next wait on, so the previous session's
+// dev.qory.session.exited reaches the gateway before the join. It returns the index of
+// the wait before the last flush's, and false when the window ends first.
 func (r *Run) pauseJoin(window context.Context, i int) (int, bool) {
-	wait := func(i int) time.Duration { return joinWaits[min(i, len(joinWaits)-1)] }
-	t := time.NewTimer(wait(i))
+	t := time.NewTimer(joinWait(i))
 	defer t.Stop()
 	select {
 	case <-t.C:
 	case <-window.Done():
 		return i, false
 	}
+	j, ok := r.flushJoin(window, i+1)
+	return j - 1, ok
+}
+
+// flushJoin flushes the session's batches, for the i-th of joinWaits at most. A flush
+// that has not returned by then is called again, for the next wait: each call ends the
+// link sink's wait between two tries of a batch, so a gateway back after a restart gets
+// the batch within one wait, not up to sink.MaxBackoff later. It returns the index of
+// the last flush's wait, and false when the window ends first.
+func (r *Run) flushJoin(window context.Context, i int) (int, bool) {
 	for {
-		flushCtx, cancel := context.WithTimeout(window, wait(i+1))
+		flushCtx, cancel := context.WithTimeout(window, joinWait(i))
 		err := r.posts.Flush(flushCtx)
 		cancel()
 		if err == nil {
@@ -341,6 +364,13 @@ func (r *Run) pauseJoin(window context.Context, i int) (int, bool) {
 		i++
 	}
 }
+
+// errJoinUnsent is in the error of a join whose request was never sent: the gateway
+// numbered nothing.
+var errJoinUnsent = errors.New("the session sent no join request")
+
+// joinWait is the i-th of joinWaits, the last one repeated.
+func joinWait(i int) time.Duration { return joinWaits[min(i, len(joinWaits)-1)] }
 
 // joinUnanswered reports whether a join request's error is a try that got no answer:
 // a connection that did not open, its TLS or its binding failing, a connection reset,
