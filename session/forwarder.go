@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,9 +31,13 @@ const dialWait = 10 * time.Second
 // gatewayHold is how long a forwarder that reaches a separate gateway through the link
 // tries again to reach it for one connection, while the agent's connection stays open
 // with nothing written to it, so a gateway that restarts within it serves the
-// connection. Claude Code and Codex wait 120 s for a CONNECT held with no answer, then
-// end the turn.
+// connection. With a CONNECT held 120 s with no answer, Claude Code 2.1.316 and Codex
+// rust-v0.166.0 finish the turn. Claude Code's limit is 360 s (test of 2026-11-12).
 const gatewayHold = 120 * time.Second
+
+// agentWait is how long the forwarder reads the agent's connection, after a dial that
+// took more than one try, for its end ([agentGone]).
+const agentWait = 10 * time.Millisecond
 
 // holdFirstWait is the wait after the first failed try of a hold; each failed try
 // doubles it, up to holdMaxWait.
@@ -348,6 +353,9 @@ func (f *forwarder) serve(c net.Conn) {
 		return
 	}
 	var src io.Reader = c
+	// agent is the reader over c that the request's head was read through, nil for a
+	// connection passed on as it arrives.
+	var agent *bufio.Reader
 	// plain is the one plain request of a connection the password let in, or of a
 	// connection with the check.
 	var plain *proxied
@@ -367,6 +375,7 @@ func (f *forwarder) serve(c net.Conn) {
 			return
 		}
 		c.SetReadDeadline(time.Time{})
+		agent = rest
 		if err := checkRequestLine(head); err != nil {
 			badRequest(c, err)
 			return
@@ -393,6 +402,7 @@ func (f *forwarder) serve(c net.Conn) {
 			return
 		}
 		c.SetReadDeadline(time.Time{})
+		agent = rest
 		if !f.admit(c) {
 			return
 		}
@@ -410,8 +420,14 @@ func (f *forwarder) serve(c net.Conn) {
 			return
 		}
 	}
-	up, err := f.dialUp(way)
+	up, held, err := f.dialUp(way)
 	if err != nil {
+		return
+	}
+	if held && agentGone(c, agent) {
+		// The agent closed its connection during the hold: a plain request or a POST to
+		// the run API sent now would run with no reader for its reply.
+		up.Close()
 		return
 	}
 	if !f.track(up) {
@@ -443,8 +459,9 @@ func (f *forwarder) serve(c net.Conn) {
 // dialUp opens the connection to the proxy with way's dial, each try for [dialWait] at
 // most. With way's hold, it tries again after every failed try until the hold ends,
 // waiting [holdFirstWait] first, then twice as long each time up to [holdMaxWait]; the
-// error is the last try's. It stops at once when the forwarder is closed.
-func (f *forwarder) dialUp(way forwarding) (net.Conn, error) {
+// error is the last try's, and held is true when the connection opened at a try after
+// the first. It stops at once when the forwarder is closed.
+func (f *forwarder) dialUp(way forwarding) (up net.Conn, held bool, err error) {
 	ctx := f.ctx
 	if way.hold > 0 {
 		var cancel context.CancelFunc
@@ -452,22 +469,37 @@ func (f *forwarder) dialUp(way forwarding) (net.Conn, error) {
 		defer cancel()
 	}
 	wait := holdFirstWait
-	for {
+	for i := 0; ; i++ {
 		try, cancel := context.WithTimeout(ctx, dialWait)
-		up, err := way.dial(try)
+		up, err = way.dial(try)
 		cancel()
 		if err == nil || way.hold == 0 {
-			return up, err
+			return up, i > 0, err
 		}
 		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			t.Stop()
-			return nil, err
+			return nil, false, err
 		case <-t.C:
 		}
 		wait = min(2*wait, holdMaxWait)
 	}
+}
+
+// agentGone reports whether the agent's connection c, read through r, ended or failed:
+// the agent closed it, or it reset. It reads one byte past what r has buffered, for
+// [agentWait] at most, and keeps that byte in r. A connection that sends nothing in
+// that time, or that r has no room left for, is still there. A nil r is a connection
+// with no reader, reported as still there.
+func agentGone(c net.Conn, r *bufio.Reader) bool {
+	if r == nil {
+		return false
+	}
+	c.SetReadDeadline(time.Now().Add(agentWait))
+	defer c.SetReadDeadline(time.Time{})
+	_, err := r.Peek(r.Buffered() + 1)
+	return err != nil && !errors.Is(err, bufio.ErrBufferFull) && !errors.Is(err, os.ErrDeadlineExceeded)
 }
 
 // headWait is how long a connection has to send its first request's head.
