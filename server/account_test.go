@@ -74,11 +74,13 @@ func TestAReservedAccountHeaderIsRefused(t *testing.T) {
 // schema's grammar takes but that has a part policy.CleanPath refuses in a request's
 // path, a dot segment, an empty segment, a backslash or an encoded slash, backslash, dot
 // or percent sign, is run_configuration_invalid, since the proxy denies every request
-// path with one; a dot inside a name, or after the last slash of a path that ends in *,
-// is no segment.
+// path with one. A segment counts by its part before its first ; or %3B, as a server
+// such as Tomcat reads it. A dot inside a name, or after the last slash of a path that
+// ends in *, is no segment, and a ; after a name starts a parameter of a normal segment.
 func TestAnUnclearModelKeyPathIsRefused(t *testing.T) {
 	for _, p := range []string{"/a/../b", "/a/./b", "/..", "/.", "/a/..", "/a/../*", "/a/./*", "/./*", "/a//b", "//*",
-		"/a/%2e%2e/b", "/a%2Fb", "/a%5cb", "/a%25b", `/a\b`, "/a/%2e*"} {
+		"/a/%2e%2e/b", "/a%2Fb", "/a%5cb", "/a%25b", `/a\b`, "/a/%2e*",
+		"/a/..;/b", "/a/.;/b", "/a/..;x/b", "/a/..;", "/a/..;*", "/a/;x/b", "/a/..%3b/b", "/a/..%3B/b", "/a/%2e%2e;/b", "/a/%2e;/b"} {
 		c := subscription()
 		c.Paths = []string{"/backend-api/codex/*", p}
 		err := server.CheckCredentials([]server.RunCredential{c}, "")
@@ -87,10 +89,37 @@ func TestAnUnclearModelKeyPathIsRefused(t *testing.T) {
 			t.Errorf("path %s: %v", p, err)
 		}
 	}
-	for _, p := range []string{"/a/.well-known", "/a/.*", "/a/..*", "/a/..b", "/a.b/c", "/backend-api/codex/*", "/a/", "/*"} {
+	for _, p := range []string{"/a/.well-known", "/a/.*", "/a/..*", "/a/..b", "/a.b/c", "/backend-api/codex/*", "/a/", "/*",
+		"/a/b;jsessionid=0123/c", "/a/b;jsessionid=0123", "/a/..b;x/c", "/a/b%3bx/c"} {
 		c := subscription()
 		c.Paths = []string{p}
 		if err := server.CheckCredentials([]server.RunCredential{c}, ""); err != nil {
+			t.Errorf("path %s: %v", p, err)
+		}
+	}
+}
+
+// TestAnUnclearHostCredentialPathIsRefused pins the same check for a host credential's
+// apply paths: a dot segment, an empty segment, or a segment that is one before its
+// first ;, is run_configuration_invalid with the credential's name, and a normal path,
+// one with a parameter after a name among them, is taken.
+func TestAnUnclearHostCredentialPathIsRefused(t *testing.T) {
+	forge := func(paths ...string) server.RunCredential {
+		return server.RunCredential{Name: "forge", Placeholders: []string{"FORGE_TOKEN"}, Apply: []server.Apply{
+			{Hosts: []string{"api.git.example"}, Scheme: "bearer", Paths: []string{"/repos/example-org/app/*"}},
+			{Hosts: []string{"git.example"}, Scheme: "basic", Username: "x-access-token", Paths: paths}}}
+	}
+	for _, p := range []string{"/example-org/app.git/..;/other", "/example-org/app.git/.;/x", "/example-org/..;x/*", "/example-org/../*",
+		"/example-org//*", "/example-org/;x/*", "/example-org/%2e%2e;/*", "/example-org/..%3B/*"} {
+		err := server.CheckCredentials([]server.RunCredential{forge("/example-org/app.git/*", p)}, "")
+		var r *accesskey.Refusal
+		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !strings.Contains(err.Error(), `the credential "forge"`) ||
+			!strings.Contains(err.Error(), "the proxy denies every request whose path has one") {
+			t.Errorf("path %s: %v", p, err)
+		}
+	}
+	for _, p := range []string{"/example-org/app.git/*", "/example-org/app;jsessionid=0123/*", "/example-org/app.git/info/refs", "/*"} {
+		if err := server.CheckCredentials([]server.RunCredential{forge(p)}, ""); err != nil {
 			t.Errorf("path %s: %v", p, err)
 		}
 	}
