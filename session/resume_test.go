@@ -17,6 +17,7 @@ import (
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/session/runtimes/codex"
 	"github.com/qoryai/forager/wall"
 )
 
@@ -449,6 +450,36 @@ func TestARolloutRunResumesWithItsArgumentsAfterExec(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Join(res.SessionDir, session.ResumeScript)); (err == nil) == walled {
 				t.Errorf("the resume script: %v", err)
+			}
+		})
+	}
+}
+
+// TestTheArgumentsAreCheckedAgainWithTheResumeArguments pins the second check of a
+// launch's arguments, with a wall and without one: in exec --json --enable -c<pair>,
+// --enable takes the pair as its value, so the first check passes; resume <id> before
+// the last argument leaves the pair alone, and it sets a provider's address, so the
+// join fails before the runtime starts.
+func TestTheArgumentsAreCheckedAgainWithTheResumeArguments(t *testing.T) {
+	paused := "~/.rollouter/2025/01/02/rollout-p-" + rolloutID + ".jsonl"
+	doc := strings.Replace(rollouter, "  after: exec\n", "  after: exec\n  place: before_last\n", 1)
+	for _, walled := range []bool{false, true} {
+		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+			sp, home := rollouterSpec(t, paused)
+			rt, err := codex.Described("rollouter.yaml", []byte(doc), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sp.Runtime = rt
+			sp.Args = append(sp.Args, "--enable", "-cmodel_providers.x.base_url=https://elsewhere.example")
+			if walled {
+				t.Setenv("QORY_TEST_HOST_ONLY", "1")
+				sp.Wall, sp.Image, sp.Mounts = &transcriptWall{home: home}, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
+			}
+			_, err = run(context.Background(), sp)
+			if err == nil || !strings.HasPrefix(err.Error(), "remove the -c that sets model_providers from the launch's arguments") ||
+				strings.Contains(err.Error(), "example") {
+				t.Errorf("the join: %v", err)
 			}
 		})
 	}

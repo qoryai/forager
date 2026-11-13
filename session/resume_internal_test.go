@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -268,6 +269,28 @@ func TestAWalledRestoreMatchesResumePath(t *testing.T) {
 	} {
 		if got := rollout.matches(rel); got != want {
 			t.Errorf("a pattern, %s: %v; want %v", rel, got, want)
+		}
+	}
+}
+
+// TestResumedArgsLeaveOutTheSettingsArguments pins the arguments the second check gets:
+// the launch's arguments without the settings arguments in front of them, with the
+// resume arguments at their place, or in front when that place lies among the settings
+// arguments.
+func TestResumedArgsLeaveOutTheSettingsArguments(t *testing.T) {
+	base := []string{"exec", "--json", "--enable", "-cx=y"}
+	added := []string{"resume", "s"}
+	for _, c := range []struct {
+		n, at int
+		want  []string
+	}{
+		{2, 5, []string{"exec", "--json", "--enable", "resume", "s", "-cx=y"}},
+		{0, 3, []string{"exec", "--json", "--enable", "resume", "s", "-cx=y"}},
+		{2, 6, []string{"exec", "--json", "--enable", "-cx=y", "resume", "s"}},
+		{2, 1, []string{"resume", "s", "exec", "--json", "--enable", "-cx=y"}},
+	} {
+		if got := resumedArgs(base, c.n, c.at, added); !slices.Equal(got, c.want) {
+			t.Errorf("n %d, at %d: %q; want %q", c.n, c.at, got, c.want)
 		}
 	}
 }

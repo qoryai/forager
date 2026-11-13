@@ -462,7 +462,7 @@ func (d *Descriptor) checkRules() error {
 		} {
 			for _, f := range m.fields {
 				if other, ok := seen[f]; ok {
-					return fmt.Errorf("rules[%d]: set the field %s in one of data, set and from_started, not in %s and %s",
+					return fmt.Errorf("rules[%d]: set the field %s in one of data, set or from_started, not in %s and %s",
 						i, accesskey.ShownName(f, false), other, m.member)
 				}
 				seen[f] = m.member
@@ -491,7 +491,7 @@ func (d *Descriptor) checkConfig() error {
 	for i, a := range settings {
 		for _, b := range settings[i+1:] {
 			if a == b || strings.HasPrefix(a, b+".") || strings.HasPrefix(b, a+".") {
-				return fmt.Errorf("model: place the values of %s and %s in two settings, neither inside the other: a key has a value or a table of keys, not both",
+				return fmt.Errorf("model: place the values of %s and %s in two settings, neither inside the other: a TOML key has a value or a table of keys, not both",
 					accesskey.ShownName(a, false), accesskey.ShownName(b, false))
 			}
 		}
@@ -559,7 +559,7 @@ func (r *Resume) check() error {
 	}
 	switch {
 	case r.Place != "" && r.Place != PlaceBeforeLast:
-		return fmt.Errorf("resume: set place to %s or leave it out: %s is no place", PlaceBeforeLast, accesskey.ShownValue(r.Place, true))
+		return fmt.Errorf("resume: set place to %s or leave it out: %s is not a value of place", PlaceBeforeLast, accesskey.ShownValue(r.Place, true))
 	case r.Place != "" && r.After == "":
 		return fmt.Errorf("resume: set after with place %s: the arguments go before the last argument after it", r.Place)
 	}

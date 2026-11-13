@@ -1163,7 +1163,10 @@ res, err := session.Resend(ctx, session.ResendSpec{
   command. `runtimes.ConfigArgs` builds those pairs. Through the optional
   `runtimes.ArgsChecker`, the join fails before the runtime starts when the launch's
   arguments set one of those settings, with an error that starts with the fix and
-  contains no value of the arguments.
+  contains no value of the arguments. A session that resumes checks the arguments
+  again with the resume arguments at their place: in `exec --json --enable -cx=y`,
+  `--enable` takes `-cx=y` as its value, and `resume <id>` right before the last
+  argument leaves `-cx=y` alone, a pair that sets `x`.
 
 `catalog.Lookup(name, dir)` resolves a name to the first of these that applies:
 
@@ -1171,11 +1174,11 @@ res, err := session.Resend(ctx, session.ResendSpec{
    ships for. It is read only when its last part is no link, it is a regular file and
    it holds at most 1 MiB.
 2. The contract's descriptor: Claude Code's or Codex's.
+3. A bare runtime, for a name with neither. It is run and recorded, with no session
+   events.
 
 Codex from either place, the contract's descriptor or a machine's `codex.yaml`, comes
 with the check of Codex's flags below.
-3. A bare runtime, for a name with neither. It is run and recorded, with no session
-   events.
 
 A session whose `SessionSpec.Runtime` is nil runs a bare runtime named after its
 command, and has no start key: its program gets no model key's variable, placeholder or
@@ -1189,7 +1192,7 @@ A program that needs custom code implements the interface.
 `runtimes.DescribedWithArgs` reads a descriptor with a `runtimes.ArgsCheck`, a check of
 flags that only that runtime has, which runs after the check of `config.flag`.
 
-Two packages give the contract's runtimes with what a descriptor cannot hold:
+Two packages add to the contract's runtimes what a descriptor cannot contain:
 
 - `codex.New()` is Codex 0.167.2 by the contract's descriptor, and
   `codex.Described(name, document, installers)` is Codex by another descriptor
@@ -1198,10 +1201,13 @@ Two packages give the contract's runtimes with what a descriptor cannot hold:
   and `-c` with a pair that sets one of the session's settings, a setting at, under or above `model_providers`,
   `profile`, `profiles`, `projects`, `responses_api_metadata`, `skills` or
   `cloud.skills`, or one of `openai_base_url`, `chatgpt_base_url` and
-  `experimental_realtime_*_base_url`; on `--enable` and `--disable` of a fixed
-  feature, `plugins`, `apps` or `connectors`; and on `--oss`, `--local-provider`,
+  `experimental_realtime_*_base_url`; on `--enable` and `--disable` only of a
+  feature that `config.fixed` sets, such as `plugins` or `apps` (`connectors` counts
+  as `apps`); and on `--oss`, `--local-provider`,
   `--profile`, `-p`, `--search`, `--ignore-user-config`, `--dangerously-bypass-hook-trust` and `--remote`. The
-  contract's README, §The descriptor, Config, lists every form.
+  contract's README, §The descriptor, Config, lists every form. Build Codex with
+  `codex.New`, `codex.Described` or `catalog.Lookup`; `runtimes.Described` adds no
+  check of Codex's flags.
 - `claude.ApprovedKey()` returns the value Claude Code keeps under
   `customApiKeyResponses.approved` once a person approves the API key's stand-in: its
   last 20 characters. A composer that writes a fresh Claude Code home writes that

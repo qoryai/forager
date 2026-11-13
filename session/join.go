@@ -634,9 +634,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			return fail(err)
 		}
 	}
+	base := prepared.Args
 	if prepared.Args, err = configArgs(rt, key, prepared.Args); err != nil {
 		return fail(fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), accesskey.ShownError(err)))
 	}
+	settingsArgs := len(prepared.Args) - len(base)
 	// The variables are resolved before the resume, whose resume.home_var is read from
 	// the launch's environment. The variables read only the preparation's values, which
 	// neither the resume nor the setup commands change.
@@ -692,7 +694,19 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// the paused run in the run answer's resume: the launch writes its transcript under
 	// the runtime's home and resumes it. A failure starts the runtime without a resume,
 	// with resumeLine on stderr once the session started.
-	prepared, resumeLine, restore := r.resumeLaunch(runCtx, resume, sessionDir, spec.Wall != nil, transcriptAt, inside, prepared)
+	// The resume arguments go before an argument of the launch, so the arguments are
+	// checked again with them: in exec --enable -cx=y, --enable takes -cx=y as its value,
+	// and resume <id> before the last argument leaves -cx=y alone, a pair that sets x.
+	prepared, resumeLine, restore, err := r.resumeLaunch(runCtx, resume, sessionDir, spec.Wall != nil, transcriptAt, inside, prepared,
+		func(at int, added []string) error {
+			if c, ok := rt.(runtimes.ArgsChecker); ok {
+				return c.CheckArgs(resumedArgs(base, settingsArgs, at, added))
+			}
+			return nil
+		})
+	if err != nil {
+		return fail(err)
+	}
 	// The session's setup commands run inside, after the runtime's preparation, and then
 	// start the launch as the runtime prepared it.
 	if prepared, err = withSetup(sessionDir, spec.SetupRunner, insideSetup(spec.SessionSpec.Setup, inside), prepared); err != nil {

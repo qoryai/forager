@@ -68,15 +68,20 @@ const resumeWait = 10 * time.Minute
 // the resumed runtime appends to at resume.path, under the paused run's slug, and the
 // session takes the arguments off again when the enclosure binds no transcript
 // directory ([wall.TranscriptChecker]).
-func (r *Run) resumeLaunch(ctx context.Context, rs *sessionResume, sessionDir string, walled bool, root transcriptRoot, inside func(string) string, launch runtimes.Launch) (runtimes.Launch, string, *restored) {
+//
+// check gets the place in launch's arguments where the resume arguments go, and those
+// arguments, before the transcript is fetched: its error is the error of the join, as
+// for arguments that set a setting the session passes only once the resume arguments
+// stand among them.
+func (r *Run) resumeLaunch(ctx context.Context, rs *sessionResume, sessionDir string, walled bool, root transcriptRoot, inside func(string) string, launch runtimes.Launch, check func(at int, added []string) error) (runtimes.Launch, string, *restored, error) {
 	if r.answer.Resume == nil || r.resumeTried || rs == nil {
-		return launch, "", nil
+		return launch, "", nil, nil
 	}
 	// want is a copy: a resume.path below another run's home_var moves below this
 	// session's, and the run answer stays as the gateway sent it.
 	want := *r.answer.Resume
-	failed := func(fix, cause string) (runtimes.Launch, string, *restored) {
-		return launch, resumeFailed(want.RunID, fix, cause), nil
+	failed := func(fix, cause string) (runtimes.Launch, string, *restored, error) {
+		return launch, resumeFailed(want.RunID, fix, cause), nil, nil
 	}
 	r.resumeTried = true
 	if u := rs.unset; u != nil {
@@ -121,6 +126,9 @@ func (r *Run) resumeLaunch(ctx context.Context, rs *sessionResume, sessionDir st
 	if pattern := newPathPattern(strings.TrimPrefix(rs.Path, rs.Prefix), want.SessionID, "", true); !pattern.matches(below) {
 		return failed(checkPath, fmt.Sprintf("its path %s does not match %s%s, with {cwd_slug} a slug", r.answer.Resume.Path, rs.prefix, pattern.shown))
 	}
+	if err := check(at, args); err != nil {
+		return launch, "", nil, err
+	}
 	if walled {
 		b, err := r.fetchTranscript(ctx)
 		if err != nil {
@@ -130,7 +138,7 @@ func (r *Run) resumeLaunch(ctx context.Context, rs *sessionResume, sessionDir st
 			return failed("Check the session's transcript directory "+pathShown(root.dir), fmt.Sprintf("the write to %s failed: %s", want.Path, accesskey.ShownError(err).Error()))
 		}
 		launch.Args = slices.Concat(launch.Args[:at], args, launch.Args[at:])
-		return launch, "", &restored{sessionID: want.SessionID, rel: rel, args: args, after: len(launch.Args) - at - len(args)}
+		return launch, "", &restored{sessionID: want.SessionID, rel: rel, args: args, after: len(launch.Args) - at - len(args)}, nil
 	}
 	b, err := r.fetchTranscript(ctx)
 	if err != nil {
@@ -153,7 +161,15 @@ func (r *Run) resumeLaunch(ctx context.Context, rs *sessionResume, sessionDir st
 	}
 	launch.Args = append([]string{script, launch.Command}, launch.Args...)
 	launch.Command = "/bin/sh"
-	return launch, "", &restored{sessionID: want.SessionID, rel: rel}
+	return launch, "", &restored{sessionID: want.SessionID, rel: rel}, nil
+}
+
+// resumedArgs is base, a launch's arguments before the n settings arguments of
+// [configArgs] go in front of them, with added inserted at at, a place in the
+// arguments with the settings arguments; in front of base when at lies among those.
+func resumedArgs(base []string, n, at int, added []string) []string {
+	i := min(max(at-n, 0), len(base))
+	return slices.Concat(base[:i], added, base[i:])
 }
 
 // restored is the transcript a session restored: sessionID is resume.session_id; rel

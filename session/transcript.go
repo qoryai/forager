@@ -457,7 +457,7 @@ func (t *transcript) find() {
 	rel := prefix + found[0]
 	if !sendablePath(t.lead()+rel, t.mask) {
 		t.ended = true
-		t.line(noResume("Keep the run's secrets and characters that are not printable out of the names of the transcript's path, in UTF-8", fmt.Sprintf("the path of the file that matches %s contains a secret or a character that is not printable, or is no UTF-8, so the session reads no transcript", shown)))
+		t.line(noResume("Keep the run's secrets and characters that are not printable out of the names of the transcript's path, in UTF-8", fmt.Sprintf("the path of the file that matches %s contains a secret or a character that is not printable, or is not valid UTF-8, so the session reads no transcript", shown)))
 		return
 	}
 	if !t.setPath(rel) {

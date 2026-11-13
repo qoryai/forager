@@ -2115,10 +2115,13 @@ release may change what an existing document does, and says so under Upgrading.
   join also fails on `--config` and `-c` with a pair at, under or above
   `model_providers`, `profile`, `profiles`, `projects`, `responses_api_metadata`,
   `skills` or `cloud.skills`, or that sets `openai_base_url`, `chatgpt_base_url` or an
-  `experimental_realtime_*_base_url`; on `--enable` and `--disable` of a fixed feature,
-  `plugins`, `apps` or `connectors`; and on `--oss`, `--local-provider`, `--profile`,
-  `-p`, `--search`, `--ignore-user-config`, `--dangerously-bypass-hook-trust` and
-  `--remote`, in every form Codex takes.
+  `experimental_realtime_*_base_url`; on `--enable` and `--disable` only of a feature
+  that `config.fixed` sets, such as `plugins` or `apps` (`connectors` counts as
+  `apps`); and on `--oss`, `--local-provider`, `--profile`, `-p`, `--search`,
+  `--ignore-user-config`, `--dangerously-bypass-hook-trust` and `--remote`, in every
+  form Codex takes. A session that resumes checks the arguments again with the resume
+  arguments at their place, so a pair that a flag took as its value before the resume
+  arguments went in fails the join too.
 - `claude.ApprovedKey()`: the value Claude Code keeps under
   `customApiKeyResponses.approved` once a person approves the API key's stand-in, its
   last 20 characters, for a composer that writes a fresh Claude Code home.

@@ -57,7 +57,7 @@ func described(path, runtime string, b []byte) (runtimes.Runtime, error) {
 	describe := runtimes.Described
 	if runtime == codex.Name {
 		// Codex's flags that change the session's settings are refused by code of the
-		// codex package, which a descriptor cannot hold.
+		// codex package, which a descriptor cannot contain.
 		describe = codex.Described
 	}
 	rt, err := describe(path, b, Installers())
