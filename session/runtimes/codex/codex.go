@@ -1,8 +1,8 @@
 // Package codex is Codex as a runtime of Forager: the contract's descriptor for it, and
 // the check of its launch arguments. Codex takes no hook: the session reads its
-// standard output and passes the descriptor's config as --config pairs. A launch whose
-// arguments change those settings, or the other settings below, through a flag of
-// Codex's is refused.
+// standard output and passes the descriptor's config as --config pairs. The join fails
+// when the launch's arguments change those settings, or the other settings below,
+// through a flag of Codex's.
 package codex
 
 import (
@@ -35,7 +35,8 @@ func New() (runtimes.Runtime, error) {
 // cli/src/main.rs, tui/src/cli.rs). -c is the short form of --config. --oss and
 // --local-provider select a local model provider in place of model_provider;
 // --profile and -p layer $CODEX_HOME/<name>.config.toml over the settings; --search
-// sets web_search; --enable and --disable set features.<name>.
+// sets web_search; --enable and --disable set features.<name>; --ignore-user-config
+// skips $CODEX_HOME/config.toml, which qory writes for a walled run.
 const (
 	flagConfig        = "--config"
 	flagShort         = "-c"
@@ -46,19 +47,26 @@ const (
 	flagSearch        = "--search"
 	flagEnable        = "--enable"
 	flagDisable       = "--disable"
+	flagIgnoreUser    = "--ignore-user-config"
 )
 
 // reserved are the settings of Codex 0.167.2 a launch's pair may not set beside the
 // session's: every setting of the model providers, since a provider's other settings,
 // such as supports_websockets or http_headers, change where and how Codex sends the
 // requests; profile and profiles, which put a profile's settings over the session's;
-// and the addresses of OpenAI and ChatGPT that no setting of the provider covers
-// (codex-rs config/src/config_toml.rs). A pattern's * matches one or more characters
-// other than a dot.
+// projects, whose trust_level Codex reads before it decides whether to load a
+// repository's .codex/config.toml, which may turn apps on through features.connectors
+// (codex-rs config/src/loader/mod.rs); responses_api_metadata, which adds the launch's
+// values to the X-Codex-Turn-Metadata header of every model request; and the
+// addresses of OpenAI and ChatGPT that no setting of the provider covers (codex-rs
+// config/src/config_toml.rs). A pattern's * matches one or more characters other than
+// a dot.
 var reserved = []string{
 	"model_providers",
 	"profile",
 	"profiles",
+	"projects",
+	"responses_api_metadata",
 	"openai_base_url",
 	"chatgpt_base_url",
 	"experimental_realtime_*_base_url",
@@ -80,6 +88,7 @@ const (
 //   - --enable or --disable of a feature whose features.<name> is one of keys, as
 //     --enable x or --enable=x, where connectors counts as apps;
 //   - --oss and --search;
+//   - --ignore-user-config, and --ignore-user-config=x, a form Codex 0.167.2 rejects;
 //   - --local-provider, --profile and -p in every form: --profile x, --profile=x,
 //     -p x, -px and -p=x.
 //
@@ -118,6 +127,8 @@ func checkArgs(args, keys []string) error {
 			}
 		case a == flagOSS || a == flagSearch:
 			return flagRefused(a)
+		case a == flagIgnoreUser || strings.HasPrefix(a, flagIgnoreUser+"="):
+			return flagRefused(flagIgnoreUser)
 		case a == flagLocalProvider || strings.HasPrefix(a, flagLocalProvider+"="):
 			return flagRefused(flagLocalProvider)
 		case a == flagProfile || strings.HasPrefix(a, flagProfile+"="):
@@ -179,7 +190,7 @@ func part(p, k string) bool {
 
 // keyRefused is the error for flag with a pair that sets k.
 func keyRefused(flag, k string) error {
-	return fmt.Errorf("remove the %s that sets %s from the launch's arguments: the session sets it for Codex, or Codex reads it to choose where its requests go",
+	return fmt.Errorf("remove the %s that sets %s from the launch's arguments: the session sets it for Codex, or it changes where Codex sends its requests",
 		accesskey.ShownName(flag, false), accesskey.ShownName(k, false))
 }
 

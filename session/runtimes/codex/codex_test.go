@@ -203,10 +203,11 @@ func roundTrip(t *testing.T, v any) any {
 }
 
 // TestCodexRefusesArgumentsThatChangeItsSettings pins the check of Codex's launch
-// arguments. These are refused with an error that starts with the fix, contains the
-// flag and contains no value: each form of --config and -c that sets a fixed key, the
-// endpoint's setting, any setting at, under or above model_providers, profile or
-// profiles, or one of the addresses of OpenAI and ChatGPT; features.connectors, the
+// arguments. The join fails on these with an error that starts with the fix, contains
+// the flag and contains no value: each form of --config and -c that sets a fixed key,
+// the endpoint's setting, any setting at, under or above model_providers, profile,
+// profiles, projects or responses_api_metadata, or one of the addresses of OpenAI and
+// ChatGPT; --ignore-user-config; features.connectors, the
 // legacy name of apps, in a pair and in --enable or --disable; --enable and --disable
 // of a fixed feature; and every form of --oss, --search, --local-provider, --profile
 // and -p. Ordinary arguments, a flag after --, and Claude Code with the same arguments
@@ -242,6 +243,13 @@ func TestCodexRefusesArgumentsThatChangeItsSettings(t *testing.T) {
 		{"-c", []string{"-cexperimental_realtime_ws_base_url=" + v}},
 		{"--config", []string{"--config", "experimental_realtime_webrtc_call_base_url=" + v}},
 		{"-c", []string{"-c", "profile=" + v}},
+		{"-c", []string{"-c", "projects./work.trust_level=\"trusted\""}},
+		{"-c", []string{"-c", "projects={\"/work\"={trust_level=\"trusted\"}}"}},
+		{"--config", []string{"--config=projects./" + v + ".trust_level=\"trusted\""}},
+		{"-c", []string{"-c", "responses_api_metadata.x=\"" + v + "\""}},
+		{"--config", []string{"--config", "responses_api_metadata={x=\"" + v + "\"}"}},
+		{"--ignore-user-config", []string{"--ignore-user-config"}},
+		{"--ignore-user-config", []string{"--ignore-user-config=true"}},
 		{"--config", []string{"--config", "profiles." + v + ".model_provider=\"openai\""}},
 		{"-c", []string{"-c", "model_provider=" + v}},
 		{"-c", []string{"-cmodel_providers.qory.env_key=" + v}},

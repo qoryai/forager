@@ -5481,10 +5481,9 @@ endpoint's setting. The pairs come before the resume's `args` are inserted and b
 the session's setup wraps the launch, and the session's record of the launch lists
 them.
 
-A launch whose arguments set a setting the session passes is refused before the
-runtime starts, because a later pair would win over the session's. The join fails
-with an error that starts with the fix and contains the flag, and no value of the
-arguments. The settings are the keys of `fixed` and the endpoint's setting. An
+The join fails before the runtime starts when the launch's arguments set a setting
+the session passes, because a later pair would win over the session's. Its error
+starts with the fix and contains the flag, and no value of the arguments. The settings are the keys of `fixed` and the endpoint's setting. An
 argument sets one when its key, with the spaces around it removed, is that key, a key
 under it, or a key it is under, which replaces the whole table:
 `model_providers.qory.name.x` and `model_providers.qory` both set
@@ -5496,7 +5495,11 @@ and `--config=k=v`. For Codex 0.167.2, it fails on these too:
   or one of these, which change where and how Codex sends its requests or put a
   profile over the session's settings: every setting at, under or above
   `model_providers`, such as `model_providers.qory.supports_websockets`; `profile`
-  and `profiles`; `openai_base_url`, `chatgpt_base_url` and
+  and `profiles`; `projects`, whose `trust_level` decides whether Codex loads a
+  repository's `.codex/config.toml`, which can turn apps on through
+  `features.connectors`; `responses_api_metadata`, which Codex adds to the
+  `X-Codex-Turn-Metadata` header of every model request; `openai_base_url`,
+  `chatgpt_base_url` and
   `experimental_realtime_*_base_url`, where `*` is one part of the key, such as
   `ws` or `webrtc_call`. The forms are `--config k=v`, `--config=k=v`, `-c k=v`,
   `-ck=v` and `-c=k=v`. `features.connectors`, the legacy name of `features.apps`,
@@ -5506,7 +5509,10 @@ and `--config=k=v`. For Codex 0.167.2, it fails on these too:
 - `--oss` and `--local-provider`, which select a local model provider;
 - `--profile` and `-p`, which layer `$CODEX_HOME/<name>.config.toml` over the
   settings, as `--profile x`, `--profile=x`, `-p x`, `-px` and `-p=x`;
-- `--search`, which sets `web_search`.
+- `--search`, which sets `web_search`;
+- `--ignore-user-config`, which skips `$CODEX_HOME/config.toml`, the settings qory
+  writes for a walled run, and `--ignore-user-config=x`, which Codex 0.167.2 does not
+  take.
 
 **Fixed**, optional: variables the session sets for the runtime in every launch, by
 name, walled or not, `{CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"}`: 1 to 64 names,

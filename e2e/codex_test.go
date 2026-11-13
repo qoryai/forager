@@ -498,8 +498,9 @@ func TestDockerCodexThroughTheWall(t *testing.T) {
 				}
 			}
 			// Codex prints a deprecation as an error item on standard output, such as the
-			// one for features.connectors, and a warning on standard error; the session's
-			// pairs, otel.exporter and otel.trace_exporter among them, give neither.
+			// one for features.connectors, and a warning on standard error. Codex prints
+			// neither for the session's pairs, otel.exporter and otel.trace_exporter among
+			// them.
 			if strings.Contains(strings.ToLower(o.out), "deprecated") || strings.Contains(strings.ToLower(o.errs), "warning") {
 				t.Errorf("Codex warned about its settings\nstdout:\n%s\nstderr:\n%s", tail(o.out, 4000), tail(o.errs, 4000))
 			}
