@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
 
@@ -408,19 +409,39 @@ func (t *transcript) find() {
 	if t.root != "" {
 		base, start = t.root, ""
 	}
+	shown := t.resume.Prefix + t.pattern.shown
 	found, err := findMatches(base, start, t.pattern)
 	switch {
+	case errors.Is(err, errTooManyEntries):
+		t.ended = true
+		t.line(noResume(fmt.Sprintf("Keep at most %d entries in the directories below %s that the transcript's pattern reaches", maxFindEntries, t.resume.Prefix), fmt.Sprintf("the search for %s listed more, so the session reads no transcript", shown)))
+		return
 	case err != nil, len(found) == 0:
 		return
 	case len(found) > 1:
 		t.ended = true
-		t.line(noResume("Keep one transcript of the runtime's session at "+t.resume.Prefix+t.pattern.shown, "more than one file matches it, so the session reads none of them"))
+		t.line(noResume("Keep one transcript of the runtime's session at "+shown, "more than one file matches it, so the session reads none of them"))
 		return
 	}
+	// The agent chooses the names a * matches, and the path goes out in each
+	// dev.qory.session.transcript as it is: a path with a secret, or one that is no
+	// UTF-8, ends the transcript, and the line does not contain the path.
 	rel := prefix + found[0]
-	if !t.setPath(rel) {
-		t.line(noResume("Keep the runtime's transcript below "+t.resume.Prefix, fmt.Sprintf("the session reads no transcript outside %s, and the transcript's path is ~/%s", t.resume.Prefix, rel)))
+	if !sendablePath(rel, t.mask) {
+		t.ended = true
+		t.line(noResume("Keep the run's secrets out of the names of the transcript's path, in UTF-8", fmt.Sprintf("the path of the file that matches %s contains a secret or is no UTF-8, so the session reads no transcript", shown)))
+		return
 	}
+	if !t.setPath(rel) {
+		t.line(noResume(fmt.Sprintf("Keep the transcript's path below %s at most %d bytes", t.resume.Prefix, maxTranscriptPath), fmt.Sprintf("the path of the file that matches %s is longer", shown)))
+	}
+}
+
+// sendablePath reports whether rel, a transcript's path, goes out in
+// dev.qory.session.transcript as it is: it is UTF-8, and mask, the run's masking of a
+// line, leaves it unchanged.
+func sendablePath(rel string, mask func(string) string) bool {
+	return utf8.ValidString(rel) && mask(rel) == rel
 }
 
 // errLinked is the error of a path to the transcript through a symbolic link or to no
@@ -537,7 +558,8 @@ func (r *Run) newSessionTranscript(rt runtimes.Runtime, n int, walled bool, root
 type pathPattern struct {
 	// names has one expression for each name, nil for one that matches nothing.
 	names []*regexp.Regexp
-	// shown is the path with each value replaced, a * left as it is, for a line.
+	// shown is the path with each value replaced, a * left as it is, and {cwd_slug}
+	// too when it matches any slug, for a line.
 	shown string
 }
 
@@ -551,7 +573,11 @@ const slugPattern = `[A-Za-z0-9-]{1,255}`
 // included; a value with a / in it matches no name. A name whose expression does not
 // compile, which only text that is no UTF-8 causes, matches nothing.
 func newPathPattern(tmpl, id, slug string, anySlug bool) *pathPattern {
-	p := &pathPattern{shown: strings.NewReplacer("{session_id}", id, "{cwd_slug}", slug).Replace(tmpl)}
+	shownSlug := slug
+	if anySlug {
+		shownSlug = "{cwd_slug}"
+	}
+	p := &pathPattern{shown: strings.NewReplacer("{session_id}", id, "{cwd_slug}", shownSlug).Replace(tmpl)}
 	for name := range strings.SplitSeq(tmpl, "/") {
 		var b strings.Builder
 		b.WriteString("^")
@@ -606,76 +632,105 @@ func (p *pathPattern) matches(rel string) bool {
 // bounds the memory of one read, not the entries read.
 const findBatch = 256
 
+// maxFindEntries is the most directory entries one search of a pattern lists, 10000:
+// a search runs at each read until the file is found, and the agent can make entries
+// below the prefix. A search that lists more ends the transcript with one line.
+const maxFindEntries = 10000
+
+// errTooManyEntries is the error of a search that listed more than [maxFindEntries]
+// entries.
+var errTooManyEntries = fmt.Errorf("the search listed more than %d entries", maxFindEntries)
+
 // findMatches returns the paths below start, relative to start, whose names match p,
 // at most two, in the order the directories list them. start is a path below base,
-// empty for base itself, none of whose names is a symbolic link. It reads through an
-// os.Root of base, so no name leads out of it. It follows a name of a directory only
-// when the entry is a directory, never a symbolic link; the last name matches an entry
-// of any type, which the read of the file then checks. A directory that does not exist
-// matches nothing.
+// empty for base itself. It opens each directory with a descriptor, with O_NOFOLLOW,
+// O_DIRECTORY and O_NONBLOCK ([openDirAt]): no name of start, and no directory it
+// follows, is a symbolic link, and a FIFO swapped in for a directory fails the open
+// at once instead of waiting for a writer. A directory a * matches is followed only
+// when its entry is a directory, and skipped when its open fails because it is gone,
+// is no directory any more or cannot be read; the last name matches an entry of any
+// type, which the read of the file then checks. A start that does not exist matches
+// nothing. More than [maxFindEntries] entries listed is [errTooManyEntries].
 func findMatches(base, start string, p *pathPattern) ([]string, error) {
-	root, err := os.OpenRoot(base)
+	fd, err := unix.Open(base, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer root.Close()
-	at := ""
 	for s := range strings.SplitSeq(start, "/") {
 		if s == "" {
 			continue
 		}
-		at = path.Join(at, s)
-		fi, err := root.Lstat(at)
-		if errors.Is(err, fs.ErrNotExist) {
+		next, err := openDirAt(fd, s)
+		unix.Close(fd)
+		switch {
+		case errors.Is(err, unix.ENOENT):
 			return nil, nil
-		}
-		if err != nil {
+		case errors.Is(err, unix.ELOOP), errors.Is(err, unix.ENOTDIR):
+			return nil, errLinked
+		case err != nil:
 			return nil, err
 		}
-		if !fi.IsDir() {
-			return nil, errLinked
-		}
+		fd = next
 	}
-	var found []string
-	err = findBelow(root, dirOrDot(at), "", p, 0, &found)
-	return found, err
+	s := &search{pattern: p}
+	err = s.below(fd, "", 0)
+	return s.found, err
 }
 
-// dirOrDot is dir, or . for an empty dir.
-func dirOrDot(dir string) string {
-	if dir == "" {
-		return "."
-	}
-	return dir
-}
-
-// findBelow adds to found the paths below dir, relative to the start of the search
-// with rel the path of dir, whose names from the i-th on match p, until found has two.
-func findBelow(root *os.Root, dir, rel string, p *pathPattern, i int, found *[]string) error {
-	f, err := root.Open(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
+// openDirAt opens the directory name below the directory dirFD with O_NOFOLLOW,
+// O_DIRECTORY and O_NONBLOCK, so that a symbolic link or a FIFO fails at once, then
+// makes the descriptor blocking again for its reads.
+func openDirAt(dirFD int, name string) (int, error) {
+	fd, err := unix.Openat(dirFD, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return err
+		return -1, err
 	}
+	if err := unix.SetNonblock(fd, false); err != nil {
+		unix.Close(fd)
+		return -1, err
+	}
+	return fd, nil
+}
+
+// search is one search of a pattern: the paths found, and the entries listed.
+type search struct {
+	pattern *pathPattern
+	found   []string
+	listed  int
+}
+
+// below adds to found the paths below the directory fd, which it closes, relative to
+// the start of the search with rel the path of the directory, whose names from the
+// i-th on match the pattern, until found has two.
+func (s *search) below(fd int, rel string, i int) error {
+	f := os.NewFile(uintptr(fd), "")
 	defer f.Close()
-	last := i == len(p.names)-1
+	last := i == len(s.pattern.names)-1
 	for {
 		entries, err := f.ReadDir(findBatch)
 		for _, e := range entries {
-			if !p.matchName(i, e.Name()) {
+			if s.listed++; s.listed > maxFindEntries {
+				return errTooManyEntries
+			}
+			if !s.pattern.matchName(i, e.Name()) {
 				continue
 			}
 			at := path.Join(rel, e.Name())
 			if last {
-				*found = append(*found, at)
+				s.found = append(s.found, at)
 			} else if e.Type().IsDir() {
-				if err := findBelow(root, path.Join(dir, e.Name()), at, p, i+1, found); err != nil {
+				next, err := openDirAt(fd, e.Name())
+				switch {
+				case errors.Is(err, unix.ENOENT), errors.Is(err, unix.ELOOP), errors.Is(err, unix.ENOTDIR), errors.Is(err, unix.EACCES):
+					continue
+				case err != nil:
+					return err
+				}
+				if err := s.below(next, at, i+1); err != nil {
 					return err
 				}
 			}
-			if len(*found) > 1 {
+			if len(s.found) > 1 {
 				return nil
 			}
 		}

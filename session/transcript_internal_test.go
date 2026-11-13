@@ -626,3 +626,141 @@ func TestAResumePathWithNoPathFromIgnoresHooks(t *testing.T) {
 		t.Errorf("sent %q %v, lines %q", got, ok, s.lines)
 	}
 }
+
+// TestTheSearchOpensNoFIFO pins the open of a directory in a search: a FIFO, and a
+// link to one, at a name where a directory was listed fail the open at once, without a
+// writer; a FIFO at a name of the start ends the search; and a walled transcript whose
+// pattern reaches a FIFO ends, so the session can write its exit.
+func TestTheSearchOpensNoFIFO(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	symlink(t, fifo, filepath.Join(dir, "linked"))
+	within := func(name string, f func()) {
+		t.Helper()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			f()
+		}()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s blocks", name)
+		}
+	}
+	dirFD, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(dirFD)
+	for _, name := range []string{"fifo", "linked"} {
+		within("the open of "+name, func() {
+			if fd, err := openDirAt(dirFD, name); err == nil {
+				unix.Close(fd)
+				t.Errorf("%s opened as a directory", name)
+			}
+		})
+	}
+	p := newPathPattern("*/x.jsonl", walledID, "", false)
+	for _, start := range []string{"fifo/", "linked/"} {
+		within("the search from "+start, func() {
+			if got, err := findMatches(dir, start, p); err == nil || len(got) != 0 {
+				t.Errorf("%s: %v %v", start, got, err)
+			}
+		})
+	}
+	tr, s, root := newRolloutTranscript(t, true)
+	if err := syscall.Mkfifo(filepath.Join(root, "2026"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tr.started(walledID)
+	within("the transcript's end", func() {
+		tr.poll(false)
+		tr.finish()
+	})
+	if len(s.events) != 0 || len(s.lines) != 1 || !strings.Contains(s.lines[0], "no file matches") {
+		t.Errorf("%d events, lines %q", len(s.events), s.lines)
+	}
+}
+
+// TestAPatternPathWithASecretIsNotSent pins the path a * matched: a name with one of
+// the run's secrets, or one that is no UTF-8, ends the transcript with one line that
+// does not contain the path, and nothing is sent.
+func TestAPatternPathWithASecretIsNotSent(t *testing.T) {
+	for name, file := range map[string]string{
+		"a secret": "rollout-sk-fake-secret-" + walledID + ".jsonl",
+		"no UTF-8": "rollout-\xff\xfe-" + walledID + ".jsonl",
+	} {
+		t.Run(name, func(t *testing.T) {
+			tr, s, root := newRolloutTranscript(t, true)
+			makeDir(t, filepath.Join(root, "2026/11/13"))
+			if err := os.WriteFile(filepath.Join(root, "2026/11/13", file), []byte("{\"a\":1}\n"), 0o600); err != nil {
+				t.Skip("the file system takes no such name:", err)
+			}
+			tr.started(walledID)
+			tr.finish()
+			want := "Keep the run's secrets out of the names of the transcript's path, in UTF-8. A continuation of this run starts the runtime without a resume: the path of the file that matches ~/.rollouts/sessions/*/*/*/rollout-*-" + walledID + ".jsonl contains a secret or is no UTF-8, so the session reads no transcript"
+			if len(s.events) != 0 || len(s.lines) != 1 || s.lines[0] != want {
+				t.Errorf("%d events, lines %q; want %q", len(s.events), s.lines, want)
+			}
+		})
+	}
+}
+
+// TestOnlyAPathWithNoSecretInUTF8IsSent pins the check of a path a * matched on
+// every file system, one that takes names that are no UTF-8 included.
+func TestOnlyAPathWithNoSecretInUTF8IsSent(t *testing.T) {
+	mask := func(l string) string { return strings.ReplaceAll(l, "sk-fake-secret", "[secret]") }
+	for rel, want := range map[string]bool{
+		".rollouts/sessions/" + rolloutRel:                                      true,
+		".rollouts/sessions/2026/11/13/rollout-sk-fake-secret-x.jsonl":          false,
+		".rollouts/sessions/2026/11/13/rollout-\xff\xfe-" + walledID + ".jsonl": false,
+	} {
+		if got := sendablePath(rel, mask); got != want {
+			t.Errorf("%q: %v; want %v", rel, got, want)
+		}
+	}
+}
+
+// TestASearchOverTheEntryCapEnds pins maxFindEntries: a search that lists more entries
+// ends the transcript with one line, and nothing is sent.
+func TestASearchOverTheEntryCapEnds(t *testing.T) {
+	tr, s, root := newRolloutTranscript(t, true)
+	for i := range maxFindEntries + 1 {
+		f, err := os.Create(filepath.Join(root, fmt.Sprintf("e%05d", i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+	}
+	tr.started(walledID)
+	tr.finish()
+	want := "Keep at most 10000 entries in the directories below ~/.rollouts/sessions/ that the transcript's pattern reaches. A continuation of this run starts the runtime without a resume: the search for ~/.rollouts/sessions/*/*/*/rollout-*-" + walledID + ".jsonl listed more, so the session reads no transcript"
+	if len(s.events) != 0 || len(s.lines) != 1 || s.lines[0] != want {
+		t.Errorf("%d events, lines %q; want %q", len(s.events), s.lines, want)
+	}
+}
+
+// TestASearchSkipsADirectoryItCannotRead pins a directory whose open fails with
+// EACCES: the search skips it and finds the file in another directory.
+func TestASearchSkipsADirectoryItCannotRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory of mode 0")
+	}
+	tr, s, root := newRolloutTranscript(t, true)
+	appendTo(t, root, rolloutRel, []byte("{\"a\":1}\n"))
+	closed := filepath.Join(root, "2025")
+	makeDir(t, closed)
+	if err := os.Chmod(closed, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(closed, 0o700) })
+	tr.started(walledID)
+	tr.finish()
+	if got, ok := s.file(t, "~/.rollouts/sessions/"+rolloutRel); !ok || string(got) != "{\"a\":1}\n" || len(s.lines) != 0 {
+		t.Errorf("sent %q %v, lines %q", got, ok, s.lines)
+	}
+}
