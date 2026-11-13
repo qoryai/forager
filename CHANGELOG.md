@@ -1125,12 +1125,13 @@ release may change what an existing document does, and says so under Upgrading.
     of a limit answer has the error code after the error type, when there is one.
   - In the streamed `200` of a `POST` to the endpoint's path and `/responses`, a
     `response.failed` event with the code `rate_limit_exceeded`, `slow_down` or a quota
-    code puts the key in cooldown. Its data may be up to 1 MiB; every other event keeps
-    4096 bytes.
+    code puts the key in cooldown. Each line and each event's data of the stream may be
+    up to 1 MiB; an `anthropic-messages` stream keeps 4096 bytes.
 
   The gateway reads the `x-codex-*` and `x-ratelimit-*` headers for this format alone.
   The proxy sends no `openai-responses` request again with another key, and keeps no
-  copy of its body. The active key changes only at a join. The provider's first `429`,
+  copy of its body. The active key changes only at a join the gateway accepts, and a
+  gateway that starts again sets the open session's key. The provider's first `429`,
   a limit event in the stream, or a cooldown of the active key during the session, from
   a model keys report's answer or at its Use up to percentage, stops the group: a `429`
   of the provider reaches Codex, each later request with the placeholder gets the

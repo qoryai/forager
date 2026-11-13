@@ -234,10 +234,11 @@ func failedEvent(size int) string {
 	return "event: response.failed\ndata: " + head + strings.Repeat("a", size-len(head)-len(tail)) + tail + "\n\n"
 }
 
-// TestAResponseFailedEventHasALargerLimit pins the limit of a response.failed event's
-// data in an openai-responses stream, maxFailedData: an event just over 4096 bytes
-// counts, one over the limit is passed on unread, and every other event keeps
-// maxLine.
+// TestAResponseFailedEventHasALargerLimit pins the limit of an event's data in an
+// openai-responses stream, maxFailedData: a response.failed event just over 4096 bytes
+// counts, with its event field first, after its data line or with none, and one over
+// the limit is passed on unread. A long event of another type before it changes
+// nothing.
 func TestAResponseFailedEventHasALargerLimit(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -247,7 +248,9 @@ func TestAResponseFailedEventHasALargerLimit(t *testing.T) {
 		{"just over 4096", failedEvent(maxLine + 1), true},
 		{"at the limit", failedEvent(maxFailedData - len("data: ")), true},
 		{"over the limit", failedEvent(maxFailedData + 1), false},
-		{"another event over 4096", "event: response.in_progress\ndata: " + strings.Repeat("a", maxLine+1) + "\n\n" +
+		{"data before the event field", "data: " + strings.TrimPrefix(strings.TrimSuffix(failedEvent(maxLine+1), "\n\n"), "event: response.failed\ndata: ") + "\nevent: response.failed\n\n", true},
+		{"no event field", strings.TrimPrefix(failedEvent(maxLine+1), "event: response.failed\n"), true},
+		{"another event over 4096, then another code", "event: response.in_progress\ndata: " + strings.Repeat("a", maxLine+1) + "\n\n" +
 			"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\"}}}\n\n", false},
 	}
 	for _, c := range cases {

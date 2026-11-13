@@ -328,13 +328,13 @@ func eventStream(h http.Header) bool {
 
 // maxLine is the most of one line, and of one event's data, of a stream the proxy reads
 // for an error event; a longer line is passed on unread, as every byte is, and its event
-// is not read. An openai-responses event whose event field is response.failed has
-// [maxFailedData] in its place.
+// is not read. An openai-responses stream has [maxFailedData] in its place.
 const maxLine = 4096
 
 // maxFailedData is the limit of a response.failed event's data, and of each of its
-// lines, in an openai-responses stream: the event can repeat the request's
-// instructions and tools, which pass 4096 bytes.
+// lines: the event can repeat the request's instructions and tools, which pass 4096
+// bytes. Its data line can come before its event field, or have none, so the limit
+// holds for every line and every event's data of an openai-responses stream.
 const maxFailedData = 1 << 20
 
 // streamWatch passes a streamed answer on as it came, and reads each event of it, by
@@ -404,10 +404,10 @@ func (s *streamWatch) read(line string) {
 	}
 }
 
-// limit is the most of a line and of the data of the event so far: [maxFailedData] for
-// an openai-responses event whose event field is response.failed, else [maxLine].
+// limit is the most of a line and of an event's data: [maxFailedData] for an
+// openai-responses stream, else [maxLine].
 func (s *streamWatch) limit() int {
-	if s.format == modelkey.FormatOpenAIResponses && s.event == "response.failed" {
+	if s.format == modelkey.FormatOpenAIResponses {
 		return maxFailedData
 	}
 	return maxLine

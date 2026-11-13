@@ -1113,11 +1113,13 @@ its reasoning encrypted for one account, so a request with another key could fai
 proxy keeps no copy of such a request's body and sends no such request again. The
 provider's first limit refusal puts the key in cooldown, as in step 1, and the proxy
 passes the refusal to the session; the proxy's `429` and the `stop` then follow, as for
-any refusal it passes. The key stays the active key until the next join, which makes
-another key active as in step 2. A key that goes into cooldown during a session with no
-refusal, from the answer to a model keys report or at its Use up to percentage, stops
-the group the same way: the proxy sets no other key, and returns its `429`. So no
-request of the session goes with another key. Codex 0.167.2 ends its turn on a refusal
+any refusal it passes. The key stays the active key until the next join the gateway
+accepts, which makes another key active as in step 2. A join that is refused, or sent
+again for its answer, makes no other key active. A gateway that starts again while a
+session is open sets that session's key, in cooldown or not. A key that goes into
+cooldown during a session with no refusal, from the answer to a model keys report or at
+its Use up to percentage, stops the group the same way: the proxy sets no other key,
+and returns its `429`. So no request of the session goes with another key. Codex 0.167.2 ends its turn on a refusal
 of a usage limit or a quota, and retries another `429` only after a `Retry-After`, so
 the proxy's `429` ends its retries.
 
@@ -1136,9 +1138,10 @@ the limit event is one whose `event` field is `response.failed` or absent, and w
 `{"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded"}}}`. The
 same words in any other event, such as a text delta, and in an answer to any other
 request do not count. The proxy reads an event whose lines and `data` are each at most
-4096 bytes, and, for `openai-responses`, an event whose `event` field is
-`response.failed` up to 1 MiB (1,048,576 bytes): the event can repeat the request's
-instructions and tools. A longer event is passed on unread. The proxy then puts the key
+4096 bytes for `anthropic-messages`, and at most 1 MiB (1,048,576 bytes) for
+`openai-responses`: a `response.failed` event can repeat the request's instructions
+and tools, and its `data` line can come before its `event` field. A longer event is
+passed on unread. The proxy then puts the key
 in cooldown and passes the stream on as it came. For `anthropic-messages` the next key
 becomes the active key, as in step 2, and the run does not pause: Claude Code 2.1.316
 sends the same request again without streaming about 20 ms later, and that request gets
