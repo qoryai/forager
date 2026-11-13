@@ -15,6 +15,14 @@ release may change what an existing document does, and says so under Upgrading.
   `model_providers.qory.base_url`, and then has no `variable`. Read `resume` of a
   runtime, `{prefix, path}`, where `path` may have `*`, which matches inside one path
   name; it is absent for a runtime with no resume.
+- Write each path of an API credential's `paths` without a part the proxy denies in a
+  request's path: a `.` or `..` segment, such as `/a/../b`, an empty segment, a
+  backslash, or an encoded slash, backslash, dot or percent sign.
+  `server.CheckCredentials` refuses such a path with `run_configuration_invalid`, since
+  the proxy denies every request path with one. In a run configuration not read from
+  bytes, it also refuses what the schema refuses in one that is: an `account_header`
+  without `account_claim`, the reverse, either without `oauth`, and an
+  `account_header` that `server.ReservedHeader` reports or that is `Authorization`.
 - Expect `model_key_switch` and `model_key_unauthorized` to be reserved codes of
   `dev.qory.run.exited`. A run's starter's outcome reason that is either code is
   dropped, its outcome kept, as for every reserved code, and `(*session.Run).Close`
@@ -261,9 +269,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
-- The contract for model keys of OpenAI, schemas and fixtures only; on 2026-11-13 the
-  gateway and the session act on none of it (README §Credentials, Paths and an account
-  header of a model key, and Keys out after a 401, each with a table of today and after):
+- The contract for model keys of OpenAI. The gateway acts on `paths` and the account
+  header (Gateway, Added); on 2026-11-13 the gateway and the session act on none of the
+  rest (README §Credentials, Paths and an account header of a model key, and Keys out
+  after a 401, with a table of today and after):
   - An API credential's `paths`, 1 to 32 paths of its endpoint's host in a host
     credential's grammar, `credential_paths` of `run-configuration.schema.json`.
   - `account_header` and `account_claim` in `auth.schema.json`, both or neither and only
@@ -1130,6 +1139,24 @@ release may change what an existing document does, and says so under Upgrading.
   format are sent again with the next key, as before. The shapes of the API key's
   headers, the `429` bodies and the stream event follow Codex's source at `17a0e6f63f`,
   and were not measured on an API key (probe 521, item 8).
+- A model key from the control plane with `paths` is set on those paths alone (README
+  §Credentials, Paths and an account header of a model key). Another path of its host
+  gets `403` under `enforce`, unless the run policy's `egress.paths` match it; the
+  request then goes with no key. Such a key may share its host with a host credential
+  whose paths overlap none of the key's: a subscription login limited to
+  `/backend-api/codex/*` can be the run's model key beside a host credential on other
+  paths of its host. Before, the run was refused, `a credential without paths is alone
+  on its hosts`.
+- A model key whose `auth` has `account_header` and `account_claim` gets the header
+  beside its token, set to the string at `account_claim` in the token's JWT payload,
+  with no check of the signature and at most 8 KiB of payload decoded. The header the
+  session sends under that name, in any letter case and with `_` for `-`, is taken off
+  every request to the key's host. A key whose value has no such string when the run
+  opens leaves the key group: the proxy never sets it, and the run's record has one
+  line that starts with the fix and contains neither the value nor the claim. With no
+  key of the group left, the run is refused, `run_configuration_invalid`. A renewed
+  value without the string is a renewal refused for its form, and the run keeps the
+  value it had.
 - Several model keys of one provider per run, a key group (docs/credentials.md, Several
   keys of one provider). On a provider's `429` the proxy puts the active key in
   cooldown, sends the request again with the next key, and passes the refusal only when
@@ -1303,6 +1330,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- A request to a host that gets a credential goes upstream with no trailer: the
+  proxy drops every trailer the session sends, also on a host with a host credential
+  alone. A trailer could carry a header the proxy sets, such as a model key's account
+  header, beside the proxy's value. A request to a host a tool serves keeps its
+  trailer.
 - A run that opens while Qory Apiary restarts opens once Qory Apiary is back. The
   gateway tries the run's registration, or its attach, again 1, 2, 4, 8 and 15 seconds
   after the try before, then every 15 seconds, within 120 seconds of the run request's

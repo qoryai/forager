@@ -786,7 +786,9 @@ as it streams. For `basic` it also replaces the base64 of the username and the v
 without its padding, in the standard and the URL alphabet, with the base64 of the
 username and the placeholder. Each form is also looked for percent-encoded and
 JSON-escaped where that changes it. The request goes upstream with `Accept-Encoding:
-identity` and without `Range`, `If-Range`, `Upgrade` and `Connection`; an answer with
+identity` and without `Range`, `If-Range`, `Upgrade` and `Connection`, and with no
+trailer: a trailer the session sends could carry a header the proxy sets, such as a
+model key's account header, beside the proxy's value. An answer with
 another `Content-Encoding` and a body, or a `101`, is a `502` from the proxy, and the
 record contains the host's status. An answer with a body has no `Content-Length` and
 comes chunked, since the placeholder and the value differ in length; an empty answer may
@@ -854,13 +856,15 @@ request (§The server, Secrets).
   (§The descriptor).
 - `endpoint` is the base URL of the model API, at most 2048 characters: `https`, a
   host, an optional port and path, and no user information, query or fragment. The
-  gateway sets the value on every path and on any port of the endpoint's host alone,
-  the host `policy.EndpointHost` reads, in the form `policy.Host` returns; the proxy
-  matches credentials by host, so the port is not compared. The path, such as `/anthropic`,
+  gateway sets the value on the endpoint's host alone, the host `policy.EndpointHost`
+  reads, in the form `policy.Host` returns, and on any port: on `paths`, or on every
+  path without them. The proxy matches credentials by host, so the port is not
+  compared. The path, such as `/anthropic`,
   reaches the runtime alone, through its endpoint variable.
 - `paths`, optional, are 1 to 32 paths of the endpoint's host the value is set on, in a
-  host credential's grammar. On 2026-11-13 the gateway still sets the value on every
-  path (Paths and an account header of a model key, below).
+  host credential's grammar. A path with a part the proxy denies in a request's path,
+  such as the `..` segment of `/a/../b`, is `run_configuration_invalid` (Paths and an
+  account header of a model key, below).
 - `key_prefixes`, optional, are 1 to 4 literal prefixes, each 1 to 32 characters of
   printable ASCII without a space, none twice, such as `sk-ant-`. A value that starts
   with none of them is `run_configuration_invalid` (below). Absent, any value is taken.
@@ -1168,13 +1172,46 @@ string in the token's JWT payload. A ChatGPT subscription is such a key:
  "paths": ["/backend-api/codex/*"]}
 ```
 
-On 2026-11-13 the schemas have these members, and no code of the gateway or the
-session reads them. Today and after the gateway's part is built:
+The proxy sets a key with `paths` on a request whose path one of them matches, as it
+sets a host credential with `paths` (§The policy, Matching a path). A request to
+another path of the host gets no key: it is denied with `403` under `enforce`, unless
+the run policy's `egress.paths` for the host match it, and then it goes with no key
+and no account header. Such a key may share its host with a host credential whose
+paths overlap none of the key's, such as `["/backend-api/files/*"]` beside the
+subscription above; a key without `paths` is still alone on its host beside a host
+credential. A path with a part the proxy denies in a request's path, a `.` or `..`
+segment, an empty segment, a backslash, or an encoded slash, backslash, dot or percent
+sign, such as `/a/../b`, is `run_configuration_invalid`: the proxy denies every
+request path with one (`wall:ambiguous-path`), so the path would match none. In a path
+that ends in `*`, the text after the last slash is the start of a segment, so
+`/a/.*` is taken.
 
-| Member | Today | After |
-|---|---|---|
-| `paths` of an API credential | the schema accepts it; the gateway sets the key on every path of the host | the gateway sets the key on `paths` alone; a request to another path of the host gets `403`, unless the run's policy allows the path in `egress.paths` |
-| `account_header`, `account_claim` | the schema accepts them; the proxy sets no account header | the proxy reads the claim from the token's payload, at most 8 KiB, with no check of its signature, and sets the header to it; a value without the claim leaves the key group |
+With `account_header`, the proxy sets the header, on each request it sets the key on,
+to the string `account_claim` points at in the key's value: the payload of a JWT, the
+second of its three parts separated by dots, base64url. The proxy checks no signature;
+the model provider checks the token. The gateway decodes at most 8 KiB of payload,
+which bounds what it decodes of a value each time it loads one. The header the session
+sends under that name, in any letter case and with `_` for `-`, is taken off every
+request to the key's host, so the session's value never reaches the provider. A
+request to a host that gets a credential goes with no trailer (§Credentials, The
+answer), so no trailer carries the header either.
+
+The gateway reads the claim of each key's value when the run opens. It reads the
+syntax of the whole payload, and decodes only the objects and lists on the pointer's
+way, each object with each member name once. A key whose value is no JWT, whose payload
+is over 8 KiB, is no base64url or no JSON object, has an object with a member name
+twice on the way, or has no string at `account_claim` that a header value can hold,
+leaves the key group for the run. The proxy never sets it, and the run's record has
+one line that starts with the fix and contains why, never the value or the claim, such
+as:
+
+```text
+Store in the control plane a value of the model key "subscription" with a string at its account_claim; the run does not set the key: its JWT payload has no string at account_claim "/https:~1~1api.openai.com~1auth/chatgpt_account_id"
+```
+
+When no key of the group is left, the run is refused, `run_configuration_invalid`. A
+renewed value without the claim is a renewal refused for its form: the run keeps the
+value it had, and the gateway reports the renewal that failed.
 
 **Keys out after a 401.** A model provider may return `401` for a key that a person
 revoked or whose subscription ended. The contract has three parts for such a key:

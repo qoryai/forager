@@ -428,3 +428,32 @@ func TestShownHasTheErrorCode(t *testing.T) {
 		t.Errorf("Shown:\n%s\nwant\n%s", line, want)
 	}
 }
+
+// TestAJoinSkipsAKeyThatIsOut pins JoinKey of an openai-responses group whose active
+// key cools while the next key by the order is out: Pick reports false and keeps the
+// key, and JoinKey makes the first key that is neither out nor in cooldown active. When
+// no key is left, JoinKey keeps the active key and Pick stays false.
+func TestAJoinSkipsAKeyThatIsOut(t *testing.T) {
+	g, _ := openaiGroup(t)
+	g.Out("model-2")
+	cool := func(name string) {
+		g.Merge([]modelkey.Window{{Credential: name, Window: "five_hour", Status: modelkey.StatusRejected, CooldownUntil: start.Add(time.Hour), Source: modelkey.SourceProvider, ObservedAt: start}})
+	}
+	cool("model")
+	if name, ok := g.Pick(); name != "model" || ok {
+		t.Errorf("Pick: %s, %v; want model and false", name, ok)
+	}
+	if got := g.JoinKey(); got != "model-3" {
+		t.Errorf("JoinKey %s; want model-3, past model-2, which is out", got)
+	}
+	if name, ok := g.Pick(); name != "model-3" || !ok {
+		t.Errorf("Pick after the join: %s, %v; want model-3", name, ok)
+	}
+	cool("model-3")
+	if got := g.JoinKey(); got != "model-3" {
+		t.Errorf("JoinKey with no key left %s; want model-3 kept", got)
+	}
+	if name, ok := g.Pick(); name != "model-3" || ok {
+		t.Errorf("Pick with no key left: %s, %v; want model-3 and false", name, ok)
+	}
+}

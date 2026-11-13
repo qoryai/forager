@@ -278,13 +278,14 @@ func (rs *resend) roundTrip(rt http.RoundTripper, out *http.Request) (*http.Resp
 		if ok && resends && rs.copied && tries < len(rs.creds) {
 			c = rs.cred(next)
 		}
-		var name, value string
+		var name, value, account string
 		if c != nil {
 			v := c.secret()
-			var set bool
+			var set, accountOK bool
 			name, value, set = c.header(v)
+			account, accountOK = c.account(v)
 			clear(v)
-			if !set {
+			if !set || !accountOK {
 				c = nil
 			}
 		}
@@ -301,7 +302,16 @@ func (rs *resend) roundTrip(rt http.RoundTripper, out *http.Request) (*http.Resp
 		again.Body, _ = rs.again()
 		again.ContentLength = int64(len(rs.body))
 		again.GetBody = rs.again
+		// The key before this one set the account header to its account id. The keys
+		// of a group share the header's name, case ignored, so it goes first, and the
+		// next key sets it to the next key's account id.
+		if rs.first.AccountHeader != "" {
+			dropHeader(again.Header, rs.first.AccountHeader)
+		}
 		again.Header.Set(name, value)
+		if c.AccountHeader != "" {
+			again.Header.Set(c.AccountHeader, account)
+		}
 		rs.name = next
 		if rs.pending != nil {
 			rs.pending.d.Credential = next

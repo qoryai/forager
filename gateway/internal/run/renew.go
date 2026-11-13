@@ -368,8 +368,9 @@ var (
 )
 
 // renewed checks the renewed value of name against the rules of the start: a value that
-// is a valid header value, one that starts with a model key's key_prefixes, an
-// expires_at after now, and the start's apply.
+// is a valid header value, one that starts with a model key's key_prefixes, one with a
+// string at a model key's account_claim, an expires_at after now, and the start's
+// apply.
 func (r *Run) renewed(name string, values sealed.Values, now time.Time) error {
 	i := slices.IndexFunc(r.stored, func(c server.RunCredential) bool { return c.Name == name })
 	v, ok := values.Value(name)
@@ -380,6 +381,11 @@ func (r *Run) renewed(name string, values sealed.Values, now time.Time) error {
 		return errors.New("its value has a control character, or a space or tab at its start or end, which a header value cannot have")
 	case !credential.KeyMatches(r.stored[i].KeyPrefixes, v):
 		return errors.New("its value starts with none of its key_prefixes")
+	}
+	if claim := r.stored[i].Auth.AccountClaim; claim != "" {
+		if _, err := credential.AccountClaim(v, claim); err != nil {
+			return err
+		}
 	}
 	at, ok := values.ExpiresAt(name)
 	switch {

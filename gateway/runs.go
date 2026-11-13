@@ -674,6 +674,9 @@ func (lr *linkRun) decide(ctx context.Context, d decision, authority func(*run.R
 		// active key changes only at a join, and the reporter shares each key's state
 		// with the control plane.
 		lr.keys = modelkey.New(keys, r.Held().Start, nil)
+		for _, name := range r.KeysOut() {
+			lr.keys.Out(name)
+		}
 		format, stream := r.ModelAPI()
 		lr.keys.SetFormat(format)
 		if lr.remote {

@@ -184,6 +184,10 @@ type Run struct {
 	applies map[string][]credential.StoredApply
 	// renew fetches again the values with expires_at; nil when none has it.
 	renew *renewer
+	// keysOut are the model keys of stored with account_claim whose value opened with
+	// no string at it ([credential.AccountClaim]), fixed when the run opens: the proxy
+	// never sets them ([Run.KeysOut]).
+	keysOut []string
 }
 
 // storedSet is what a run configuration says of the run's credentials: its credentials
@@ -379,7 +383,9 @@ func (r *Run) takeComputed(p *policy.Loaded) string {
 // under the digest Forager computed of the document's bytes, and refuses a value a
 // header cannot hold, a model key's value that starts with none of its key_prefixes,
 // a value that expired before the run started, and one whose apply is outside its
-// entry ([checkOpened]).
+// entry ([checkOpened]). A model key with account_claim whose value has no string at it
+// leaves the key group ([Run.KeysOut]), with a line in the run's record; when no key of
+// the group is left, the run is refused.
 func (r *Run) open(ctx context.Context) error {
 	names := make([]string, len(r.stored))
 	for i, c := range r.stored {
@@ -415,6 +421,10 @@ func (r *Run) open(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := r.checkClaims(values); err != nil {
+		values.Clear()
+		return err
+	}
 	r.applies = make(map[string][]credential.StoredApply, len(r.stored))
 	for _, c := range r.stored {
 		r.applies[c.Name] = effectiveApply(c, values)
@@ -425,6 +435,42 @@ func (r *Run) open(ctx context.Context) error {
 	r.mu.Unlock()
 	return nil
 }
+
+// checkClaims sets keysOut: each model key with account_claim whose opened value in
+// values has no string at it ([credential.AccountClaim]), with a line in the run's
+// record that contains why, never the value or the claim. It refuses the run,
+// run_configuration_invalid, when no key of the run's key group is left.
+func (r *Run) checkClaims(values sealed.Values) error {
+	var out []string
+	for _, c := range r.stored {
+		if c.Auth.AccountClaim == "" {
+			continue
+		}
+		v, _ := values.Value(c.Name)
+		_, err := credential.AccountClaim(v, c.Auth.AccountClaim)
+		if err == nil {
+			continue
+		}
+		out = append(out, c.Name)
+		if r.cfg.Log != nil {
+			r.cfg.Log(fmt.Sprintf("Store in the control plane a value of the model key %s with a string at its account_claim; the run does not set the key: %v",
+				accesskey.ShownName(c.Name, true), err))
+		}
+	}
+	group := storedGroup(r.stored, r.storedModel)
+	if len(group) > 0 && !slices.ContainsFunc(group, func(c server.RunCredential) bool { return !slices.Contains(out, c.Name) }) {
+		start := startName(group, r.storedModel)
+		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(start),
+			"run configuration %s: store in the control plane a value of a model key of the key group of %s with a string at its account_claim: no key of the group has one", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(start, true))
+	}
+	r.keysOut = out
+	return nil
+}
+
+// KeysOut are the model keys whose value opened with no string at their account_claim,
+// which leave the key group for the run ([modelkey.Group.Out]); none when every key
+// has one. Call it after [Run.Hold].
+func (r *Run) KeysOut() []string { return slices.Clone(r.keysOut) }
 
 // clearValues overwrites the opened values of the run configuration's credentials,
 // under r.mu, so it never overlaps the copy a request takes ([Run.storedUses]).
@@ -1183,7 +1229,7 @@ func (r *Run) storedUses() []credential.Stored {
 		}
 		name := c.Name
 		out = append(out, credential.Stored{Name: name, Apply: r.applies[name], Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint, OAuth: c.Auth.OAuth,
-			Entry: keyEntry(c), ExpiresAt: r.renew.expiresAt(name), Rejected: r.renew.rejected(name), Value: func() []byte {
+			AccountHeader: c.Auth.AccountHeader, AccountClaim: c.Auth.AccountClaim, Entry: keyEntry(c), ExpiresAt: r.renew.expiresAt(name), Rejected: r.renew.rejected(name), Value: func() []byte {
 				r.mu.Lock()
 				defer r.mu.Unlock()
 				b, _ := r.values.Value(name)
@@ -1244,6 +1290,11 @@ func ProxyUses(held *credential.Held) []proxy.Credential {
 			c.Placeholder = link.KeyPlaceholder(held.Start)
 		case u.Format != "":
 			c.Placeholder = link.KeyPlaceholder(u.Name)
+		}
+		if u.AccountHeader != "" {
+			claim := u.AccountClaim
+			c.AccountHeader = u.AccountHeader
+			c.Account = func(v []byte) (string, error) { return credential.AccountClaim(v, claim) }
 		}
 		if u.Stored {
 			// The server's value has no Token, so it stays bytes. A host's 401 asks for it

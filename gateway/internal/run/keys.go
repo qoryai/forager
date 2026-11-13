@@ -41,7 +41,8 @@ func storedGroup(creds []server.RunCredential, model string) []server.RunCredent
 
 // keyEntry is c as [credential.KeyGroup] reads it.
 func keyEntry(c server.RunCredential) credential.KeyEntry {
-	return credential.KeyEntry{Name: c.Name, Format: c.Format, Endpoint: c.Endpoint, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header, OAuth: c.Auth.OAuth}
+	return credential.KeyEntry{Name: c.Name, Format: c.Format, Endpoint: c.Endpoint, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header, OAuth: c.Auth.OAuth,
+		AccountHeader: c.Auth.AccountHeader, AccountClaim: c.Auth.AccountClaim}
 }
 
 // checkKeyGroup returns a run_configuration_invalid error, with the key's name, for a

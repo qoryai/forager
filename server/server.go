@@ -335,8 +335,8 @@ type RunConfiguration struct {
 }
 
 // RunCredential is one entry of a run configuration's credentials, with no value. An
-// API credential, a model key, has Format, Endpoint, Auth and KeyPrefixes; a host
-// credential has Apply, Placeholders and Purpose.
+// API credential, a model key, has Format, Endpoint, Auth, Paths and KeyPrefixes; a
+// host credential has Apply, Placeholders and Purpose.
 type RunCredential struct {
 	Name string `json:"name"`
 	// Format is the API format of an API credential, one of api-format.schema.json;
@@ -344,6 +344,9 @@ type RunCredential struct {
 	Format string `json:"format,omitzero"`
 	// Endpoint is the base URL of an API credential's model API.
 	Endpoint string `json:"endpoint,omitzero"`
+	// Paths are the paths of an API credential's endpoint host the gateway sets its
+	// value on; nil for every path.
+	Paths []string `json:"paths,omitzero"`
 	// KeyPrefixes are the prefixes an API credential's value must start with; nil for
 	// any value.
 	KeyPrefixes []string `json:"key_prefixes,omitzero"`
@@ -398,9 +401,9 @@ type Apply struct {
 }
 
 // Applies are where and how the credential's value is set: for an API credential one
-// item, the host [policy.EndpointHost] reads from its endpoint with its auth and every
-// path; for a host credential its Apply. An API credential whose endpoint has no host
-// applies to none.
+// item, the host [policy.EndpointHost] reads from its endpoint with its auth and its
+// Paths, every path without them; for a host credential its Apply. An API credential
+// whose endpoint has no host applies to none.
 func (c RunCredential) Applies() []Apply {
 	if c.Format == "" {
 		return c.Apply
@@ -409,16 +412,21 @@ func (c RunCredential) Applies() []Apply {
 	if !ok {
 		return nil
 	}
-	return []Apply{{Hosts: []string{host}, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header}}
+	return []Apply{{Hosts: []string{host}, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header, Paths: slices.Clone(c.Paths)}}
 }
 
 // Auth is how a value is set on a request, auth.schema.json: Scheme is bearer, basic
 // with Username, or header with Header. OAuth marks a bearer as an OAuth token.
+// AccountHeader and AccountClaim, both or neither and only with OAuth, are the header
+// the proxy sets beside the token and the JSON pointer, RFC 6901, of its value in the
+// token's JWT payload; empty for none.
 type Auth struct {
-	Scheme   string `json:"scheme"`
-	Header   string `json:"header,omitzero"`
-	Username string `json:"username,omitzero"`
-	OAuth    bool   `json:"oauth,omitzero"`
+	Scheme        string `json:"scheme"`
+	Header        string `json:"header,omitzero"`
+	Username      string `json:"username,omitzero"`
+	OAuth         bool   `json:"oauth,omitzero"`
+	AccountHeader string `json:"account_header,omitzero"`
+	AccountClaim  string `json:"account_claim,omitzero"`
 }
 
 // Variable is one of a run configuration's variables: its value. A member beside it is
