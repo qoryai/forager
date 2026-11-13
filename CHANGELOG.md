@@ -1258,24 +1258,37 @@ release may change what an existing document does, and says so under Upgrading.
   writes no `dev.qory.run.exited`, and keeps the run's record. The gateway that starts
   again reopens the run at its first request whose run key verifies, a batch, a reload,
   a join, a transcript request or a proxy connection: it attaches the run again with the
-  tries of an open and goes on numbering the record. While the reopen is tried, or after
-  it fails in a way that may pass, a request gets a `503` with no body; after a final
-  failure, a `410` `run_closed`. The attach of a reopen is final at once on a signed
-  `410`, `run_attached`, `wrong_gateway`, `workspace_not_served` or a run configuration
-  that fails Forager's checks; any other signed `4xx`, and a `401` signed or not, is
-  tried again for up to 120 seconds, and is final when that window ends on it; a `5xx`,
-  no answer, a `429` `rate_limited`, and an unsigned answer other than a `401` give a
-  `503`. While a connection waits on a reopen, it counts against the bound of 4096
+  tries of an open and goes on numbering the record. Every request of the run waits for
+  the reopen while its connection stays open. It gets a `503` with no body after a
+  failure that may pass, and a `410` `run_closed` after a final failure; a request whose
+  connection closes first, such as one of a session that stopped waiting after 10
+  seconds, gets no answer, and the reopen goes on. The attach of a reopen is final at
+  once on a signed `410`, `run_attached`, `wrong_gateway`, `workspace_not_served` or a
+  run configuration that fails Forager's checks; any other signed `4xx`, and a `401`
+  signed or not, is tried again for up to 120 seconds, and is final when that window
+  ends on it; a `5xx`, no answer, a `429` `rate_limited`, and an unsigned answer other
+  than a `401` give a `503`. A fetch of the run's secrets in a reopen gives a `503` when
+  it gets no answer, a `5xx` or a `429` `rate_limited`, and a `410` `run_closed` on any
+  other `4xx`. While a connection waits on a reopen, it counts against the bound of 4096
   connections and not against its source's bounds. To reopen a run the gateway keeps
   `request.json`, `ca.pem`, `ca.key`, `given.jsonl`, `joins.jsonl`, `model-key-limit`
   and `held.jsonl` in its record, each mode `0600`. `request.json` may contain a
-  registry's credentials in an image reference. `request.json` and the CA files go
-  together: at the run's end, when its open or a reopen fails for good, when
-  `qory run resend` ends the run, and in a sweep every 10 minutes of each record
-  unchanged for 15 minutes. A join request that repeats the last join the gateway
-  numbered, answered `200` or `403` `placeholder_conflict`, gets the same answer, across
-  a restart too. Before, a run open at a gateway that stopped was over, and
-  `qory run resend` ended it with `gateway_lost`.
+  registry's credentials in an image reference. All seven go together: at the run's end,
+  when its open or a reopen fails for good, when `qory run resend` ends the run, and in
+  a sweep every 10 minutes of each record unchanged for 15 minutes. `events.jsonl`,
+  `delivered.log`, `undelivered/` and `gateway.lock` stay. A join request that repeats
+  the last join the gateway numbered, answered `200` or `403` `placeholder_conflict`,
+  gets the same answer, across a restart too. Before, a run open at a gateway that
+  stopped was over, and `qory run resend` ended it with `gateway_lost`. To deploy such a
+  gateway:
+  - keep the gateway's state directory, with the instance id it signs with and the run
+    records, on a volume that outlives the gateway's container;
+  - do not run `qory run resend` on a gateway's record during a deploy: it ends the run
+    with `gateway_lost`;
+  - expect the first deploy onto this release to end the runs that are open, because
+    the gateway it replaces ends them as it stops;
+  - expect a rollback to an earlier gateway to end each suspended run with a `410`
+    `run_closed`.
 - A run request behind a separate gateway counts against the bounds of 64 connections
   of one source and 256 of one IPv6 /48 only until its open starts, once its run key
   passes and its body is read. It counts against the bound of 4096 connections until
