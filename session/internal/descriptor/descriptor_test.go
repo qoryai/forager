@@ -715,8 +715,9 @@ func TestRuntimesJSONShape(t *testing.T) {
 			resume := members("resume", rs, []string{"prefix", "path"})
 			prefix, _ := resume["prefix"].(string)
 			path, _ := resume["path"].(string)
-			if !strings.HasPrefix(prefix, "~/") || !strings.HasSuffix(prefix, "/") || !strings.HasPrefix(path, prefix) {
-				t.Errorf("resume of %v is %v; want a prefix under ~/ ending in / that the path starts with", rt["name"], resume)
+			lead := strings.HasPrefix(prefix, "~/") || strings.HasPrefix(prefix, "/") || strings.HasPrefix(prefix, "${")
+			if !lead || !strings.HasSuffix(prefix, "/") || !strings.HasPrefix(path, prefix) {
+				t.Errorf("resume of %v is %v; want a prefix under ~/, /, or ${<home_var>}/ ending in / that the path starts with", rt["name"], resume)
 			}
 		}
 		if want := map[string]any{"prefix": "~/.claude/projects/", "path": "~/.claude/projects/{cwd_slug}/{session_id}.jsonl"}; rt["name"] == "claude" && !reflect.DeepEqual(rt["resume"], want) {
@@ -869,6 +870,60 @@ func TestResumeDecodes(t *testing.T) {
 	for _, prefix := range []string{".amp/s/", "/"} {
 		if _, err := descriptor.Parse("amp.yaml", []byte(resume(prefix+"{session_id}.jsonl", prefix))); err == nil {
 			t.Errorf("the prefix %q was accepted", prefix)
+		}
+	}
+}
+
+// TestAResumeHomeVariableDecodes pins resume.home_var: a prefix and a path that start
+// with ${<home_var>}/ decode as they are, the home itself as the prefix included. The
+// schema refuses a variable without home_var, a home_var whose prefix or path starts
+// with ~/ or /, and a $ anywhere but in that ${<home_var>}/; Parse returns an error that
+// starts with the fix for a prefix or path that starts with another variable.
+func TestAResumeHomeVariableDecodes(t *testing.T) {
+	const head = "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
+		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n"
+	resume := func(homeVar, path, prefix string) string {
+		doc := head + "resume:\n  path: '" + path + "'\n  prefix: '" + prefix + "'\n  args: [resume, '{session_id}']\n"
+		if homeVar != "" {
+			doc += "  home_var: " + homeVar + "\n"
+		}
+		return doc
+	}
+	for _, c := range []struct{ path, prefix string }{
+		{"${AMP_HOME}/s/*/rollout-*-{session_id}.jsonl", "${AMP_HOME}/s/"},
+		{"${AMP_HOME}/{session_id}.jsonl", "${AMP_HOME}/"},
+	} {
+		d, err := descriptor.Parse("amp.yaml", []byte(resume("AMP_HOME", c.path, c.prefix)))
+		if err != nil {
+			t.Fatalf("%s: %v", c.prefix, err)
+		}
+		want := &descriptor.Resume{HomeVar: "AMP_HOME", Path: c.path, Prefix: c.prefix, Args: []string{"resume", "{session_id}"}}
+		if !reflect.DeepEqual(d.Resume, want) {
+			t.Errorf("Resume = %+v; want %+v", d.Resume, want)
+		}
+	}
+	for name, doc := range map[string]string{
+		"a variable without home_var":        resume("", "${AMP_HOME}/s/{session_id}.jsonl", "${AMP_HOME}/s/"),
+		"home_var with a prefix in the home": resume("AMP_HOME", "~/.amp/s/{session_id}.jsonl", "~/.amp/s/"),
+		"home_var with an absolute prefix":   resume("AMP_HOME", "/var/lib/amp/s/{session_id}.jsonl", "/var/lib/amp/s/"),
+		"a second variable in the path":      resume("AMP_HOME", "${AMP_HOME}/s/${OTHER}/{session_id}.jsonl", "${AMP_HOME}/s/"),
+		"a $ in the prefix":                  resume("AMP_HOME", "${AMP_HOME}/s$x/{session_id}.jsonl", "${AMP_HOME}/s$x/"),
+		"a variable in an absolute prefix":   resume("", "/var/${AMP_HOME}/{session_id}.jsonl", "/var/${AMP_HOME}/"),
+		"a variable without braces":          resume("AMP_HOME", "$AMP_HOME/s/{session_id}.jsonl", "$AMP_HOME/s/"),
+		"a variable with no / after it":      resume("AMP_HOME", "${AMP_HOME}s/{session_id}.jsonl", "${AMP_HOME}s/"),
+	} {
+		if _, err := descriptor.Parse("amp.yaml", []byte(doc)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// The schema cannot compare the variable with home_var: Parse does.
+	for name, doc := range map[string]string{
+		"another variable":             resume("AMP_HOME", "${OTHER}/s/{session_id}.jsonl", "${OTHER}/s/"),
+		"another variable in the path": resume("AMP_HOME", "${OTHER}/s/{session_id}.jsonl", "${AMP_HOME}/s/"),
+	} {
+		_, err := descriptor.Parse("amp.yaml", []byte(doc))
+		if err == nil || !strings.HasPrefix(err.Error(), "amp.yaml: resume: start ") || !strings.Contains(err.Error(), "${AMP_HOME}/") {
+			t.Errorf("%s: %v; want an error that starts with the fix and contains ${AMP_HOME}/", name, err)
 		}
 	}
 }

@@ -5635,9 +5635,17 @@ input contains it, a template with `{session_id}` and `{cwd_slug}`:
 characters other than `/` inside one path name, for a runtime that puts a date in the
 path, `/var/lib/qory-codex-home/sessions/*/*/*/rollout-*-{session_id}.jsonl`.
 `prefix` is the directory the transcript must lie under, with no `*`: below the
-runtime's home, `~/.claude/projects/`, `~` being that home, or absolute, for a runtime
-whose home is at a fixed place, `/var/lib/qory-codex-home/sessions/`. `path` starts with
-`prefix`. `args` are the arguments the session adds when it resumes,
+runtime's home, `~/.claude/projects/`, `~` being that home, absolute, for a runtime
+whose home is at a fixed place, `/var/lib/qory-codex-home/sessions/`, or below the
+value of `home_var`, `${CODEX_HOME}/sessions/`. `path` starts with `prefix`.
+`home_var`, optional, is the variable of the launch's environment that contains the
+runtime's home, `CODEX_HOME` for Codex. With it, `prefix` and `path` start with exactly
+`${<home_var>}/`; without it, they start with `~/` or `/`. Neither contains a `$`
+anywhere else: the schema refuses one, and the session refuses a descriptor whose
+`prefix` or `path` starts with another variable, `resume: start "${OTHER}/s/" with
+"${CODEX_HOME}/": home_var is CODEX_HOME, and the transcript lies below its value`. The
+session replaces `${<home_var>}` with the variable's value in the launch's environment,
+the one the runtime gets (§The events, A session's transcript). `args` are the arguments the session adds when it resumes,
 `["--resume", "{session_id}"]`. `after`, optional, is the argument of the runtime's that
 `args` follow: with `after: exec` and `args: [resume, "{session_id}"]`, `codex exec
 --json` resumes as `codex exec resume <session id> --json`. Absent, or when no
@@ -5648,7 +5656,7 @@ end. The session sends the transcript as `dev.qory.session.transcript`
 (§The events, A session's transcript) and restores it in a run with `resume` (§The run
 API, The transcript of a paused run), behind a wall through the session's transcript
 directory, which the wall binds at `prefix` inside, or in the writable mount whose place
-inside holds an absolute `prefix`. Absent, the session sends no
+inside contains an absolute `prefix`, `home_var`'s value resolved. Absent, the session sends no
 transcript, a wall binds no transcript directory, and a continuation starts the runtime
 without a resume.
 
@@ -5757,7 +5765,9 @@ descriptor's order and without their values, `{"flag": "--config", "fixed":
 them, when it has one, and `resume`, the
 descriptor's `resume.prefix` and `resume.path`, `{"prefix": "~/.claude/projects/",
 "path": "~/.claude/projects/{cwd_slug}/{session_id}.jsonl"}`, for a server to check a
-transcript's path against, when it has one. Every list is
+transcript's path against, when it has one. A `prefix` that starts with
+`${<home_var>}/` stands for any absolute path with no `.` or `..` name in that place: the
+transcript's path is absolute, below the variable's value in the run that sent it. Every list is
 present, empty when the descriptor has none, and so is `fixed`, an empty object;
 `model`, `config` and `resume` are absent when the descriptor has none, and so are `keys` and `overrides` in a `model` that has none of them. `runtimes` is
 a list of objects that a reader finds by `name`. `go generate ./contracts`

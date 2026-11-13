@@ -89,8 +89,12 @@ type Config struct {
 
 // Resume is where the runtime writes the transcript of its session, and the arguments
 // that start the runtime again from it. Each path starts with ~/, the runtime's home,
-// or with /, an absolute path.
+// with /, an absolute path, or with ${HomeVar}/, the value of HomeVar in the launch's
+// environment.
 type Resume struct {
+	// HomeVar is the variable of the launch's environment that contains the runtime's
+	// home, such as CODEX_HOME; empty when Prefix and Path start with ~/ or /.
+	HomeVar string `yaml:"home_var" json:"home_var,omitempty"`
 	// PathFrom is the member of a hook's input that contains the transcript's path,
 	// such as transcript_path; empty when the session takes the path from Path alone.
 	PathFrom string `yaml:"path_from" json:"path_from,omitempty"`
@@ -516,8 +520,10 @@ func (d *Descriptor) checkConfig() error {
 	return nil
 }
 
-// check checks what the schema cannot express of resume: path starts with prefix, and
-// neither has a .. segment. A nil Resume passes.
+// check checks what the schema cannot express of resume: path starts with prefix,
+// neither has a .. segment, and the only variable either has is home_var's, as
+// ${<home_var>}/ at its start, which each has when home_var is set. A nil Resume
+// passes.
 func (r *Resume) check() error {
 	if r == nil {
 		return nil
@@ -525,6 +531,19 @@ func (r *Resume) check() error {
 	for _, p := range []string{r.Prefix, r.Path} {
 		if slices.Contains(strings.Split(p, "/"), "..") {
 			return fmt.Errorf("resume: remove the .. segment from %s: the transcript lies under resume.prefix", accesskey.ShownValue(p, true))
+		}
+		rest := p
+		if r.HomeVar != "" {
+			lead := "${" + r.HomeVar + "}/"
+			var ok bool
+			if rest, ok = strings.CutPrefix(p, lead); !ok {
+				return fmt.Errorf("resume: start %s with %s: home_var is %s, and the transcript lies below its value",
+					accesskey.ShownValue(p, true), accesskey.ShownValue(lead, true), accesskey.ShownName(r.HomeVar, false))
+			}
+		}
+		if strings.Contains(rest, "$") {
+			return fmt.Errorf("resume: remove the $ from %s: resume.prefix and resume.path take no variable other than home_var, as ${<home_var>}/ at their start",
+				accesskey.ShownValue(p, true))
 		}
 	}
 	if !strings.HasPrefix(r.Path, r.Prefix) {
