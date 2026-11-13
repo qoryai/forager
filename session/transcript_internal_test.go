@@ -487,7 +487,7 @@ func newRolloutTranscript(t *testing.T, walled bool) (*transcript, *sentTranscri
 	mask := func(l string) string { return strings.ReplaceAll(l, "sk-fake-secret", "[secret]") }
 	send, line := func(m map[string]any) { s.events = append(s.events, m) }, func(l string) { s.lines = append(s.lines, l) }
 	if walled {
-		return newWalledTranscript(rolloutResume, dir, "/workspace", mask, send, line), s, dir
+		return newWalledTranscript(rolloutResume, dir, "", "/workspace", mask, send, line), s, dir
 	}
 	return newTranscript(rolloutResume, dir, "/workspace", mask, send, line), s, dir
 }
@@ -1000,7 +1000,7 @@ func TestAnUnwalledReadFollowsLinksToThePrefix(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "transcripts")
 			symlink(t, real, root)
 			s := &sentTranscript{}
-			tr := newWalledTranscript(r.resume, root, "/workspace", func(l string) string { return l }, func(m map[string]any) { s.events = append(s.events, m) }, func(l string) { s.lines = append(s.lines, l) })
+			tr := newWalledTranscript(r.resume, root, "", "/workspace", func(l string) string { return l }, func(m map[string]any) { s.events = append(s.events, m) }, func(l string) { s.lines = append(s.lines, l) })
 			tr.started(walledID)
 			tr.finish()
 			if len(s.events) != 0 || len(s.lines) != 1 {

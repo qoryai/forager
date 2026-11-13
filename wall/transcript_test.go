@@ -93,8 +93,8 @@ func TestALaunchWithNoTranscriptDirectoryBindsNone(t *testing.T) {
 
 // TestATranscriptDirectoryThatOverlapsAMountIsRefused pins the refusals: a directory
 // that lies inside a mount, contains one or is not clean, a place below the home with a ..
-// name or that is absolute, and a home where the place inside overlaps a mount's place
-// inside or /qory.
+// name, an absolute place that is /, is not clean or overlaps a mount's place inside or
+// /qory, and a home where the place inside overlaps a mount's place inside or /qory.
 func TestATranscriptDirectoryThatOverlapsAMountIsRefused(t *testing.T) {
 	for name, change := range map[string]func(*Launch){
 		"inside the workspace":     func(l *Launch) { l.Transcript.Path = "/work/.claude" },
@@ -103,7 +103,11 @@ func TestATranscriptDirectoryThatOverlapsAMountIsRefused(t *testing.T) {
 		"not clean":                func(l *Launch) { l.Transcript.Path = "/runs/x/../work" },
 		"relative":                 func(l *Launch) { l.Transcript.Path = "runs/x" },
 		"a .. name below home":     func(l *Launch) { l.Transcript.Under = "../.ssh" },
-		"absolute below home":      func(l *Launch) { l.Transcript.Under = "/etc" },
+		"the root":                 func(l *Launch) { l.Transcript.Under = "/" },
+		"absolute, not clean":      func(l *Launch) { l.Transcript.Under = "/var/../etc" },
+		"absolute, in a mount":     func(l *Launch) { l.Transcript.Under = "/work/.sessions" },
+		"absolute, around a mount": func(l *Launch) { l.Transcript.Under = "/home/dev/.qory" },
+		"absolute, under /qory":    func(l *Launch) { l.Transcript.Under = "/qory/sessions" },
 		"a home in a mount":        func(l *Launch) { l.Env = append(l.Env, "HOME=/work") },
 		"a home that contains one": func(l *Launch) { l.Env = append(l.Env, "HOME=/"); l.Transcript.Under = "work" },
 		"a home under /qory":       func(l *Launch) { l.Env = append(l.Env, "HOME=/qory") },
@@ -437,5 +441,48 @@ func TestTheAgentsGroupComesFromTheWallsUserOrTheImage(t *testing.T) {
 				t.Errorf("the tar has %+v; want uid 1000 and gid %d", got, want)
 			}
 		})
+	}
+}
+
+// TestAnAbsoluteTranscriptPlaceIsBoundThere pins a transcript directory whose place is
+// absolute, an absolute resume.prefix: the wall binds it there, whatever HOME is, makes
+// no directory between a home and the place, and checks each directory from / down to
+// it in the image, with a fix that names the directory alone when one cannot be
+// searched.
+func TestAnAbsoluteTranscriptPlaceIsBoundThere(t *testing.T) {
+	dir := tar.Header{Typeflag: tar.TypeDir, Mode: 0o755}
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000"`, heads: map[string]tar.Header{"/var": dir, "/var/lib": dir}}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, sys: rec}
+	e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close(context.Background())
+	l := transcriptLaunch("HOME=/home/agent")
+	l.Transcript.Under = "/var/lib/agent-home/sessions"
+	if unbound, err := e.(TranscriptChecker).CheckTranscript(context.Background(), l.Env, l.Transcript); unbound != nil || err != nil {
+		t.Fatalf("CheckTranscript: %+v, %v; want nil", unbound, err)
+	}
+	if _, err := e.Wrap(context.Background(), l); err != nil {
+		t.Fatal(err)
+	}
+	if create := agentCreate(rec); !strings.Contains(create, "--mount type=bind,src="+l.Transcript.Path+",dst=/var/lib/agent-home/sessions ") {
+		t.Errorf("the agent's docker create %q; want the bind at /var/lib/agent-home/sessions", create)
+	}
+	if got := copiedDirs(t, rec); len(got) != 0 {
+		t.Errorf("the tar has %+v; want no directory", got)
+	}
+
+	locked := tar.Header{Typeflag: tar.TypeDir, Mode: 0o700}
+	rec = &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000"`, heads: map[string]tar.Header{"/var": dir, "/var/lib": locked}}
+	d = &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, sys: rec}
+	e, err = d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close(context.Background())
+	unbound, err := e.(TranscriptChecker).CheckTranscript(context.Background(), l.Env, l.Transcript)
+	if err != nil || unbound == nil || unbound.Fix != `Let uid 1000 search "/var/lib" in the image` {
+		t.Errorf("CheckTranscript: %+v, %v; want the fix that names /var/lib", unbound, err)
 	}
 }

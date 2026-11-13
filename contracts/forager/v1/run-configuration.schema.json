@@ -56,7 +56,7 @@
       "properties": {
         "run_id": {"description": "The id of the paused run, a lower-case UUID.", "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
         "session_id": {"description": "The runtime's session id in the paused run, as dev.qory.session.transcript has it.", "type": "string", "minLength": 1, "maxLength": 128},
-        "path": {"description": "The transcript's path under the runtime's home, as dev.qory.session.transcript has it, such as ~/.claude/projects/-workspace/<session_id>.jsonl. It lies under the descriptor's resume.prefix.", "type": "string", "minLength": 1, "maxLength": 1024}
+        "path": {"description": "The transcript's path, as dev.qory.session.transcript has it: under the runtime's home, such as ~/.claude/projects/-workspace/<session_id>.jsonl, or absolute. It lies under the descriptor's resume.prefix.", "type": "string", "minLength": 1, "maxLength": 1024}
       }
     },
     "harness_hidden": {

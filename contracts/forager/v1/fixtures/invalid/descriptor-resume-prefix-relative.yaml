@@ -1,4 +1,4 @@
-# A descriptor's resume prefix lies under the runtime's home, ~/.
+# A descriptor's resume prefix starts with ~/, the runtime's home, or with /.
 version: 1
 runtime: claude
 runtime_version: "2.1.316"
@@ -8,7 +8,7 @@ sources:
 resume:
   path_from: transcript_path
   path: ~/.claude/projects/{cwd_slug}/{session_id}.jsonl
-  prefix: /tmp/projects/
+  prefix: .claude/projects/
   args: ["--resume", "{session_id}"]
 rules:
   - source: output

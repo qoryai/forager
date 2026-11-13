@@ -1,6 +1,7 @@
 # A descriptor whose runtime reads its settings as TOML from --config pairs: the model
 # endpoint is a setting, fixed settings go with every launch, and the transcript path
-# has a date in it, so the path has * and no hook input contains it. The resume's
+# has a date in it, so the path has * and no hook input contains it. The transcript
+# lies under an absolute prefix, the runtime's home at a fixed place. The resume's
 # arguments follow exec: codex exec --json becomes codex exec resume <id> --json.
 version: 1
 runtime: codex
@@ -25,8 +26,8 @@ config:
     features.plugins: false
     stream_max_retries: 5
 resume:
-  path: ~/.codex/sessions/*/*/*/rollout-*-{session_id}.jsonl
-  prefix: ~/.codex/sessions/
+  path: /var/lib/qory-codex-home/sessions/*/*/*/rollout-*-{session_id}.jsonl
+  prefix: /var/lib/qory-codex-home/sessions/
   args: [resume, "{session_id}"]
   after: exec
 rules:

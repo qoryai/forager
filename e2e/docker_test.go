@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"slices"
@@ -43,6 +44,7 @@ func TestDockerConforms(t *testing.T) {
 	t.Run("the relay runs no health check", relayRunsNoHealthCheck)
 	t.Run("the relay listens on the inside network alone", relayListensInsideAlone)
 	t.Run("the relay takes a connection from the inside network alone", relayTakesInsideAlone)
+	t.Run("a read-only file over a writable target stays", readOnlyFileOverWritableTarget)
 }
 
 // TestDockerNestedConforms runs the suite against an image with a Docker of the agent's
@@ -638,6 +640,14 @@ func startRelay(t *testing.T, command, helper, image string, args ...string) rel
 // agent's own; the request's run id is the test's own.
 func startEnclosure(t *testing.T, command, helper string, req wall.Request, args ...string) relayRun {
 	t.Helper()
+	dir := t.TempDir()
+	return startEnclosureWith(t, command, helper, req, dir, []wall.Mount{{Path: dir}}, args...)
+}
+
+// startEnclosureWith is startEnclosure with the workspace dir and the launch's mounts,
+// one of which holds dir.
+func startEnclosureWith(t *testing.T, command, helper string, req wall.Request, dir string, mounts []wall.Mount, args ...string) relayRun {
+	t.Helper()
 	w := &wall.Docker{Command: command, Helper: helper, RelayArgs: e2e.RelayArgs, NestArgs: e2e.NestArgs}
 	runID := fmt.Sprintf("walltest-relay-%d-%d", os.Getpid(), time.Now().UnixNano())
 	req.RunID = runID
@@ -652,8 +662,7 @@ func startEnclosure(t *testing.T, command, helper string, req wall.Request, args
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { proxy.Close() })
-	dir := t.TempDir()
-	agent, err := e.Wrap(ctx, wall.Launch{Command: "sh", Args: args, Dir: dir, Mounts: []wall.Mount{{Path: dir}},
+	agent, err := e.Wrap(ctx, wall.Launch{Command: "sh", Args: args, Dir: dir, Mounts: mounts,
 		Proxy: proxy.Addr().String(), ProxyToken: relaySecret})
 	if err != nil {
 		t.Fatal(err)
@@ -701,6 +710,49 @@ func (r relayRun) start(ctx context.Context, t *testing.T) func() string {
 	return func() string {
 		agent.Wait()
 		return out.String()
+	}
+}
+
+// readOnlyFileOverWritableTarget binds a writable directory at a target and a read-only
+// file at a target inside it, from a path on this machine apart from the directory, as a
+// session lists them for a runtime's home at a fixed place, and requires that the agent
+// writes the directory but cannot delete, replace or change the file, inside or on this
+// machine.
+func readOnlyFileOverWritableTarget(t *testing.T) {
+	command, helper := relayEngine(t)
+	home, files := t.TempDir(), t.TempDir()
+	if err := os.Chmod(home, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	hooks := filepath.Join(files, "hooks.json")
+	if err := os.WriteFile(hooks, []byte("{\"hooks\":{}}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const inside = "/var/lib/agent-home"
+	script := `cd ` + inside + `
+echo x > other.json && echo wrote other.json
+rm -f hooks.json 2>/dev/null && echo removed hooks.json
+mv -f other.json hooks.json 2>/dev/null && echo replaced hooks.json
+{ echo changed > hooks.json; } 2>/dev/null && echo changed hooks.json
+cat hooks.json`
+	dir := t.TempDir()
+	r := startEnclosureWith(t, command, helper, wall.Request{Image: busybox}, dir, []wall.Mount{
+		{Path: dir},
+		{Path: home, Target: inside},
+		{Path: hooks, ReadOnly: true, Target: inside + "/hooks.json"},
+	}, "-c", script)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	out := r.start(ctx, t)()
+	if want := "wrote other.json\n{\"hooks\":{}}\n"; !strings.HasSuffix(out, want) || strings.Contains(out, "removed") ||
+		strings.Contains(out, "replaced") || strings.Contains(out, "changed") {
+		t.Errorf("the agent printed %q; want it to end with %q", out, want)
+	}
+	if b, err := os.ReadFile(hooks); err != nil || string(b) != "{\"hooks\":{}}\n" {
+		t.Errorf("the file on this machine is %q, %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "other.json")); err != nil {
+		t.Errorf("the writable directory on this machine: %v", err)
 	}
 }
 

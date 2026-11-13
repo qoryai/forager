@@ -26,7 +26,7 @@ func newWalledTestTranscript(t *testing.T) (*transcript, *sentTranscript, string
 	root := t.TempDir()
 	s := &sentTranscript{}
 	mask := func(l string) string { return strings.ReplaceAll(l, "sk-fake-secret", "[secret]") }
-	tr := newWalledTranscript(claudeResume, root, "/workspace", mask, func(m map[string]any) { s.events = append(s.events, m) }, func(l string) { s.lines = append(s.lines, l) })
+	tr := newWalledTranscript(claudeResume, root, "", "/workspace", mask, func(m map[string]any) { s.events = append(s.events, m) }, func(l string) { s.lines = append(s.lines, l) })
 	return tr, s, root
 }
 

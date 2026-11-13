@@ -1566,8 +1566,8 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, string, error) {
 
 // transcriptMount is the --mount of the launch's transcript directory, empty for a
 // launch with none: the directory, writable, at Under below the home of the agent's
-// user inside, [dockerEnclosure.transcriptPlace]. A directory that is not absolute and
-// clean, an Under that is not relative and clean or has a .. name, a directory that is,
+// user inside, or at an absolute Under, [dockerEnclosure.transcriptPlace]. A directory
+// that is not absolute and clean, an Under that is not clean or has a .. name, a directory that is,
 // contains or lies inside one of the launch's mounts or the hook socket's directory, a
 // place inside that is, contains or lies inside another mount's place inside or /qory, and
 // a place the agent's container cannot bind for the agent ([Unbound]) are refused: no
@@ -1608,9 +1608,13 @@ func (e *dockerEnclosure) transcriptMount(ctx context.Context, l Launch) (string
 		return "", nil, fmt.Errorf("wall docker: %s: %s", place.unbound.Fix, place.unbound.Cause)
 	}
 	for _, d := range dsts {
-		if under(d, place.dst) || under(place.dst, d) {
-			return "", nil, fmt.Errorf("wall docker: set HOME to a directory where %s overlaps no mount: the transcript directory is bound there, and it overlaps %s", accesskey.ShownValue(place.dst, true), accesskey.ShownValue(d, true))
+		if !under(d, place.dst) && !under(place.dst, d) {
+			continue
 		}
+		if path.IsAbs(tr.Under) {
+			return "", nil, fmt.Errorf("wall docker: show no mount at, around or inside %s: the transcript directory is bound there, and it overlaps %s", accesskey.ShownValue(place.dst, true), accesskey.ShownValue(d, true))
+		}
+		return "", nil, fmt.Errorf("wall docker: set HOME to a directory where %s overlaps no mount: the transcript directory is bound there, and it overlaps %s", accesskey.ShownValue(place.dst, true), accesskey.ShownValue(d, true))
 	}
 	m, err := mount(tr.Path, place.dst, false)
 	if err != nil {
@@ -1652,19 +1656,20 @@ func (e *dockerEnclosure) CheckTranscript(ctx context.Context, env []string, t T
 // the environment env, once for each directory, Under and HOME of env. The agent's
 // user inside must be the session's uid, [dockerEnclosure.agentIDs], since the
 // directory is mode 0700 and owned by that uid. The bind's place is Under below the
-// agent's home, [dockerEnclosure.home]. Each directory from / down to that place, read
-// out of the image, must be a directory and no symbolic link, since the engine follows
-// a link inside the image and the bind could then land inside another mount; and each
-// one above the place must let the agent's user and group search it. A directory the
-// image does not have, and every one below it, is made: by the engine, owned by root and
-// mode 0755, above the home, and by copyDirs below it.
+// agent's home, [dockerEnclosure.home], or Under itself when it is absolute. Each
+// directory from / down to that place, read out of the image, must be a directory and
+// no symbolic link, since the engine follows a link inside the image and the bind could
+// then land inside another mount; and each one above the place must let the agent's
+// user and group search it. A directory the image does not have, and every one below
+// it, is made: by the engine, owned by root and mode 0755, above the home, and by
+// copyDirs below it. For an absolute Under, the engine makes every one.
 func (e *dockerEnclosure) transcriptPlace(ctx context.Context, env []string, t Transcript) (*transcriptPlace, error) {
 	key := t.Path + "\x00" + t.Under + "\x00" + lastHome(env)
 	if e.placed != nil && e.placed.key == key {
 		return e.placed, nil
 	}
-	if t.Under == "" || path.IsAbs(t.Under) || path.Clean(t.Under) != t.Under || slices.Contains(strings.Split(t.Under, "/"), "..") {
-		return nil, fmt.Errorf("wall docker: the transcript's place below the home, %s, is not a relative, clean path", accesskey.ShownValue(t.Under, true))
+	if t.Under == "" || t.Under == "/" || path.Clean(t.Under) != t.Under || slices.Contains(strings.Split(t.Under, "/"), "..") {
+		return nil, fmt.Errorf("wall docker: the transcript's place, %s, is not a clean path below the home or below /", accesskey.ShownValue(t.Under, true))
 	}
 	p := &transcriptPlace{key: key}
 	uid, gid, unbound, err := e.agentIDs(ctx)
@@ -1675,9 +1680,13 @@ func (e *dockerEnclosure) transcriptPlace(ctx context.Context, env []string, t T
 		p.unbound, e.placed = unbound, p
 		return p, nil
 	}
-	home, err := e.home(ctx, env)
-	if err != nil {
-		return nil, err
+	// An absolute Under is the place itself, whatever the home: the engine makes each
+	// directory above it that the image does not have, and copyDirs makes none.
+	home := "/"
+	if !path.IsAbs(t.Under) {
+		if home, err = e.home(ctx, env); err != nil {
+			return nil, err
+		}
 	}
 	p.dst, p.uid, p.gid = path.Join(home, t.Under), uid, gid
 	var names []string
@@ -1694,12 +1703,12 @@ func (e *dockerEnclosure) transcriptPlace(ctx context.Context, env []string, t T
 			missing = i
 			break
 		}
-		if why := unreachable(h, q, q == p.dst, uid, gid); why != nil {
+		if why := unreachable(h, q, q == p.dst, path.IsAbs(t.Under), uid, gid); why != nil {
 			p.unbound, e.placed = why, p
 			return p, nil
 		}
 	}
-	for q := path.Dir(t.Under); q != "."; q = path.Dir(q) {
+	for q := path.Dir(t.Under); q != "." && !path.IsAbs(t.Under); q = path.Dir(q) {
 		if at := path.Join(home, q); slices.Index(names, at) >= missing {
 			p.mk = append([]string{at}, p.mk...)
 		}
@@ -1713,7 +1722,8 @@ func (e *dockerEnclosure) transcriptPlace(ctx context.Context, env []string, t T
 // symbolic link and a file that is no directory do, and so does a directory above the
 // bind's place, last false, that the agent's user and group cannot search: the owner's
 // bit counts for the owner, the group's for the group and the others' for the rest.
-func unreachable(h *tar.Header, q string, last bool, uid, gid int) *Unbound {
+// abs says the place is absolute, so the fix is the directory's mode alone, not HOME.
+func unreachable(h *tar.Header, q string, last, abs bool, uid, gid int) *Unbound {
 	shown := accesskey.ShownValue(q, true)
 	switch {
 	case h.Typeflag == tar.TypeSymlink:
@@ -1735,7 +1745,11 @@ func unreachable(h *tar.Header, q string, last bool, uid, gid int) *Unbound {
 	if h.Mode&bit != 0 {
 		return nil
 	}
-	return &Unbound{Fix: fmt.Sprintf("Set HOME in the image to a directory that uid %d can reach, or let it search %s", uid, shown),
+	fix := fmt.Sprintf("Set HOME in the image to a directory that uid %d can reach, or let it search %s", uid, shown)
+	if abs {
+		fix = fmt.Sprintf("Let uid %d search %s in the image", uid, shown)
+	}
+	return &Unbound{Fix: fix,
 		Cause: fmt.Sprintf("%s has mode %04o and owner %d:%d in the image, so the agent, %d:%d, cannot reach the transcript directory below it", shown, h.Mode&0o7777, h.Uid, h.Gid, uid, gid)}
 }
 

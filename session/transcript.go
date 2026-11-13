@@ -41,7 +41,8 @@ const transcriptPoll = time.Second
 // bytes appended since the last one; the bytes after the last newline wait for the
 // rest of their line. A line over [maxTranscriptLine] bytes, and a file over
 // [maxTranscript] bytes, stop the transcript with one line. home is the
-// directory on this machine that stands for ~, the runtime's home. The file's path comes
+// directory on this machine that stands for ~, the runtime's home, or / for a
+// resume.Prefix that is absolute. The file's path comes
 // from the first hook input that contains resume.PathFrom, when the descriptor sets
 // one, and until then from resume.Path with the runtime's session id and the slug of
 // its working directory. A resume.Path with a * is a pattern: each read searches for
@@ -51,7 +52,9 @@ const transcriptPoll = time.Second
 // reads no path with a symbolic link among the names below resume.Prefix.
 //
 // Behind a wall, root is the session's transcript directory, which the wall binds at
-// resume.Prefix inside, and home is empty: the file's path is resume.Path below root
+// resume.Prefix inside, or the path on this machine of the writable mount whose place
+// holds an absolute resume.Prefix, with under the names from root down to
+// resume.Prefix; home is empty. The file's path is resume.Path below resume.Prefix
 // alone, whatever a hook input contains, the session id a UUID in lower case
 // ([walledSessionID]), and the file is read as [readBeneath] reads it. A session id of
 // another shape, or a file the session does not read, writes one line, and nothing more
@@ -60,6 +63,7 @@ type transcript struct {
 	resume runtimes.Resume
 	home   string
 	root   string
+	under  string
 	// slug is the runtime's working directory with every character other than an
 	// ASCII letter or digit replaced by -.
 	slug string
@@ -72,7 +76,7 @@ type transcript struct {
 
 	mu sync.Mutex
 	// sessionID is the runtime's session id; rel is the file's path relative to home,
-	// fromHook true once a hook input set it. pattern is the path of a resume.path with
+	// without its lead ([leadOf]), fromHook true once a hook input set it. pattern is the path of a resume.path with
 	// a *, which each read searches for until one file matches, while rel is empty;
 	// nil otherwise.
 	sessionID string
@@ -106,11 +110,29 @@ func newTranscript(rs runtimes.Resume, home, cwd string, mask func(string) strin
 }
 
 // newWalledTranscript returns the transcript of a walled runtime with resume rs whose
-// transcript directory on this machine is root and whose working directory inside is
-// cwd.
-func newWalledTranscript(rs runtimes.Resume, root, cwd string, mask func(string) string, send func(map[string]any), line func(string)) *transcript {
-	return &transcript{resume: rs, root: root, slug: cwdSlug(cwd), mask: mask, send: send, line: line}
+// transcript lies below the directory root on this machine, at the names under and then
+// below resume.prefix, and whose working directory inside is cwd.
+func newWalledTranscript(rs runtimes.Resume, root, under, cwd string, mask func(string) string, send func(map[string]any), line func(string)) *transcript {
+	return &transcript{resume: rs, root: root, under: under, slug: cwdSlug(cwd), mask: mask, send: send, line: line}
 }
+
+// leadOf is how a transcript's path under resume.prefix starts: / for an absolute
+// prefix, and ~/, the runtime's home, otherwise.
+func leadOf(prefix string) string {
+	if strings.HasPrefix(prefix, "/") {
+		return "/"
+	}
+	return "~/"
+}
+
+// lead is [leadOf] of the transcript's resume.prefix.
+func (t *transcript) lead() string { return leadOf(t.resume.Prefix) }
+
+// prefix is resume.prefix without its lead: the place of rel's first names.
+func (t *transcript) prefix() string { return strings.TrimPrefix(t.resume.Prefix, t.lead()) }
+
+// shownPath is the file's path as dev.qory.session.transcript has it, the lead and rel.
+func (t *transcript) shownPath() string { return t.lead() + t.rel }
 
 // resumeArgsKept is the error of a session whose wall binds no transcript directory and
 // whose launch does not have the resume arguments the session added where it added
@@ -125,8 +147,8 @@ func noResume(fix, cause string) string {
 	return fix + ". A continuation of this run starts the runtime without a resume: " + cause
 }
 
-// restore fixes the file to the restored transcript rel, resume.path relative to the
-// home, and the session id to id: the resumed runtime appends to that file, under the
+// restore fixes the file to the restored transcript rel, resume.path without its lead,
+// and the session id to id: the resumed runtime appends to that file, under the
 // paused run's slug, so the session sends the whole file from offset 0, the restored
 // lines first. A path the session does not read leaves the transcript with no path.
 func (t *transcript) restore(id, rel string) {
@@ -149,7 +171,7 @@ func (t *transcript) sameRestored(p string) {
 		return
 	}
 	t.warned = true
-	t.line(fmt.Sprintf("Check that the runtime resumes from ~/%s. The session reads the restored transcript there, and %s of the hook input is %q", t.rel, t.resume.PathFrom, accesskey.ShownValue(p[:min(len(p), 256)], false)))
+	t.line(fmt.Sprintf("Check that the runtime resumes from %s. The session reads the restored transcript there, and %s of the hook input is %q", t.shownPath(), t.resume.PathFrom, accesskey.ShownValue(p[:min(len(p), 256)], false)))
 }
 
 // walledID takes id as the session id of a walled runtime, once: a UUID in lower case
@@ -173,7 +195,7 @@ func (t *transcript) walledID(id string) {
 		t.pattern = newPathPattern(below, id, t.slug, false)
 		return
 	}
-	t.setPath(strings.TrimPrefix(t.resume.Prefix, "~/") + strings.NewReplacer("{session_id}", id, "{cwd_slug}", t.slug).Replace(below))
+	t.setPath(t.prefix() + strings.NewReplacer("{session_id}", id, "{cwd_slug}", t.slug).Replace(below))
 }
 
 // cwdSlug is dir with every character other than an ASCII letter or digit replaced by
@@ -242,19 +264,19 @@ func (t *transcript) started(sessionID string) {
 			return
 		}
 		p := strings.NewReplacer("{session_id}", t.sessionID, "{cwd_slug}", t.slug).Replace(t.resume.Path)
-		if !t.setPath(strings.TrimPrefix(p, "~/")) {
+		if !t.setPath(strings.TrimPrefix(p, t.lead())) {
 			t.line(noResume("Keep the runtime's transcript below "+t.resume.Prefix, fmt.Sprintf("the session reads no transcript outside %s, and the transcript's path is %s", t.resume.Prefix, p)))
 		}
 	}
 }
 
-// setPath sets the file's path relative to home, and reports whether rel is one the
+// setPath sets the file's path relative to home, without its lead, and reports whether rel is one the
 // session reads: under the prefix, with no empty, . or .. segment. Otherwise the file
 // has no path. A path that changes starts the file's chunks at offset 0 again. Either
 // way the search of a pattern ends.
 func (t *transcript) setPath(rel string) bool {
 	t.pattern = nil
-	prefix := strings.TrimPrefix(t.resume.Prefix, "~/")
+	prefix := t.prefix()
 	ok := strings.HasPrefix(rel, prefix) && len(rel) > len(prefix) && !dotted(rel) && len(rel) <= maxTranscriptPath
 	if !ok {
 		rel = ""
@@ -270,7 +292,7 @@ func (t *transcript) setPath(rel string) bool {
 const maxSessionID = 128
 
 // maxTranscriptPath is the longest path relative to the home that
-// dev.qory.session.transcript's path, ~/ and this path, can contain.
+// dev.qory.session.transcript's path, ~/ or / and this path, can contain.
 const maxTranscriptPath = 1024 - len("~/")
 
 // dotted reports whether p has an empty, . or .. segment.
@@ -321,7 +343,7 @@ func (t *transcript) finish() {
 	switch {
 	case t.root == "" || t.ended || t.seen:
 	case t.rel != "":
-		t.line(noResume("Check that the runtime writes its transcript at ~/"+t.rel, "the file does not exist, so the session sent no transcript"))
+		t.line(noResume("Check that the runtime writes its transcript at "+t.shownPath(), "the file does not exist, so the session sent no transcript"))
 	case t.pattern != nil:
 		t.line(noResume("Check that the runtime writes its transcript at "+t.resume.Prefix+t.pattern.shown, "no file matches, so the session sent no transcript"))
 	}
@@ -347,15 +369,14 @@ func (t *transcript) poll(final bool) {
 	var size int64
 	var err error
 	if t.root != "" {
-		b, size, err = readBeneath(t.root, strings.TrimPrefix(t.rel, strings.TrimPrefix(t.resume.Prefix, "~/")), t.read)
+		b, size, err = readBeneath(t.root, path.Join(t.under, strings.TrimPrefix(t.rel, t.prefix())), t.read)
 	} else {
-		prefix := strings.TrimPrefix(t.resume.Prefix, "~/")
-		b, size, err = readUnlinked(filepath.Join(t.home, prefix), strings.TrimPrefix(t.rel, prefix), t.read)
+		b, size, err = readUnlinked(filepath.Join(t.home, t.prefix()), strings.TrimPrefix(t.rel, t.prefix()), t.read)
 	}
 	var refused *beneathRefused
 	if errors.As(err, &refused) {
 		t.ended = true
-		t.line(noResume(refused.fix, fmt.Sprintf("the session reads no transcript at ~/%s: %s", t.rel, refused.why)))
+		t.line(noResume(refused.fix, fmt.Sprintf("the session reads no transcript at %s: %s", t.shownPath(), refused.why)))
 		return
 	}
 	if err != nil {
@@ -364,7 +385,7 @@ func (t *transcript) poll(final bool) {
 	t.seen = true
 	if size < t.read {
 		t.ended = true
-		t.line(noResume("Let the runtime only append to its transcript", fmt.Sprintf("the transcript ~/%s became shorter than the %d bytes read", t.rel, t.read)))
+		t.line(noResume("Let the runtime only append to its transcript", fmt.Sprintf("the transcript %s became shorter than the %d bytes read", t.shownPath(), t.read)))
 		return
 	}
 	if len(b) == 0 && !final {
@@ -391,28 +412,29 @@ func (t *transcript) poll(final bool) {
 	}
 	for len(masked) > 0 {
 		n := min(len(masked), TranscriptChunk)
-		t.send(map[string]any{"session_id": t.sessionID, "path": "~/" + t.rel, "offset": t.sent, "bytes": base64.StdEncoding.EncodeToString(masked[:n])})
+		t.send(map[string]any{"session_id": t.sessionID, "path": t.shownPath(), "offset": t.sent, "bytes": base64.StdEncoding.EncodeToString(masked[:n])})
 		t.sent += int64(n)
 		masked = masked[n:]
 	}
 	if long {
 		t.ended, t.partial = true, nil
-		t.line(noResume(fmt.Sprintf("Keep each line of the transcript at most %d bytes (8 MiB)", maxTranscriptLine), fmt.Sprintf("a line of the transcript ~/%s is longer, so the session sends no more of it", t.rel)))
+		t.line(noResume(fmt.Sprintf("Keep each line of the transcript at most %d bytes (8 MiB)", maxTranscriptLine), fmt.Sprintf("a line of the transcript %s is longer, so the session sends no more of it", t.shownPath())))
 	}
 }
 
 // find searches for the file of the pattern, the part of resume.path below
-// resume.prefix: behind a wall below the transcript directory, with no symbolic link
-// as its name, listing at most [maxFindEntries] entries; without one below
+// resume.prefix: behind a wall below the transcript directory, or below the names from
+// the mount's path down to resume.prefix, with no symbolic link as its name or among
+// those names, listing at most [maxFindEntries] entries; without one below
 // resume.prefix under the home, reached through any symbolic link, listing every
 // entry. One file that matches sets the path, and more than one writes one line and
 // ends the transcript. A search that fails, or finds none, is tried again at the next
 // read. Call it with mu locked.
 func (t *transcript) find() {
-	prefix := strings.TrimPrefix(t.resume.Prefix, "~/")
+	prefix := t.prefix()
 	base, start, limit, follow := t.home, prefix, 0, true
 	if t.root != "" {
-		base, start, limit, follow = t.root, "", maxFindEntries, false
+		base, start, limit, follow = t.root, t.under, maxFindEntries, false
 	}
 	shown := t.resume.Prefix + t.pattern.shown
 	found, err := findMatches(base, start, t.pattern, limit, follow)
@@ -429,11 +451,11 @@ func (t *transcript) find() {
 		return
 	}
 	// The agent chooses the names a * matches, and the path goes out in each
-	// dev.qory.session.transcript as it is, after ~/: a path with a secret, with a
+	// dev.qory.session.transcript as it is, after ~/ or /: a path with a secret, with a
 	// character that is not printable or that is no UTF-8 ends the transcript, and the
 	// line does not contain the path.
 	rel := prefix + found[0]
-	if !sendablePath("~/"+rel, t.mask) {
+	if !sendablePath(t.lead()+rel, t.mask) {
 		t.ended = true
 		t.line(noResume("Keep the run's secrets and characters that are not printable out of the names of the transcript's path, in UTF-8", fmt.Sprintf("the path of the file that matches %s contains a secret or a character that is not printable, or is no UTF-8, so the session reads no transcript", shown)))
 		return
@@ -511,13 +533,13 @@ func readUnlinked(base, rel string, offset int64) ([]byte, int64, error) {
 // sessionTranscript is the transcript of session n's runtime rt, nil for a runtime
 // without resume. A run with no wall reads it under the runtime's home, HOME of env,
 // the launch's environment, or the home of the user the session runs as when env has
-// none, and the runtime's working directory dir. Behind a wall, root is the session's
-// transcript directory, which the wall binds at resume.prefix inside, and dir the
-// working directory inside; the session reads the transcript below root. A walled
-// session with no transcript directory, root empty, sends none. For the session that
+// none, and the runtime's working directory dir; an absolute resume.prefix is read at
+// its path, whatever the home. Behind a wall, root is where the session reads the
+// transcript ([transcriptRoot]), and dir the working directory inside. A walled session
+// with no transcript directory, root's dir empty, sends none. For the session that
 // restored a paused run's transcript, restore, it reads the restored file
 // ([transcript.restore]).
-func (r *Run) sessionTranscript(rt runtimes.Runtime, n int, walled bool, root string, env []string, dir string, masker *mask.Masker, hidden *mask.Harness, restore *restored) *transcript {
+func (r *Run) sessionTranscript(rt runtimes.Runtime, n int, walled bool, root transcriptRoot, env []string, dir string, masker *mask.Masker, hidden *mask.Harness, restore *restored) *transcript {
 	tr := r.newSessionTranscript(rt, n, walled, root, env, dir, masker, hidden)
 	if tr != nil && restore != nil {
 		tr.restore(restore.sessionID, restore.rel)
@@ -526,7 +548,7 @@ func (r *Run) sessionTranscript(rt runtimes.Runtime, n int, walled bool, root st
 }
 
 // newSessionTranscript is the transcript of [Run.sessionTranscript] before a restore.
-func (r *Run) newSessionTranscript(rt runtimes.Runtime, n int, walled bool, root string, env []string, dir string, masker *mask.Masker, hidden *mask.Harness) *transcript {
+func (r *Run) newSessionTranscript(rt runtimes.Runtime, n int, walled bool, root transcriptRoot, env []string, dir string, masker *mask.Masker, hidden *mask.Harness) *transcript {
 	resumes, ok := rt.(runtimes.Resumes)
 	if !ok {
 		return nil
@@ -542,10 +564,13 @@ func (r *Run) newSessionTranscript(rt runtimes.Runtime, n int, walled bool, root
 		r.write(event.SessionTranscript, data)
 	}
 	if walled {
-		if root == "" {
+		if root.dir == "" {
 			return nil
 		}
-		return newWalledTranscript(rs, root, dir, mask, send, line)
+		return newWalledTranscript(rs, root.dir, root.under, dir, mask, send, line)
+	}
+	if leadOf(rs.Prefix) == "/" {
+		return newTranscript(rs, "/", dir, mask, send, line)
 	}
 	home := ""
 	for _, kv := range env {

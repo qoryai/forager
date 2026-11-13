@@ -946,6 +946,50 @@ func TestDockerBindsTheWorkspaceThroughItsMount(t *testing.T) {
 	}
 }
 
+// TestDockerBindsMountsAtTheirTargets pins mounts with a Target: each is bound at its
+// Target, read-only where the launch says so, in the launch's order, so a read-only
+// file is bound over the writable directory listed before it; and the workspace stays
+// the working directory through the mount at its path.
+func TestDockerBindsMountsAtTheirTargets(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, sys: rec}
+	e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := launch()
+	l.Socket = ""
+	l.Mounts = []Mount{
+		{Path: "/work"},
+		{Path: "/runs/r1/codex-home", Target: "/var/lib/agent-home"},
+		{Path: "/runs/r1/files/hooks.json", ReadOnly: true, Target: "/var/lib/agent-home/hooks.json"},
+		{Path: "/runs/r1/files/skills", ReadOnly: true, Target: "/var/lib/agent-home/skills"},
+	}
+	wrapped, err := e.Wrap(context.Background(), l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var binds []string
+	workdir := ""
+	for i, a := range wrapped.Args {
+		switch {
+		case a == "--workdir":
+			workdir = wrapped.Args[i+1]
+		case a == "--mount" && (strings.Contains(wrapped.Args[i+1], "src=/work,") || strings.Contains(wrapped.Args[i+1], "src=/runs/r1/")):
+			binds = append(binds, wrapped.Args[i+1])
+		}
+	}
+	want := []string{
+		"type=bind,src=/work,dst=/work",
+		"type=bind,src=/runs/r1/codex-home,dst=/var/lib/agent-home",
+		"type=bind,src=/runs/r1/files/hooks.json,dst=/var/lib/agent-home/hooks.json,readonly",
+		"type=bind,src=/runs/r1/files/skills,dst=/var/lib/agent-home/skills,readonly",
+	}
+	if !slices.Equal(binds, want) || workdir != "/work" {
+		t.Errorf("binds %q, working directory %q\nwant %q", binds, workdir, want)
+	}
+}
+
 // TestDockerListsItsOwnBinds pins the adapter's own binds: the helper, read-only, the
 // hook socket's directory, writable, and the private directory it writes the run's
 // files in, read-only, the one Wrap then writes them in.
