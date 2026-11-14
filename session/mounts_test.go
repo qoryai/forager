@@ -654,7 +654,10 @@ func TestAMountTargetIsAbsoluteCleanAndApartFromQory(t *testing.T) {
 // with a read-only file and a read-only folder inside it, each at a Target inside it
 // and with a path on this machine apart from the others: the join binds each, the
 // directory first, then the file and the folder, in the order of their places inside,
-// fewer names first, whatever the order the caller gives.
+// fewer names first, whatever the order the caller gives. The workspace and the
+// session's directory lie inside none of them, and their places inside are their
+// paths on this machine: where they come among the others depends on the depth of the
+// temporary directory, so the test pins that each is bound, and not where.
 func TestReadOnlyFilesLieInsideAWritableTarget(t *testing.T) {
 	home, files := t.TempDir(), t.TempDir()
 	hooks := filepath.Join(files, "hooks.json")
@@ -677,11 +680,21 @@ func TestReadOnlyFilesLieInsideAWritableTarget(t *testing.T) {
 		{Path: home, Target: homeInside},
 		{Path: skills, ReadOnly: true, Target: homeInside + "/skills"},
 		{Path: hooks, ReadOnly: true, Target: homeInside + "/hooks.json"},
-		{Path: sp.Dir},
-		{Path: res.SessionDir, ReadOnly: true},
 	}
-	if !slices.Equal(w.got.Mounts, want) {
-		t.Errorf("mounts %v\nwant %v", w.got.Mounts, want)
+	var targeted []wall.Mount
+	for _, m := range w.got.Mounts {
+		if m.Target != "" {
+			targeted = append(targeted, m)
+		}
+	}
+	if !slices.Equal(targeted, want) {
+		t.Errorf("mounts at a Target %v\nwant %v", targeted, want)
+	}
+	byPath := func(a, b wall.Mount) int { return strings.Compare(a.Path, b.Path) }
+	got := slices.SortedFunc(slices.Values(w.got.Mounts), byPath)
+	all := slices.SortedFunc(slices.Values(append(want, wall.Mount{Path: sp.Dir}, wall.Mount{Path: res.SessionDir, ReadOnly: true})), byPath)
+	if !slices.Equal(got, all) {
+		t.Errorf("mounts %v\nwant %v in any order", w.got.Mounts, all)
 	}
 }
 
