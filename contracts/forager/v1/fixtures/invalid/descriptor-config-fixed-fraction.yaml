@@ -1,0 +1,9 @@
+# A fixed setting is a string, a boolean or an integer, not a fraction.
+version: 1
+runtime: amp
+runtime_version: "1"
+sources: {output: {format: jsonl}}
+rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]
+config:
+  flag: --config
+  fixed: {a.b: 0.5}

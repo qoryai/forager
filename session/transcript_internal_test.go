@@ -3,10 +3,13 @@ package session
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -289,7 +292,7 @@ func TestARestoredTranscriptIsReadWithNoWall(t *testing.T) {
 func TestTheLineOfKeptResumeArgumentsStartsWithTheFix(t *testing.T) {
 	got := resumeArgsKept("Make /home/dev a directory in the image", `"/home/dev" is a file in the image`)
 	want := `Make /home/dev a directory in the image, then continue the paused run again: "/home/dev" is a file in the image. ` +
-		"The session cannot take the resume arguments off the launch, because the launch ends with other arguments, which only a defect in Forager causes"
+		"The session cannot take the resume arguments off the launch, because the launch has other arguments where they were added, which only a defect in Forager causes"
 	if got != want {
 		t.Errorf("the line:\n%s\nwant:\n%s", got, want)
 	}
@@ -370,5 +373,710 @@ func TestATranscriptAtAFIFOIsNoRead(t *testing.T) {
 	}
 	if len(s.events) != 0 {
 		t.Errorf("%d events from a FIFO", len(s.events))
+	}
+}
+
+// rolloutResume is a resume whose path has a * in three directory names and in the
+// file's name, as Codex writes its rollouts, and whose arguments follow exec.
+var rolloutResume = runtimes.Resume{Path: "~/.rollouts/sessions/*/*/*/rollout-*-{session_id}.jsonl", Prefix: "~/.rollouts/sessions/", Args: []string{"resume", "{session_id}"}, After: "exec"}
+
+// rolloutRel is a file that rolloutResume's path matches for walledID, below the
+// prefix.
+const rolloutRel = "2026/11/13/rollout-2026-11-13T10-00-00-" + walledID + ".jsonl"
+
+// TestAPathPatternMatchesInsideOneName pins the pattern of a resume.path: a * matches
+// any characters inside one name and never a /, a name is never . or .., the session
+// id is literal, a * in it included, and {cwd_slug} matches a slug alone when any slug
+// is allowed.
+func TestAPathPatternMatchesInsideOneName(t *testing.T) {
+	below := strings.TrimPrefix(rolloutResume.Path, rolloutResume.Prefix)
+	p := newPathPattern(below, walledID, "", false)
+	for rel, want := range map[string]bool{
+		rolloutRel:                                                        true,
+		"x/y/z/rollout--" + walledID + ".jsonl":                           true,
+		"2026/11/13/x/rollout-a-" + walledID + ".jsonl":                   false,
+		"2026/11/rollout-a-" + walledID + ".jsonl":                        false,
+		"../11/13/rollout-a-" + walledID + ".jsonl":                       false,
+		"2026/./13/rollout-a-" + walledID + ".jsonl":                      false,
+		"2026//13/rollout-a-" + walledID + ".jsonl":                       false,
+		"2026/11/13/rollout-a-" + walledID + ".jsonl.bak":                 false,
+		"2026/11/13/rollout-a-5d0c6a51-3b2e-4f7a-9c1d-8e6f4a2b0c37.jsonl": false,
+		"2026/11/13/rollout" + walledID + ".jsonl":                        false,
+	} {
+		if got := p.matches(rel); got != want {
+			t.Errorf("%s: %v; want %v", rel, got, want)
+		}
+	}
+	if p.shown != "*/*/*/rollout-*-"+walledID+".jsonl" {
+		t.Errorf("shown %q", p.shown)
+	}
+	for _, name := range []string{".", ".."} {
+		if newPathPattern("*", "", "", false).matchName(0, name) {
+			t.Errorf("* matches %q", name)
+		}
+	}
+	literal := newPathPattern("{session_id}.jsonl", "a*b", "", false)
+	if !literal.matches("a*b.jsonl") || literal.matches("axxb.jsonl") {
+		t.Error("a * of the session id matches as a pattern")
+	}
+	slashed := newPathPattern("{session_id}.jsonl", "a/b", "", false)
+	if slashed.matches("a/b.jsonl") {
+		t.Error("a session id with / matches two names")
+	}
+	anySlug := newPathPattern("{cwd_slug}/{session_id}.jsonl", walledID, "", true)
+	for rel, want := range map[string]bool{
+		"-workspace/" + walledID + ".jsonl": true,
+		"-paused/" + walledID + ".jsonl":    true,
+		"we!rd/" + walledID + ".jsonl":      false,
+		"../" + walledID + ".jsonl":         false,
+		"-w/x/" + walledID + ".jsonl":       false,
+		walledID + ".jsonl":                 false,
+		"-workspace/probe.jsonl":            false,
+	} {
+		if got := anySlug.matches(rel); got != want {
+			t.Errorf("any slug, %s: %v; want %v", rel, got, want)
+		}
+	}
+}
+
+// TestFindMatchesFollowsNoLink pins the search of a pattern: the files that match, at
+// most two; a directory a * matches is followed only when it is a directory, never a
+// symbolic link; the last name matches an entry of any type; a start below a link,
+// and a start that does not exist, find nothing.
+func TestFindMatchesFollowsNoLink(t *testing.T) {
+	p := newPathPattern("*/*/*/rollout-*-{session_id}.jsonl", walledID, "", false)
+	base := t.TempDir()
+	if got, err := findMatches(base, "none/", p, 0, false); err != nil || len(got) != 0 {
+		t.Errorf("a start that does not exist: %v %v", got, err)
+	}
+	appendTo(t, base, "s/"+rolloutRel, []byte("{}\n"))
+	appendTo(t, base, "s/2026/11/13/rollout-x-other.jsonl", []byte("{}\n"))
+	if got, err := findMatches(base, "s/", p, 0, false); err != nil || !slices.Equal(got, []string{rolloutRel}) {
+		t.Errorf("one file: %v %v", got, err)
+	}
+	outside := t.TempDir()
+	appendTo(t, outside, "11/13/rollout-y-"+walledID+".jsonl", []byte("{}\n"))
+	symlink(t, outside, filepath.Join(base, "s", "2025"))
+	if got, err := findMatches(base, "s/", p, 0, false); err != nil || !slices.Equal(got, []string{rolloutRel}) {
+		t.Errorf("through a linked directory: %v %v", got, err)
+	}
+	symlink(t, outside, filepath.Join(base, "linked"))
+	if got, err := findMatches(base, "linked/", p, 0, false); err == nil || len(got) != 0 {
+		t.Errorf("a start below a link: %v %v", got, err)
+	}
+	symlink(t, filepath.Join(outside, "11/13/rollout-y-"+walledID+".jsonl"), filepath.Join(base, "s/2026/11/13/rollout-z-"+walledID+".jsonl"))
+	got, err := findMatches(base, "s/", p, 0, false)
+	slices.Sort(got)
+	if want := []string{rolloutRel, "2026/11/13/rollout-z-" + walledID + ".jsonl"}; err != nil || !slices.Equal(got, want) {
+		t.Errorf("a link as the file: %v %v; want %v", got, err, want)
+	}
+	for i := range 3 {
+		appendTo(t, base, fmt.Sprintf("s/2027/01/0%d/rollout-a-%s.jsonl", i, walledID), []byte("{}\n"))
+	}
+	if got, err := findMatches(base, "s/", p, 0, false); err != nil || len(got) != 2 {
+		t.Errorf("five files: %v %v; want two", got, err)
+	}
+}
+
+// newRolloutTranscript is a transcript of rolloutResume, walled when walled is true,
+// whose home or transcript directory is a new directory.
+func newRolloutTranscript(t *testing.T, walled bool) (*transcript, *sentTranscript, string) {
+	t.Helper()
+	dir := t.TempDir()
+	s := &sentTranscript{}
+	mask := func(l string) string { return strings.ReplaceAll(l, "sk-fake-secret", "[secret]") }
+	send, line := func(m map[string]any) { s.events = append(s.events, m) }, func(l string) { s.lines = append(s.lines, l) }
+	if walled {
+		return newWalledTranscript(rolloutResume, dir, "", "/workspace", mask, send, line), s, dir
+	}
+	return newTranscript(rolloutResume, dir, "/workspace", mask, send, line), s, dir
+}
+
+// TestATranscriptIsFoundByItsPattern pins a resume.path with a *, with a wall and
+// without one: a read before the file exists finds nothing and writes no line; once the
+// file exists the session reads it and sends it under its path, masked.
+func TestATranscriptIsFoundByItsPattern(t *testing.T) {
+	for _, walled := range []bool{false, true} {
+		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+			tr, s, dir := newRolloutTranscript(t, walled)
+			below := rolloutRel
+			if !walled {
+				below = ".rollouts/sessions/" + rolloutRel
+			}
+			tr.started(walledID)
+			tr.poll(false)
+			appendTo(t, dir, below, []byte("{\"a\":\"sk-fake-secret\"}\n"))
+			tr.poll(false)
+			appendTo(t, dir, below, []byte("{\"b\":2}\n"))
+			tr.finish()
+			got, ok := s.file(t, "~/.rollouts/sessions/"+rolloutRel)
+			if !ok || string(got) != "{\"a\":\"[secret]\"}\n{\"b\":2}\n" || len(s.lines) != 0 {
+				t.Errorf("sent %q %v, lines %q", got, ok, s.lines)
+			}
+		})
+	}
+}
+
+// TestATranscriptPatternWithTwoFilesReadsNone pins two files that match: one line, and
+// nothing sent, with a wall and without one, also once one of them is gone.
+func TestATranscriptPatternWithTwoFilesReadsNone(t *testing.T) {
+	for _, walled := range []bool{false, true} {
+		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+			tr, s, dir := newRolloutTranscript(t, walled)
+			at := ""
+			if !walled {
+				at = ".rollouts/sessions/"
+			}
+			appendTo(t, dir, at+rolloutRel, []byte("{\"a\":1}\n"))
+			appendTo(t, dir, at+"2026/11/14/rollout-b-"+walledID+".jsonl", []byte("{\"b\":1}\n"))
+			tr.started(walledID)
+			tr.poll(false)
+			if err := os.Remove(filepath.Join(dir, at+rolloutRel)); err != nil {
+				t.Fatal(err)
+			}
+			tr.finish()
+			want := "Keep one transcript of the runtime's session at ~/.rollouts/sessions/*/*/*/rollout-*-" + walledID + ".jsonl. A continuation of this run starts the runtime without a resume: more than one file matches it, so the session reads none of them"
+			if len(s.events) != 0 || len(s.lines) != 1 || s.lines[0] != want {
+				t.Errorf("%d events, lines %q; want %q", len(s.events), s.lines, want)
+			}
+		})
+	}
+}
+
+// TestAWalledTranscriptPatternRefusesWhatTheAgentPlants pins the checks of a file a
+// pattern found behind a wall, as for Claude Code's path: a symbolic link, a FIFO,
+// which the session opens without blocking, a file with a second hard link, and one
+// over 64 MiB each send nothing and write one line; a file below a linked directory
+// is not found, and the end writes that no file matches.
+func TestAWalledTranscriptPatternRefusesWhatTheAgentPlants(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "secret.jsonl")
+	if err := os.WriteFile(outside, []byte("{\"host\":\"secret\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dirOf := filepath.Dir(rolloutRel)
+	for name, c := range map[string]struct {
+		plant func(t *testing.T, root string)
+		want  string
+	}{
+		"a symbolic link": {func(t *testing.T, root string) {
+			makeDir(t, filepath.Join(root, dirOf))
+			symlink(t, outside, filepath.Join(root, rolloutRel))
+		}, "the session reads no transcript at ~/.rollouts/sessions/" + rolloutRel + ": a name on its path is a symbolic link or no directory"},
+		"a FIFO": {func(t *testing.T, root string) {
+			makeDir(t, filepath.Join(root, dirOf))
+			if err := syscall.Mkfifo(filepath.Join(root, rolloutRel), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, "the session reads no transcript at ~/.rollouts/sessions/" + rolloutRel + ": it is no regular file"},
+		"a hard link": {func(t *testing.T, root string) {
+			makeDir(t, filepath.Join(root, dirOf))
+			if err := os.Link(outside, filepath.Join(root, rolloutRel)); err != nil {
+				t.Skip("no hard link between the test's directories:", err)
+			}
+		}, "the session reads no transcript at ~/.rollouts/sessions/" + rolloutRel + ": it has 2 hard links"},
+		"a file over 64 MiB": {func(t *testing.T, root string) {
+			makeDir(t, filepath.Join(root, dirOf))
+			f, err := os.Create(filepath.Join(root, rolloutRel))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			if err := f.Truncate(maxTranscript + 1); err != nil {
+				t.Fatal(err)
+			}
+		}, "the session reads no transcript at ~/.rollouts/sessions/" + rolloutRel + ": it is over 67108864 bytes (64 MiB)"},
+		"a linked directory": {func(t *testing.T, root string) {
+			dir := t.TempDir()
+			appendTo(t, dir, "13/"+filepath.Base(rolloutRel), []byte("{\"linked\":1}\n"))
+			makeDir(t, filepath.Join(root, "2026"))
+			symlink(t, dir, filepath.Join(root, "2026", "11"))
+		}, "Check that the runtime writes its transcript at ~/.rollouts/sessions/*/*/*/rollout-*-" + walledID + ".jsonl. A continuation of this run starts the runtime without a resume: no file matches, so the session sent no transcript"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tr, s, root := newRolloutTranscript(t, true)
+			c.plant(t, root)
+			tr.started(walledID)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				tr.poll(false)
+				tr.finish()
+			}()
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the read blocks")
+			}
+			if len(s.events) != 0 || len(s.lines) != 1 || !strings.Contains(s.lines[0], c.want) {
+				t.Errorf("%d events, lines %q; want none and %q", len(s.events), s.lines, c.want)
+			}
+		})
+	}
+}
+
+// TestAResumePathWithNoPathFromIgnoresHooks pins a resume with no path_from: a hook
+// input's transcript_path sets nothing, and the session reads resume.path.
+func TestAResumePathWithNoPathFromIgnoresHooks(t *testing.T) {
+	tr, s, home := newRolloutTranscript(t, false)
+	appendTo(t, home, ".rollouts/sessions/"+rolloutRel, []byte("{\"a\":1}\n"))
+	appendTo(t, home, ".rollouts/sessions/hook.jsonl", []byte("{\"hook\":1}\n"))
+	tr.record(hookRecord(walledID, filepath.Join(home, ".rollouts/sessions/hook.jsonl")))
+	tr.started(walledID)
+	tr.finish()
+	if got, ok := s.file(t, "~/.rollouts/sessions/"+rolloutRel); !ok || string(got) != "{\"a\":1}\n" || len(s.lines) != 0 {
+		t.Errorf("sent %q %v, lines %q", got, ok, s.lines)
+	}
+}
+
+// TestTheSearchOpensNoFIFO pins the open of a directory in a search: a FIFO, and a
+// link to one, at a name where a directory was listed fail the open at once, without a
+// writer; a FIFO at a name of the start ends the search; and a walled transcript whose
+// pattern reaches a FIFO ends, so the session can write its exit.
+func TestTheSearchOpensNoFIFO(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	symlink(t, fifo, filepath.Join(dir, "linked"))
+	within := func(name string, f func()) {
+		t.Helper()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			f()
+		}()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s blocks", name)
+		}
+	}
+	dirFD, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(dirFD)
+	for _, name := range []string{"fifo", "linked"} {
+		within("the open of "+name, func() {
+			if fd, err := openDirAt(dirFD, name); err == nil {
+				unix.Close(fd)
+				t.Errorf("%s opened as a directory", name)
+			}
+		})
+	}
+	p := newPathPattern("*/x.jsonl", walledID, "", false)
+	for _, start := range []string{"fifo/", "linked/"} {
+		within("the search from "+start, func() {
+			if got, err := findMatches(dir, start, p, 0, false); err == nil || len(got) != 0 {
+				t.Errorf("%s: %v %v", start, got, err)
+			}
+		})
+	}
+	tr, s, root := newRolloutTranscript(t, true)
+	if err := syscall.Mkfifo(filepath.Join(root, "2026"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tr.started(walledID)
+	within("the transcript's end", func() {
+		tr.poll(false)
+		tr.finish()
+	})
+	if len(s.events) != 0 || len(s.lines) != 1 || !strings.Contains(s.lines[0], "no file matches") {
+		t.Errorf("%d events, lines %q", len(s.events), s.lines)
+	}
+}
+
+// TestAPatternPathWithASecretIsNotSent pins the path a * matched: a name with one of
+// the run's secrets, a newline or an ESC, or one that is no UTF-8, ends the
+// transcript with one line that does not contain the path, and nothing is sent.
+func TestAPatternPathWithASecretIsNotSent(t *testing.T) {
+	for name, file := range map[string]string{
+		"a secret":  "rollout-sk-fake-secret-" + walledID + ".jsonl",
+		"no UTF-8":  "rollout-\xff\xfe-" + walledID + ".jsonl",
+		"a newline": "rollout-a\nA continuation-" + walledID + ".jsonl",
+		"an ESC":    "rollout-\x1b[31m-" + walledID + ".jsonl",
+	} {
+		t.Run(name, func(t *testing.T) {
+			tr, s, root := newRolloutTranscript(t, true)
+			makeDir(t, filepath.Join(root, "2026/11/13"))
+			if err := os.WriteFile(filepath.Join(root, "2026/11/13", file), []byte("{\"a\":1}\n"), 0o600); err != nil {
+				t.Skip("the file system takes no such name:", err)
+			}
+			tr.started(walledID)
+			tr.finish()
+			want := "Keep the run's secrets and characters that are not printable out of the names of the transcript's path, in UTF-8. A continuation of this run starts the runtime without a resume: the path of the file that matches ~/.rollouts/sessions/*/*/*/rollout-*-" + walledID + ".jsonl contains a secret or a character that is not printable, or is not valid UTF-8, so the session reads no transcript"
+			if len(s.events) != 0 || len(s.lines) != 1 || s.lines[0] != want {
+				t.Errorf("%d events, lines %q; want %q", len(s.events), s.lines, want)
+			}
+		})
+	}
+}
+
+// TestOnlyAPathWithNoSecretInUTF8IsSent pins the check of a path a * matched on
+// every file system, one that takes names that are no UTF-8 included: a secret, a
+// character that is not printable and bytes that are no UTF-8 fail, a space passes.
+func TestOnlyAPathWithNoSecretInUTF8IsSent(t *testing.T) {
+	mask := func(l string) string { return strings.ReplaceAll(l, "sk-fake-secret", "[secret]") }
+	for rel, want := range map[string]bool{
+		".rollouts/sessions/" + rolloutRel:                                      true,
+		".rollouts/sessions/2026/11/13/rollout-sk-fake-secret-x.jsonl":          false,
+		".rollouts/sessions/2026/11/13/rollout-\xff\xfe-" + walledID + ".jsonl": false,
+		"~/.rollouts/sessions/2026/11/13/rollout-a\n-x.jsonl":                   false,
+		"~/.rollouts/sessions/2026/11/13/rollout-\x1b-x.jsonl":                  false,
+		"~/.rollouts/sessions/2026/11/13/rollout-\x7f-x.jsonl":                  false,
+		"~/.rollouts/sessions/2026/11/13/rollout-a b-x.jsonl":                   true,
+	} {
+		if got := sendablePath(rel, mask); got != want {
+			t.Errorf("%q: %v; want %v", rel, got, want)
+		}
+	}
+}
+
+// TestTheEntryCapHoldsOnlyBehindAWall pins maxFindEntries, with more entries than it
+// below the prefix and the file among them: behind a wall the search ends the
+// transcript with one line and sends nothing; without a wall it lists every entry and
+// sends the file.
+func TestTheEntryCapHoldsOnlyBehindAWall(t *testing.T) {
+	for _, walled := range []bool{true, false} {
+		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+			tr, s, dir := newRolloutTranscript(t, walled)
+			at := dir
+			if !walled {
+				at = filepath.Join(dir, ".rollouts/sessions")
+				makeDir(t, at)
+			}
+			for i := range maxFindEntries + 1 {
+				f, err := os.Create(filepath.Join(at, fmt.Sprintf("e%05d", i)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.Close()
+			}
+			appendTo(t, at, rolloutRel, []byte("{\"a\":1}\n"))
+			tr.started(walledID)
+			tr.finish()
+			if !walled {
+				if got, ok := s.file(t, "~/.rollouts/sessions/"+rolloutRel); !ok || string(got) != "{\"a\":1}\n" || len(s.lines) != 0 {
+					t.Errorf("sent %q %v, lines %q", got, ok, s.lines)
+				}
+				return
+			}
+			want := "Keep at most 10000 entries in the directories below ~/.rollouts/sessions/ that the transcript's pattern reaches. A continuation of this run starts the runtime without a resume: the search for ~/.rollouts/sessions/*/*/*/rollout-*-" + walledID + ".jsonl listed more, so the session reads no transcript"
+			if len(s.events) != 0 || len(s.lines) != 1 || s.lines[0] != want {
+				t.Errorf("%d events, lines %q; want %q", len(s.events), s.lines, want)
+			}
+		})
+	}
+}
+
+// TestAPatternPathOverTheLimitIsNotSent pins a file a * found whose path relative to
+// the home is over 1022 bytes: one line that names the limit and not the path, and
+// nothing sent. The directories are made one name at a time, below the limit of a
+// whole path on this machine.
+func TestAPatternPathOverTheLimitIsNotSent(t *testing.T) {
+	tr, s, root := newRolloutTranscript(t, true)
+	long := strings.Repeat("d", 255)
+	fd, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if err := unix.Mkdirat(fd, long, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		next, err := unix.Openat(fd, long, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+		unix.Close(fd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fd = next
+	}
+	name := "rollout-" + strings.Repeat("f", 200) + "-" + walledID + ".jsonl"
+	file, err := unix.Openat(fd, name, unix.O_WRONLY|unix.O_CREAT|unix.O_CLOEXEC, 0o600)
+	unix.Close(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unix.Write(file, []byte("{\"a\":1}\n"))
+	unix.Close(file)
+	if n := len(".rollouts/sessions/" + long + "/" + long + "/" + long + "/" + name); n <= maxTranscriptPath {
+		t.Fatalf("the path is %d bytes, not over %d", n, maxTranscriptPath)
+	}
+	tr.started(walledID)
+	tr.finish()
+	want := "Keep the transcript's path below ~/.rollouts/sessions/ at most 1022 bytes. A continuation of this run starts the runtime without a resume: the path of the file that matches ~/.rollouts/sessions/*/*/*/rollout-*-" + walledID + ".jsonl is longer"
+	if len(s.events) != 0 || len(s.lines) != 1 || s.lines[0] != want || strings.Contains(s.lines[0], long) {
+		t.Errorf("%d events, lines %q; want %q", len(s.events), s.lines, want)
+	}
+}
+
+// TestASearchSkipsAnEntryChangedBeforeItsOpen pins the skip of a directory whose open
+// fails because the entry changed after the listing: removed (ENOENT), a symbolic link
+// (ELOOP, or ENOTDIR on macOS) and a FIFO (ENOTDIR). The search goes on and finds the
+// file in the directory left as it was.
+func TestASearchSkipsAnEntryChangedBeforeItsOpen(t *testing.T) {
+	base := t.TempDir()
+	for _, d := range []string{"a", "b", "c", "d"} {
+		appendTo(t, base, d+"/x.jsonl", []byte("{}\n"))
+	}
+	other := t.TempDir()
+	appendTo(t, other, "x.jsonl", []byte("{}\n"))
+	var changed []string
+	s := &search{pattern: newPathPattern("*/x.jsonl", walledID, "", false), beforeOpen: func(dirFD int, name string) {
+		if len(changed) == 3 {
+			return
+		}
+		if err := os.RemoveAll(filepath.Join(base, name)); err != nil {
+			t.Fatal(err)
+		}
+		switch len(changed) {
+		case 0:
+		case 1:
+			symlink(t, other, filepath.Join(base, name))
+		case 2:
+			if err := syscall.Mkfifo(filepath.Join(base, name), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		changed = append(changed, name)
+	}}
+	fd, err := openDirAt(unix.AT_FDCWD, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.below(fd, "", 0); err != nil {
+		t.Fatalf("the search failed: %v", err)
+	}
+	if len(changed) != 3 || len(s.found) != 1 || slices.Contains(changed, path.Dir(s.found[0])) {
+		t.Errorf("found %v after changing %v; want the one directory left", s.found, changed)
+	}
+}
+
+// TestASearchSkipsADirectoryItCannotRead pins a directory whose open fails with
+// EACCES: the search skips it and finds the file in another directory.
+func TestASearchSkipsADirectoryItCannotRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory of mode 0")
+	}
+	tr, s, root := newRolloutTranscript(t, true)
+	appendTo(t, root, rolloutRel, []byte("{\"a\":1}\n"))
+	closed := filepath.Join(root, "2025")
+	makeDir(t, closed)
+	if err := os.Chmod(closed, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(closed, 0o700) })
+	tr.started(walledID)
+	tr.finish()
+	if got, ok := s.file(t, "~/.rollouts/sessions/"+rolloutRel); !ok || string(got) != "{\"a\":1}\n" || len(s.lines) != 0 {
+		t.Errorf("sent %q %v, lines %q", got, ok, s.lines)
+	}
+}
+
+// TestAnUnwalledSearchStartsThroughLinks pins the base of a search with no wall: a
+// home, or a resume.prefix below it, that is a symbolic link is followed, and the file
+// below is found; behind a wall, a transcript directory that is a link finds nothing.
+// The file under a linked home, and under a linked prefix, is sent.
+func TestAnUnwalledSearchStartsThroughLinks(t *testing.T) {
+	p := newPathPattern("*/*/*/rollout-*-{session_id}.jsonl", walledID, "", false)
+	real := t.TempDir()
+	appendTo(t, real, ".rollouts/sessions/"+rolloutRel, []byte("{\"a\":1}\n"))
+	linkedHome := filepath.Join(t.TempDir(), "home")
+	symlink(t, real, linkedHome)
+	if got, err := findMatches(linkedHome, ".rollouts/sessions/", p, 0, true); err != nil || !slices.Equal(got, []string{rolloutRel}) {
+		t.Errorf("a linked home: %v %v", got, err)
+	}
+	home := t.TempDir()
+	makeDir(t, filepath.Join(home, ".rollouts"))
+	symlink(t, filepath.Join(real, ".rollouts/sessions"), filepath.Join(home, ".rollouts/sessions"))
+	if got, err := findMatches(home, ".rollouts/sessions/", p, 0, true); err != nil || !slices.Equal(got, []string{rolloutRel}) {
+		t.Errorf("a linked prefix: %v %v", got, err)
+	}
+	if got, err := findMatches(home, ".rollouts/sessions/", p, 0, false); err == nil || len(got) != 0 {
+		t.Errorf("a linked prefix with no link followed: %v %v", got, err)
+	}
+	if got, err := findMatches(filepath.Join(real, ".rollouts/sessions"), "", p, maxFindEntries, false); err != nil || len(got) != 1 {
+		t.Errorf("a transcript directory: %v %v", got, err)
+	}
+	walledLink := filepath.Join(t.TempDir(), "transcripts")
+	symlink(t, filepath.Join(real, ".rollouts/sessions"), walledLink)
+	if got, err := findMatches(walledLink, "", p, maxFindEntries, false); err == nil || len(got) != 0 {
+		t.Errorf("a linked transcript directory: %v %v", got, err)
+	}
+	for name, c := range map[string]struct {
+		home string
+		sent string
+	}{
+		"a linked home":   {linkedHome, "{\"a\":1}\n"},
+		"a linked prefix": {home, "{\"a\":1}\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := &sentTranscript{}
+			tr := newTranscript(rolloutResume, c.home, "/workspace", func(l string) string { return l }, func(m map[string]any) { s.events = append(s.events, m) }, func(l string) { s.lines = append(s.lines, l) })
+			tr.started(walledID)
+			tr.finish()
+			if got, ok := s.file(t, "~/.rollouts/sessions/"+rolloutRel); !ok || string(got) != c.sent || len(s.lines) != 0 {
+				t.Errorf("sent %q %v, lines %q; want %q", got, ok, s.lines, c.sent)
+			}
+		})
+	}
+}
+
+// codexResume is a resume with Codex's prefix and pattern: Codex writes the rollout of
+// a session at ~/.codex/sessions/<year>/<month>/<day>/rollout-<time>-<id>.jsonl.
+var codexResume = runtimes.Resume{Path: "~/.codex/sessions/*/*/*/rollout-*-{session_id}.jsonl", Prefix: "~/.codex/sessions/", Args: []string{"resume", "{session_id}"}, After: "exec"}
+
+// TestAnUnwalledReadFollowsLinksToThePrefix pins the read of a run with no wall, for
+// Claude Code's resume and Codex's: a home, or a resume.prefix below it, that is a
+// symbolic link is followed, as is a link at an inner name of resume.prefix, such as
+// ~/.claude itself, and the transcript is read and sent; a symbolic link among the
+// names below resume.prefix, a directory or the file, sends nothing and writes no line. Behind a wall, a transcript directory that is a symbolic link sends
+// nothing and writes one line.
+func TestAnUnwalledReadFollowsLinksToThePrefix(t *testing.T) {
+	const content = "{\"a\":1}\n"
+	for runtime, r := range map[string]struct {
+		resume runtimes.Resume
+		prefix string // resume.prefix below the home
+		below  string // the transcript's path below resume.prefix
+	}{
+		"Claude Code": {claudeResume, ".claude/projects", "-workspace/" + walledID + ".jsonl"},
+		"Codex":       {codexResume, ".codex/sessions", rolloutRel},
+	} {
+		first, rest, _ := strings.Cut(r.below, "/")
+		for name, c := range map[string]struct {
+			home func(t *testing.T) string
+			sent string
+		}{
+			"a linked prefix": {func(t *testing.T) string {
+				real, home := t.TempDir(), t.TempDir()
+				appendTo(t, real, r.below, []byte(content))
+				makeDir(t, filepath.Dir(filepath.Join(home, r.prefix)))
+				symlink(t, real, filepath.Join(home, r.prefix))
+				return home
+			}, content},
+			"a linked inner name of the prefix": {func(t *testing.T) string {
+				real, home := t.TempDir(), t.TempDir()
+				inner, below, _ := strings.Cut(r.prefix, "/")
+				appendTo(t, real, below+"/"+r.below, []byte(content))
+				symlink(t, real, filepath.Join(home, inner))
+				return home
+			}, content},
+			"a linked home": {func(t *testing.T) string {
+				real, home := t.TempDir(), filepath.Join(t.TempDir(), "home")
+				appendTo(t, real, r.prefix+"/"+r.below, []byte(content))
+				symlink(t, real, home)
+				return home
+			}, content},
+			"a linked directory below the prefix": {func(t *testing.T) string {
+				outside, home := t.TempDir(), t.TempDir()
+				appendTo(t, outside, rest, []byte(content))
+				makeDir(t, filepath.Join(home, r.prefix))
+				symlink(t, outside, filepath.Join(home, r.prefix, first))
+				return home
+			}, ""},
+			"a linked file": {func(t *testing.T) string {
+				outside, home := t.TempDir(), t.TempDir()
+				appendTo(t, outside, "t.jsonl", []byte(content))
+				makeDir(t, filepath.Dir(filepath.Join(home, r.prefix, r.below)))
+				symlink(t, filepath.Join(outside, "t.jsonl"), filepath.Join(home, r.prefix, r.below))
+				return home
+			}, ""},
+		} {
+			t.Run(runtime+", "+name, func(t *testing.T) {
+				s := &sentTranscript{}
+				tr := newTranscript(r.resume, c.home(t), "/workspace", func(l string) string { return l }, func(m map[string]any) { s.events = append(s.events, m) }, func(l string) { s.lines = append(s.lines, l) })
+				tr.started(walledID)
+				tr.finish()
+				got, ok := s.file(t, "~/"+r.prefix+"/"+r.below)
+				if !ok || string(got) != c.sent || len(s.lines) != 0 || (c.sent == "") != (len(s.events) == 0) {
+					t.Errorf("sent %q %v %v, lines %q; want %q", got, ok, s.events, s.lines, c.sent)
+				}
+			})
+		}
+		t.Run(runtime+", behind a wall, a linked transcript directory", func(t *testing.T) {
+			real := t.TempDir()
+			appendTo(t, real, r.below, []byte(content))
+			root := filepath.Join(t.TempDir(), "transcripts")
+			symlink(t, real, root)
+			s := &sentTranscript{}
+			tr := newWalledTranscript(r.resume, root, "", "/workspace", func(l string) string { return l }, func(m map[string]any) { s.events = append(s.events, m) }, func(l string) { s.lines = append(s.lines, l) })
+			tr.started(walledID)
+			tr.finish()
+			if len(s.events) != 0 || len(s.lines) != 1 {
+				t.Errorf("sent %v, lines %q", s.events, s.lines)
+			}
+		})
+	}
+}
+
+// TestTheReadRefusesALinkAfterTheSearch pins a link put below resume.prefix after the
+// search of a pattern found the file, with no wall: the search finds the file and the
+// session sends it, then the date directory becomes a symbolic link to a copy with
+// more lines, and the read sends none of them and writes no line.
+func TestTheReadRefusesALinkAfterTheSearch(t *testing.T) {
+	home := t.TempDir()
+	s := &sentTranscript{}
+	tr := newTranscript(codexResume, home, "/workspace", func(l string) string { return l }, func(m map[string]any) { s.events = append(s.events, m) }, func(l string) { s.lines = append(s.lines, l) })
+	appendTo(t, home, ".codex/sessions/"+rolloutRel, []byte("{\"a\":1}\n"))
+	tr.started(walledID)
+	tr.poll(false)
+	if tr.rel != ".codex/sessions/"+rolloutRel {
+		t.Fatalf("the search set %q", tr.rel)
+	}
+	outside := filepath.Join(t.TempDir(), "2026")
+	if err := os.Rename(filepath.Join(home, ".codex/sessions/2026"), outside); err != nil {
+		t.Fatal(err)
+	}
+	appendTo(t, filepath.Dir(outside), rolloutRel, []byte("{\"b\":2}\n"))
+	symlink(t, outside, filepath.Join(home, ".codex/sessions/2026"))
+	tr.finish()
+	if got, ok := s.file(t, "~/.codex/sessions/"+rolloutRel); !ok || string(got) != "{\"a\":1}\n" || len(s.lines) != 0 {
+		t.Errorf("sent %q %v, lines %q", got, ok, s.lines)
+	}
+}
+
+// TestAFIFOAtThePrefixIsNoRead pins a FIFO with no writer at resume.prefix, or a
+// symbolic link to one there, with no wall, for Claude Code's resume and Codex's: the
+// read returns at once and sends nothing, and so cannot keep a join from returning.
+func TestAFIFOAtThePrefixIsNoRead(t *testing.T) {
+	for runtime, r := range map[string]struct {
+		resume runtimes.Resume
+		prefix string
+	}{
+		"Claude Code": {claudeResume, ".claude/projects"},
+		"Codex":       {codexResume, ".codex/sessions"},
+	} {
+		for _, linked := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, linked %v", runtime, linked), func(t *testing.T) {
+				home := t.TempDir()
+				makeDir(t, filepath.Dir(filepath.Join(home, r.prefix)))
+				fifo := filepath.Join(home, r.prefix)
+				if linked {
+					fifo = filepath.Join(t.TempDir(), "fifo")
+					symlink(t, fifo, filepath.Join(home, r.prefix))
+				}
+				if err := unix.Mkfifo(fifo, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				s := &sentTranscript{}
+				tr := newTranscript(r.resume, home, "/workspace", func(l string) string { return l }, func(m map[string]any) { s.events = append(s.events, m) }, func(l string) { s.lines = append(s.lines, l) })
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					tr.started(walledID)
+					tr.poll(false)
+					tr.finish()
+				}()
+				select {
+				case <-done:
+				case <-time.After(10 * time.Second):
+					t.Fatal("the read did not return within 10 seconds")
+				}
+				if len(s.events) != 0 {
+					t.Errorf("sent %v", s.events)
+				}
+			})
+		}
 	}
 }

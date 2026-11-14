@@ -1,0 +1,17 @@
+# A rule of the hooks source may not take a field from the session's start: a hook
+# record may come before the start the output reports.
+version: 1
+runtime: example
+runtime_version: "1.0.0"
+sources:
+  output: {format: jsonl}
+rules:
+  - source: output
+    match: {type: start}
+    type: dev.qory.runtime.started
+    data: {session_id: id}
+    set: {source: startup}
+  - source: hooks
+    match: {hook_event_name: Stop}
+    type: dev.qory.runtime.turn_finished
+    from_started: [session_id]

@@ -116,7 +116,108 @@
       },
       "egress_hosts": [
         "api.anthropic.com"
-      ]
+      ],
+      "resume": {
+        "prefix": "~/.claude/projects/",
+        "path": "~/.claude/projects/{cwd_slug}/{session_id}.jsonl"
+      }
+    },
+    {
+      "name": "codex",
+      "title": "Codex",
+      "reserves": [],
+      "denies": [
+        "OPENAI_BASE_URL",
+        "CODEX_AUTHAPI_BASE_URL",
+        "CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL",
+        "CODEX_AGENT_IDENTITY_JWKS_BASE_URL",
+        "CODEX_APP_SERVER_CHATGPT_BASE_URL",
+        "CODEX_CLOUD_TASKS_BASE_URL",
+        "CODEX_OSS_BASE_URL",
+        "CODEX_OSS_PORT",
+        "CODEX_REFRESH_TOKEN_URL_OVERRIDE",
+        "CODEX_REVOKE_TOKEN_URL_OVERRIDE",
+        "CODEX_EXEC_SERVER_URL",
+        "CODEX_EXEC_SERVER_NOISE_REGISTRY_URL",
+        "CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID",
+        "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN",
+        "CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID",
+        "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+        "CODEX_API_KEY",
+        "CODEX_ACCESS_TOKEN",
+        "CODEX_CA_CERTIFICATE",
+        "CODEX_HOME",
+        "CODEX_SQLITE_HOME"
+      ],
+      "credential_files": [],
+      "declares": [],
+      "one_of": [],
+      "model": {
+        "formats": [
+          "openai-responses"
+        ],
+        "model": {
+          "flag": "--model"
+        },
+        "effort": {
+          "run": {
+            "setting": "model_reasoning_effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "ultra"
+            ]
+          }
+        },
+        "endpoint": {
+          "setting": "model_providers.qory.base_url"
+        },
+        "keys": [
+          {
+            "format": "openai-responses",
+            "auth": {
+              "scheme": "bearer"
+            },
+            "variable": "OPENAI_API_KEY"
+          },
+          {
+            "format": "openai-responses",
+            "auth": {
+              "scheme": "bearer",
+              "oauth": true
+            },
+            "variable": "OPENAI_API_KEY"
+          }
+        ]
+      },
+      "config": {
+        "flag": "--config",
+        "fixed": [
+          "model_provider",
+          "model_providers.qory.name",
+          "model_providers.qory.wire_api",
+          "model_providers.qory.env_key",
+          "features.plugins",
+          "features.apps",
+          "analytics.enabled",
+          "feedback.enabled",
+          "check_for_update_on_startup",
+          "otel.exporter",
+          "otel.trace_exporter",
+          "otel.metrics_exporter",
+          "web_search"
+        ]
+      },
+      "fixed": {},
+      "egress_hosts": [],
+      "resume": {
+        "prefix": "${CODEX_HOME}/sessions/",
+        "path": "${CODEX_HOME}/sessions/*/*/*/rollout-*-{session_id}.jsonl"
+      }
     }
   ]
 }

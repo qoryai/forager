@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
@@ -595,16 +596,6 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			r.open.Report("closing the session's output.log: " + accesskey.ShownError(err).Error())
 		}
 	}()
-	// Behind a wall, a runtime with resume gets the session's transcript directory,
-	// transcripts/<n>/ in the run directory, which the wall binds writable at
-	// resume.prefix inside: the session reads the transcript, and writes a restored one,
-	// there. It lies outside every place the enclosure binds.
-	var transcriptDir, transcriptUnder string
-	if spec.Wall != nil {
-		if transcriptDir, transcriptUnder, err = makeTranscriptDir(rt, dir, n, spec.Dir, slices.Concat(plan.sources, r.wallOwn, r.setupBinds)); err != nil {
-			return fail(err)
-		}
-	}
 	// The runtime prepares the launch before the variables are resolved, because what it
 	// sets is Forager's and wins over a server's variable of the same name. Behind a wall
 	// the session's directory goes in read-only, apart from every place the session
@@ -634,21 +625,24 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if prepared, err = rt.Prepare(attach); err != nil {
 		return fail(fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), accesskey.ShownError(err)))
 	}
-	// The run's first session whose runtime has resume continues the runtime session of
-	// the paused run in the run answer's resume: the launch writes its transcript under
-	// the runtime's home and resumes it. A failure starts the runtime without a resume,
-	// with resumeLine on stderr once the session started.
-	prepared, resumeLine, restore := r.resumeLaunch(runCtx, rt, sessionDir, spec.Wall != nil, transcriptDir, inside, prepared)
-	// The session's setup commands run inside, after the runtime's preparation, and then
-	// start the launch as the runtime prepared it.
-	if prepared, err = withSetup(sessionDir, spec.SetupRunner, insideSetup(spec.SessionSpec.Setup, inside), prepared); err != nil {
-		return fail(err)
+	// A runtime that reads its settings as TOML gets its descriptor's config.fixed and,
+	// for an endpoint that is a setting, the start key's endpoint, before the launch's
+	// arguments. A later argument that sets one of them would win, so such a launch
+	// fails first.
+	if c, ok := rt.(runtimes.ArgsChecker); ok {
+		if err := c.CheckArgs(prepared.Args); err != nil {
+			return fail(err)
+		}
 	}
-	prepared.Command, prepared.Args, prepared.Env = inside(prepared.Command), insideAll(prepared.Args, inside), insideValues(prepared.Env, inside)
-	if r.remote != nil {
-		neutral = r.neutralPaths(spec.HarnessHome, spec.InputsDir, "", inside)
-		neutralText = r.neutralPaths(spec.HarnessHome, spec.InputsDir, spec.Dir, inside)
+	base := prepared.Args
+	if prepared.Args, err = configArgs(rt, key, prepared.Args); err != nil {
+		return fail(fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), accesskey.ShownError(err)))
 	}
+	settingsArgs := len(prepared.Args) - len(base)
+	// The variables are resolved before the resume, whose resume.home_var is read from
+	// the launch's environment. The variables read only the preparation's values, which
+	// neither the resume nor the setup commands change.
+	prepared.Env = insideValues(prepared.Env, inside)
 	// A value the runtime's preparation sets for one of key.Others is left out, walled
 	// or not; behind a wall the name is then unset inside.
 	prepared.Env = withoutNames(prepared.Env, key.Others)
@@ -678,6 +672,50 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	}
 	if key.Endpoint != "" {
 		ownEnv = append(ownEnv, key.Endpoint)
+	}
+	// The environment the enclosure's launch gets. The launch adds only Forager's names
+	// to it, so the runtime's resume.home_var has its value here ([resumeOf]).
+	wrapEnv := environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(placeholderNames, key))
+	resume := resumeOf(rt, wrapEnv)
+	// Behind a wall, a runtime with resume gets the session's transcript directory,
+	// transcripts/<n>/ in the run directory, which the wall binds writable at
+	// resume.prefix inside: the session reads the transcript, and writes a restored one,
+	// there. It lies outside every place the enclosure binds. An absolute resume.prefix
+	// inside a writable mount's place is read in that mount, with no bind, and one inside
+	// a read-only mount's gets no transcript, nor does a resume.home_var with no usable
+	// value.
+	var transcriptAt transcriptRoot
+	if spec.Wall != nil {
+		if transcriptAt, err = makeTranscriptDir(resume, dir, n, spec.Dir, slices.Concat(plan.sources, r.wallOwn, r.setupBinds), shown.Mounts); err != nil {
+			return fail(err)
+		}
+	}
+	// The run's first session whose runtime has resume continues the runtime session of
+	// the paused run in the run answer's resume: the launch writes its transcript under
+	// the runtime's home and resumes it. A failure starts the runtime without a resume,
+	// with resumeLine on stderr once the session started.
+	// The resume arguments go before an argument of the launch, so the arguments are
+	// checked again with them: in exec --enable -cx=y, --enable takes -cx=y as its value,
+	// and resume <id> before the last argument leaves -cx=y alone, a pair that sets x.
+	prepared, resumeLine, restore, err := r.resumeLaunch(runCtx, resume, sessionDir, spec.Wall != nil, transcriptAt, inside, prepared,
+		func(at int, added []string) error {
+			if c, ok := rt.(runtimes.ArgsChecker); ok {
+				return c.CheckArgs(resumedArgs(base, settingsArgs, at, added))
+			}
+			return nil
+		})
+	if err != nil {
+		return fail(err)
+	}
+	// The session's setup commands run inside, after the runtime's preparation, and then
+	// start the launch as the runtime prepared it.
+	if prepared, err = withSetup(sessionDir, spec.SetupRunner, insideSetup(spec.SessionSpec.Setup, inside), prepared); err != nil {
+		return fail(err)
+	}
+	prepared.Command, prepared.Args = inside(prepared.Command), insideAll(prepared.Args, inside)
+	if r.remote != nil {
+		neutral = r.neutralPaths(spec.HarnessHome, spec.InputsDir, "", inside)
+		neutralText = r.neutralPaths(spec.HarnessHome, spec.InputsDir, spec.Dir, inside)
 	}
 	if err := checkModelKey(harness, rt, credentialHosts, vars, prepared, placeholderNames); err != nil {
 		return fail(err)
@@ -721,6 +759,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	r.write(event.SessionStarted, r.sessionStarted(spec, rt, n, prepared, shown, neutral, interactive, cols, rows))
 	if resumeLine != "" {
 		r.writeLog("stderr", n, 0, []byte(neutral(resumeLine)+"\n"))
+	}
+	// A resume.prefix inside a read-only mount gets no transcript: one line, as for a
+	// transcript directory the wall does not bind.
+	if u := transcriptAt.unbound; u != nil {
+		r.writeLog("stderr", n, 0, []byte(neutral(noResume(u.Fix, u.Cause))+"\n"))
 	}
 	if r.remote != nil {
 		r.open.Report(r.launchLine(spec, n, prepared))
@@ -821,9 +864,22 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	summaries, _ := rt.(runtimes.Summaries)
 	// tr sends the runtime's transcript, for a runtime with resume; nil otherwise.
 	var tr *transcript
+	// resumedID is the restored session id, a string, once the launch keeps the resume
+	// arguments the session added. The runtime's first dev.qory.runtime.started then
+	// has source resume where its rule sets startup, as Codex's thread.started does
+	// whether codex exec started or resumed the session, when its session_id is that
+	// id: a runtime that started a session of another id did not resume. firstSeen is
+	// true once that first event was seen.
+	var resumedID atomic.Value
+	var firstSeen atomic.Bool
 	mapper := parents.New(rt, func(e runtimes.Event) {
-		if tr != nil && e.Type == "dev.qory.runtime.started" {
-			if id, ok := e.Data["session_id"].(string); ok {
+		if e.Type == "dev.qory.runtime.started" {
+			id, _ := resumedID.Load().(string)
+			if !firstSeen.Swap(true) && id != "" && e.Data["source"] == "startup" && e.Data["session_id"] == id {
+				e.Data = maps.Clone(e.Data)
+				e.Data["source"] = "resume"
+			}
+			if id, ok := e.Data["session_id"].(string); ok && tr != nil {
 				tr.started(id)
 			}
 		}
@@ -860,31 +916,33 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	defer closeSocket()
 	defer mapper.Close()
 
-	// The environment the enclosure's launch gets, below.
-	wrapEnv := environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(placeholderNames, key))
 	// Behind a wall the enclosure works out, once the image is there, whether it binds
 	// the session's transcript directory where the agent's user can write it. When it
 	// does not, the session binds no directory, takes off the resume arguments it added,
 	// sends no transcript and writes one line, and with a restored transcript a second
 	// one: the runtime starts without a resume.
-	if checker, ok := enclosure.(wall.TranscriptChecker); ok && transcriptDir != "" {
-		unbound, err := checker.CheckTranscript(runCtx, wrapEnv, wall.Transcript{Path: transcriptDir, Under: transcriptUnder})
+	if checker, ok := enclosure.(wall.TranscriptChecker); ok && transcriptAt.bind != "" {
+		unbound, err := checker.CheckTranscript(runCtx, wrapEnv, transcriptAt.wallTranscript())
 		if err != nil {
 			return fail(accesskey.ShownError(err))
 		}
 		if unbound != nil {
-			transcriptDir, transcriptUnder = "", ""
+			transcriptAt = transcriptRoot{}
 			if restore != nil {
 				added := insideAll(restore.args, inside)
-				if !slices.Equal(prepared.Args[max(len(prepared.Args)-len(added), 0):], added) {
+				end := len(prepared.Args) - restore.after
+				if end < len(added) || !slices.Equal(prepared.Args[end-len(added):end], added) {
 					return fail(errors.New(resumeArgsKept(unbound.Fix, unbound.Cause)))
 				}
-				prepared.Args = prepared.Args[:len(prepared.Args)-len(added)]
+				prepared.Args = slices.Delete(slices.Clone(prepared.Args), end-len(added), end)
 				r.writeLog("stderr", n, 0, []byte(neutral(resumeFailed(r.answer.Resume.RunID, unbound.Fix, unbound.Cause))+"\n"))
 				restore = nil
 			}
 			r.writeLog("stderr", n, 0, []byte(neutral(noResume(unbound.Fix, unbound.Cause))+"\n"))
 		}
+	}
+	if restore != nil {
+		resumedID.Store(restore.sessionID)
 	}
 	command, args := prepared.Command, prepared.Args
 	// What is started: the runtime itself, or under a wall the adapter's command that
@@ -921,7 +979,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		if err := samePlan(plan, again); err != nil {
 			return fail(err)
 		}
-		binds, err := wallBinds(enclosure, sock.Path(), r.authority, wall.Transcript{Path: transcriptDir, Under: transcriptUnder})
+		binds, err := wallBinds(enclosure, sock.Path(), r.authority, transcriptAt.wallTranscript())
 		if err != nil {
 			return fail(err)
 		}
@@ -936,7 +994,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			CA:    r.authority,
 			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: shown.Mounts, Limits: spec.Limits,
 			ProxyToken: r.relayToken,
-			Transcript: wall.Transcript{Path: transcriptDir, Under: transcriptUnder},
+			Transcript: transcriptAt.wallTranscript(),
 		})
 		if err != nil {
 			return fail(accesskey.ShownError(err))
@@ -969,7 +1027,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if spec.Wall != nil {
 		trDir = shown.Dir
 	}
-	tr = r.sessionTranscript(rt, n, spec.Wall != nil, transcriptDir, launch.Env, trDir, masker, hidden, restore)
+	tr = r.sessionTranscript(resume, n, spec.Wall != nil, transcriptAt, launch.Env, trDir, masker, hidden, restore)
 	// The transcript's reads end before the join returns, on every path: the end of
 	// the runtime below, and a panic in between.
 	endTranscript := func() {}
@@ -999,9 +1057,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// What ends the context later changes nothing. A stop in the gateway's answer to a
 	// batch is decided after the exit, below.
 	var cancelled, timedOut bool
+	// postingAtExit is the count of events on the link in batches whose post began when
+	// the runtime's exit was observed, -1 until then.
+	var postingAtExit atomic.Int64
+	postingAtExit.Store(-1)
 	proc.exited = func() {
+		postingAtExit.Store(int64(r.posts.Posting()))
 		cause := context.Cause(limited)
-		cancelled = ctx.Err() != nil && !errors.Is(cause, errTimeout) && !errors.Is(cause, errRunClosed) && !errors.Is(cause, errModelKeyLimit)
+		cancelled = ctx.Err() != nil && !errors.Is(cause, errTimeout) && !errors.Is(cause, errRunClosed) && !errors.Is(cause, errModelKeyStop)
 		timedOut = errors.Is(cause, errTimeout) && proc.stopped.Load()
 		if exitObserved != nil {
 			exitObserved()
@@ -1013,7 +1076,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// is no stop.
 	setupSteps.start(func() bool {
 		cause := context.Cause(limited)
-		return errors.Is(cause, errTimeout) || errors.Is(cause, errModelKeyLimit) || ctx.Err() != nil || errors.Is(context.Cause(runCtx), errRunClosed)
+		return errors.Is(cause, errTimeout) || errors.Is(cause, errModelKeyStop) || ctx.Err() != nil || errors.Is(context.Cause(runCtx), errRunClosed)
 	})
 	var exit exitStatus
 	if interactive {
@@ -1048,13 +1111,21 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	}
 	// Before the dev.qory.session.exited of a runtime that exited by itself, the
 	// session posts the batch it holds and reads the answer, so a stop that comes as the
-	// runtime exits still sets the reason.
+	// runtime exits still sets the reason. The gateway puts the stop in the answer to a
+	// batch that reaches it after the proxy passed the refusal, and the runtime exited
+	// after that refusal: so at least one batch is posted after the exit. When every
+	// event queued so far was in a batch whose post began before the exit, the session
+	// writes a heartbeat for that batch. The gateway takes a stop back once it accepts
+	// dev.qory.session.exited, so the answer is read before that event is written.
 	if !closed && !timedOut && !cancelled {
+		if at := postingAtExit.Load(); at < 0 || int64(r.posts.Queued()) == at {
+			r.beat()
+		}
 		flushCtx, cancelFlush := context.WithTimeout(context.WithoutCancel(ctx), closeWait)
 		r.posts.Flush(flushCtx)
 		cancelFlush()
 	}
-	keyLimit := r.stops.end() == event.ReasonModelKeyLimit
+	stopReason := r.stops.end()
 	state, reason := event.StateFailed, ""
 	switch {
 	case closed:
@@ -1065,10 +1136,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	case cancelled:
 		// It was stopped from where it was started, a Ctrl-C, before it said how it went.
 		state, reason = event.StateCancelled, event.ReasonInterrupted
-	case keyLimit:
+	case stopReason != "":
 		// The gateway's answer to a batch had stop: the run's proxy passed a model
-		// provider's limit refusal to the runtime, and the run pauses.
-		state, reason = event.StatePaused, event.ReasonModelKeyLimit
+		// provider's limit refusal or 401 to the runtime. The run pauses, or with
+		// model_key_unauthorized fails, whatever the runtime's exit status.
+		state, reason = stopReasons[stopReason], stopReason
 	case exit.code == 0:
 		state = event.StateSucceeded
 	}
@@ -1105,8 +1177,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	case timedOut:
 		r.open.Report(fmt.Sprintf("the runtime was stopped at the limit of %s", spec.Timeout))
 		r.write(event.SessionExited, exited)
-	case keyLimit:
-		r.open.Report("the runtime was stopped and the run pauses: every model key of the run is at its provider's limit or at its Use up to percentage, or the gateway could not send a refused request again with the next key (a request over 8 MiB, or a key whose credential does not cover the path)")
+	case stopReason != "":
+		r.open.Report(stopReports[stopReason])
 		r.write(event.SessionExited, exited)
 	default:
 		r.write(event.SessionExited, exited)

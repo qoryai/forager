@@ -239,7 +239,7 @@ func TestTheNextKeyIsTheNextByTheOrderOutOfCooldown(t *testing.T) {
 // goes into cooldown, with the answer's headers, and the next key becomes active.
 func TestAStreamErrorCoolsTheKeyAndSwitches(t *testing.T) {
 	g, _ := group(t)
-	g.Streamed("model", headers())
+	g.Streamed("model", headers(), "")
 	if g.Active() != "model-2" {
 		t.Errorf("active %s; want model-2", g.Active())
 	}
@@ -420,12 +420,13 @@ func TestOnPassedCallsComeInTheOrderOfTheChanges(t *testing.T) {
 	}
 }
 
-// TestShownHasNamesAndNoValues pins the log line of a limit answer: the status, the
+// TestShownHasNamesAndNoValues pins the log line of a limit response: the status, the
 // error type and the header names, a limit header of no window named apart, and no
 // value.
 func TestShownHasNamesAndNoValues(t *testing.T) {
-	line := modelkey.Shown("model", 429, headers("Anthropic-Ratelimit-Unified-5h-Reset", "1762786800", "Anthropic-Ratelimit-Unified-7d_oi-Status", "rejected", "Retry-After", "31"), modelkey.RateLimitError)
-	want := "model key model: limit answer, status 429, error type rate_limit_error, headers anthropic-ratelimit-unified-5h-reset anthropic-ratelimit-unified-7d_oi-status retry-after; no window for anthropic-ratelimit-unified-7d_oi-status"
+	g, _ := group(t)
+	line := g.Shown("model", 429, headers("Anthropic-Ratelimit-Unified-5h-Reset", "1762786800", "Anthropic-Ratelimit-Unified-7d_oi-Status", "rejected", "Retry-After", "31"), modelkey.RateLimitError, "")
+	want := "model key model: limit response, status 429, error type rate_limit_error, headers anthropic-ratelimit-unified-5h-reset anthropic-ratelimit-unified-7d_oi-status retry-after; no window for anthropic-ratelimit-unified-7d_oi-status"
 	if line != want {
 		t.Errorf("Shown:\n%s\nwant\n%s", line, want)
 	}
@@ -525,7 +526,7 @@ func TestAKeyInCooldownAtTheClaimWaitsForItsEnd(t *testing.T) {
 
 // TestAClaimOutsideTheWindowsIsLeftOut pins -representative-claim: a value of the 11
 // windows is a window, and any other value is no window and is named in the log of
-// limit answers by its header, not its value.
+// limit responses by its header, not its value.
 func TestAClaimOutsideTheWindowsIsLeftOut(t *testing.T) {
 	g, _ := group(t)
 	reset := start.Add(time.Hour)
@@ -540,7 +541,7 @@ func TestAClaimOutsideTheWindowsIsLeftOut(t *testing.T) {
 	if ws := g.Windows(); len(ws) != 1 {
 		t.Errorf("windows %+v; want seven_day_sonnet alone", ws)
 	}
-	line := modelkey.Shown("model-2", 429, h, "")
+	line := g.Shown("model-2", 429, h, "", "")
 	if !strings.Contains(line, "no window for anthropic-ratelimit-unified-representative-claim") || strings.Contains(line, "monthly_other") {
 		t.Errorf("Shown: %s", line)
 	}

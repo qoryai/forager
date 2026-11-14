@@ -36,7 +36,7 @@ type secrets struct {
 	err   error
 }
 
-func (s *secrets) fetch(_ context.Context, digest string, names []string) (sealed.Values, error) {
+func (s *secrets) fetch(_ context.Context, digest string, names, _ []string) (sealed.Values, error) {
 	s.calls = append(s.calls, append([]string{digest}, names...))
 	if s.err != nil {
 		return sealed.Values{}, s.err

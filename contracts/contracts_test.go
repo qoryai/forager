@@ -94,14 +94,16 @@ func TestEverySchemaCompiles(t *testing.T) {
 
 // TestDocumentFixturesValidate pins that every policy, server, configuration, run
 // registration, run configuration, attach answer, outcome, batch answer, API format,
-// descriptor, model keys report and model keys answer fixture passes its schema.
+// descriptor, model keys report, model keys answer and secrets request fixture passes
+// its schema.
 func TestDocumentFixturesValidate(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-registration.schema.json", "run-configuration.schema.json",
 		"run-attach-answer.schema.json", "run-outcome.schema.json", "batch-answer.schema.json",
 		"api-format.schema.json", "descriptor.schema.json",
-		"model-keys-report.schema.json", "model-keys-answer.schema.json")
+		"model-keys-report.schema.json", "model-keys-answer.schema.json", "secrets-request.schema.json")
 	dirs := map[string]string{
+		"fixtures/secrets-request":   "secrets-request.schema.json",
 		"fixtures/model-keys-report": "model-keys-report.schema.json",
 		"fixtures/model-keys-answer": "model-keys-answer.schema.json",
 		"fixtures/api-format":        "api-format.schema.json",
@@ -210,7 +212,9 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // with and without model_credential, a join answer with and
 // without model_credential, a batch answer with stop and an empty one, a batch of a
 // session.exited and a run.exited paused with model_key_limit and one of a session.exited
-// alone, a batch of two session.transcript chunks, and refusals from the gateway, two internal ones among them, one whose message spans
+// alone, the same two with model_key_switch, and with model_key_unauthorized and failed,
+// a batch answer with each of those two stops, a batch of two session.transcript chunks,
+// and refusals from the gateway, two internal ones among them, one whose message spans
 // lines, two 410s with the state and the reason of the run's end, and from apiary.
 func TestLinkFixturesValidate(t *testing.T) {
 	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal,
@@ -371,10 +375,29 @@ const beyondLinkSchema = "-beyond-schema-"
 // whose stop has no reason or another one, a session.exited or a session's run.exited
 // failed or cancelled with model_key_limit, a session.exited paused with no reason or
 // with stopped and exit code -1, a session's run.exited paused with no reason, a session.transcript numbered 0, with a negative offset,
-// without its session id or over 32 KiB, and a descriptor whose resume has no args, a
-// prefix outside the home or a path without {session_id}, and a run.target_write with a
-// state outside the four, without its path, with an empty system, with a ref or with a
-// request id in upper case. A fixture whose name contains
+// without its session id or over 32 KiB, a descriptor whose resume has no args, a
+// prefix outside the home or a path without {session_id}, a descriptor rule whose set
+// sets session or a field to an object, whose from_started lists agent_id or is on a
+// hook rule or a rule of runtime.started, or with none of data, set and from_started,
+// and a run.target_write with a state outside the four, without its path, with an empty
+// system, with a ref or with a request id in upper case. For model keys of another
+// format: a run configuration whose API credential has account_header or account_claim
+// alone, both without oauth, with oauth false or beside a header scheme, an
+// account_claim that is no JSON pointer, / alone, with a control character or with an
+// escape other than ~0 and ~1, an account_header with a space or that is a reserved
+// header, Authorization, Host, Content-Length with _, Cookie, a Proxy-, X-Qory- or
+// Qory- header, or paths that are empty, 33, twice, with an inner * or
+// relative; a secrets request whose unauthorized is empty, of 7, twice or not a name; a
+// model keys report whose unauthorized is empty, of 7, a list of names, or has an entry
+// without at or credential, with an at that is no time or with a member it does not
+// define; a link batch, a session.exited or a run.exited with model_key_switch and a
+// state other than paused, or with model_key_unauthorized and a state other than
+// failed; and a descriptor whose endpoint is a flag or two places, whose config has no
+// flag, a short flag, a member it does not define, an empty fixed or one of 65 keys, a
+// fixed value that is a fraction, a table, an integer over 2^53-1, or a string with a
+// line feed or over 4096 characters, or a key with a space, whose model key or
+// declared secret has an account_header, or whose resume has a prefix with * or an
+// empty after. A fixture whose name contains
 // -beyond-schema- breaks a rule only the gateway checks, and passes its schema. The longest schema name the file name starts with is
 // the schema, so run-configuration-variable-value-not-string is held to the run
 // configuration and not to a schema named run.
@@ -732,7 +755,8 @@ func TestOneStepIsOpenAtATime(t *testing.T) {
 }
 
 // TestSessionExitedReasonsAreTheSessions pins the reasons of a dev.qory.session.exited in a
-// link batch to timeout, interrupted, model_key_limit and the codes a link batch's
+// link batch to timeout, interrupted, the three reasons of a stop in a batch's answer,
+// model_key_limit, model_key_switch and model_key_unauthorized, and the codes a link batch's
 // dev.qory.run.refused may have, the codes the session sets itself: a refused join has its refusal's code as
 // reason. The event's reason is the open code of dev.qory.run.exited, since the gateway
 // writes a session's dev.qory.session.exited with the reason of the run's end.
@@ -753,12 +777,13 @@ func TestSessionExitedReasonsAreTheSessions(t *testing.T) {
 			got = append(got, c.(string))
 		}
 	}
+	stops := []string{"model_key_limit", "model_key_switch", "model_key_unauthorized"}
 	for _, code := range got {
-		if code != "timeout" && code != "interrupted" && code != "model_key_limit" && !refusal.Decides(code) {
+		if code != "timeout" && code != "interrupted" && !slices.Contains(stops, code) && !refusal.Decides(code) {
 			t.Errorf("a link batch's session.exited allows the reason %s, which the session does not decide", code)
 		}
 	}
-	for _, code := range []string{"timeout", "interrupted", "model_key_limit", "placeholder_conflict", "mount_mode_conflict", "engine_unreachable",
+	for _, code := range []string{"timeout", "interrupted", "model_key_limit", "model_key_switch", "model_key_unauthorized", "placeholder_conflict", "mount_mode_conflict", "mount_target_conflict", "engine_unreachable",
 		"image_access_denied", "image_rate_limited", "image_registry_unreachable"} {
 		if !slices.Contains(got, code) {
 			t.Errorf("a link batch's session.exited does not allow the reason %s", code)
@@ -1316,6 +1341,24 @@ func TestAMeasureRecordValidates(t *testing.T) {
 		}
 		if err := s.Validate(doc); err != nil {
 			t.Errorf("%s: %v", b, err)
+		}
+	}
+}
+
+// TestAccountHeaderIsNoReservedHeader pins account_header of auth.schema.json to
+// server.ReservedHeader and Authorization: the schema refuses every header
+// server.ReservedHeader reports and Authorization, in any letter case and with _ for -,
+// and accepts a header that only starts or ends like one of them.
+func TestAccountHeaderIsNoReservedHeader(t *testing.T) {
+	s := compile(t, "auth.schema.json")["auth.schema.json"]
+	claim := "/https:~1~1api.openai.com~1auth/chatgpt_account_id"
+	for _, h := range []string{"authorization", "AUTHORIZATION", "Host", "content_length", "Transfer-Encoding", "connection", "TE",
+		"trailer", "Upgrade", "keep_alive", "Expect", "Cookie", "proxy-authorization", "Proxy_Connection", "X-Qory-Run", "x_qory_token", "qory-key", "Qory_Run",
+		"chatgpt-account-id", "hostname", "x-host", "tea", "x-qory", "qory", "proxyish", "cookies"} {
+		reserved := server.ReservedHeader(h) || strings.EqualFold(h, "authorization")
+		err := s.Validate(map[string]any{"scheme": "bearer", "oauth": true, "account_header": h, "account_claim": claim})
+		if reserved != (err != nil) {
+			t.Errorf("account_header %s: schema error %v; server.ReservedHeader or Authorization: %v", h, err, reserved)
 		}
 	}
 }

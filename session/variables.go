@@ -271,10 +271,14 @@ func shownNames(names []string) []string {
 // placeholder, [link.KeyPlaceholder]; and Endpoint, the runtime's endpoint variable set
 // to the key's endpoint. Others is the names of the runtime's other model-key
 // variables, which no value reaches: the runtime would send such a value to the start
-// key's endpoint. Zero when the run has no API credential.
+// key's endpoint. For a runtime whose endpoint is a setting, Endpoint is empty, and
+// Setting is the setting's dotted key and URL the key's endpoint, which the launch
+// passes as a pair of the descriptor's config ([configArgs]). Zero when the run has no
+// API credential.
 type keyed struct {
 	Variable, Endpoint string
 	Others             []string
+	Setting, URL       string
 }
 
 // endpointName is the name of the variable Endpoint sets, empty when it sets none.
@@ -334,7 +338,8 @@ func startKey(credentials []server.LinkCredentialHosts, model string) (int, erro
 // credentials, the start key alone, by [startKey], gets the variable of rt's model key
 // whose format is the credential's and whose auth has its scheme, its header's name,
 // compared without case, and its oauth: the variable joins the credential's placeholders and the run's, and the start key
-// sets it and the runtime's endpoint variable. The other API credentials stay as the
+// sets it and the runtime's endpoint variable, or for an endpoint that is a setting,
+// that setting. The other API credentials stay as the
 // answer has them, with no placeholder. A start key of a format rt lists no key for,
 // or of an auth none of them has, is [refusal.RunConfigurationInvalid] with the
 // credential's name, and so is a placeholder [checkPlaceholders] refuses. Every other
@@ -405,7 +410,14 @@ func chosen(rt runtimes.Runtime, bare bool, credentials []server.LinkCredentialH
 		if !slices.Contains(names, variable) {
 			names = append(names, variable)
 		}
-		key = keyed{Variable: variable + "=" + link.KeyPlaceholder(c.Name), Endpoint: places.Endpoint.Variable + "=" + c.Endpoint}
+		key = keyed{Variable: variable + "=" + link.KeyPlaceholder(c.Name)}
+		// An endpoint that is a setting sets no variable: it goes in the runtime's
+		// settings.
+		if places.Endpoint.Variable != "" {
+			key.Endpoint = places.Endpoint.Variable + "=" + c.Endpoint
+		} else {
+			key.Setting, key.URL = places.Endpoint.Setting, c.Endpoint
+		}
 		for _, k := range keyVariables(rt) {
 			if k != variable {
 				key.Others = append(key.Others, k)

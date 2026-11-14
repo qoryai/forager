@@ -56,7 +56,7 @@
       "properties": {
         "run_id": {"description": "The id of the paused run, a lower-case UUID.", "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
         "session_id": {"description": "The runtime's session id in the paused run, as dev.qory.session.transcript has it.", "type": "string", "minLength": 1, "maxLength": 128},
-        "path": {"description": "The transcript's path under the runtime's home, as dev.qory.session.transcript has it, such as ~/.claude/projects/-workspace/<session_id>.jsonl. It lies under the descriptor's resume.prefix.", "type": "string", "minLength": 1, "maxLength": 1024},
+        "path": {"description": "The transcript's path, as dev.qory.session.transcript has it: under the runtime's home, such as ~/.claude/projects/-workspace/<session_id>.jsonl, or absolute. It lies under the descriptor's resume.prefix. For a descriptor with resume.home_var, it is absolute, below the paused run's value of that variable, such as /var/lib/codex-home/sessions/2026/11/13/rollout-<time>-<session_id>.jsonl; the session writes the file at the same names below this run's value.", "type": "string", "minLength": 1, "maxLength": 1024},
         "runs": {"description": "The paused runs this run continues, oldest first, through each run's continuation, at most the newest 256; the last is run_id. Fixed when the run starts.", "type": "array", "minItems": 1, "maxItems": 256, "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"}}
       }
     },
@@ -80,7 +80,7 @@
       "oneOf": [{"$ref": "#/$defs/api_credential"}, {"$ref": "#/$defs/host_credential"}]
     },
     "api_credential": {
-      "description": "A model key: its name, the API format and endpoint it is for, how its value is set, the prefixes a value must start with, and what the gateway needs for its cooldown. The gateway sets the value on every path of the endpoint's host alone. The session gives the key to the variable the run's runtime's descriptor lists for the format and auth in model.keys, and sets the runtime's endpoint variable to endpoint, in place of every other value of it. A run whose runtime lists no key for the format, or none with this auth, is run_configuration_invalid.",
+      "description": "A model key: its name, the API format and endpoint it is for, how its value is set, the paths it is set on, the prefixes a value must start with, and what the gateway needs for its cooldown. The gateway sets the value on the endpoint's host alone, on paths, or on every path without them. The session gives the key to the variable the run's runtime's descriptor lists for the format and auth in model.keys, and sets the runtime's endpoint variable to endpoint, in place of every other value of it. A run whose runtime lists no key for the format, or none with this auth, is run_configuration_invalid.",
       "type": "object",
       "additionalProperties": false,
       "required": ["name", "format", "endpoint", "auth"],
@@ -89,6 +89,7 @@
         "format": {"description": "The API format the endpoint serves.", "$ref": "api-format.schema.json"},
         "endpoint": {"description": "The base URL of the model API, such as https://api.deepseek.com/anthropic.", "$ref": "#/$defs/endpoint"},
         "auth": {"description": "How the value is set on a request, a scheme from the closed set.", "$ref": "auth.schema.json"},
+        "paths": {"description": "The paths of the endpoint's host the gateway sets the value on, such as [\"/backend-api/codex/*\"], in a host credential's grammar. A request to another path of the host gets no value of the key, and passes only as the run's policy allows it. Absent, the gateway sets the value on every path of the host.", "$ref": "#/$defs/credential_paths"},
         "key_prefixes": {"description": "The prefixes a value must start with, such as sk-ant-. The gateway refuses a value that starts with none of them when it loads it. Absent, any value is taken.", "$ref": "#/$defs/key_prefixes"},
         "resets_at": {"description": "The key's earliest reset in a provider's response, as the server had it at the claim, an RFC 3339 time. While no response of the provider in the run has a reset of the key, the gateway takes it as the key's known reset when it chooses the next key after a limit refusal; the server sends the keys in the order that breaks ties, not by it (README §Credentials, Several model keys). Absent when no response had one.", "type": "string", "format": "date-time"},
         "schedule_resets_at": {"description": "The next reset of the key's weekly schedule after the claim, an RFC 3339 time. The gateway sets the key's cooldown to it when a limit refusal has no reset, and to it plus 7 days once it has passed. The gateway also takes it, or it plus 7 days once it has passed, as a known reset of the key when it chooses the next key after a limit refusal (README §Credentials, Several model keys). Absent when the key has no schedule.", "type": "string", "format": "date-time"},
@@ -122,12 +123,20 @@
         "scheme": {"description": "bearer sets Authorization: Bearer and the value. basic sets Authorization: Basic with username and the value as the password. header sets the header in header to the value.", "enum": ["bearer", "basic", "header"]},
         "username": {"description": "With basic alone.", "type": "string", "minLength": 1, "pattern": "^[^:\\s]+$"},
         "header": {"description": "With header alone.", "type": "string", "maxLength": 64, "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"},
-        "paths": {"description": "The paths of those hosts the value is set on, in the policy's path grammar. Absent means every path.", "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^/[^*?#\\s]*\\*?$"}}
+        "paths": {"description": "The paths of those hosts the value is set on. Absent means every path.", "$ref": "#/$defs/credential_paths"}
       },
       "allOf": [
         {"if": {"properties": {"scheme": {"const": "header"}}}, "then": {"required": ["header"]}, "else": {"not": {"required": ["header"]}}},
         {"if": {"properties": {"scheme": {"const": "basic"}}}, "then": {"required": ["username"]}, "else": {"not": {"required": ["username"]}}}
       ]
+    },
+    "credential_paths": {
+      "description": "The paths a credential's value is set on, in the policy's path grammar: 1 to 32, none twice, each a path from the root, matched whole, or up to a final * matched as a prefix, such as /backend-api/codex/*. No other wildcard, no query.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^/[^*?#\\s]*\\*?$"}
     },
     "endpoint": {
       "description": "A model API's base URL: https, a host, an optional port and path, and no user information, query or fragment, at most 2048 characters. Forager refuses, run_configuration_invalid, one whose host policy.EndpointHost does not read.",

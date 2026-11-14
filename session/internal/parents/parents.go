@@ -14,6 +14,11 @@
 // The mapper sets line on each event of a record of the output source, the record's
 // line on the runtime's standard output, and leaves line out of every other event,
 // whatever the runtime's Map returns.
+//
+// For an event whose rule lists fields in from_started, the mapper copies each from
+// the last dev.qory.runtime.started of the main agent it mapped, the one without
+// agent_id. It writes no such event before that start, or when the start has no
+// such field: the event would lack a field its rule gives it.
 package parents
 
 import (
@@ -30,6 +35,7 @@ const Hold = 5 * time.Second
 
 // The event types and fields the mapper reads and writes.
 const (
+	runtimeStarted  = "dev.qory.runtime.started"
 	toolStarted     = "dev.qory.runtime.tool_started"
 	subagentStarted = "dev.qory.runtime.subagent_started"
 	fieldToolUseID  = "tool_use_id"
@@ -83,6 +89,9 @@ type Mapper struct {
 	links map[string]string
 	// queue is the hook events kept back, in their order.
 	queue []*kept
+	// started is the data of the last dev.qory.runtime.started of the main agent, nil
+	// before one.
+	started map[string]any
 }
 
 // kept is one event the mapper keeps back. held is true for a subagent's start whose
@@ -121,8 +130,15 @@ func (m *Mapper) Handle(rec descriptor.Record) {
 	}
 	for _, e := range m.rt.Map(rec) {
 		e.Data = lined(e.Data, rec)
+		if !m.fromStarted(&e) {
+			continue
+		}
 		k := &kept{event: e}
 		switch e.Type {
+		case runtimeStarted:
+			if _, sub := e.Data[fieldAgentID]; !sub {
+				m.started = maps.Clone(e.Data)
+			}
 		case toolStarted:
 			if id, _ := e.Data[fieldToolUseID].(string); id != "" {
 				agent, _ := e.Data[fieldAgentID].(string)
@@ -210,6 +226,19 @@ func (m *Mapper) flush() {
 		m.queue[i] = nil
 	}
 	m.queue = m.queue[i:]
+}
+
+// fromStarted copies the fields of e.FromStarted from the main agent's last start
+// into e's data, and reports false when the start, or one of its fields, is missing.
+func (m *Mapper) fromStarted(e *descriptor.Event) bool {
+	for _, f := range e.FromStarted {
+		v, ok := m.started[f]
+		if !ok {
+			return false
+		}
+		e.Data[f] = v
+	}
+	return true
 }
 
 // lined is a copy of data with the record's line as line, for a record of the output

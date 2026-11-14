@@ -107,7 +107,8 @@ const (
 // interrupted and run_closed, the close of a run with no join writes no_session, the
 // close after a join writes model_key_limit, and the session in the session's record
 // the code of the gateway's 410, batch_refused among them; the resend of a record
-// writes gateway_lost; the gateway writes the others.
+// writes gateway_lost; the contract reserves model_key_switch and
+// model_key_unauthorized for the close; the gateway writes the others.
 const (
 	ReasonTimeout = "timeout"
 	// ReasonInterrupted is a session's run stopped from where it was started, cancelled:
@@ -131,6 +132,19 @@ const (
 	// provider's limit refusal to the session. It is also the reason of the close of a
 	// run whose last session ended with it, and that close is paused too.
 	ReasonModelKeyLimit = "model_key_limit"
+	// ReasonModelKeySwitch is the contract's reason, with paused, of a session stopped
+	// after the gateway's answer to a batch had stop with it, and of the close of a run
+	// whose last session ended with it: the model provider returned 401 for the
+	// session's key, and another key of the key group is usable. The contract's README,
+	// §Credentials, Keys out after a 401, lists what the gateway and the session do with
+	// it.
+	ReasonModelKeySwitch = "model_key_switch"
+	// ReasonModelKeyUnauthorized is the contract's reason, with failed, of a session
+	// stopped after the gateway's answer to a batch had stop with it, and of the close
+	// of a run whose last session ended with it: every key of the key group is out, and
+	// a 401 of the model provider took at least one out. The README section of
+	// ReasonModelKeySwitch lists what the gateway and the session do with it.
+	ReasonModelKeyUnauthorized = "model_key_unauthorized"
 )
 
 // ReasonWorkflowNotInHarness is the reason qory gives the close of a run with no join
@@ -164,8 +178,8 @@ const (
 	StateCancelled = "cancelled"
 	// StatePaused is a session the session stopped after the gateway's answer to a batch
 	// had stop with model_key_limit, and the close of a run whose last session ended
-	// that way. It goes with the reason model_key_limit alone. A control plane can
-	// continue the run.
+	// that way. It goes with model_key_limit, and in the contract also with
+	// model_key_switch. A control plane can continue the run.
 	StatePaused = "paused"
 )
 
@@ -186,7 +200,7 @@ func IsStepState(s string) bool {
 var reserved = map[string]bool{
 	ReasonTimeout: true, ReasonInterrupted: true, ReasonStopped: true,
 	ReasonSessionLost: true, ReasonGatewayLost: true, ReasonBatchRefused: true, ReasonRunClosed: true,
-	ReasonNoSession: true, ReasonModelKeyLimit: true,
+	ReasonNoSession: true, ReasonModelKeyLimit: true, ReasonModelKeySwitch: true, ReasonModelKeyUnauthorized: true,
 	"quiet": true, "credential_expired": true, "credential_check_unreachable": true, "credential_check_invalid": true,
 	"run_ended_at_issuer": true, "issuer_unreachable": true, "issuer_answer_invalid": true,
 }

@@ -1147,15 +1147,21 @@ func (k *Link) Deliver(ctx context.Context, eventsURL, deliveryID string, body [
 }
 
 // stopReason is the reason of stop in a batch's answer, link-batch-answer.schema.json:
-// model_key_limit, or empty for a body that is empty, is no JSON object, has no stop
-// or has a reason outside Forager's list, after which the session goes on.
+// model_key_limit, model_key_switch or model_key_unauthorized, or empty for a body that
+// is empty, is no JSON object, has no stop or has a reason outside Forager's list,
+// after which the session goes on.
 func stopReason(body []byte) string {
 	var doc struct {
 		Stop *struct {
 			Reason string `json:"reason"`
 		} `json:"stop"`
 	}
-	if len(body) == 0 || jsonv2.Unmarshal(body, &doc) != nil || doc.Stop == nil || doc.Stop.Reason != event.ReasonModelKeyLimit {
+	if len(body) == 0 || jsonv2.Unmarshal(body, &doc) != nil || doc.Stop == nil {
+		return ""
+	}
+	switch doc.Stop.Reason {
+	case event.ReasonModelKeyLimit, event.ReasonModelKeySwitch, event.ReasonModelKeyUnauthorized:
+	default:
 		return ""
 	}
 	return doc.Stop.Reason

@@ -1151,6 +1151,9 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	if err != nil {
 		return Launch{}, err
 	}
+	if err := e.targetLinks(ctx, l); err != nil {
+		return Launch{}, err
+	}
 	helper, err := mount(e.d.Helper, HelperPath, true)
 	if err != nil {
 		return Launch{}, err
@@ -1586,14 +1589,211 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, string, error) {
 	return out, host, nil
 }
 
+// targetLinks fails a launch with a mount whose Target goes through a symbolic link in
+// the image: each name from / down to the Target, read out of the image with
+// [dockerEnclosure.imageHeader], that is a symbolic link is refused, since the engine
+// follows it and the bind could resolve over another mount or over /qory. A name that lies
+// inside another mount's place inside is that mount's on this machine, not the image's,
+// and the session checks it; the walk down to a Target stops there, and at the first
+// name the image does not have, which the engine makes.
+//
+// It also fails a launch with a read-only mount with a Target when the agent can rename
+// a directory of the image on the way to the outermost mount whose place inside
+// contains that Target ([renames]): the bind would move with it. Renaming a name needs
+// write on the directory that holds it, so the directories checked are those above the
+// outermost place's parent: that parent's entry for the place is a mount point, which
+// no rename moves. The walk stops at the first name the image does not have: the
+// engine makes it and those below it, owned by root and mode 0755. A directory
+// [dockerEnclosure.copyDirs] makes for the transcript bind is the agent's, mode 0700,
+// and the walk goes on past it. / is not read.
+func (e *dockerEnclosure) targetLinks(ctx context.Context, l Launch) error {
+	mounts := l.Mounts
+	placeOf := func(m Mount) string {
+		if m.Target != "" {
+			return filepath.Clean(m.Target)
+		}
+		return m.Path
+	}
+	inside := func(q string) bool {
+		return slices.ContainsFunc(mounts, func(m Mount) bool { at := placeOf(m); return at != q && under(at, q) })
+	}
+	// heads are the names already read out of the image, nil for one it does not have.
+	heads := map[string]*tar.Header{}
+	head := func(q string) (*tar.Header, error) {
+		if h, ok := heads[q]; ok {
+			return h, nil
+		}
+		h, err := e.imageHeader(ctx, q)
+		if err == nil {
+			heads[q] = h
+		}
+		return h, err
+	}
+	// above are the names from / down to q, / and q left out, outermost first.
+	above := func(q string) []string {
+		var names []string
+		for q = path.Dir(q); q != "/"; q = path.Dir(q) {
+			names = append([]string{q}, names...)
+		}
+		return names
+	}
+	for _, m := range mounts {
+		if m.Target == "" {
+			continue
+		}
+		for _, q := range append(above(path.Clean(m.Target)), path.Clean(m.Target)) {
+			if inside(q) {
+				break
+			}
+			h, err := head(q)
+			if err != nil {
+				return err
+			}
+			if h == nil {
+				break
+			}
+			if h.Typeflag == tar.TypeSymlink {
+				shown := accesskey.ShownValue(q, true)
+				return fmt.Errorf("wall docker: make %s a directory or file in the image, not a symbolic link: %s is a "+
+					"symbolic link in the image, which the engine follows, so the bind could resolve over another mount or "+
+					"over /qory", shown, shown)
+			}
+		}
+	}
+	var who *renamer
+	for _, m := range mounts {
+		if m.Target == "" || !m.ReadOnly {
+			continue
+		}
+		outer := placeOf(m)
+		for _, o := range mounts {
+			if at := placeOf(o); under(at, outer) {
+				outer = at
+			}
+		}
+		if who == nil {
+			ids, err := e.newRenamer(ctx, l)
+			if err != nil {
+				return err
+			}
+			who = ids
+			for _, d := range ids.made {
+				heads[d] = &tar.Header{Typeflag: tar.TypeDir, Mode: 0o700, Uid: ids.uid, Gid: ids.gid}
+			}
+		}
+		names := append(above(outer), outer)
+		for k, q := range names[:max(len(names)-2, 0)] {
+			h, err := head(q)
+			if err != nil {
+				return err
+			}
+			if h == nil {
+				break
+			}
+			next, err := head(names[k+1])
+			if err != nil {
+				return err
+			}
+			found := who.renames(h, next)
+			if found == "" {
+				continue
+			}
+			shown := accesskey.ShownValue(q, true)
+			fix := fmt.Sprintf("wall docker: make %s in the image owned by root and writable by root alone, or show the "+
+				"mount %s at a place outside it", shown, accesskey.ShownValue(m.Path, true))
+			rest := fmt.Sprintf("can rename %s on the way to the read-only mount at %s, and the bind moves with it",
+				accesskey.ShownValue(names[k+1], true), accesskey.ShownValue(m.Target, true))
+			if slices.Contains(who.made, q) {
+				return fmt.Errorf("wall docker: show the mount %s at a place outside %s: the wall makes %s for the "+
+					"transcript directory, mode 0700 and owned by the agent, %d:%d, so the agent %s",
+					accesskey.ShownValue(m.Path, true), shown, shown, who.uid, who.gid, rest)
+			}
+			if who.uid < 0 {
+				return fmt.Errorf("%s: the agent runs as %s, whose ids are not checked, and %s has mode %04o and owner "+
+					"%d:%d in the image, %s, so the agent %s", fix, accesskey.ShownName(e.user, true), shown,
+					h.Mode&0o7777, h.Uid, h.Gid, found, rest)
+			}
+			return fmt.Errorf("%s: %s has mode %04o and owner %d:%d in the image, so the agent, %d:%d, %s", fix, shown,
+				h.Mode&0o7777, h.Uid, h.Gid, who.uid, who.gid, rest)
+		}
+	}
+	return nil
+}
+
+// renamer is the agent inside as the rename check of [dockerEnclosure.targetLinks]
+// takes it: its uid and gid, below 0 when they are not known, the wall's user being a
+// name or a uid other than the session's; anyGroup when the wall's user is a uid with no
+// group, so the engine adds the groups the image's /etc/group gives it, and a directory
+// any group may write counts as one the agent writes; and made, the directories
+// [dockerEnclosure.copyDirs] makes for the launch's transcript bind.
+type renamer struct {
+	uid, gid int
+	anyGroup bool
+	made     []string
+}
+
+// newRenamer is the renamer for the launch l, with the place of its transcript
+// directory, [dockerEnclosure.transcriptPlace], for its made directories.
+func (e *dockerEnclosure) newRenamer(ctx context.Context, l Launch) (*renamer, error) {
+	ids := &renamer{uid: -1, gid: -1, anyGroup: !strings.Contains(e.user, ":")}
+	uid, gid, unbound, err := e.agentIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if unbound == nil {
+		ids.uid, ids.gid = uid, gid
+	}
+	if l.Transcript.Path != "" {
+		p, err := e.transcriptPlace(ctx, l.Env, l.Transcript)
+		if err != nil {
+			return nil, err
+		}
+		if p.unbound == nil {
+			ids.made = p.mk
+		}
+	}
+	return ids, nil
+}
+
+// renames is what lets the agent rename next, the entry of the image's directory whose
+// first tar header is h on the way to a read-only mount, nil for a name the image does
+// not have, which the engine makes owned by root; empty when nothing does. The owner of
+// a directory may change its mode with no capability, and may rename any entry of it
+// with the sticky bit set, so a directory the agent owns does whatever its mode. A
+// directory the agent's group or the others may write does too, unless it has the
+// sticky bit and the agent does not own next. With ids not known, a user other than
+// root may be the agent: such an owner does, and so does a group's or the others' write
+// unless sticky and next is root's.
+func (a *renamer) renames(h, next *tar.Header) string {
+	if a.uid < 0 {
+		switch {
+		case h.Uid != 0:
+			return "owned by a user other than root"
+		case h.Mode&0o022 == 0, h.Mode&0o1000 != 0 && (next == nil || next.Uid == 0):
+			return ""
+		}
+		return "writable by its group or by other users"
+	}
+	if h.Uid == a.uid {
+		return "owned by the agent"
+	}
+	writes := h.Mode&0o002 != 0 || (h.Mode&0o020 != 0 && (a.anyGroup || h.Gid == a.gid))
+	switch {
+	case !writes, h.Mode&0o1000 != 0 && (next == nil || next.Uid != a.uid):
+		return ""
+	}
+	return "writable by its group or by other users"
+}
+
 // transcriptMount is the --mount of the launch's transcript directory, empty for a
 // launch with none: the directory, writable, at Under below the home of the agent's
-// user inside, [dockerEnclosure.transcriptPlace]. A directory that is not absolute and
-// clean, an Under that is not relative and clean or has a .. name, a directory that is,
-// contains or lies inside one of the launch's mounts or the hook socket's directory, a
-// place inside that is, contains or lies inside another mount's place inside or /qory, and
-// a place the agent's container cannot bind for the agent ([Unbound]) are refused: no
-// mount of the launch's shows the directory, and the bind hides no part of another one.
+// user inside, or at an absolute Under, [dockerEnclosure.transcriptPlace]. A directory
+// that is not absolute and clean, an Under that is not clean or has a .. name, a
+// directory that is, contains or lies inside one of the launch's mounts or the hook
+// socket's directory, a place inside that is, contains or lies inside another mount's
+// place inside, and a place the agent's container cannot bind for the agent
+// ([Unbound]), one at or inside /qory among them, are refused: no mount of the
+// launch's shows the directory, and the bind hides no part of another one.
 // It also returns the place, with the directories between the home and the bind's place
 // that [dockerEnclosure.copyDirs] makes.
 func (e *dockerEnclosure) transcriptMount(ctx context.Context, l Launch) (string, *transcriptPlace, error) {
@@ -1604,8 +1804,7 @@ func (e *dockerEnclosure) transcriptMount(ctx context.Context, l Launch) (string
 	if !filepath.IsAbs(tr.Path) || filepath.Clean(tr.Path) != tr.Path {
 		return "", nil, fmt.Errorf("wall docker: the transcript directory %s is not an absolute, clean path", accesskey.ShownValue(tr.Path, true))
 	}
-	var sources []string
-	dsts := []string{qoryDir}
+	var sources, dsts []string
 	for _, m := range l.Mounts {
 		sources = append(sources, m.Path)
 		if m.Target != "" {
@@ -1630,9 +1829,13 @@ func (e *dockerEnclosure) transcriptMount(ctx context.Context, l Launch) (string
 		return "", nil, fmt.Errorf("wall docker: %s: %s", place.unbound.Fix, place.unbound.Cause)
 	}
 	for _, d := range dsts {
-		if under(d, place.dst) || under(place.dst, d) {
-			return "", nil, fmt.Errorf("wall docker: set HOME to a directory where %s overlaps no mount: the transcript directory is bound there, and it overlaps %s", accesskey.ShownValue(place.dst, true), accesskey.ShownValue(d, true))
+		if !under(d, place.dst) && !under(place.dst, d) {
+			continue
 		}
+		if path.IsAbs(tr.Under) {
+			return "", nil, fmt.Errorf("wall docker: show no mount at, around or inside %s: the transcript directory is bound there, and it overlaps %s", accesskey.ShownValue(place.dst, true), accesskey.ShownValue(d, true))
+		}
+		return "", nil, fmt.Errorf("wall docker: set HOME to a directory where %s overlaps no mount: the transcript directory is bound there, and it overlaps %s", accesskey.ShownValue(place.dst, true), accesskey.ShownValue(d, true))
 	}
 	m, err := mount(tr.Path, place.dst, false)
 	if err != nil {
@@ -1674,19 +1877,20 @@ func (e *dockerEnclosure) CheckTranscript(ctx context.Context, env []string, t T
 // the environment env, once for each directory, Under and HOME of env. The agent's
 // user inside must be the session's uid, [dockerEnclosure.agentIDs], since the
 // directory is mode 0700 and owned by that uid. The bind's place is Under below the
-// agent's home, [dockerEnclosure.home]. Each directory from / down to that place, read
-// out of the image, must be a directory and no symbolic link, since the engine follows
-// a link inside the image and the bind could then land inside another mount; and each
-// one above the place must let the agent's user and group search it. A directory the
-// image does not have, and every one below it, is made: by the engine, owned by root and
-// mode 0755, above the home, and by copyDirs below it.
+// agent's home, [dockerEnclosure.home], or Under itself when it is absolute. Each
+// directory from / down to that place, read out of the image, must be a directory and
+// no symbolic link, since the engine follows a link inside the image and the bind could
+// then land inside another mount; and each one above the place must let the agent's
+// user and group search it. A directory the image does not have, and every one below
+// it, is made: by the engine, owned by root and mode 0755, above the home, and by
+// copyDirs below it. For an absolute Under, the engine makes every one.
 func (e *dockerEnclosure) transcriptPlace(ctx context.Context, env []string, t Transcript) (*transcriptPlace, error) {
 	key := t.Path + "\x00" + t.Under + "\x00" + lastHome(env)
 	if e.placed != nil && e.placed.key == key {
 		return e.placed, nil
 	}
-	if t.Under == "" || path.IsAbs(t.Under) || path.Clean(t.Under) != t.Under || slices.Contains(strings.Split(t.Under, "/"), "..") {
-		return nil, fmt.Errorf("wall docker: the transcript's place below the home, %s, is not a relative, clean path", accesskey.ShownValue(t.Under, true))
+	if t.Under == "" || t.Under == "/" || path.Clean(t.Under) != t.Under || slices.Contains(strings.Split(t.Under, "/"), "..") {
+		return nil, fmt.Errorf("wall docker: set the transcript's place to a clean path below the home or below /: %s is not one", accesskey.ShownValue(t.Under, true))
 	}
 	p := &transcriptPlace{key: key}
 	uid, gid, unbound, err := e.agentIDs(ctx)
@@ -1697,11 +1901,19 @@ func (e *dockerEnclosure) transcriptPlace(ctx context.Context, env []string, t T
 		p.unbound, e.placed = unbound, p
 		return p, nil
 	}
-	home, err := e.home(ctx, env)
-	if err != nil {
-		return nil, err
+	// An absolute Under is the place itself, whatever the home: the engine makes each
+	// directory above it that the image does not have, and copyDirs makes none.
+	home := "/"
+	if !path.IsAbs(t.Under) {
+		if home, err = e.home(ctx, env); err != nil {
+			return nil, err
+		}
 	}
 	p.dst, p.uid, p.gid = path.Join(home, t.Under), uid, gid
+	if why := inQory(p.dst, path.IsAbs(t.Under)); why != nil {
+		p.unbound, e.placed = why, p
+		return p, nil
+	}
 	var names []string
 	for q := p.dst; q != "/"; q = path.Dir(q) {
 		names = append([]string{q}, names...)
@@ -1716,12 +1928,12 @@ func (e *dockerEnclosure) transcriptPlace(ctx context.Context, env []string, t T
 			missing = i
 			break
 		}
-		if why := unreachable(h, q, q == p.dst, uid, gid); why != nil {
+		if why := unreachable(h, q, q == p.dst, path.IsAbs(t.Under), uid, gid); why != nil {
 			p.unbound, e.placed = why, p
 			return p, nil
 		}
 	}
-	for q := path.Dir(t.Under); q != "."; q = path.Dir(q) {
+	for q := path.Dir(t.Under); q != "." && !path.IsAbs(t.Under); q = path.Dir(q) {
 		if at := path.Join(home, q); slices.Index(names, at) >= missing {
 			p.mk = append([]string{at}, p.mk...)
 		}
@@ -1730,12 +1942,28 @@ func (e *dockerEnclosure) transcriptPlace(ctx context.Context, env []string, t T
 	return p, nil
 }
 
+// inQory is why the agent's container binds no transcript directory at dst, the
+// bind's place inside, when dst is or lies inside /qory, where the wall mounts its
+// helper, hooks and bundle; nil when it lies outside. abs is true for an absolute
+// place, whose fix is about resume.prefix, not HOME.
+func inQory(dst string, abs bool) *Unbound {
+	if !under(qoryDir, dst) {
+		return nil
+	}
+	cause := fmt.Sprintf("the transcript's place %s lies at or inside /qory, where the wall mounts its helper, hooks and bundle", accesskey.ShownValue(dst, true))
+	if abs {
+		return &Unbound{Fix: "Set resume.prefix, or the value of its resume.home_var, to a path outside /qory", Cause: cause}
+	}
+	return &Unbound{Fix: "Set HOME to a directory where the transcript's place lies outside /qory", Cause: cause}
+}
+
 // unreachable is why the directory q of the image, whose first tar header is h, keeps
 // the transcript bind from the agent, uid and gid inside; nil when it does not. A
 // symbolic link and a file that is no directory do, and so does a directory above the
 // bind's place, last false, that the agent's user and group cannot search: the owner's
 // bit counts for the owner, the group's for the group and the others' for the rest.
-func unreachable(h *tar.Header, q string, last bool, uid, gid int) *Unbound {
+// abs says the place is absolute, so the fix is the directory's mode alone, not HOME.
+func unreachable(h *tar.Header, q string, last, abs bool, uid, gid int) *Unbound {
 	shown := accesskey.ShownValue(q, true)
 	switch {
 	case h.Typeflag == tar.TypeSymlink:
@@ -1757,7 +1985,11 @@ func unreachable(h *tar.Header, q string, last bool, uid, gid int) *Unbound {
 	if h.Mode&bit != 0 {
 		return nil
 	}
-	return &Unbound{Fix: fmt.Sprintf("Set HOME in the image to a directory that uid %d can reach, or let it search %s", uid, shown),
+	fix := fmt.Sprintf("Set HOME in the image to a directory that uid %d can reach, or let it search %s", uid, shown)
+	if abs {
+		fix = fmt.Sprintf("Let uid %d search %s in the image", uid, shown)
+	}
+	return &Unbound{Fix: fix,
 		Cause: fmt.Sprintf("%s has mode %04o and owner %d:%d in the image, so the agent, %d:%d, cannot reach the transcript directory below it", shown, h.Mode&0o7777, h.Uid, h.Gid, uid, gid)}
 }
 

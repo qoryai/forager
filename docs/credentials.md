@@ -116,7 +116,8 @@ from a host that gets the credential, before the answer reaches the agent.
   itself. A base64 form with `+` or `/` differs percent-encoded, and a `/` differs in
   JSON whose encoder writes it as `\/`.
 - The request goes to the host with `Accept-Encoding: identity`, and without `Range`,
-  `If-Range` and `Upgrade`. If the host compresses its answer anyway, or switches
+  `If-Range`, `Upgrade` and any trailer: a trailer can contain a header the proxy sets,
+  such as a model key's account header, beside the proxy's value. If the host compresses its answer anyway, or switches
   protocols, the agent gets a `502` from the gateway.
 - An answer with a body has no `Content-Length` and comes chunked, since the
   placeholder and the value differ in length; an empty answer may have
@@ -251,6 +252,13 @@ an entry of the key that is not `rejected`. The session gets only the answer to 
 second request. The proxy keeps a copy of each request
 body up to 8 MiB for this; a larger body goes once.
 
+Keys of the format `openai-responses` keep one key for each session, because Codex
+sends its reasoning encrypted for one account. The proxy sends no such request again:
+the provider's first `429` puts the key in cooldown and reaches Codex, and the run
+pauses as below, also when another key is out of cooldown. The active key changes only
+when a session joins: a key that goes into cooldown during a session for another
+reason, such as its Use up to percentage, pauses the run the same way.
+
 A key with `use_up_to_percent` is also in cooldown while a window in its
 `use_up_to_windows` is at or above the percentage, until that window resets. The
 gateway reads each window's use from the provider's responses to the run and from the
@@ -263,7 +271,7 @@ a `429`.
 
 When no key is left out of cooldown, the session gets the `429`, and the proxy sends no
 more requests with the placeholder until the session's join ends: each gets a `429` from
-the gateway that starts `qory: the run pauses:`. The
+the gateway that starts `The gateway sends no more model requests in this session:`. The
 gateway's answer to the session's next batch has `stop`, `model_key_limit`, so the
 session stops the runtime and the run pauses. The next join gets the active key again.
 
@@ -275,7 +283,7 @@ arrives: until then, up to about a second after the other run's refusal and long
 while a report waits for a retry, the run can still send a request with that key and
 get the refusal itself. The contract's
 [§The server, The model keys](../contracts/forager/v1/README.md#the-server) lists the
-report and its answers. The gateway writes one log line for each limit answer, with the
+report and its answers. The gateway writes one log line for each limit response, with the
 status, the names of the limit headers and the error's type, and no value.
 
 ## From Qory Apiary
@@ -283,8 +291,9 @@ status, the names of the limit headers and the error's type, and no value.
 A run configuration may list `credentials`, with no value; the control plane stores the
 values. An entry is one of two kinds:
 
-- An API credential is a model key: `{name, format, endpoint, auth, key_prefixes}`, as
-  in [Model keys](#model-keys).
+- An API credential is a model key: `{name, format, endpoint, auth, paths,
+  key_prefixes}`, as in [Model keys](#model-keys), with `paths` and an account header
+  as in [Paths and an account header](#paths-and-an-account-header).
 - A host credential is any other secret: `{name, apply, placeholders}`. Each of its 1
   to 16 `apply` items is one place and way the value is set: `{hosts, scheme, username,
   header, paths}`.
@@ -319,8 +328,9 @@ values. An entry is one of two kinds:
 - The gateway fetches a value with `expires_at` again 5 minutes before it expires, and
   after a host answers `401` to a request with the value, at most every 30 seconds per
   credential. The renewed value takes the old value's place, and the gateway overwrites the
-  old bytes with zeros. A value without `expires_at`, such as a model key's, is fetched
-  once.
+  old bytes with zeros. A value without `expires_at` is fetched once. A model key is
+  renewed in a request that names it alone, so a key the control plane cannot seal
+  blocks no other credential's renewal.
 - If a renewal fails, or its `expires_at` is not after the machine's clock, the run
   keeps the old value and the gateway reports `run <run id>: If this repeats, check the
   control plane: credential "forge" was not renewed:` with the cause, then tries again
@@ -364,6 +374,65 @@ in `forager.yaml`:
   `gateway.stack_hosts` and the node's policy both list by name.
 - They are fixed for the run. A reload that lists other `stack_hosts` fails, and the run
   keeps its policy.
+
+### Paths and an account header
+
+A model key from the control plane may have `paths`, 1 to 32 paths of its endpoint's
+host, in a host credential's grammar. The proxy then sets the key only on those paths:
+a request to another path of the host gets `403` under `enforce`, unless the run
+policy's `egress.paths` match it, and then goes with no key. Such a key may share its
+host with a host credential whose paths overlap none of its paths. A path with a `.`
+or `..` segment, an empty segment, a backslash, or an encoded slash, backslash, dot or
+percent sign stops the run with `run_configuration_invalid`, and so does a segment that
+is one of those before its first `;` or `%3B`, such as `/a/..;/b`. The same rule applies
+to the paths of a host credential's `apply` items.
+
+A key whose `auth` has `oauth` may also have `account_header` and `account_claim`,
+both or neither. The proxy sets the header beside the token, to the string that
+`account_claim`, a JSON pointer, points at in the token's JWT payload. A ChatGPT
+subscription login is such a key:
+
+```json
+{"name": "subscription", "format": "openai-responses",
+ "endpoint": "https://chatgpt.example/backend-api/codex",
+ "auth": {"scheme": "bearer", "oauth": true, "account_header": "chatgpt-account-id",
+          "account_claim": "/https:~1~1api.openai.com~1auth/chatgpt_account_id"},
+ "paths": ["/backend-api/codex/*"]}
+```
+
+- The proxy checks no signature, and decodes at most 8 KiB of payload.
+- The header the session sends under that name, in any letter case and with `_` for
+  `-`, never reaches the provider.
+- A key whose value has no such string when the run opens leaves the run's key group,
+  and the run's record gets one line that starts with the fix and contains neither the
+  value nor the claim. With no key of the group left, the run stops with
+  `run_configuration_invalid`.
+- An `account_header` that frames the request, is hop-by-hop, is one the proxy sets,
+  or is `Authorization` stops the run with `run_configuration_invalid`.
+
+### A key the provider returns 401 for
+
+A model provider's `401` to a request on the model API's path, `/v1/messages` under
+the endpoint for `anthropic-messages` and `/responses` for `openai-responses`, takes the
+key out of use:
+
+1. A key whose value has `expires_at` is renewed at once. A value puts it back; the
+   control plane's `409` takes it out for the run, and so do a first value the run
+   cannot set, for a key with no value yet, and `expires_at` with no renewal; any other
+   failure, including a renewed value the run cannot set, keeps it out of use, and the
+   gateway tries again after 30 seconds.
+   A key without `expires_at` leaves the key group for the run at once.
+2. For `anthropic-messages` the proxy sends the request again with the next usable key.
+   For `openai-responses`, and when no key is usable, the session gets the `401`, and
+   the run stops: `paused` with `model_key_switch` when another key is usable, `failed`
+   with `model_key_unauthorized` when every key is out and a `401` took at least one
+   out, and `paused` with `model_key_limit` otherwise.
+3. The gateway reports the keys out after a `401` to the control plane with its model
+   keys report.
+
+A `401` on another path of the host, such as an account check, reaches the session as
+the provider sent it, and the gateway renews a key with `expires_at` as for any
+credential.
 
 ### Harness credentials
 

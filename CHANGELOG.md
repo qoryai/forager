@@ -10,10 +10,52 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Read `model.endpoint` of a runtime in `runtimes.json` as one of `variable` and
+  `setting`: a descriptor's endpoint may be a setting, such as
+  `model_providers.qory.base_url`, and then has no `variable`. Read `resume` of a
+  runtime, `{prefix, path}`, where `path` may have `*`, which matches inside one path
+  name; it is absent for a runtime with no resume. A `prefix` may be absolute, or start
+  with `${<home_var>}/`, such as Codex's `${CODEX_HOME}/sessions/`, which stands for any
+  absolute path with no `.` or `..` name: a transcript's `path` is then absolute. Read
+  `config` of a runtime, `{flag, fixed}`, the flag and the keys of the settings the
+  session passes, and refuse a run whose arguments set one of them; it is absent for a
+  runtime with no config.
+- Write each path of an API credential's `paths`, and of a host credential's `apply`
+  items, without a part the proxy denies in a request's path: a `.` or `..` segment,
+  such as `/a/../b`, an empty segment, a backslash, or an encoded slash, backslash, dot
+  or percent sign. A segment counts by its part before its first `;` or `%3B`, so
+  `/a/..;/b` and `/a/;x/b` are refused. `server.CheckCredentials` refuses such a path
+  with `run_configuration_invalid`, and `server.UnclearPath` reports it, since the
+  proxy denies every request path with one. In a run configuration not read from
+  bytes, it also refuses what the schema refuses in one that is: an `account_header`
+  without `account_claim`, the reverse, either without `oauth`, and an
+  `account_header` that `server.ReservedHeader` reports or that is `Authorization`.
+- Expect `model_key_switch` and `model_key_unauthorized` to be reserved codes of
+  `dev.qory.run.exited`. A run's starter's outcome reason that is either code is
+  dropped, its outcome kept, as for every reserved code. Close a run whose last session
+  ended with `model_key_switch` `paused`, and one whose last session ended with
+  `model_key_unauthorized` `failed`: `(*session.Run).Close` returns an error, and the
+  gateway returns `400` `invalid_request` to a batch, for either code with another
+  state, in a run with no join, or after a last session that ended otherwise.
+- Read `mount_target_conflict` as a code of `dev.qory.run.refused` and of a refused
+  join's `dev.qory.session.exited`: two mounts at one place inside, a mount's `Target`
+  that overlaps the workspace or the session's directory, or a symbolic link on the
+  way to a place inside another.
 - Deploy in this order:
-  1. the gateway;
-  2. a Qory Apiary that folds `dev.qory.run.target_write` and sends `use_up_to_percent`
-     and `use_up_to_windows`.
+  1. a Qory Apiary that accepts `unauthorized` in the secrets request and in the model
+     keys report. An earlier one returns `400` `invalid_request` for a member its
+     schema does not define: the renewal of a model key after a `401` then fails, so
+     the key stays out of use, and the gateway's model keys reports are dropped while a
+     key is out;
+  2. the gateway. A session built before this change keeps only `model_key_limit`
+     from `stop`, so under the updated gateway its runtime keeps running after
+     `model_key_switch` or `model_key_unauthorized`;
+  3. the sessions. A gateway built before this change ends a run `batch_refused` for a
+     join refused with `mount_target_conflict`;
+  4. a Qory Apiary that folds `dev.qory.run.target_write`, sends `use_up_to_percent`
+     and `use_up_to_windows`, and sends an API credential's `paths`, `account_header`
+     and `account_claim`. A gateway built before this change fails a run with any of
+     these members with `run_configuration_invalid`.
 
   A Qory Apiary built before the type stores each `dev.qory.run.target_write`, and its
   fold skips it.
@@ -265,6 +307,54 @@ release may change what an existing document does, and says so under Upgrading.
   prints and for the refusal of a run configuration's image that is not pinned; the
   session for `dev.qory.session.started`, the image step's name and the manifest
   check; and the wall for its errors and refusals.
+- The contract for model keys of OpenAI, which the gateway and the session act on
+  (Gateway, Added; Session, Added; README §Credentials, Paths and an account header of
+  a model key, and Keys out after a 401):
+  - An API credential's `paths`, 1 to 32 paths of its endpoint's host in a host
+    credential's grammar, `credential_paths` of `run-configuration.schema.json`.
+  - `account_header` and `account_claim` in `auth.schema.json`, both or neither and only
+    with `oauth`: the header the proxy is to set beside an OAuth token, such as
+    `chatgpt-account-id`, and the JSON pointer (RFC 6901) of its value in the token's
+    JWT payload, such as `/https:~1~1api.openai.com~1auth/chatgpt_account_id`.
+  - `unauthorized` in the secrets request, 1 to 6 names of model keys whose renewal
+    follows a model provider's `401`, and in the model keys report, 1 to 6
+    `{credential, at}`, the keys out of the run after such a `401`.
+  - The reasons `model_key_switch`, `paused`, and `model_key_unauthorized`, `failed`, in
+    `link-batch-answer.schema.json`'s `stop`, `dev.qory.session.exited` and
+    `dev.qory.run.exited`, with the pairing rules `model_key_limit` has with `paused`.
+  - In the runtime descriptor: `model.endpoint` as `variable` or `setting`; `config`,
+    `{flag, fixed}`, for a runtime that reads its settings as TOML from a flag such as
+    `--config`; `resume.path_from` optional; `*` in `resume.path`, which matches inside
+    one path name; and `resume.after`, the argument `resume.args` follow.
+  - `resume`, `{prefix, path}`, for each runtime of `runtimes.json` with a resume.
+- The runtime descriptor of Codex 0.167.2, `runtimes/codex/descriptor.yaml`, and its
+  entry in `runtimes.json`: `codex exec --json`, read from its standard output and
+  stopped with `SIGINT`, with the format `openai-responses` and a key in
+  `OPENAI_API_KEY`, as a bearer or a subscription login's OAuth token. Its `config`
+  passes `--config` pairs that send every request through the provider `qory`, with
+  the start key's endpoint as `model_providers.qory.base_url`, and turn off plugins,
+  apps, analytics, feedback, the update check, metrics, telemetry export and web
+  search. Its `denies` list the variables that move requests, give Codex another key,
+  change its trust of TLS or move its home, and `denied-variables.json`'s `model_keys`
+  lists `CODEX_API_KEY`. `thread.started` maps to `dev.qory.runtime.started` with
+  `source: startup`, `turn.completed` to `dev.qory.runtime.turn_finished` and
+  `turn.failed` to `dev.qory.runtime.turn_failed`. Its `resume` reads the rollout below
+  `${CODEX_HOME}/sessions/` and resumes as `codex exec resume <session id>`.
+- In the runtime descriptor:
+  - a rule's `set`, fields with a value of the descriptor's, a string, a number or a
+    boolean, and `from_started`, `[session_id]`, copied from the session's last
+    `dev.qory.runtime.started` of the main agent. A rule needs at least one of `data`,
+    `set` and `from_started`, and a field in two of them is refused;
+  - `resume.home_var`, the variable of the launch's environment that contains the
+    runtime's home, `CODEX_HOME` for Codex: `resume.prefix` and `resume.path` then
+    start with `${<home_var>}/`, and a `$` anywhere else fails the schema;
+  - `resume.place`, `before_last`, with `resume.after`: the resume arguments go right
+    before the first `--` after `after`, or else right before the last argument, the
+    prompt.
+- `source: resume` on the first `dev.qory.runtime.started` of a runtime started with the
+  descriptor's `resume.args`, when its rule sets `startup` and its `session_id` is the
+  restored one.
+- `mount_target_conflict`, a code of `refusal.Decides` (Wall, Added).
 - `dev.qory.run.target_write`, with `system`, `path`, `state` and `request_id`: one
   write the run sent to a place in another system, and whether it took effect. The
   gateway writes `started` when the write begins and `changed`, `refused` or `cut` when
@@ -1103,6 +1193,79 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The gateway reads OpenAI's limits for a key group of the format `openai-responses`
+  (contract README §Credentials, Several model keys, and §The server, The model keys):
+  - A ChatGPT subscription's `x-codex-primary-*` and `x-codex-secondary-*` headers:
+    `-window-minutes` 300 is `five_hour` and 10080 is `seven_day`, `-used-percent` is
+    the utilization, and the reset is `-reset-at` when it is after the answer's
+    arrival, else the arrival plus `-reset-after-seconds`. Another length is written
+    to the log of limit responses and is no window. A `429` rejects the windows at 100
+    percent or more.
+  - An OpenAI API key's `x-ratelimit-{limit,remaining,reset}-{requests,tokens}`, the
+    windows `requests` and `tokens`, with a reset after a duration such as `6m0s`.
+  - An error body's `error.code`. The quota codes `insufficient_quota`,
+    `credit_balance_exhausted`, `organization_spend_limit_exceeded`,
+    `project_spend_limit_exceeded` and `organization_usage_limit_exceeded`, and the
+    type `insufficient_quota` with no code, are the window `spend_limit`. The log line
+    of a limit response has the error code after the error type, when there is one,
+    and starts `model key <name>: limit response`, which was `limit answer`.
+  - In the streamed `200` of a `POST` to the endpoint's path and `/responses`, a
+    `response.failed` event with the code `rate_limit_exceeded`, `slow_down` or a quota
+    code puts the key in cooldown. Each line and each event's data of the stream may be
+    up to 1 MiB; an `anthropic-messages` stream keeps 4096 bytes.
+
+  The gateway reads the `x-codex-*` and `x-ratelimit-*` headers for this format alone.
+  The proxy sends no `openai-responses` request again with another key, and keeps no
+  copy of its body. The active key changes only at a join the gateway accepts, and a
+  gateway that starts again sets the open session's key. The provider's first `429`,
+  a limit event in the stream, or a cooldown of the active key during the session, from
+  a model keys report's answer or at its Use up to percentage, stops the group: a `429`
+  of the provider reaches Codex, each later request with the placeholder gets the
+  proxy's `429`, with no `Retry-After`, until the session's join ends, and the gateway's
+  answer to the session's next batch has `stop`, `model_key_limit`. Keys of another
+  format are sent again with the next key, as before. The shapes of the API key's
+  headers, the `429` bodies and the stream event follow Codex's source at `17a0e6f63f`,
+  and were not measured on an API key.
+- A model key that the model provider returns `401` for leaves use (README §Credentials,
+  Keys out after a 401). Only a `401` to a request to the model API's path counts: the
+  endpoint's path and `/v1/messages` for `anthropic-messages`, and `/responses` for
+  `openai-responses`; a `401` on another path reaches the session as it came. A key
+  whose value has `expires_at` is renewed at once with its name in the secrets request's
+  `unauthorized`: a value puts it back; the server's signed `409` takes it out for the
+  run, and so do a first value the run cannot set, for a key with no value yet, and
+  `expires_at` with no renewal; any other failure, including a renewed value the run
+  cannot set, keeps it out of use, and the gateway tries again after 30 seconds. A key
+  without `expires_at` leaves the key group at once. The gateway writes one log line for
+  each such `401`, with the key's name and no value. Then `anthropic-messages` sends the
+  request again with the next usable key, and `openai-responses` passes the `401` to the
+  session. The answer to the session's next batch has `stop` with
+  `model_key_unauthorized` when a `401` took out the last key, `model_key_switch` for
+  `openai-responses` with another key usable, and `model_key_limit` otherwise. The
+  gateway accepts a session's `dev.qory.run.exited` `paused` with `model_key_switch` and
+  `failed` with `model_key_unauthorized` after a last session with that reason. Each
+  model keys report lists the keys out after a `401` in `unauthorized`. A separate
+  gateway keeps the stop's reason and those keys in the run's record,
+  `model-keys-unauthorized.json`, so a gateway that starts again puts the same stop in
+  its answers, leaves those keys out of its first secrets request, and renews each key
+  whose renewal was pending in a request that names it alone.
+- A model key from the control plane with `paths` is set on those paths alone (README
+  §Credentials, Paths and an account header of a model key). Another path of its host
+  gets `403` under `enforce`, unless the run policy's `egress.paths` match it; the
+  request then goes with no key. Such a key may share its host with a host credential
+  whose paths overlap none of the key's: a subscription login limited to
+  `/backend-api/codex/*` can be the run's model key beside a host credential on other
+  paths of its host. Before, the run was refused, `a credential without paths is alone
+  on its hosts`.
+- A model key whose `auth` has `account_header` and `account_claim` gets the header
+  beside its token, set to the string at `account_claim` in the token's JWT payload,
+  with no check of the signature and at most 8 KiB of payload decoded. The header the
+  session sends under that name, in any letter case and with `_` for `-`, is taken off
+  every request to the key's host. A key whose value has no such string when the run
+  opens leaves the key group: the proxy never sets it, and the run's record has one
+  line that starts with the fix and contains neither the value nor the claim. With no
+  key of the group left, the run is refused, `run_configuration_invalid`. A renewed
+  value without the string is a renewal refused for its form, and the run keeps the
+  value it had.
 - The gateway writes `dev.qory.run.target_write` for each git push over HTTP that the
   run's proxy reads, on a host it terminates or in a plain request: `started` as the
   push goes to the host, then `changed`, `refused` or `cut`. It reads the report status
@@ -1117,12 +1280,13 @@ release may change what an existing document does, and says so under Upgrading.
   cooldown, sends the request again with the next key, and passes the refusal only when
   no key is left; the gateway's answer to the session's next batch then has `stop`,
   `model_key_limit`. From then until the session's join ends, each request with the
-  placeholder gets the proxy's `429`, `qory: the run pauses: every model key of the
-  run's key group is at its provider's limit or at its Use up to percentage, or the
-  gateway could not send a refused request again with the next key (a request over 8
-  MiB, or a key whose credential does not cover the path), and the gateway sends no more
-  model requests in this session.` The gateway
-  reports each key's limit windows to the control plane with a signed `POST
+  placeholder gets the proxy's `429`, `The gateway sends no more model requests in this
+  session: every model key of the run's key group is at its provider's limit, at its
+  Use up to percentage, or out of use after a 401 (unauthorized) of its provider, or
+  the gateway could not send a request again with the next key after a limit response
+  (a request over 8 MiB, a key whose credential does not cover the path, or an
+  openai-responses request, whose session keeps one key).` The gateway reports each
+  key's limit windows to the control plane with a signed `POST
   <run.url>/<run_id>/model-keys`, and skips a key the answer has in cooldown. The
   gateway leaves out an answer's entry observed more than 300 seconds after the
   gateway's clock, and caps an entry's `resets_at` and `cooldown_until` at 7 days
@@ -1284,6 +1448,22 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- The gateway renews each model key in a secrets request that names it alone, with or
+  without a `401`; the other credentials still go together. The server returns `409` to a
+  whole request when it cannot seal one of its names, so a model key it could not seal
+  blocked the renewal of every credential in its request, such as a forge token.
+- The gateway waits 30 seconds for the answer to a secrets request
+  (`server.SecretsTimeout`), up from 10: the control plane may refresh a model key's
+  value before it sends its response. Every other request to the server keeps 10 seconds. A
+  `server.Client` whose `HTTP` client has no `Timeout` gets the request's. A run with
+  credentials behind a separate gateway may take about 170 seconds to open after a
+  late attach, and 160 seconds on the local link after a late registration, past the
+  140 seconds a session waits.
+- A request to a host that gets a credential goes upstream with no trailer: the
+  proxy drops every trailer the session sends, also on a host with a host credential
+  alone. A trailer could carry a header the proxy sets, such as a model key's account
+  header, beside the proxy's value. A request to a host a tool serves keeps its
+  trailer.
 - A run that opens while Qory Apiary restarts opens once Qory Apiary is back. The
   gateway tries the run's registration, or its attach, again 1, 2, 4, 8 and 15 seconds
   after the try before, then every 15 seconds, within 120 seconds of the run request's
@@ -1343,7 +1523,8 @@ release may change what an existing document does, and says so under Upgrading.
   - expect the first deploy onto this release to end the runs that are open, because
     the gateway it replaces ends them as it stops;
   - expect a rollback to an earlier gateway to end each suspended run with a `410`
-    `run_closed`.
+    `run_closed`. The CA keys stay in the run records until a gateway that keeps its
+    runs removes them, or until you delete the run records under `Dir`.
 - A run request behind a separate gateway counts against the bounds of 64 connections
   of one source and 256 of one IPv6 /48 only until its open starts, once its run key
   passes and its body is read. It counts against the bound of 4096 connections until
@@ -1641,6 +1822,14 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Security
 
+- The proxy denies a request whose path has a segment that is `.`, `..` or empty
+  before its first `;` or `%3B`, such as `/allowed/..;/secret`, with
+  `wall:ambiguous-path` and a `403`, in either mode, and sets no credential on it. A
+  server such as Tomcat drops a segment's parameters from the `;` on, so it read that
+  path as `/secret` while the proxy matched `/allowed/*` and set the credential. A `;`
+  after a name, such as `;jsessionid=`, passes as before. A request target with no
+  slash after its scheme, such as `https:..;/secret`, is denied the same way: the
+  proxy read its path as `/` and sent the text after the scheme upstream as the path.
 - Build Forager with Go 1.27.3 or above: go.mod requires `go 1.27.3`. Go 1.27.3 has
   security fixes to `crypto/x509`, which the gateway's proxy uses to check the
   certificates of upstream hosts.
@@ -1649,6 +1838,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Bind each `Launch.Mounts` entry at its `Target` when it has one, in a wall outside
+  Forager, and bind the list in its order: a read-only mount may lie inside a writable
+  one by their places inside, and comes after it. Bind `Launch.Transcript.Path` at
+  `Launch.Transcript.Under` itself when `Under` is absolute.
 - Expect an error from the Docker wall's `Close` when the engine cannot be reached: it
   counts only `no such container` as gone for a container. Before, a missing engine
   socket counted as gone.
@@ -1677,6 +1870,39 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `SessionSpec.Mounts[].Target`, `wall.Mount.Target` from a caller: the place inside
+  where the wall shows a mount, such as a composed home at `/var/lib/agent-home` and a
+  read-only `/var/lib/agent-home/hooks.json` inside it (docs/wall.md, No bind from a
+  place an agent can change). A `Target` is absolute, clean, with no comma, double
+  quote or newline, and is, contains and lies inside none of `/qory`,
+  `/var/lib/docker`, `/proc`, `/sys`, `/dev`, `/etc/hosts`, `/etc/hostname`,
+  `/etc/resolv.conf` and `/sbin/docker-init`; another fails the join with an error that
+  starts with the fix. A mount with a `Target` is always bound, and its path on this
+  machine overlaps no other place's: `mount_mode_conflict` for the other mode,
+  otherwise `mount_target_conflict`. Places nest by their places inside when one has a
+  `Target`: a read-only place may lie one name inside a writable one, or deeper when
+  each directory between them is a read-only place; a writable place inside a
+  read-only one is `mount_mode_conflict`; two places at one place inside, and a
+  `Target` that overlaps the workspace inside or the session's directory, are
+  `mount_target_conflict`. The session lists the binds by place inside, fewer names
+  first.
+- Checks that keep a bind where the run shows it:
+  - a symbolic link on this machine among the names from a place's path down to a
+    place inside it is `mount_target_conflict`, at the join and again before the wall
+    step;
+  - the Docker wall reads each name from `/` down to each `Target` in the image and
+    fails the session at a symbolic link, such as `/lib64` that links to `lib`;
+  - for a read-only mount with a `Target`, the Docker wall fails the session when the
+    agent can rename a directory of the image on the way to the outermost mount that
+    contains it: one the agent owns, or one its group or the others may write, unless
+    the directory has the sticky bit and the agent does not own the next name.
+- An absolute `resume.prefix`, a resolved `${<home_var>}/` one among them: inside a
+  writable mount's place inside, the session reads and restores the transcript in that
+  mount on this machine, with no transcript bind; inside a read-only mount's, the
+  runtime starts without a resume, with one line on `stderr` that starts with the fix;
+  otherwise the wall binds the transcript directory at the prefix itself. A mount whose
+  place inside lies inside the prefix fails the session, and a transcript place at or
+  inside `/qory` starts the runtime without a resume, with one line.
 - `wall.Launch.Transcript`, `wall.Transcript`: the session's transcript directory,
   `transcripts/<n>/` in the run directory, which the Docker wall binds writable at the
   runtime's `resume.prefix` below the home of the agent's user inside: `HOME` of the
@@ -1877,6 +2103,59 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `runtimes.Configs`, `runtimes.ConfigArgs`, `runtimes.TOMLValue`: for a descriptor
+  with `config`, the session puts `config.flag` and `key=value` for each key of
+  `config.fixed`, and for an endpoint that is a setting, right after the command,
+  sorted by key, before the launch's arguments. A string is a TOML basic string with
+  quotes, backslashes and control characters escaped, so each pair is one line.
+- `runtimes.ArgsChecker`, `runtimes.ArgsCheck`, `runtimes.DescribedWithArgs`: the join
+  fails before the runtime starts when the launch's arguments set a setting the session
+  passes through `config.flag`, as `flag k=v` or `flag=k=v`: the key, a key under it, or
+  a key it is under. The error starts with the fix, contains the flag and no value of
+  the arguments.
+- `codex.New()` and `codex.Described`: Codex by the contract's descriptor or by another
+  descriptor document, with the check of Codex 0.167.2's flags. `catalog.Lookup` builds
+  Codex with it, from the contract's descriptor and from a machine's `codex.yaml`, and
+  a runtime's `runtimes.ArgsCheck` runs also for a descriptor without `config`. The
+  join also fails on `--config` and `-c` with a pair at, under or above
+  `model_providers`, `profile`, `profiles`, `projects`, `responses_api_metadata`,
+  `skills` or `cloud.skills`, or that sets `openai_base_url`, `chatgpt_base_url` or an
+  `experimental_realtime_*_base_url`; on `--enable` and `--disable` only of a feature
+  that `config.fixed` sets, such as `plugins` or `apps` (`connectors` counts as
+  `apps`); and on `--oss`, `--local-provider`, `--profile`, `-p`, `--search`,
+  `--ignore-user-config`, `--dangerously-bypass-hook-trust` and `--remote`, in every
+  form Codex takes. A session that resumes checks the arguments again with the resume
+  arguments at their place, so a pair that a flag took as its value before the resume
+  arguments went in fails the join too.
+- `claude.ApprovedKey()`: the value Claude Code keeps under
+  `customApiKeyResponses.approved` once a person approves the API key's stand-in, its
+  last 20 characters, for a composer that writes a fresh Claude Code home.
+  `approve-key.sh` takes its value from the same function.
+- The session takes `model_key_switch` and `model_key_unauthorized` in the gateway's
+  `stop`, stops the runtime, and writes `dev.qory.session.exited` `paused` with
+  `model_key_switch`, or `failed` with `model_key_unauthorized`, whatever the runtime's
+  exit status. When the runtime exits by itself and every event queued so far was in a
+  batch posted before the exit, the session writes a `dev.qory.run.heartbeat` and reads
+  its answer before `dev.qory.session.exited`, so a stop that comes as the runtime
+  exits still sets the state.
+- A `*` in `resume.path` matches any characters other than `/` inside one name: the
+  session searches below `resume.prefix` at each read until one file matches, with a
+  wall and without one, following no symbolic link below the prefix. More than one
+  match, a walled search of more than 10000 entries, or a matched path with a secret, a
+  character that is not printable or no UTF-8 sends nothing and writes one line on
+  `stderr` that starts with the fix.
+- An absolute `resume.prefix`, and `resume.home_var`: the session reads a
+  `${<home_var>}/` prefix from the launch's environment, the one the runtime gets, and
+  then treats it as absolute. A value that is not set, empty, not absolute in its
+  shortest form, with a `.` or `..` name, no UTF-8, or with a space, a character that
+  is not printable, `*`, `$`, `{`, `}`, a comma or a double quote starts the runtime
+  without a resume and writes one line that starts with the fix. A paused run's
+  transcript is restored at the same names below this run's value.
+- `resume.after` and `resume.place`: the resume arguments go right after the argument
+  that equals `after`, or with `place: before_last` right before the first `--` after
+  it, or else before the last argument, with a wall and without one. A launch with no
+  argument after `after` starts without a resume, with one line that starts with the
+  fix. Codex resumes as `codex exec --json resume <session id> "<prompt>"`.
 - `(*session.Run).SetRunAPICheck`, `session.RunAPIRequest` and `session.RunAPIRefusal`:
   a check of each POST that a walled program sends to the run API, before anything of it
   reaches the gateway. Call `SetRunAPICheck` after `Open` and before `Setup` and the
@@ -2217,6 +2496,16 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- A run with no wall reads its transcript when `HOME`, or the directory of
+  `resume.prefix`, such as `~/.claude/projects` or `~/.codex/sessions`, is a symbolic
+  link. Before, it sent no transcript and the continuation had no resume. A symbolic
+  link among the names below `resume.prefix` still sends nothing.
+- A resume whose session id starts with `-` fails, with a wall and without one, and the
+  runtime starts without a resume: `its session id <id> starts with -, so the runtime
+  would read it as an option`. Before, a run with no wall put that id in the runtime's
+  arguments.
+- An unwalled restore checks the run configuration's `resume.path` against the
+  descriptor's `resume.path`, as a walled restore does.
 - `dev.qory.session.started` and the image step's `dev.qory.run.step_started` have the
   image's reference without its user information, as `request.json` has it:
   `user:pw@registry.example/agent@sha256:…` is recorded as
@@ -2492,6 +2781,27 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- Five tests run Codex 0.167.2 behind the wall, against a stub of the Responses API,
+  with the image in `QORY_WALL_CODEX_IMAGE`; each skips without it, and fails under
+  `QORY_WALL_REQUIRE`:
+  - `TestDockerCodexThroughTheWall`, with an API key and with a subscription login's
+    token: Codex prints the stub's text, each request has the key as a bearer and,
+    with the token, the account header from its claim, and the run reaches no host but
+    the stub;
+  - `TestDockerCodexPausesOnAUsageLimit`: a `429` with the `x-codex-*` headers ends
+    the session and the run `paused` with `model_key_limit`;
+  - `TestDockerCodexEndsOrSwitchesOnARejectedKey`: a `401` ends them `failed` with
+    `model_key_unauthorized` with one key, and `paused` with `model_key_switch` with a
+    second key;
+  - `TestDockerCodexRefusesAnArgumentThatSetsASessionSetting`: with Codex from
+    `catalog.Lookup`, `--config`, `-c`, `--profile` and `--remote` that set a setting
+    the session passes fail the join, and Codex does not start;
+  - `TestDockerCodexResumesAPausedRunUnderAnotherKey`: run 2 restores run 1's rollout,
+    starts `codex exec` with `resume <thread id>` right before the prompt, and sends its
+    first request with the second key.
+- CI's Wall conformance jobs fetch npm's linux-x64 package of `@openai/codex` 0.167.2,
+  check it against its SHA-512, npm's `dist.integrity`, build an image with `codex` on
+  its `PATH`, and set `QORY_WALL_CODEX_IMAGE` to it.
 - `TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun` runs Claude Code 2.1.316
   behind the wall with two keys, each with `use_up_to_percent` 90. The stub serves
   each request with the five-hour window at 90 percent: the second request goes with

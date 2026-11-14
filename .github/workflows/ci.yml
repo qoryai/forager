@@ -174,6 +174,27 @@ jobs:
           echo "$dir" >> "$GITHUB_PATH"
           echo "QORY_WALL_CLAUDE_IMAGE=qory-walltest-claude:$CLAUDE_CODE_VERSION" >> "$GITHUB_ENV"
 
+      - name: Fetch Codex and build an image with it
+        # The tests of Codex run Codex 0.167.2, the version the descriptor pins, behind
+        # the wall in this image. The binary is npm's linux-x64 package of
+        # @openai/codex, checked against its SHA-512, npm's dist.integrity. The image
+        # makes /var/lib/qory-codex-home, CODEX_HOME in the wall, writable.
+        env:
+          CODEX_VERSION: 0.167.2
+          CODEX_SHA512_AMD64: d91c375645a89ccc7009280ec3e36488a2ceb8ecf2a103569b153bc7c1a789eb1d31f84a7386ac36a3b34e043024b282ad294f738ffa7d84da1fb7d872e19619
+          BASE_IMAGE: ghcr.io/qoryai/ci-images:debian-trixie-20260918-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+        run: |
+          dir="$RUNNER_TEMP/codex"
+          mkdir -p "$dir"
+          curl -fsSLo "$RUNNER_TEMP/codex.tgz" "https://registry.npmjs.org/@openai/codex/-/codex-${CODEX_VERSION}-linux-x64.tgz"
+          echo "${CODEX_SHA512_AMD64}  $RUNNER_TEMP/codex.tgz" | sha512sum -c -
+          tar -xzf "$RUNNER_TEMP/codex.tgz" -C "$dir" --strip-components=4 package/vendor/x86_64-unknown-linux-musl/bin/codex
+          printf '%s\n' "FROM $BASE_IMAGE" 'COPY codex /usr/local/bin/codex' \
+            'RUN codex --version && mkdir -p /home/agent /var/lib/qory-codex-home && chmod 1777 /home/agent /var/lib/qory-codex-home' \
+            'ENV HOME=/home/agent' \
+            | docker build --tag "qory-walltest-codex:$CODEX_VERSION" --file - "$dir"
+          echo "QORY_WALL_CODEX_IMAGE=qory-walltest-codex:$CODEX_VERSION" >> "$GITHUB_ENV"
+
       - name: Run the suite against Docker
         # The test binary is the relay, the forwarder and the probe inside the enclosure,
         # so it is built static. QORY_WALL_REQUIRE turns a skip into a failure: this job
@@ -190,13 +211,14 @@ jobs:
         # The tests of several model keys, the walled resume,
         # TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey, and the hook check,
         # TestDockerClaudeCodeHooksReachTheSessionBehindTheWall, need Docker and the image
-        # the step before builds, and are listed for the same reason.
+        # of Claude Code, and the tests of Codex need Docker and the image of Codex; they
+        # are listed for the same reason.
         # TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey needs no Docker, but
         # Claude Code on PATH, which the part job does not have.
         env:
           CGO_ENABLED: "0"
           QORY_WALL_REQUIRE: "1"
-        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey)$'
+        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey|TestDockerCodexThroughTheWall|TestDockerCodexPausesOnAUsageLimit|TestDockerCodexEndsOrSwitchesOnARejectedKey|TestDockerCodexRefusesAnArgumentThatSetsASessionSetting|TestDockerCodexResumesAPausedRunUnderAnotherKey)$'
 
       - name: Read the qory commit
         # The tests of qory's transcript link run qory's agent-env verb behind the wall.
@@ -305,6 +327,27 @@ jobs:
           echo "$dir" >> "$GITHUB_PATH"
           echo "QORY_WALL_CLAUDE_IMAGE=qory-walltest-claude:$CLAUDE_CODE_VERSION" >> "$GITHUB_ENV"
 
+      - name: Fetch Codex and build an image with it
+        # The tests of Codex run Codex 0.167.2, the version the descriptor pins, behind
+        # the wall in this image. The binary is npm's linux-x64 package of
+        # @openai/codex, checked against its SHA-512, npm's dist.integrity. The image
+        # makes /var/lib/qory-codex-home, CODEX_HOME in the wall, writable.
+        env:
+          CODEX_VERSION: 0.167.2
+          CODEX_SHA512_AMD64: d91c375645a89ccc7009280ec3e36488a2ceb8ecf2a103569b153bc7c1a789eb1d31f84a7386ac36a3b34e043024b282ad294f738ffa7d84da1fb7d872e19619
+          BASE_IMAGE: ghcr.io/qoryai/ci-images:debian-trixie-20260918-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+        run: |
+          dir="$RUNNER_TEMP/codex"
+          mkdir -p "$dir"
+          curl -fsSLo "$RUNNER_TEMP/codex.tgz" "https://registry.npmjs.org/@openai/codex/-/codex-${CODEX_VERSION}-linux-x64.tgz"
+          echo "${CODEX_SHA512_AMD64}  $RUNNER_TEMP/codex.tgz" | sha512sum -c -
+          tar -xzf "$RUNNER_TEMP/codex.tgz" -C "$dir" --strip-components=4 package/vendor/x86_64-unknown-linux-musl/bin/codex
+          printf '%s\n' "FROM $BASE_IMAGE" 'COPY codex /usr/local/bin/codex' \
+            'RUN codex --version && mkdir -p /home/agent /var/lib/qory-codex-home && chmod 1777 /home/agent /var/lib/qory-codex-home' \
+            'ENV HOME=/home/agent' \
+            | docker build --tag "qory-walltest-codex:$CODEX_VERSION" --file - "$dir"
+          echo "QORY_WALL_CODEX_IMAGE=qory-walltest-codex:$CODEX_VERSION" >> "$GITHUB_ENV"
+
       - name: Run the suite against Docker
         # The test binary is the relay, the forwarder and the probe inside the enclosure,
         # so it is built static. QORY_WALL_REQUIRE turns a skip into a failure: this job
@@ -321,13 +364,14 @@ jobs:
         # The tests of several model keys, the walled resume,
         # TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey, and the hook check,
         # TestDockerClaudeCodeHooksReachTheSessionBehindTheWall, need Docker and the image
-        # the step before builds, and are listed for the same reason.
+        # of Claude Code, and the tests of Codex need Docker and the image of Codex; they
+        # are listed for the same reason.
         # TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey needs no Docker, but
         # Claude Code on PATH, which the part job does not have.
         env:
           CGO_ENABLED: "0"
           QORY_WALL_REQUIRE: "1"
-        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey)$'
+        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey|TestDockerCodexThroughTheWall|TestDockerCodexPausesOnAUsageLimit|TestDockerCodexEndsOrSwitchesOnARejectedKey|TestDockerCodexRefusesAnArgumentThatSetsASessionSetting|TestDockerCodexResumesAPausedRunUnderAnotherKey)$'
 
   e2e-docker:
     name: Wall conformance, nested Docker

@@ -1,0 +1,17 @@
+# A value of set is a string, a number or a boolean.
+version: 1
+runtime: example
+runtime_version: "1.0.0"
+sources:
+  output: {format: jsonl}
+rules:
+  - source: output
+    match: {type: start}
+    type: dev.qory.runtime.started
+    data: {session_id: id}
+    set: {source: startup}
+  - source: output
+    match: {type: failed}
+    type: dev.qory.runtime.turn_failed
+    set: {error: {kind: unknown}}
+    from_started: [session_id]

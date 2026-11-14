@@ -1150,16 +1150,35 @@ res, err := session.Resend(ctx, session.ResendSpec{
   transcript of such a runtime as `dev.qory.session.transcript`, behind a wall through
   the session's transcript directory, which the wall binds at `resume.prefix` inside, and
   restores and resumes it in a run whose run answer has `resume`. A runtime without
-  it has neither. See [the record](events.md#foragers-events).
+  it has neither. See [the record](events.md#foragers-events). A descriptor's
+  `resume.prefix` starts with `~/`, the runtime's home, with `/`, or with
+  `${<home_var>}/`, the value of `resume.home_var` in the launch's environment, such as
+  `${CODEX_HOME}/sessions/`. A `*` in `resume.path` matches inside one name.
+  `resume.after` is the argument `resume.args` follow, and `resume.place: before_last`
+  puts them right before the last argument after it, the prompt, or before the first
+  `--` after it: Codex resumes as `codex exec --json resume <session id> "<prompt>"`,
+- the settings it reads as TOML from a flag, through the optional `runtimes.Configs`,
+  from a descriptor's `config`: the session puts `config.flag` and `key=value` for
+  each key of `config.fixed`, and for an endpoint that is a setting, right after the
+  command. `runtimes.ConfigArgs` builds those pairs. Through the optional
+  `runtimes.ArgsChecker`, the join fails before the runtime starts when the launch's
+  arguments set one of those settings, with an error that starts with the fix and
+  contains no value of the arguments. A session that resumes checks the arguments
+  again with the resume arguments at their place: in `exec --json --enable -cx=y`,
+  `--enable` takes `-cx=y` as its value, and `resume <id>` right before the last
+  argument leaves `-cx=y` alone, a pair that sets `x`.
 
 `catalog.Lookup(name, dir)` resolves a name to the first of these that applies:
 
 1. A descriptor `<name>.yaml` in `dir`. This is how a machine describes a runtime nothing
    ships for. It is read only when its last part is no link, it is a regular file and
    it holds at most 1 MiB.
-2. The contract's descriptor: Claude Code's.
+2. The contract's descriptor: Claude Code's or Codex's.
 3. A bare runtime, for a name with neither. It is run and recorded, with no session
    events.
+
+Codex from either place, the contract's descriptor or a machine's `codex.yaml`, comes
+with the check of Codex's flags below.
 
 A session whose `SessionSpec.Runtime` is nil runs a bare runtime named after its
 command, and has no start key: its program gets no model key's variable, placeholder or
@@ -1170,6 +1189,29 @@ a run with a model key.
 
 A program that needs custom code implements the interface.
 `session/runtimes/runtimetest` runs the same checks on it.
+`runtimes.DescribedWithArgs` reads a descriptor with a `runtimes.ArgsCheck`, a check of
+flags that only that runtime has, which runs after the check of `config.flag`.
+
+Two packages add to the contract's runtimes what a descriptor cannot contain:
+
+- `codex.New()` is Codex 0.167.2 by the contract's descriptor, and
+  `codex.Described(name, document, installers)` is Codex by another descriptor
+  document; `catalog.Lookup` uses it for the name `codex`. Each comes with the check of
+  Codex's flags, also for a descriptor without `config`. The join fails on `--config`
+  and `-c` with a pair that sets one of the session's settings, a setting at, under or above `model_providers`,
+  `profile`, `profiles`, `projects`, `responses_api_metadata`, `skills` or
+  `cloud.skills`, or one of `openai_base_url`, `chatgpt_base_url` and
+  `experimental_realtime_*_base_url`; on `--enable` and `--disable` only of a
+  feature that `config.fixed` sets, such as `plugins` or `apps` (`connectors` counts
+  as `apps`); and on `--oss`, `--local-provider`,
+  `--profile`, `-p`, `--search`, `--ignore-user-config`, `--dangerously-bypass-hook-trust` and `--remote`. The
+  contract's README, §The descriptor, Config, lists every form. Build Codex with
+  `codex.New`, `codex.Described` or `catalog.Lookup`; `runtimes.Described` adds no
+  check of Codex's flags.
+- `claude.ApprovedKey()` returns the value Claude Code keeps under
+  `customApiKeyResponses.approved` once a person approves the API key's stand-in: its
+  last 20 characters. A composer that writes a fresh Claude Code home writes that
+  value, as the session's `approve-key.sh` does.
 
 ## The spec
 
@@ -1334,8 +1376,15 @@ request asks the gateway for, for this session.
 - `Wall` starts the runtime behind a wall. See [the wall](wall.md#from-go). A walled
   run needs `Exec`, the command that calls `session.Exec` inside the enclosure, which
   every walled launch starts through.
-  `Mounts` are what else of the machine the wall shows, and `ForagerFiles` the caller's
-  files, which no mount may hold. See [Forager's files](wall.md#foragers-files).
+  `Mounts` are what else of the machine the wall shows, each a `wall.Mount` with its
+  `Path`, `ReadOnly` and an optional `Target`, the place inside where the wall shows it,
+  such as a composed home at `/var/lib/agent-home` and a read-only file at
+  `/var/lib/agent-home/hooks.json`. Empty, the place inside is `Path`. A mount with a
+  `Target` is always bound, and two places at one place inside are
+  `mount_target_conflict`. See [no bind from a place an agent can
+  change](wall.md#no-bind-from-a-place-an-agent-can-change) for the rules.
+  `ForagerFiles` are the caller's files, which no mount may contain. See [Forager's
+  files](wall.md#foragers-files).
 - `Written` are the places of this machine a walled run can write, as the caller records
   them: the workspaces and the writable mounts of the walled runs it starts. A settings
   file the runtime reads from this machine, the one Claude Code is passed with
@@ -1473,6 +1522,19 @@ request asks the gateway for, for this session.
     the session posts once the runtime exited by itself counts too. `ExitCode` and `Signal` are the runtime's. The run stays open: run its
     host work, such as a push, then close it `paused` with `model_key_limit` and
     `ExitCode`.
+  - When the gateway's answer to a batch had `stop`, `model_key_switch`, `paused` and
+    `model_key_switch`: the model provider returned `401` for the session's key of the
+    format `openai-responses`, and another key of the run is usable. Close the run
+    after its host work `paused` with `model_key_switch` and `ExitCode`; a control plane
+    can continue it at once on another key.
+  - When the gateway's answer to a batch had `stop`, `model_key_unauthorized`, `failed`
+    and `model_key_unauthorized`: every model key of the run is out, and a `401` of the
+    model provider took at least one out. Close the run after its host work
+    `failed` with `model_key_unauthorized` and `ExitCode`.
+  - When the runtime exits by itself, the session posts at least one batch after the
+    exit, with a `dev.qory.run.heartbeat` when every event it queued was in a batch
+    posted before the exit, and reads the answer before `dev.qory.session.exited`. So
+    a stop that the gateway set as the runtime exited still sets the state.
   - A runtime that exits 0 at the session's stop, at the context's end or at the
     limit, has exited 0: `Join` records its `dev.qory.session.exited` and returns its
     `Result`, with no error.
@@ -1514,9 +1576,12 @@ image runs nested Docker, which is when `Docker` is true in the image `(*session
 `Close` refuses each of the ten codes with another state or exit
 code, or after a join, as the gateway does. Close a run whose last session ended with
 `model_key_limit` with `paused`, `model_key_limit` and that session's `ExitCode`: a
-control plane reads it as a pause of the run. `Close` returns an error for `model_key_limit` with
-another state, for `paused` with no reason or another reason, in a run with no join, and
-after a last session that ended otherwise.
+control plane reads it as a pause of the run. Close a run whose last session ended with
+`model_key_switch` the same way, `paused`, and one whose last session ended with
+`model_key_unauthorized` with `failed`. `Close` returns an error for `model_key_limit`
+or `model_key_switch` with another state than `paused`, for `model_key_unauthorized`
+with another state than `failed`, for `paused` with no reason or another reason, for
+any of the three in a run with no join, and after a last session that ended otherwise.
 `Close` refuses an outcome the contract refuses, and a close while a `Join` runs.
 `session.Closed` is what the run came to:
 

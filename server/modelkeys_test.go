@@ -45,7 +45,23 @@ func TestPostModelKeys(t *testing.T) {
 	if len(keys) == 0 || keys[0].Credential == "" || keys[0].ObservedAt == "" {
 		t.Errorf("the answer's keys %+v", keys)
 	}
-	if _, err := c.PostModelKeys(ctx, a.runURL(), gatewayRunID, server.ModelKeysReport{}); err != nil || !strings.Contains(string(a.body), `"keys":[]`) {
+	// The keys out of use after a 401 go in unauthorized, at most 6.
+	out := server.ModelKeysReport{Time: "2026-11-10T12:00:05Z", Unauthorized: []server.UnauthorizedKey{{Credential: "subscription", At: "2026-11-10T12:00:04Z"}}}
+	if _, err := c.PostModelKeys(ctx, a.runURL(), gatewayRunID, out); err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"version":1,"run_id":"` + gatewayRunID + `","time":"2026-11-10T12:00:05Z","keys":[],"unauthorized":[{"credential":"subscription","at":"2026-11-10T12:00:04Z"}]}`; string(a.body) != want {
+		t.Errorf("sent %s\nwant %s", a.body, want)
+	}
+	validDocument(t, "model-keys-report.schema.json", a.body)
+	sent := string(a.body)
+	for range 6 {
+		out.Unauthorized = append(out.Unauthorized, out.Unauthorized[0])
+	}
+	if _, err := c.PostModelKeys(ctx, a.runURL(), gatewayRunID, out); err == nil || string(a.body) != sent {
+		t.Errorf("7 unauthorized keys: %v; want refused before anything is sent", err)
+	}
+	if _, err := c.PostModelKeys(ctx, a.runURL(), gatewayRunID, server.ModelKeysReport{}); err != nil || !strings.Contains(string(a.body), `"keys":[]`) || strings.Contains(string(a.body), "unauthorized") {
 		t.Errorf("an empty report sent %s, %v", a.body, err)
 	}
 	validDocument(t, "model-keys-report.schema.json", a.body)

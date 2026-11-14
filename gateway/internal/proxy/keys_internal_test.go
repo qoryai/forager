@@ -95,9 +95,24 @@ type keyFixture struct {
 	logged []string
 }
 
-// newKeyFixture starts the fake provider and the proxy. Each of set changes every key of
-// the group.
+// newKeyFixture starts the fake provider and the proxy, with a group of the format
+// anthropic-messages whose stream path is /v1/messages. Each of set changes every key
+// of the group.
 func newKeyFixture(t *testing.T, set ...func(*modelkey.Key)) *keyFixture {
+	t.Helper()
+	return newKeyFixtureOf(t, modelkey.FormatAnthropicMessages, "/v1/messages", set...)
+}
+
+// newKeyFixtureOf starts the fake provider and the proxy, with a group of the format
+// whose stream path is stream. Each of set changes every key of the group.
+func newKeyFixtureOf(t *testing.T, format, stream string, set ...func(*modelkey.Key)) *keyFixture {
+	t.Helper()
+	return newKeyFixtureWith(t, format, stream, nil, set...)
+}
+
+// newKeyFixtureWith is [newKeyFixtureOf] whose credential of each key has the Rejected
+// that rejected returns for its name; nil, or a nil func, for none.
+func newKeyFixtureWith(t *testing.T, format, stream string, rejected func(name string) func(), set ...func(*modelkey.Key)) *keyFixture {
 	t.Helper()
 	upCA, err := NewCA("upstream")
 	if err != nil {
@@ -123,7 +138,11 @@ func newKeyFixture(t *testing.T, set ...func(*modelkey.Key)) *keyFixture {
 	var keys []modelkey.Key
 	for _, name := range []string{"model", "model-2", "model-3"} {
 		value := fakeKeys[name]
-		creds = append(creds, Credential{Name: name, Hosts: []string{keyHost}, Scheme: "bearer", Placeholder: placeholder, Token: func() string { return value }})
+		c := Credential{Name: name, Hosts: []string{keyHost}, Scheme: "bearer", Placeholder: placeholder, Token: func() string { return value }}
+		if rejected != nil {
+			c.Rejected = rejected(name)
+		}
+		creds = append(creds, c)
 		k := modelkey.Key{Name: name, PauseFor: time.Hour}
 		for _, f := range set {
 			f(&k)
@@ -131,7 +150,8 @@ func newKeyFixture(t *testing.T, set ...func(*modelkey.Key)) *keyFixture {
 		keys = append(keys, k)
 	}
 	f.g = modelkey.New(keys, "model", nil)
-	f.p.SetKeyGroup(f.g, "/v1/messages", func(line string) { f.mu.Lock(); f.logged = append(f.logged, line); f.mu.Unlock() })
+	f.g.SetFormat(format)
+	f.p.SetKeyGroup(f.g, format, stream, func(line string) { f.mu.Lock(); f.logged = append(f.logged, line); f.mu.Unlock() })
 	ca, err := NewCA("test")
 	if err != nil {
 		t.Fatal(err)
@@ -173,7 +193,7 @@ func keysOf(calls []upstreamCall) []string {
 // active key never reaches the session, the same body goes again with the next key,
 // and the session gets that answer, with the value replaced by the start key's
 // placeholder. The next request goes with the next key, the record has it, and the log
-// of limit answers has names alone.
+// of limit responses has names alone.
 func TestALimitRefusalIsSentAgainWithTheNextKey(t *testing.T) {
 	f := newKeyFixture(t)
 	f.up.answers["model"] = limited
@@ -198,9 +218,9 @@ func TestALimitRefusalIsSentAgainWithTheNextKey(t *testing.T) {
 	f.mu.Lock()
 	logged := strings.Join(f.logged, "\n")
 	f.mu.Unlock()
-	if !strings.HasPrefix(logged, `model key "model": limit answer, status 429, error type rate_limit_error, headers anthropic-ratelimit-unified-5h-reset`) ||
+	if !strings.HasPrefix(logged, `model key "model": limit response, status 429, error type rate_limit_error, headers anthropic-ratelimit-unified-5h-reset`) ||
 		strings.Contains(logged, "rejected") || strings.Contains(logged, "five_hour") {
-		t.Errorf("the log of limit answers: %q", logged)
+		t.Errorf("the log of limit responses: %q", logged)
 	}
 	if w := f.g.Windows(); len(w) == 0 || w[0].Credential != "model" || w[0].Status != modelkey.StatusRejected {
 		t.Errorf("windows %+v; want model's five_hour rejected first", w)
@@ -227,7 +247,7 @@ func TestNoKeyLeftPassesTheRefusalAndHoldsTheRest(t *testing.T) {
 		t.Error("the group is not stopped")
 	}
 	status, body = f.post(t, "{}")
-	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "qory: the run pauses: every model key of the run's key group is at its provider's limit or at its Use up to percentage") || len(f.up.taken()) != 0 {
+	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "The gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit") || len(f.up.taken()) != 0 {
 		t.Errorf("after the stop: %d %q; want the gateway's 429 and no call", status, body)
 	}
 	if d := f.seen.at(-1); d.Outcome != Refused || d.Credential != "" || d.Status != 0 {
@@ -310,7 +330,7 @@ func TestAStreamErrorSwitchesTheKeyAndPassesTheBytes(t *testing.T) {
 // no key, and that an empty line ends the event.
 func TestAStreamWithoutAnErrorKeepsTheKey(t *testing.T) {
 	// No resend: a cooldown would panic on the nil key group.
-	s := &streamWatch{ReadCloser: io.NopCloser(bytes.NewReader(nil))}
+	s := &streamWatch{ReadCloser: io.NopCloser(bytes.NewReader(nil)), format: modelkey.FormatAnthropicMessages}
 	for _, line := range []string{
 		"event: content_block_delta", `data: {"delta":"\"rate_limit_error\""}`, "",
 		"event: content_block_delta", `data: {"type":"error","error":{"type":"rate_limit_error"}}`, "",
@@ -406,7 +426,7 @@ func TestEveryKeyCoolingGetsTheProxys429(t *testing.T) {
 	}
 	f.g.Merge(entries)
 	status, body := f.post(t, "{}")
-	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "qory: the run pauses: every model key of the run's key group is at its provider's limit or at its Use up to percentage") {
+	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "The gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit") {
 		t.Errorf("the session got %d %q; want the gateway's 429", status, body)
 	}
 	if calls := f.up.taken(); len(calls) != 0 {
@@ -442,7 +462,7 @@ func TestKeysAtTheirUseUpToPercentGetTheProxys429(t *testing.T) {
 		}
 	}
 	status, body := f.post(t, "{}")
-	if want := "qory: the run pauses: every model key of the run's key group is at its provider's limit or at its Use up to percentage, or the gateway could not send a refused request again with the next key (a request over 8 MiB, or a key whose credential does not cover the path), and the gateway sends no more model requests in this session.\n"; status != http.StatusTooManyRequests || body != want {
+	if want := "The gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit, at its Use up to percentage, or out of use after a 401 (unauthorized) of its provider, or the gateway could not send a request again with the next key after a limit response (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, whose session keeps one key).\n"; status != http.StatusTooManyRequests || body != want {
 		t.Errorf("the session got %d %q; want the gateway's 429", status, body)
 	}
 	if calls := f.up.taken(); len(calls) != 0 {
@@ -519,7 +539,7 @@ func TestTheCopyIsDroppedWhenTheStatusArrives(t *testing.T) {
 	g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}, {Name: "model-2", PauseFor: time.Hour}}, "model", nil)
 	one := &Credential{Name: "model", Hosts: []string{keyHost}, Scheme: "bearer", Token: func() string { return fakeKeys["model"] }}
 	two := &Credential{Name: "model-2", Hosts: []string{keyHost}, Scheme: "bearer", Token: func() string { return fakeKeys["model-2"] }}
-	k := &keyGroup{g: g, messages: "/v1/messages", log: func(string) {}}
+	k := &keyGroup{g: g, format: modelkey.FormatAnthropicMessages, messages: "/v1/messages", log: func(string) {}}
 	r := httptest.NewRequest(http.MethodPost, "https://"+keyHost+"/v1/messages", strings.NewReader(`{"model":"m"}`))
 	p := &Proxy{}
 	ctx := p.withResend(r.Context(), r, k, one, []*Credential{one, two}, "/v1/messages", true)
@@ -608,7 +628,7 @@ func answerBeforeTheBody(t *testing.T, h2 bool, status, size int) {
 	defer srv.Close()
 	rt := srv.Client().Transport
 	one := &Credential{Name: "model", Hosts: []string{keyHost}, Scheme: "bearer", Token: func() string { return fakeKeys["model"] }}
-	k := &keyGroup{g: modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}}, "model", nil), messages: "/v1/messages", log: func(string) {}}
+	k := &keyGroup{g: modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}}, "model", nil), format: modelkey.FormatAnthropicMessages, messages: "/v1/messages", log: func(string) {}}
 	r, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/messages", io.NopCloser(bytes.NewReader(sent)))
 	if err != nil {
 		t.Fatal(err)

@@ -249,9 +249,25 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 		}
 	}
 
+	// The keys out of use after a 401 stay so. A key out for the run, and one whose
+	// renewal is pending, is left out of the secrets request: the server returns 409
+	// with no value to a whole request that has a name it cannot seal. A pending key
+	// is renewed alone once the key group has it pending.
+	keys, err := readUnauthorized(dir)
+	if err != nil {
+		g.report(fmt.Sprintf("run %s: if this reopen fails, start another run: reading the run's model keys out of use after a 401 (unauthorized) failed, so the reopen requests every key's value in one secrets request, and the control plane returns 409 (conflict) to that request when it cannot seal one of the values: %v", runID, err))
+	}
+	var revoked, pending []string
+	for _, k := range keys {
+		if k.Out {
+			revoked = append(revoked, k.Credential)
+		} else {
+			pending = append(pending, k.Credential)
+		}
+	}
 	// The steps past the attach end when Close starts too, with ask: a reopen Close cuts
 	// fails in a way that may pass, and the record stays for the next gateway.
-	ca, err = lr.decide(ctx, ask, decision{wall: req.Wall, narrowing: req.Narrowing, images: req.Images, fetched: &run.Fetched{URL: conf.Run.URL, Digest: digest, Document: rc}, labels: labels},
+	ca, err = lr.decide(ctx, ask, decision{wall: req.Wall, narrowing: req.Narrowing, images: req.Images, fetched: &run.Fetched{URL: conf.Run.URL, Digest: digest, Document: rc}, labels: labels, revoked: revoked, pending: pending},
 		func(*run.Run) (*proxy.CA, error) {
 			if ca == nil {
 				return nil, fmt.Errorf("start a new run: this run needs its certificate authority, and its record has no %s or %s", proxy.CACertFile, proxy.CAKeyFile)
@@ -265,14 +281,31 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 		var mayPass holdError
 		return fail(!errors.As(err, &mayPass), err)
 	}
-	marked, err := limitMarked(dir)
+	reason, marked, err := limitMarked(dir)
 	if err != nil {
 		return fail(true, err)
 	}
-	if marked && lr.keys != nil {
-		// The proxy passed a limit refusal to the session before the stop: the first
-		// batch's answer has stop again. A run configuration with no key group now has
-		// no key to stop.
+	if lr.keys != nil {
+		// A key whose renewal was pending has no value, as the secrets request left it
+		// out; it is renewed alone now, and leaves the group when the run has no
+		// renewal of it.
+		lr.keys.Restore(keys)
+		for _, k := range keys {
+			if lr.keys.Pending(k.Credential) && !lr.r.Renew(k.Credential) {
+				lr.keys.Revoked(k.Credential)
+			}
+		}
+	}
+	switch {
+	case !marked || lr.keys == nil:
+		// A run configuration with no key group now has no key to stop.
+	case reason != "":
+		// The answers to the session had stop before the stop of the gateway: the
+		// first batch's answer has stop again, with the same reason.
+		lr.keys.PassWith(reason)
+	default:
+		// The proxy passed a limit refusal or a 401 to the session, and no answer had
+		// the stop yet: the first batch's answer has it, its reason as of then.
 		lr.keys.Pass()
 	}
 	lr.mu.Lock()
@@ -283,6 +316,11 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 		lr.px.SetNoModelKey()
 	case open != nil && open.model != "":
 		lr.px.SetModelKey(open.model)
+		if lr.keys.Has(open.model) {
+			// The open session goes on with the key it joined with, which the group
+			// made of the start key's state does not know.
+			lr.keys.SetActive(open.model)
+		}
 	}
 	if numbered {
 		// The run's first join request closed the stack proxy.

@@ -13,6 +13,7 @@ import (
 	"github.com/qoryai/forager/session/internal/hostfile"
 	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/session/runtimes/claude"
+	"github.com/qoryai/forager/session/runtimes/codex"
 )
 
 // Installers are the hook installers a descriptor may name, by the names it names them.
@@ -53,7 +54,13 @@ func Lookup(runtime, dir string) (runtimes.Runtime, error) {
 }
 
 func described(path, runtime string, b []byte) (runtimes.Runtime, error) {
-	rt, err := runtimes.Described(path, b, Installers())
+	describe := runtimes.Described
+	if runtime == codex.Name {
+		// Codex's flags that change the session's settings are refused by code of the
+		// codex package, which a descriptor cannot contain.
+		describe = codex.Described
+	}
+	rt, err := describe(path, b, Installers())
 	if err != nil {
 		return nil, err
 	}

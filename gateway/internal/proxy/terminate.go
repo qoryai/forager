@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -25,6 +26,16 @@ import (
 // AmbiguousPath is the rule a denial names when a request's path could be read two
 // ways: not a path entry, the proxy's own refusal, in either mode.
 const AmbiguousPath = "wall:ambiguous-path"
+
+// sentPath is the path of u as the proxy forwards it: the opaque text of a target such
+// as https:..;/secret, which the transport sends as the request's path, or the escaped
+// path. An opaque text never starts with a slash, so [policy.CleanPath] refuses it.
+func sentPath(u *url.URL) string {
+	if u.Opaque != "" {
+		return u.Opaque
+	}
+	return u.EscapedPath()
+}
 
 // EchoMethod is the rule a denial names of a TRACE or a TRACK, which echo the
 // request's headers back, to a host a credential is for: a refusal of the proxy's, in
@@ -55,6 +66,12 @@ type Credential struct {
 	// the key is set with. Empty for every other credential, which the proxy sets on
 	// every request to its hosts.
 	Placeholder string
+	// AccountHeader, for a model key whose auth has account_header, is the header the
+	// proxy sets beside the key, to what Account reads from the key's value: the claim
+	// at account_claim in its JWT payload. The proxy takes the header off every request
+	// to the key's hosts, so the session's value of it never passes. Empty for none.
+	AccountHeader string
+	Account       func(value []byte) (string, error)
 }
 
 // Tool is a program of the machine's that serves hosts: the proxy hands every request
@@ -426,10 +443,15 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			r.Out.URL.Scheme = "https"
 			r.Out.URL.Host = strings.TrimSuffix(authority, ":443")
 			r.Out.Host = ""
-			// The request's own trailer, which the server fills once the body is read:
-			// a copy made before that would carry none.
+			r.Out.Body = endAtEOF(r.Out.Body)
+			// The request's trailer, which the server fills once the body is read: a
+			// copy made before that would carry none. To a host that gets a credential
+			// it sends none: the server merges every trailer it reads, declared or
+			// not, and a trailer could carry a header the proxy sets, such as a model
+			// key's account header, beside the proxy's value.
 			r.Out.Trailer = r.In.Trailer
 			if masked(r.In) != nil {
+				r.Out.Trailer = nil
 				// The value is replaced in the answer only where it can be read: in
 				// an uncompressed body, whole, and on a connection that stays HTTP. A
 				// range of the body could hold part of the value.
@@ -449,11 +471,15 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			// After the request's record, before the answer is changed or withheld.
 			writeOf(resp.Request).answer(resp)
 			name, ok := resp.Request.Context().Value(keyedKey{}).(string)
-			if rs := resendOf(resp.Request); rs != nil {
-				// The key the request went with last, after a resend another than the first.
+			rs := resendOf(resp.Request)
+			if rs != nil {
+				// A resend may have sent the request with another key: name is the key
+				// of the response.
 				name = rs.name
 			}
-			if ok && resp.StatusCode == http.StatusUnauthorized {
+			// For a 401 on the model API's path, [resend.reject] has requested the
+			// key's value again; for a 401 on another path, this code requests it.
+			if ok && (rs == nil || !rs.model) && resp.StatusCode == http.StatusUnauthorized {
 				// The credential the proxy set on the request, of those of the host.
 				if i := slices.IndexFunc(creds, func(c *Credential) bool { return c.Name == name }); i >= 0 && creds[i].Rejected != nil {
 					creds[i].Rejected()
@@ -468,7 +494,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 				return errUnaskedSwitch
 			}
 			if coding := encoded(resp); coding != "" {
-				clean, _ := policy.CleanPath(resp.Request.URL.EscapedPath())
+				clean, _ := policy.CleanPath(sentPath(resp.Request.URL))
 				withheld(resp, coding, resp.Request.Method, d.Host, clean)
 			}
 			return nil
@@ -486,9 +512,9 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		req.Method, req.RequestMethod, req.Mode, req.Rule, req.RequestID = "HTTPS", r.Method, now.Mode, now.Rule, newRequestID()
 		if !now.Allowed {
 			// A host the policy refuses reaches no tool and has no path decision.
-			clean, ok := policy.CleanPath(r.URL.EscapedPath())
+			clean, ok := policy.CleanPath(sentPath(r.URL))
 			if !ok {
-				clean = r.URL.EscapedPath()
+				clean = sentPath(r.URL)
 			}
 			req.Path, req.Allowed, req.Outcome = clean, false, Refused
 			if rated != nil {
@@ -500,7 +526,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			return
 		}
 		keys := t.p.choice()
-		clean, rule, allowed, c := t.decide(d.Host, r.URL.EscapedPath(), now.Mode, keys)
+		clean, rule, allowed, c := t.decide(d.Host, sentPath(r.URL), now.Mode, keys)
 		req.Path, req.PathRule, req.Allowed = clean, rule, allowed
 		tl := t.tool(d.Host)
 		if tl != nil {
@@ -520,14 +546,19 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			return
 		}
 		r.Header.Del(setBy)
+		for _, h := range creds {
+			if h.AccountHeader != "" {
+				dropHeader(r.Header, h.AccountHeader)
+			}
+		}
 		group := (*keyGroup)(nil)
 		if c != nil && allowed && tl == nil && c.carries(r.Header) {
 			group = t.p.group(c.Name)
 		}
 		if group != nil && (group.g.Passed() || !keys.ready) {
-			// The proxy passed a limit refusal to the session, or every key of the group is
-			// in cooldown, which stops the session as a passed refusal does: until its join
-			// ends, no request with the placeholder reaches the provider.
+			// The proxy passed a limit refusal or a 401 to the session, or no key of the
+			// group is usable, which stops the session as a passed refusal does: until its
+			// join ends, no request with the placeholder reaches the provider.
 			group.g.Pass()
 			t.p.limitPassed(w, req)
 			return
@@ -542,8 +573,13 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			for _, h := range creds {
 				v := h.secret()
 				if h == c && c.carries(r.Header) {
-					if name, value, ok := c.header(v); ok {
+					name, value, ok := c.header(v)
+					account, accountOK := c.account(v)
+					if ok && accountOK {
 						r.Header.Set(name, value)
+						if c.AccountHeader != "" {
+							r.Header.Set(c.AccountHeader, account)
+						}
 						r.Header.Set(setBy, c.Name)
 						req.Credential, keyed = c.Name, true
 					}
@@ -700,6 +736,33 @@ func (c *Credential) header(v []byte) (string, string, bool) {
 		return c.Header, join("", v), true
 	}
 	return "", "", false
+}
+
+// account is the value of the credential's account header for its value v, which
+// stays the caller's to clear, and whether the proxy may set v: true with "" for a
+// credential with no account header, false when v has no account claim. A value the
+// run loaded has one ([credential.AccountClaim]), so a false is a value that changed
+// since, and the proxy sets neither.
+func (c *Credential) account(v []byte) (string, bool) {
+	if c.AccountHeader == "" {
+		return "", true
+	}
+	if c.Account == nil || len(v) == 0 {
+		return "", false
+	}
+	account, err := c.Account(v)
+	return account, err == nil
+}
+
+// dropHeader takes every header named name off h, case ignored and an underscore read
+// as a dash, which some servers read as the same name.
+func dropHeader(h http.Header, name string) {
+	want := strings.ReplaceAll(strings.ToLower(name), "_", "-")
+	for k := range h {
+		if strings.ReplaceAll(strings.ToLower(k), "_", "-") == want {
+			delete(h, k)
+		}
+	}
 }
 
 // upstream is the transport to the real hosts of terminated connections: verified
@@ -861,6 +924,7 @@ func (t *terminator) toTool(w http.ResponseWriter, r *http.Request, d Decision, 
 				pr.Out.Trailer = out
 				pr.Out.Body = &trailing{ReadCloser: pr.Out.Body, in: in, out: out}
 			}
+			pr.Out.Body = endAtEOF(pr.Out.Body)
 		},
 		Transport:     tl.transport,
 		FlushInterval: -1,
@@ -910,6 +974,38 @@ func (t *trailing) Read(b []byte) (int, error) {
 		}
 	}
 	return n, err
+}
+
+// endedBody is a request body that returns io.EOF again once it has returned it, and
+// never reads the session's body after that. The transport reads a body with a length
+// once more past its end, and a server closes the session's body as the answer's
+// header goes out, so that read could fail with [http.ErrBodyReadAfterClose]: the
+// transport counts it as a failed write, closes the connection to the host and cuts
+// the answer.
+type endedBody struct {
+	io.ReadCloser
+	ended bool
+}
+
+// Read reads the body until its end, and returns io.EOF after it.
+func (b *endedBody) Read(p []byte) (int, error) {
+	if b.ended {
+		return 0, io.EOF
+	}
+	n, err := b.ReadCloser.Read(p)
+	if err == io.EOF {
+		b.ended = true
+	}
+	return n, err
+}
+
+// endAtEOF is body as an [endedBody]: nil and [http.NoBody] stay as they are, since the
+// transport sends a request with either as one with no body.
+func endAtEOF(body io.ReadCloser) io.ReadCloser {
+	if body == nil || body == http.NoBody {
+		return body
+	}
+	return &endedBody{ReadCloser: body}
 }
 
 // newRequestID is a request's id: 16 random bytes, hex.

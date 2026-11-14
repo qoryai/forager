@@ -41,7 +41,8 @@ func storedGroup(creds []server.RunCredential, model string) []server.RunCredent
 
 // keyEntry is c as [credential.KeyGroup] reads it.
 func keyEntry(c server.RunCredential) credential.KeyEntry {
-	return credential.KeyEntry{Name: c.Name, Format: c.Format, Endpoint: c.Endpoint, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header, OAuth: c.Auth.OAuth}
+	return credential.KeyEntry{Name: c.Name, Format: c.Format, Endpoint: c.Endpoint, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header, OAuth: c.Auth.OAuth,
+		AccountHeader: c.Auth.AccountHeader, AccountClaim: c.Auth.AccountClaim}
 }
 
 // checkKeyGroup returns a run_configuration_invalid error, with the key's name, for a
@@ -169,17 +170,18 @@ func (r *Run) Resume() *server.LinkResume {
 	return nil
 }
 
-// MessagesPath is the clean path of the messages request of the model API of the run's
-// key group, [modelkey.MessagesPath] of the start key's format and endpoint; empty when
-// the run has no key group. Call it after [Run.Hold].
-func (r *Run) MessagesPath() string {
+// ModelAPI is the model API of the run's key group: the start key's format, and the
+// clean path of the request whose streamed answers the proxy reads, [modelkey.StreamPath]
+// of the start key's format and endpoint. Both empty when the run has no key group.
+// Call it after [Run.Hold].
+func (r *Run) ModelAPI() (format, stream string) {
 	held := r.Held()
 	if held == nil || len(held.Group) == 0 {
-		return ""
+		return "", ""
 	}
 	i := slices.IndexFunc(r.stored, func(c server.RunCredential) bool { return c.Name == held.Start })
 	if i < 0 {
-		return ""
+		return "", ""
 	}
-	return modelkey.MessagesPath(r.stored[i].Format, r.stored[i].Endpoint)
+	return r.stored[i].Format, modelkey.StreamPath(r.stored[i].Format, r.stored[i].Endpoint)
 }

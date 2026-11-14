@@ -472,3 +472,56 @@ func TestTheMapperSetsTheLineOfAnOutputRecord(t *testing.T) {
 		t.Errorf("events %v; want line 4 on the output's and none on the hook's", got)
 	}
 }
+
+// startedDoc is a descriptor whose turn lines take session_id from the session's start.
+const startedDoc = `version: 1
+runtime: example
+runtime_version: "1"
+sources: {output: {format: jsonl}}
+rules:
+  - source: hooks
+    match: {hook_event_name: SubagentStart}
+    type: dev.qory.runtime.started
+    data: {session_id: session_id, agent_id: agent_id}
+    set: {source: startup}
+  - source: output
+    match: {type: start}
+    type: dev.qory.runtime.started
+    data: {session_id: id}
+    set: {source: startup}
+  - source: output
+    match: {type: done}
+    type: dev.qory.runtime.turn_finished
+    from_started: [session_id]
+`
+
+// TestATurnTakesTheSessionIDOfTheStart pins from_started: an event of a turn before
+// any start is not written, one after it gets the session id of the main agent's last
+// start, a subagent's start does not change it, and a later start does.
+func TestATurnTakesTheSessionIDOfTheStart(t *testing.T) {
+	d, err := descriptor.Parse("example.yaml", []byte(startedDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	m := parents.New(mapOnly{d}, func(e descriptor.Event) { got = append(got, fmt.Sprint(e.Type, " ", e.Data["session_id"])) }, &clock{})
+	for _, r := range []descriptor.Record{
+		{Source: "output", Line: 1, Record: map[string]any{"type": "done"}},
+		{Source: "output", Line: 2, Record: map[string]any{"type": "start", "id": "s1"}},
+		{Source: "output", Line: 3, Record: map[string]any{"type": "done"}},
+		{Source: "hooks", Record: map[string]any{"hook_event_name": "SubagentStart", "session_id": "sub", "agent_id": "a1"}},
+		{Source: "output", Line: 4, Record: map[string]any{"type": "done"}},
+		{Source: "output", Line: 5, Record: map[string]any{"type": "start", "id": "s2"}},
+		{Source: "output", Line: 6, Record: map[string]any{"type": "done"}},
+	} {
+		m.Handle(r)
+	}
+	m.Close()
+	want := []string{
+		"dev.qory.runtime.started s1", "dev.qory.runtime.turn_finished s1", "dev.qory.runtime.started sub",
+		"dev.qory.runtime.turn_finished s1", "dev.qory.runtime.started s2", "dev.qory.runtime.turn_finished s2",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("written %q, want %q", got, want)
+	}
+}

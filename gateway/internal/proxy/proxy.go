@@ -1001,9 +1001,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// A plain request to a host that gets a credential is refused before its path is
 	// read, in either mode; one past the rate limit gets its 429 below.
 	if rated == nil && d.Allowed && len(term.credentials(d.Host)) > 0 {
-		clean, ok := policy.CleanPath(r.URL.EscapedPath())
+		clean, ok := policy.CleanPath(sentPath(r.URL))
 		if !ok {
-			clean = r.URL.EscapedPath()
+			clean = sentPath(r.URL)
 		}
 		d.Allowed, d.Rule, d.Outcome = false, PlainRequest, Refused
 		d.RequestMethod, d.Path = r.Method, clean
@@ -1014,7 +1014,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The path is decided under the mode the host was decided under, which the answer
 	// and the record give.
 	if d.Allowed {
-		if clean, rule, ok := term.plainPath(d.Host, r.URL.EscapedPath(), d.Mode); clean != "" {
+		if clean, rule, ok := term.plainPath(d.Host, sentPath(r.URL), d.Mode); clean != "" {
 			d.RequestMethod, d.Path, d.PathRule, d.Allowed = r.Method, clean, rule, ok
 			if !ok {
 				d.Outcome = Refused
@@ -1051,6 +1051,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	out := r.Clone(p.dialContext(r.Context(), d))
 	out.RequestURI = ""
+	out.Body = endAtEOF(out.Body)
 	// The host asked of upstream is the one decided on, in its form.
 	out.URL.Host = d.Host
 	if r.URL.Port() != "" {

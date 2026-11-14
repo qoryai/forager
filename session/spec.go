@@ -335,10 +335,18 @@ type SessionSpec struct {
 	// starts it as SetupRunner, then the command's number from 1, then --, then the
 	// command's Args. Setup needs it; without Setup it is not used.
 	SetupRunner []string
-	// Mounts are what the enclosure shows of this machine, each at its path: the
-	// checkout around Dir, a composed home outside it. A mount, or Dir, inside another
-	// one of the same mode is reached through the outer one, which alone is bound; one of
-	// the other mode is a refused join, mount_mode_conflict. One whose path goes through a
+	// Mounts are what the enclosure shows of this machine, each at its path, or at its
+	// Target: the checkout around Dir, a composed home outside it. A mount, or Dir,
+	// inside another one of the same mode, by their paths on this machine, is reached
+	// through the outer one, which alone is bound; one of the other mode is a refused
+	// join, mount_mode_conflict. A mount with a Target, absolute, clean, apart from
+	// /qory and with no comma, double quote or newline, is bound by itself, and its path
+	// on this machine overlaps no other place's: mount_mode_conflict for the other mode,
+	// else mount_target_conflict. Inside, a read-only place may lie inside a writable
+	// one, such as a read-only file at /var/lib/agent-home/hooks.json in a writable
+	// directory at /var/lib/agent-home; a writable one inside a read-only one is
+	// mount_mode_conflict, and two at one place, or a Target that overlaps Dir or the
+	// session's directory, mount_target_conflict. One whose path goes through a
 	// link inside a writable one, and that does not resolve into it, is a refused join,
 	// whatever its mode, mount_through_link. Dir is writable, or read-only with
 	// WorkspaceReadOnly, and is bound at its path when no mount contains it. The session adds the session's directory in the run
@@ -494,10 +502,11 @@ type Outcome struct {
 
 // checkOutcome refuses an outcome the close cannot write: a state outside the four, an
 // exit code under -1, a reason outside the pattern or one of Forager's reserved codes
-// other than timeout, interrupted, no_session and model_key_limit, those four with
-// another state or exit code than they take, paused with any reason other than
-// model_key_limit, model_key_limit in a run with no join or
-// after a last session that ended with another reason, lastReason, and image_missing, image_user_root, image_access_denied,
+// other than timeout, interrupted, no_session, model_key_limit, model_key_switch and
+// model_key_unauthorized, those six with another state or exit code than they take,
+// paused with any reason other than model_key_limit and model_key_switch; one of the
+// three model key reasons in a run with no join or after a last session that ended
+// with another reason, lastReason; and image_missing, image_user_root, image_access_denied,
 // image_rate_limited, image_registry_unreachable, workflow_not_in_harness, read_needs_wall, read_needs_setup_outside,
 // read_needs_no_nested_docker and read_needs_setup_removed other than failed with -1 for
 // a run no session joined, the one outcome with each of them that the gateway accepts.
@@ -508,8 +517,8 @@ func checkOutcome(o Outcome, joined bool, lastReason string) error {
 		return fmt.Errorf("the outcome's state %q is none of succeeded, failed, cancelled and paused", o.State)
 	case o.ExitCode < -1:
 		return fmt.Errorf("the outcome's exit code %d is under -1", o.ExitCode)
-	case o.State == event.StatePaused && o.Reason != event.ReasonModelKeyLimit:
-		return errors.New("close a paused run with the reason model_key_limit: the close writes paused with no other reason")
+	case o.State == event.StatePaused && o.Reason != event.ReasonModelKeyLimit && o.Reason != event.ReasonModelKeySwitch:
+		return errors.New("close a paused run with the reason model_key_limit or model_key_switch: the close writes paused with no other reason")
 	case o.Reason == refusal.ImageMissing, o.Reason == refusal.ImageUserRoot, o.Reason == refusal.ImageAccessDenied,
 		o.Reason == refusal.ImageRateLimited, o.Reason == refusal.ImageRegistryUnreachable, o.Reason == event.ReasonWorkflowNotInHarness,
 		o.Reason == event.ReasonReadNeedsWall, o.Reason == event.ReasonReadNeedsSetupOutside,
@@ -527,9 +536,9 @@ func checkOutcome(o Outcome, joined bool, lastReason string) error {
 		if o.State != event.StateCancelled {
 			return errors.New("an outcome with the reason interrupted is cancelled")
 		}
-	case o.Reason == event.ReasonModelKeyLimit:
-		if o.State != event.StatePaused || !joined || lastReason != event.ReasonModelKeyLimit {
-			return errors.New("close with model_key_limit only as paused, after a last session that ended with model_key_limit")
+	case stopReasons[o.Reason] != "":
+		if o.State != stopReasons[o.Reason] || !joined || lastReason != o.Reason {
+			return fmt.Errorf("close with %s only as %s, after a last session that ended with %s", o.Reason, stopReasons[o.Reason], o.Reason)
 		}
 	case o.Reason == event.ReasonNoSession:
 		if o.State != event.StateFailed || o.ExitCode != -1 || joined {

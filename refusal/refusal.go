@@ -69,9 +69,20 @@ const (
 	// order.
 	MountContainsForagerFiles = "mount_contains_forager_files"
 	// MountModeConflict is a walled run with a mount, or the workspace, inside another
-	// one, or the same, of the other mode, writable or read-only: its names are the
-	// inner and the outer, in that order.
+	// one, or the same, of the other mode, writable or read-only, by their paths on this
+	// machine; or, when one of them has a Target, a writable place inside a read-only
+	// one by their places inside, or a read-only place more than one name inside a
+	// writable one with a directory between them that is no read-only place. Its names
+	// are the inner and the outer, in that order.
 	MountModeConflict = "mount_mode_conflict"
+	// MountTargetConflict is a walled run with a mount whose place inside, its Target,
+	// clashes: two mounts at one place inside, a Target that is, contains or lies inside
+	// the workspace or the session's directory inside, a mount with a Target whose path
+	// on this machine is, contains or lies inside another place's of the same mode, or a
+	// symbolic link on this machine among the names from the outer place's path, of
+	// either mode, down to the inner place inside it. Its names are the inner place and
+	// the outer one, in that order, each as passed.
+	MountTargetConflict = "mount_target_conflict"
 	// MountSharedWithRun is a walled run with a bind inside, or reached through, a
 	// writable bind of another walled run of this user's still going, a writable bind
 	// that holds one of that run's binds or the way to one, a bind that is, holds or
@@ -95,7 +106,7 @@ const (
 func Decides(code string) bool {
 	switch code {
 	case RunConfigurationInvalid, ToolUnknown, ImageUnknown, ImageNotAllowed, ImageUserRoot, ImageMissing,
-		ImageAccessDenied, ImageRateLimited, ImageRegistryUnreachable, VariableReserved, PlaceholderConflict, ModelKeyMissing, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
+		ImageAccessDenied, ImageRateLimited, ImageRegistryUnreachable, VariableReserved, PlaceholderConflict, ModelKeyMissing, MountContainsForagerFiles, MountModeConflict, MountTargetConflict, MountSharedWithRun,
 		MountThroughLink, EngineUnreachable:
 		return true
 	}

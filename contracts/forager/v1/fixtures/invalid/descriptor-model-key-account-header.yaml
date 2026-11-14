@@ -1,0 +1,12 @@
+# Only an API credential of a run configuration has an account header.
+version: 1
+runtime: amp
+runtime_version: "1"
+sources: {output: {format: jsonl}}
+rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]
+model:
+  formats: [openai-responses]
+  model: {flag: --model}
+  endpoint: {variable: AMP_BASE_URL}
+  keys:
+    - {format: openai-responses, variable: AMP_TOKEN, auth: {scheme: bearer, oauth: true, account_header: chatgpt-account-id, account_claim: /auth/account}}
