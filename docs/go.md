@@ -1383,7 +1383,7 @@ request asks the gateway for, for this session.
   `Target` is always bound, and two places at one place inside are
   `mount_target_conflict`. See [no bind from a place an agent can
   change](wall.md#no-bind-from-a-place-an-agent-can-change) for the rules.
-  `ForagerFiles` are the caller's files, which no mount may hold. See [Forager's
+  `ForagerFiles` are the caller's files, which no mount may contain. See [Forager's
   files](wall.md#foragers-files).
 - `Written` are the places of this machine a walled run can write, as the caller records
   them: the workspaces and the writable mounts of the walled runs it starts. A settings
@@ -1528,8 +1528,8 @@ request asks the gateway for, for this session.
     after its host work `paused` with `model_key_switch` and `ExitCode`; a control plane
     can continue it at once on another key.
   - When the gateway's answer to a batch had `stop`, `model_key_unauthorized`, `failed`
-    and `model_key_unauthorized`: the model provider returned `401` for every model key
-    of the run, and no renewal brought one back. Close the run after its host work
+    and `model_key_unauthorized`: every model key of the run is out, and a `401` of the
+    model provider took at least one out. Close the run after its host work
     `failed` with `model_key_unauthorized` and `ExitCode`.
   - When the runtime exits by itself, the session posts at least one batch after the
     exit, with a `dev.qory.run.heartbeat` when every event it queued was in a batch

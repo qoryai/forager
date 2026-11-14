@@ -43,12 +43,16 @@ release may change what an existing document does, and says so under Upgrading.
   way to a place inside another.
 - Deploy in this order:
   1. a Qory Apiary that accepts `unauthorized` in the secrets request and in the model
-     keys report. An earlier one refuses a member its schema does not define with
-     `400` `invalid_request`: the renewal of a model key after a `401` then fails, so
+     keys report. An earlier one returns `400` `invalid_request` for a member its
+     schema does not define: the renewal of a model key after a `401` then fails, so
      the key stays out of use, and the gateway's model keys reports are dropped while a
      key is out;
-  2. the gateway;
-  3. a Qory Apiary that folds `dev.qory.run.target_write`, sends `use_up_to_percent`
+  2. the gateway. A session built before this change keeps only `model_key_limit`
+     from `stop`, so under the updated gateway its runtime keeps running after
+     `model_key_switch` or `model_key_unauthorized`;
+  3. the sessions. A gateway built before this change ends a run `batch_refused` for a
+     join refused with `mount_target_conflict`;
+  4. a Qory Apiary that folds `dev.qory.run.target_write`, sends `use_up_to_percent`
      and `use_up_to_windows`, and sends an API credential's `paths`, `account_header`
      and `account_claim`. A gateway built before this change fails a run with any of
      these members with `run_configuration_invalid`.
@@ -1227,9 +1231,11 @@ release may change what an existing document does, and says so under Upgrading.
   path counts: the endpoint's path and `/v1/messages` for `anthropic-messages`, and
   `/responses` for `openai-responses`; a `401` on another path reaches the session as
   it came. A key whose value has `expires_at` is renewed at once with its name in the
-  secrets request's `unauthorized`: a value puts it back, the server's signed `409`, a
-  value the run cannot set or `expires_at` with no renewal takes it out for the run,
-  and another failure keeps it out with another try 30 seconds later. A key without
+  secrets request's `unauthorized`: a value puts it back; the server's signed `409`
+  takes it out for the run, and so do a first value the run cannot set, for a key with
+  no value yet, and `expires_at` with no renewal; any other failure, including a
+  renewed value the run cannot set, keeps it out of use, and the gateway tries again
+  after 30 seconds. A key without
   `expires_at` leaves the key group at once. The gateway writes one log line for each
   such `401`, with the key's name and no value. Then `anthropic-messages` sends the
   request again with the next usable key, and `openai-responses` passes the `401` to
@@ -1277,11 +1283,11 @@ release may change what an existing document does, and says so under Upgrading.
   `model_key_limit`. From then until the session's join ends, each request with the
   placeholder gets the proxy's `429`, `The gateway sends no more model requests in this
   session: every model key of the run's key group is at its provider's limit, at its
-  Use up to percentage, or out of use after a 401 of its provider, or the gateway could
-  not send a request again with the next key after a limit response (a request over 8
-  MiB, a key whose credential does not cover the path, or an openai-responses request,
-  whose session keeps one key).` The gateway
-  reports each key's limit windows to the control plane with a signed `POST
+  Use up to percentage, or out of use after a 401 (unauthorized) of its provider, or
+  the gateway could not send a request again with the next key after a limit response
+  (a request over 8 MiB, a key whose credential does not cover the path, or an
+  openai-responses request, whose session keeps one key).` The gateway reports each
+  key's limit windows to the control plane with a signed `POST
   <run.url>/<run_id>/model-keys`, and skips a key the answer has in cooldown. The
   gateway leaves out an answer's entry observed more than 300 seconds after the
   gateway's clock, and caps an entry's `resets_at` and `cooldown_until` at 7 days
@@ -1445,11 +1451,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 - The gateway renews each model key in a secrets request that names it alone, with or
   without a `401`; the other credentials still go together. The server returns `409` to a
-  whole request when it cannot seal one of its names, so a model key it refused
+  whole request when it cannot seal one of its names, so a model key it could not seal
   blocked the renewal of every credential in its request, such as a forge token.
 - The gateway waits 30 seconds for the answer to a secrets request
   (`server.SecretsTimeout`), up from 10: the control plane may refresh a model key's
-  value before it answers. Every other request to the server keeps 10 seconds. A
+  value before it sends its response. Every other request to the server keeps 10 seconds. A
   `server.Client` whose `HTTP` client has no `Timeout` gets the request's. A run with
   credentials behind a separate gateway may take about 170 seconds to open after a
   late attach, and 160 seconds on the local link after a late registration, past the
@@ -2776,6 +2782,27 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- Five tests run Codex 0.167.2 behind the wall, against a stub of the Responses API,
+  with the image in `QORY_WALL_CODEX_IMAGE`; each skips without it, and fails under
+  `QORY_WALL_REQUIRE`:
+  - `TestDockerCodexThroughTheWall`, with an API key and with a subscription login's
+    token: Codex prints the stub's text, each request has the key as a bearer and,
+    with the token, the account header from its claim, and the run reaches no host but
+    the stub;
+  - `TestDockerCodexPausesOnAUsageLimit`: a `429` with the `x-codex-*` headers ends
+    the session and the run `paused` with `model_key_limit`;
+  - `TestDockerCodexEndsOrSwitchesOnARejectedKey`: a `401` ends them `failed` with
+    `model_key_unauthorized` with one key, and `paused` with `model_key_switch` with a
+    second key;
+  - `TestDockerCodexRefusesAnArgumentThatSetsASessionSetting`: with Codex from
+    `catalog.Lookup`, `--config`, `-c`, `--profile` and `--remote` that set a setting
+    the session passes fail the join, and Codex does not start;
+  - `TestDockerCodexResumesAPausedRunUnderAnotherKey`: run 2 restores run 1's rollout,
+    starts `codex exec` with `resume <thread id>` right before the prompt, and sends its
+    first request with the second key.
+- CI's Wall conformance jobs fetch npm's linux-x64 package of `@openai/codex` 0.167.2,
+  check it against its SHA-512, npm's `dist.integrity`, build an image with `codex` on
+  its `PATH`, and set `QORY_WALL_CODEX_IMAGE` to it.
 - `TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun` runs Claude Code 2.1.316
   behind the wall with two keys, each with `use_up_to_percent` 90. The stub serves
   each request with the five-hour window at 90 percent: the second request goes with

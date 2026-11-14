@@ -1222,7 +1222,7 @@ one line that starts with the fix and contains why, never the value or the claim
 as:
 
 ```text
-Store in the control plane a value of the model key "subscription" with a string at its account_claim; the run does not set the key: its JWT payload has no string at account_claim "/https:~1~1api.openai.com~1auth/chatgpt_account_id"
+Store in the control plane a value of the model key "subscription" with a string at its account_claim; the run does not set the key: the value's JWT payload has no string at account_claim "/https:~1~1api.openai.com~1auth/chatgpt_account_id"
 ```
 
 When no key of the group is left, the run is refused, `run_configuration_invalid`. A
@@ -1242,8 +1242,8 @@ revoked or whose subscription ended. The contract has three parts for such a key
   `dev.qory.run.exited`: `model_key_switch`, `paused`, when the provider returned `401`
   for the session's key, another key of the group is usable, and the group's format is
   `openai-responses`, whose requests the gateway does not send again with another key;
-  and `model_key_unauthorized`, `failed`, when every key of the group got such a `401`
-  (§The gateway's link, A stop in a batch's answer).
+  and `model_key_unauthorized`, `failed`, when every key of the group is out and a
+  `401` took at least one out (§The gateway's link, A stop in a batch's answer).
 
 The gateway acts on a `401` to a request with a model key to the model API's path under
 the key's endpoint: the endpoint's path and `/v1/messages` for `anthropic-messages`, and
@@ -1255,17 +1255,19 @@ After a `401` on the model API's path:
 1. The proxy sets the key no more, and the gateway writes one line to its log, with the
    key's name and no value. A key whose value has `expires_at` is renewed at once, in a
    secrets request that names it alone, with its name in `unauthorized`: a `200` with a
-   value puts the key back in the group; the server's signed `409`, a value the run
-   cannot set, or `expires_at` with no renewal takes it out for the run; any other
-   failure, such as a `503`, keeps it out of use, with another try 30 seconds later. A
-   key without `expires_at` leaves the group for the run at once.
+   value puts the key back in the group; the server's signed `409` takes it out for the
+   run, and so do a first value the run cannot set, for a key with no value yet, and
+   `expires_at` with no renewal; any other failure, such as a `503` or a renewed value
+   the run cannot set, keeps it out of use, and the gateway tries again after 30
+   seconds. A key without `expires_at`
+   leaves the group for the run at once.
 2. For `anthropic-messages`, the proxy sends the request again with the next usable key,
    as after a limit refusal (Several model keys, above). For `openai-responses`, and
    when no key is usable, the proxy passes the `401` to the session, and from then until
    the session's join ends returns its `429` to each request with the placeholder.
-3. The gateway's answer to the session's next batch has `stop` with the reason its first
-   such answer fixes: `model_key_unauthorized` when every key of the group is out and a
-   `401` took at least one out; `model_key_switch` when the proxy passed a `401`, the
+3. The gateway's answer to the session's next batch has `stop` with the reason the
+   gateway sets in its first such answer: `model_key_unauthorized` when every key of
+   the group is out and a `401` took at least one out; `model_key_switch` when the proxy passed a `401`, the
    format is `openai-responses` and another key is usable; otherwise `model_key_limit`,
    such as for a key whose renewal is pending. The session writes
    `dev.qory.session.exited` `paused` with `model_key_switch`, or `failed` with
@@ -3404,8 +3406,9 @@ body as the request string's last line:
 
 `run_configuration` is the digest of the run configuration the credentials come from,
 `credentials` the names of the entries whose values the server seals, in the document's
-order, each once: every entry when the run starts, but at a reopen the model keys out
-of use after a `401`, and the entries that are due at a renewal, each model key in a
+order, each once: every entry when the run starts, at a reopen every entry except
+the model keys out of use or pending after a `401`, and the entries that are due at a
+renewal, each model key in a
 request that names it alone and the other entries together, `unauthorized`, optional, the model keys among `credentials` whose renewal
 follows a model provider's `401`, 1 to 6 names in the order of `credentials`
 (§Credentials, Keys out after a 401), and
@@ -4976,7 +4979,7 @@ The session stops the runtime as for `model_key_limit` and writes
 with the same state and reason.
 
 The gateway puts the stop in its answer to a batch that reaches it after the proxy
-passed the refusal or the `401`, and takes the stop back once it accepts the session's
+passed the refusal or the `401`, and clears the stop once it accepts the session's
 `dev.qory.session.exited`. A runtime that writes nothing after the refusal and exits
 leaves no such batch, so when every event the session queued before the exit was in a
 batch whose post began before it, the session writes a `dev.qory.run.heartbeat` after
@@ -6333,7 +6336,7 @@ up in its parent, so two binds of one root are allowed:
   comma, double quote or newline. Empty, the place inside is its path. A target that
   breaks this fails the join, with no code. A name from `/` down to a target that is a
   symbolic link in the image, such as `/lib64` in an image where it links to `lib`,
-  fails the session: the engine follows it, so the bind could land over another mount or
+  fails the session: the engine follows it, so the bind could resolve over another mount or
   over `/qory`. A name inside another mount's place inside is not read from the image.
   For a read-only mount with a target, a directory of the image on the way to the
   outermost mount whose place inside contains the target, in which the agent can rename

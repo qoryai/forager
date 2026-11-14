@@ -381,10 +381,10 @@ up in its parent, so two binds of one root are allowed.
   this machine. A mount, or the workspace, inside another one of the same mode, by
   their paths on this machine, is reached through the outer one, which alone is bound,
   when neither has a `Target`. One inside another of the other mode is no run,
-  `mount_mode_conflict`, and `Names` holds the inner path, then the outer one. Its
+  `mount_mode_conflict`, and `Names` contains the inner path, then the outer one. Its
   sentence reads: "the mount /work/vendor (read-only) lies inside the mount /work
   (writable): a part of a writable mount can't be read-only". When the outer place is
-  the workspace, it says "place" for "mount". A writable place inside a read-only one
+  the workspace, the sentence has "place" in place of "mount". A writable place inside a read-only one
   is refused the same way, and so are two places of one path in both modes.
 - **Mounts at a target.** Set `SessionSpec.Mounts[].Target` to show a mount at another
   place inside, such as a composed home at `/var/lib/agent-home`. A `Target` is an
@@ -428,7 +428,7 @@ up in its parent, so two binds of one root are allowed.
   with it. The agent can rename in a directory it owns, whatever the mode, and in one
   its group or the others may write, unless the directory has the sticky bit and the
   agent does not own the next name. For a wall's user that is a uid with no group, the
-  engine adds the groups the image's `/etc/group` gives it, so a directory any group
+  engine adds the groups that the image's `/etc/group` lists for it, so a directory any group
   may write counts. For a wall's user that is a name, or a uid other than the
   session's, a directory that a user other than root owns, or that its group or the
   others may write, counts. A directory the wall makes for the transcript directory,

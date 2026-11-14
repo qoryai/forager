@@ -144,8 +144,8 @@ stops the runtime:
 - `model_key_switch`, `paused`, when the key's format is `openai-responses` and
   another key of the run is usable. The caller closes the run `paused` with
   `model_key_switch`, and a control plane can continue it at once on another key.
-- `model_key_unauthorized`, `failed`, when a `401` took out every key of the run and
-  no renewal brought one back. The caller closes the run `failed` with
+- `model_key_unauthorized`, `failed`, when every key of the run is out and a `401`
+  took at least one out. The caller closes the run `failed` with
   `model_key_unauthorized`.
 
 When the runtime exits by itself, the session posts at least one batch after the exit,
@@ -181,8 +181,12 @@ the runtime through `resume.sh`, which copies it under the runtime's home and ad
 descriptor's arguments, such as `--resume <session id>`. Behind a wall it writes it in
 the transcript directory before the agent's container starts, and adds the arguments
 itself. The arguments go at the end, or right after the argument that equals
-`resume.after`, or with `resume.place: before_last` right before the last argument: `codex exec --json "<prompt>"`
-resumes as `codex exec --json resume <session id> "<prompt>"`. The runtime's first
+`resume.after`. With `resume.place: before_last` they go right before the first `--`
+after `resume.after`, or else right before the last argument: `codex exec --json
+"<prompt>"` resumes as `codex exec --json resume <session id> "<prompt>"`, and `codex
+exec --json -- "<prompt>"` as `codex exec --json resume <session id> -- "<prompt>"`.
+A session that resumes checks the launch's arguments again with the resume arguments
+at their place, and the join fails when they set a setting the session passes. The runtime's first
 `dev.qory.runtime.started` then has `source` `resume` where its rule sets `startup`,
 when its `session_id` is the restored one.
 When the read or the copy fails, or the paused run's session id starts with `-`, the runtime starts without a resume, after one line

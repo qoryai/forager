@@ -116,7 +116,7 @@ from a host that gets the credential, before the answer reaches the agent.
   itself. A base64 form with `+` or `/` differs percent-encoded, and a `/` differs in
   JSON whose encoder writes it as `\/`.
 - The request goes to the host with `Accept-Encoding: identity`, and without `Range`,
-  `If-Range`, `Upgrade` and any trailer: a trailer could carry a header the proxy sets,
+  `If-Range`, `Upgrade` and any trailer: a trailer can contain a header the proxy sets,
   such as a model key's account header, beside the proxy's value. If the host compresses its answer anyway, or switches
   protocols, the agent gets a `502` from the gateway.
 - An answer with a body has no `Content-Length` and comes chunked, since the
@@ -384,8 +384,8 @@ policy's `egress.paths` match it, and then goes with no key. Such a key may shar
 host with a host credential whose paths overlap none of its paths. A path with a `.`
 or `..` segment, an empty segment, a backslash, or an encoded slash, backslash, dot or
 percent sign stops the run with `run_configuration_invalid`, and so does a segment that
-is one of those before its first `;` or `%3B`, such as `/a/..;/b`. The same rule holds
-for the paths of a host credential's `apply` items.
+is one of those before its first `;` or `%3B`, such as `/a/..;/b`. The same rule applies
+to the paths of a host credential's `apply` items.
 
 A key whose `auth` has `oauth` may also have `account_header` and `account_claim`,
 both or neither. The proxy sets the header beside the token, to the string that
@@ -417,13 +417,15 @@ the endpoint for `anthropic-messages` and `/responses` for `openai-responses`, t
 key out of use:
 
 1. A key whose value has `expires_at` is renewed at once. A value puts it back; the
-   control plane's `409`, or `expires_at` with no renewal, takes it out for the run;
-   any other failure keeps it out of use, and the gateway tries again 30 seconds later.
+   control plane's `409` takes it out for the run, and so do a first value the run
+   cannot set, for a key with no value yet, and `expires_at` with no renewal; any other
+   failure, including a renewed value the run cannot set, keeps it out of use, and the
+   gateway tries again after 30 seconds.
    A key without `expires_at` leaves the key group for the run at once.
 2. For `anthropic-messages` the proxy sends the request again with the next usable key.
    For `openai-responses`, and when no key is usable, the session gets the `401`, and the
    run stops: `paused` with `model_key_switch` when another key is usable, `failed` with
-   `model_key_unauthorized` when a `401` took out every key, and `paused` with
+   `model_key_unauthorized` when every key is out and a `401` took at least one out, and `paused` with
    `model_key_limit` otherwise.
 3. The gateway reports the keys out after a `401` to the control plane with its model
    keys report.
