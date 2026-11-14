@@ -1226,29 +1226,28 @@ release may change what an existing document does, and says so under Upgrading.
   format are sent again with the next key, as before. The shapes of the API key's
   headers, the `429` bodies and the stream event follow Codex's source at `17a0e6f63f`,
   and were not measured on an API key.
-- A model key that the model provider returns `401` for leaves use (README
-  §Credentials, Keys out after a 401). Only a `401` to a request to the model API's
-  path counts: the endpoint's path and `/v1/messages` for `anthropic-messages`, and
-  `/responses` for `openai-responses`; a `401` on another path reaches the session as
-  it came. A key whose value has `expires_at` is renewed at once with its name in the
-  secrets request's `unauthorized`: a value puts it back; the server's signed `409`
-  takes it out for the run, and so do a first value the run cannot set, for a key with
-  no value yet, and `expires_at` with no renewal; any other failure, including a
-  renewed value the run cannot set, keeps it out of use, and the gateway tries again
-  after 30 seconds. A key without
-  `expires_at` leaves the key group at once. The gateway writes one log line for each
-  such `401`, with the key's name and no value. Then `anthropic-messages` sends the
-  request again with the next usable key, and `openai-responses` passes the `401` to
-  the session. The answer to the session's next batch has `stop` with
+- A model key that the model provider returns `401` for leaves use (README §Credentials,
+  Keys out after a 401). Only a `401` to a request to the model API's path counts: the
+  endpoint's path and `/v1/messages` for `anthropic-messages`, and `/responses` for
+  `openai-responses`; a `401` on another path reaches the session as it came. A key
+  whose value has `expires_at` is renewed at once with its name in the secrets request's
+  `unauthorized`: a value puts it back; the server's signed `409` takes it out for the
+  run, and so do a first value the run cannot set, for a key with no value yet, and
+  `expires_at` with no renewal; any other failure, including a renewed value the run
+  cannot set, keeps it out of use, and the gateway tries again after 30 seconds. A key
+  without `expires_at` leaves the key group at once. The gateway writes one log line for
+  each such `401`, with the key's name and no value. Then `anthropic-messages` sends the
+  request again with the next usable key, and `openai-responses` passes the `401` to the
+  session. The answer to the session's next batch has `stop` with
   `model_key_unauthorized` when a `401` took out the last key, `model_key_switch` for
   `openai-responses` with another key usable, and `model_key_limit` otherwise. The
-  gateway accepts a session's `dev.qory.run.exited` `paused` with `model_key_switch`
-  and `failed` with `model_key_unauthorized` after a last session with that reason.
-  Each model keys report lists the keys out after a `401` in `unauthorized`. A
-  separate gateway keeps the stop's reason and those keys in the run's record,
+  gateway accepts a session's `dev.qory.run.exited` `paused` with `model_key_switch` and
+  `failed` with `model_key_unauthorized` after a last session with that reason. Each
+  model keys report lists the keys out after a `401` in `unauthorized`. A separate
+  gateway keeps the stop's reason and those keys in the run's record,
   `model-keys-unauthorized.json`, so a gateway that starts again puts the same stop in
-  its answers, leaves those keys out of its first secrets request, and renews each key whose
-  renewal was pending in a request that names it alone.
+  its answers, leaves those keys out of its first secrets request, and renews each key
+  whose renewal was pending in a request that names it alone.
 - A model key from the control plane with `paths` is set on those paths alone (README
   §Credentials, Paths and an account header of a model key). Another path of its host
   gets `403` under `enforce`, unless the run policy's `egress.paths` match it; the

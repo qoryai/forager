@@ -1266,10 +1266,10 @@ After a `401` on the model API's path:
    when no key is usable, the proxy passes the `401` to the session, and from then until
    the session's join ends returns its `429` to each request with the placeholder.
 3. The gateway's answer to the session's next batch has `stop` with the reason the
-   gateway sets in its first such answer: `model_key_unauthorized` when every key of
-   the group is out and a `401` took at least one out; `model_key_switch` when the proxy passed a `401`, the
-   format is `openai-responses` and another key is usable; otherwise `model_key_limit`,
-   such as for a key whose renewal is pending. The session writes
+   gateway sets in its first such answer: `model_key_unauthorized` when every key of the
+   group is out and a `401` took at least one out; `model_key_switch` when the proxy
+   passed a `401`, the format is `openai-responses` and another key is usable; otherwise
+   `model_key_limit`, such as for a key whose renewal is pending. The session writes
    `dev.qory.session.exited` `paused` with `model_key_switch`, or `failed` with
    `model_key_unauthorized`, and the close and the gateway accept each only with its
    state, after a last session that ended with it (§The events, How a run ends).
@@ -2600,7 +2600,7 @@ state of each of Forager's endings:
 | the run was stopped from where it was started (a Ctrl-C) before its close; `exit_code` is the last session's, `-1` when no session ran | `cancelled` | `interrupted` |
 | the run's last session ended with `model_key_limit`, because the run's proxy passed a model provider's limit refusal to it, or the gateway's `429` when every model key of the run is at its provider's limit or at its Use up to percentage, and the run's caller closed the run after its host work; `exit_code` is the last session's | `paused` | `model_key_limit` |
 | the run's last session ended with `model_key_switch`, because the model provider returned `401` for its key and another key of the group is usable, and the run's caller closed the run after its host work; `exit_code` is the last session's | `paused` | `model_key_switch` |
-| the run's last session ended with `model_key_unauthorized`, because every key of the group got a `401` of the model provider that no renewal brought back, and the run's caller closed the run after its host work; `exit_code` is the last session's | `failed` | `model_key_unauthorized` |
+| the run's last session ended with `model_key_unauthorized`, because every key of the group is out and a `401` of the model provider took at least one out, and the run's caller closed the run after its host work; `exit_code` is the last session's | `failed` | `model_key_unauthorized` |
 | the run was closed with no join, after its host work failed, such as a fetch or a compose; `exit_code` is `-1` | `failed` | `no_session` |
 | the run was closed with no join, after the fetch of the run's image found that its registry, or the registry's mirror, does not have it; `exit_code` is `-1` | `failed` | `image_missing` |
 | the run was closed with no join, after the fetch of the run's image found that its user is root; `exit_code` is `-1` | `failed` | `image_user_root` |

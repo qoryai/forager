@@ -223,7 +223,7 @@ func TestAStopForAKeyOutAfterA401EndsTheSession(t *testing.T) {
 	}{
 		{"model_key_switch", "paused", "the runtime was stopped and the run pauses: the model provider returned 401 (unauthorized) for the session's model key, and the run continues with another key of the run", 0},
 		{"model_key_switch", "paused", "", 3},
-		{"model_key_unauthorized", "failed", "Renew or replace the run's model keys: every model key of the run is out of use, the model provider returned 401 (unauthorized) for at least one of them, and no key renewal returned a value the provider accepts. The runtime was stopped and the run fails", 0},
+		{"model_key_unauthorized", "failed", "Renew or replace the run's model keys: every model key of the run is out for the run, the model provider returned 401 (unauthorized) for at least one of them, and no key renewal returned a value the provider accepts. The runtime was stopped and the run fails", 0},
 		{"model_key_unauthorized", "failed", "", 3},
 	} {
 		t.Run(fmt.Sprintf("%s %d", c.reason, c.exit), func(t *testing.T) {

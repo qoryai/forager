@@ -27,7 +27,7 @@ var stopReasons = map[string]string{
 var stopReports = map[string]string{
 	event.ReasonModelKeyLimit:        "the runtime was stopped and the run pauses: every model key of the run is at its provider's limit or at its Use up to percentage, or the gateway could not send a refused request again with the next key (a request over 8 MiB, or a key whose credential does not cover the path)",
 	event.ReasonModelKeySwitch:       "the runtime was stopped and the run pauses: the model provider returned 401 (unauthorized) for the session's model key, and the run continues with another key of the run",
-	event.ReasonModelKeyUnauthorized: "Renew or replace the run's model keys: every model key of the run is out of use, the model provider returned 401 (unauthorized) for at least one of them, and no key renewal returned a value the provider accepts. The runtime was stopped and the run fails",
+	event.ReasonModelKeyUnauthorized: "Renew or replace the run's model keys: every model key of the run is out for the run, the model provider returned 401 (unauthorized) for at least one of them, and no key renewal returned a value the provider accepts. The runtime was stopped and the run fails",
 }
 
 // batchStop is the stop in the gateway's answer to a batch (contracts/forager/v1/README.md

@@ -72,7 +72,7 @@ const resumeWait = 10 * time.Minute
 // check gets the place in launch's arguments where the resume arguments go, and those
 // arguments, before the transcript is fetched: its error is the error of the join, as
 // for arguments that set a setting the session passes only once the resume arguments
-// stand among them.
+// are among them.
 func (r *Run) resumeLaunch(ctx context.Context, rs *sessionResume, sessionDir string, walled bool, root transcriptRoot, inside func(string) string, launch runtimes.Launch, check func(at int, added []string) error) (runtimes.Launch, string, *restored, error) {
 	if r.answer.Resume == nil || r.resumeTried || rs == nil {
 		return launch, "", nil, nil

@@ -157,43 +157,42 @@ transcript of its session to a file, `~/.claude/projects/<working directory as a
 slug>/<session id>.jsonl` for Claude Code, and
 `${CODEX_HOME}/sessions/<year>/<month>/<day>/rollout-<time>-<session id>.jsonl` for
 Codex, with `CODEX_HOME` from the launch's environment. A `*` in the descriptor's
-`resume.path` matches inside one name, and the session reads the one file that
-matches; more than one writes one line and sends nothing. `path` in each event is the
-file's path as the runtime sees it: below `~/`, or absolute, such as
+`resume.path` matches inside one name, and the session reads the one file that matches;
+more than one writes one line and sends nothing. `path` in each event is the file's path
+as the runtime sees it: below `~/`, or absolute, such as
 `/var/lib/qory-codex-home/sessions/2026/11/13/rollout-<time>-<session id>.jsonl`. When
-the descriptor's `resume.home_var` has no usable value in the launch, the runtime
-starts without a resume, and the session writes one line on `stderr` that starts with
-the fix. The session sends that file as
-`dev.qory.session.transcript` events: whole lines as the runtime appends them, each
-masked as a `dev.qory.run.log` chunk is, in chunks of at most 32 KiB, with `session`,
-`session_id`, `path`, `offset` from 0 and `bytes`. The session reads the file once more
-to its end before the session's `dev.qory.session.exited`. Behind a wall the wall binds
-the session's transcript directory, `transcripts/<n>/` in the run directory, at
-`resume.prefix` inside, and the session reads the file there: only the file of
-`resume.path`, such as `<slug>/<session id>.jsonl`, under a session id that is a UUID in lower case, and only a
-regular file with one link and at most 64 MiB, with no symbolic link on its path. For
-anything else it sends nothing and writes one line on `stderr` that starts with the fix
-and then shows the cause. When the
-run answer has `resume`, the run's first session whose runtime has `resume` reads the
-paused run's transcript over the gateway's link, `GET <run.url>/<run_id>/transcript`. In
-a run with no wall it writes it in the session's directory as `resume.jsonl`, and starts
-the runtime through `resume.sh`, which copies it under the runtime's home and adds the
+the descriptor's `resume.home_var` has no usable value in the launch, the runtime starts
+without a resume, and the session writes one line on `stderr` that starts with the fix.
+The session sends that file as `dev.qory.session.transcript` events: whole lines as the
+runtime appends them, each masked as a `dev.qory.run.log` chunk is, in chunks of at most
+32 KiB, with `session`, `session_id`, `path`, `offset` from 0 and `bytes`. The session
+reads the file once more to its end before the session's `dev.qory.session.exited`.
+Behind a wall the wall binds the session's transcript directory, `transcripts/<n>/` in
+the run directory, at `resume.prefix` inside, and the session reads the file there: only
+the file of `resume.path`, such as `<slug>/<session id>.jsonl`, under a session id that
+is a UUID in lower case, and only a regular file with one link and at most 64 MiB, with
+no symbolic link on its path. For anything else it sends nothing and writes one line on
+`stderr` that starts with the fix and then shows the cause. When the run answer has
+`resume`, the run's first session whose runtime has `resume` reads the paused run's
+transcript over the gateway's link, `GET <run.url>/<run_id>/transcript`. In a run with
+no wall it writes it in the session's directory as `resume.jsonl`, and starts the
+runtime through `resume.sh`, which copies it under the runtime's home and adds the
 descriptor's arguments, such as `--resume <session id>`. Behind a wall it writes it in
 the transcript directory before the agent's container starts, and adds the arguments
 itself. The arguments go at the end, or right after the argument that equals
 `resume.after`. With `resume.place: before_last` they go right before the first `--`
 after `resume.after`, or else right before the last argument: `codex exec --json
 "<prompt>"` resumes as `codex exec --json resume <session id> "<prompt>"`, and `codex
-exec --json -- "<prompt>"` as `codex exec --json resume <session id> -- "<prompt>"`.
-A session that resumes checks the launch's arguments again with the resume arguments
-at their place, and the join fails when they set a setting the session passes. The runtime's first
-`dev.qory.runtime.started` then has `source` `resume` where its rule sets `startup`,
-when its `session_id` is the restored one.
-When the read or the copy fails, or the paused run's session id starts with `-`, the runtime starts without a resume, after one line
-on `stderr` that starts with the fix and then shows the cause, a `404` from the gateway among the
-causes. Behind a wall the same happens when the wall cannot bind the transcript
-directory where the agent's user writes it. See the
-contract's §The events, A session's transcript.
+exec --json -- "<prompt>"` as `codex exec --json resume <session id> -- "<prompt>"`. A
+session that resumes checks the launch's arguments again with the resume arguments at
+their place, and the join fails when the launch's arguments then set a setting the
+session passes. The runtime's first `dev.qory.runtime.started` then has `source`
+`resume` where its rule sets `startup`, when its `session_id` is the restored one. When
+the read or the copy fails, or the paused run's session id starts with `-`, the runtime
+starts without a resume, after one line on `stderr` that starts with the fix and then
+shows the cause, a `404` from the gateway among the causes. Behind a wall the same
+happens when the wall cannot bind the transcript directory where the agent's user writes
+it. See the contract's §The events, A session's transcript.
 
 Behind a wall, the `dev.qory.session.exited` of a runtime that exited also has the
 enclosure's peak memory and CPU time, as measured inside the enclosure, to size machine

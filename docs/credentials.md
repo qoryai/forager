@@ -423,10 +423,10 @@ key out of use:
    gateway tries again after 30 seconds.
    A key without `expires_at` leaves the key group for the run at once.
 2. For `anthropic-messages` the proxy sends the request again with the next usable key.
-   For `openai-responses`, and when no key is usable, the session gets the `401`, and the
-   run stops: `paused` with `model_key_switch` when another key is usable, `failed` with
-   `model_key_unauthorized` when every key is out and a `401` took at least one out, and `paused` with
-   `model_key_limit` otherwise.
+   For `openai-responses`, and when no key is usable, the session gets the `401`, and
+   the run stops: `paused` with `model_key_switch` when another key is usable, `failed`
+   with `model_key_unauthorized` when every key is out and a `401` took at least one
+   out, and `paused` with `model_key_limit` otherwise.
 3. The gateway reports the keys out after a `401` to the control plane with its model
    keys report.
 
