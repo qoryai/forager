@@ -112,7 +112,7 @@ func TestA409TakesTheKeyOut(t *testing.T) {
 			for len(k.log.lines()) == 0 && time.Now().Before(deadline) {
 				time.Sleep(time.Millisecond)
 			}
-			if l := k.log.lines(); len(l) != 1 || !strings.HasPrefix(l[0], `Store in the control plane a value of the model key "model" that its provider accepts; the run sets the key no more: the provider returned 401 for it, and its renewal brought no value the run can set: `) {
+			if l := k.log.lines(); len(l) != 1 || !strings.HasPrefix(l[0], `Store in the control plane a value of the model key "model" that its provider accepts; the run stops setting the key: the provider returned 401 (unauthorized) for the key, and the renewal returned no value the run can set: `) {
 				t.Errorf("the record %q", l)
 			}
 			calls := len(k.s.called())
@@ -408,7 +408,7 @@ func TestAPendingKeysFirstApplyIsTaken(t *testing.T) {
 	}{
 		{"same", sealed.Apply{Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key"}, "model-2", ""},
 		{"other paths", sealed.Apply{Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key", Paths: []string{"/anthropic/*"}}, "(none)",
-			`Store a value of the model key "model" whose apply matches its run configuration entry`},
+			`Store a value of the model key "model" whose apply matches the key's entry in the run configuration`},
 		{"outside", sealed.Apply{Hosts: []string{"other.example"}, Scheme: "header", Header: "x-api-key"}, "(none)", `Store in the control plane a value of the model key "model"`},
 	} {
 		t.Run(c.name, func(t *testing.T) {

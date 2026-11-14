@@ -1592,7 +1592,7 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, string, error) {
 // targetLinks fails a launch with a mount whose Target goes through a symbolic link in
 // the image: each name from / down to the Target, read out of the image with
 // [dockerEnclosure.imageHeader], that is a symbolic link is refused, since the engine
-// follows it and the bind could land over another mount or over /qory. A name that lies
+// follows it and the bind could resolve over another mount or over /qory. A name that lies
 // inside another mount's place inside is that mount's on this machine, not the image's,
 // and the session checks it; the walk down to a Target stops there, and at the first
 // name the image does not have, which the engine makes.
@@ -1654,8 +1654,8 @@ func (e *dockerEnclosure) targetLinks(ctx context.Context, l Launch) error {
 			}
 			if h.Typeflag == tar.TypeSymlink {
 				shown := accesskey.ShownValue(q, true)
-				return fmt.Errorf("wall docker: Make %s a directory or file in the image, not a symbolic link: %s is a "+
-					"symbolic link in the image, which the engine follows, so the bind could land over another mount or "+
+				return fmt.Errorf("wall docker: make %s a directory or file in the image, not a symbolic link: %s is a "+
+					"symbolic link in the image, which the engine follows, so the bind could resolve over another mount or "+
 					"over /qory", shown, shown)
 			}
 		}
@@ -1699,12 +1699,12 @@ func (e *dockerEnclosure) targetLinks(ctx context.Context, l Launch) error {
 				continue
 			}
 			shown := accesskey.ShownValue(q, true)
-			fix := fmt.Sprintf("wall docker: Make %s in the image owned by root and writable by root alone, or show the "+
+			fix := fmt.Sprintf("wall docker: make %s in the image owned by root and writable by root alone, or show the "+
 				"mount %s at a place outside it", shown, accesskey.ShownValue(m.Path, true))
 			rest := fmt.Sprintf("can rename %s on the way to the read-only mount at %s, and the bind moves with it",
 				accesskey.ShownValue(names[k+1], true), accesskey.ShownValue(m.Target, true))
 			if slices.Contains(who.made, q) {
-				return fmt.Errorf("wall docker: Show the mount %s at a place outside %s: the wall makes %s for the "+
+				return fmt.Errorf("wall docker: show the mount %s at a place outside %s: the wall makes %s for the "+
 					"transcript directory, mode 0700 and owned by the agent, %d:%d, so the agent %s",
 					accesskey.ShownValue(m.Path, true), shown, shown, who.uid, who.gid, rest)
 			}
@@ -1772,7 +1772,7 @@ func (a *renamer) renames(h, next *tar.Header) string {
 		case h.Mode&0o022 == 0, h.Mode&0o1000 != 0 && (next == nil || next.Uid == 0):
 			return ""
 		}
-		return "writable by its group or the others"
+		return "writable by its group or by other users"
 	}
 	if h.Uid == a.uid {
 		return "owned by the agent"
@@ -1782,7 +1782,7 @@ func (a *renamer) renames(h, next *tar.Header) string {
 	case !writes, h.Mode&0o1000 != 0 && (next == nil || next.Uid != a.uid):
 		return ""
 	}
-	return "writable by its group or the others"
+	return "writable by its group or by other users"
 }
 
 // transcriptMount is the --mount of the launch's transcript directory, empty for a

@@ -573,34 +573,34 @@ const MaxClaimPayload = 8 << 10
 func AccountClaim(value []byte, pointer string) (string, error) {
 	parts := bytes.SplitN(value, []byte("."), 4)
 	if len(parts) != 3 {
-		return "", errors.New("the value is no JWT: it is not three parts separated by dots")
+		return "", errors.New("the value is not a JWT: it is not three parts separated by dots")
 	}
 	enc := bytes.TrimRight(parts[1], "=")
 	if base64.RawURLEncoding.DecodedLen(len(enc)) > MaxClaimPayload {
-		return "", fmt.Errorf("its JWT payload is over %d bytes", MaxClaimPayload)
+		return "", fmt.Errorf("the value's JWT payload is over %d bytes", MaxClaimPayload)
 	}
 	payload := make([]byte, base64.RawURLEncoding.DecodedLen(len(enc)))
 	defer clear(payload)
 	n, err := base64.RawURLEncoding.Decode(payload, enc)
 	if err != nil {
-		return "", errors.New("its JWT payload is not base64url")
+		return "", errors.New("the value's JWT payload is not base64url")
 	}
 	shown := accesskey.ShownValue(pointer, true)
 	if !strings.HasPrefix(pointer, "/") {
-		return "", fmt.Errorf("account_claim %s is no JSON pointer", shown)
+		return "", fmt.Errorf("account_claim %s is not a JSON pointer", shown)
 	}
 	at := jsontext.Value(payload[:n])
 	if _, ok := members(at, "", true); !ok {
-		return "", errors.New("its JWT payload is not one JSON object with each member name once")
+		return "", errors.New("the value's JWT payload is not one JSON object with each member name once")
 	}
-	missing := fmt.Errorf("its JWT payload has no string at account_claim %s", shown)
+	missing := fmt.Errorf("the value's JWT payload has no string at account_claim %s", shown)
 	for _, token := range strings.Split(pointer[1:], "/") {
 		token = strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")
 		switch at.Kind() {
 		case '{':
 			next, ok := members(at, token, false)
 			if !ok {
-				return "", fmt.Errorf("its JWT payload has an object with a member name twice on the way to account_claim %s", shown)
+				return "", fmt.Errorf("the value's JWT payload has an object with a member name twice on the way to account_claim %s", shown)
 			}
 			if next == nil {
 				return "", missing
@@ -625,7 +625,7 @@ func AccountClaim(value []byte, pointer string) (string, error) {
 	if err := jsonv2.Unmarshal(at, &claim); err != nil || claim == "" ||
 		strings.HasPrefix(claim, " ") || strings.HasPrefix(claim, "\t") || strings.HasSuffix(claim, " ") || strings.HasSuffix(claim, "\t") ||
 		strings.ContainsFunc(claim, func(r rune) bool { return r != '\t' && (r < 0x20 || (r >= 0x7f && r <= 0x9f)) }) {
-		return "", fmt.Errorf("the string at account_claim %s in its JWT payload is empty, is not UTF-8, starts or ends with a space or a tab, or has a control character, which a header value cannot have", shown)
+		return "", fmt.Errorf("the string at account_claim %s in the value's JWT payload is empty, is not UTF-8, starts or ends with a space or a tab, or has a control character, which a header value cannot have", shown)
 	}
 	return claim, nil
 }

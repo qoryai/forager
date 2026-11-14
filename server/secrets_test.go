@@ -167,7 +167,7 @@ func TestASecretsRequestOutsideItsFormIsNotSent(t *testing.T) {
 		"seven unauthorized": {func(r *server.SecretsRequest) {
 			r.Credentials = []string{"a", "b", "c", "d", "e", "f", "g"}
 			r.Unauthorized = r.Credentials
-		}, "report this bug in the gateway's secrets request to the Forager maintainers; the request lists 7 unauthorized keys, and a request lists at most 6"},
+		}, "tell the Forager maintainers about this bug in the gateway's secrets request; the request lists 7 unauthorized keys, and a request lists at most 6"},
 		"an unauthorized key not in credentials": {func(r *server.SecretsRequest) { r.Unauthorized = []string{"other"} }, unauthorizedBug},
 		"an unauthorized key twice": {func(r *server.SecretsRequest) {
 			r.Credentials = []string{"model", "model-2"}
@@ -211,7 +211,7 @@ func TestASecretsRequestOutsideItsFormIsNotSent(t *testing.T) {
 }
 
 // unauthorizedBug is Body's error for an unauthorized list out of its form.
-const unauthorizedBug = "report this bug in the gateway's secrets request to the Forager maintainers; an unauthorized key is not in credentials, is listed twice, or is out of the order of credentials"
+const unauthorizedBug = "tell the Forager maintainers about this bug in the gateway's secrets request; an unauthorized key is not in credentials, is listed twice, or is out of the order of credentials"
 
 // deadlines records the deadline of each request's context, and answers 503.
 type deadlines struct {

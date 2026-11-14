@@ -705,7 +705,7 @@ func TestAPatternPathWithASecretIsNotSent(t *testing.T) {
 			}
 			tr.started(walledID)
 			tr.finish()
-			want := "Keep the run's secrets and characters that are not printable out of the names of the transcript's path, in UTF-8. A continuation of this run starts the runtime without a resume: the path of the file that matches ~/.rollouts/sessions/*/*/*/rollout-*-" + walledID + ".jsonl contains a secret or a character that is not printable, or is no UTF-8, so the session reads no transcript"
+			want := "Keep the run's secrets and characters that are not printable out of the names of the transcript's path, in UTF-8. A continuation of this run starts the runtime without a resume: the path of the file that matches ~/.rollouts/sessions/*/*/*/rollout-*-" + walledID + ".jsonl contains a secret or a character that is not printable, or is not valid UTF-8, so the session reads no transcript"
 			if len(s.events) != 0 || len(s.lines) != 1 || s.lines[0] != want {
 				t.Errorf("%d events, lines %q; want %q", len(s.events), s.lines, want)
 			}

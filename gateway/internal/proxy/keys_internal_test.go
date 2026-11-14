@@ -462,7 +462,7 @@ func TestKeysAtTheirUseUpToPercentGetTheProxys429(t *testing.T) {
 		}
 	}
 	status, body := f.post(t, "{}")
-	if want := "The gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit, at its Use up to percentage, or out of use after a 401 of its provider, or the gateway could not send a request again with the next key after a limit response (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, whose session keeps one key).\n"; status != http.StatusTooManyRequests || body != want {
+	if want := "The gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit, at its Use up to percentage, or out of use after a 401 (unauthorized) of its provider, or the gateway could not send a request again with the next key after a limit response (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, whose session keeps one key).\n"; status != http.StatusTooManyRequests || body != want {
 		t.Errorf("the session got %d %q; want the gateway's 429", status, body)
 	}
 	if calls := f.up.taken(); len(calls) != 0 {

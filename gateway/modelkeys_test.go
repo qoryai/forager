@@ -562,7 +562,7 @@ func TestAnAnthropicGroupEndsWhenEveryKeyGets401(t *testing.T) {
 	if status, body := g.batch(t, exitedWith(g.runID, map[string]any{"state": "failed", "exit_code": -1, "signal": "SIGTERM", "reason": "model_key_unauthorized"})); status != http.StatusAccepted {
 		t.Errorf("the close: %d %q", status, body)
 	}
-	if lines := g.h.reportsWith(`: the provider returned 401; the key has no expires_at and leaves the run's key group`); len(lines) != 3 {
+	if lines := g.h.reportsWith(`: the provider returned 401 (unauthorized); the key has no expires_at, so the gateway removes the key from the run's key group`); len(lines) != 3 {
 		t.Errorf("the log of 401 answers: %q; want 3 lines", lines)
 	}
 }

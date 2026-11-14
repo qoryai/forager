@@ -364,7 +364,7 @@ func (w *renewer) renew(names []string, now time.Time) {
 			switch {
 			case w.valueless(name) && errors.Is(err, errApplyMoved):
 				// The proxy sets the key on its entry's items, built at the start.
-				w.takeOut(name, fmt.Sprintf("Store a value of the model key %s whose apply matches its run configuration entry: its first value after a reopen sets it on other paths, so the run sets it no more",
+				w.takeOut(name, fmt.Sprintf("Store a value of the model key %s whose apply matches the key's entry in the run configuration: the key's first value after a reopen applies the key to other paths, so the run stops setting the key",
 					accesskey.ShownName(name, true)))
 				continue
 			case w.valueless(name):
@@ -404,7 +404,7 @@ func (w *renewer) revoke(name string, err error) {
 		return
 	default:
 	}
-	w.takeOut(name, fmt.Sprintf("Store in the control plane a value of the model key %s that its provider accepts; the run sets the key no more: the provider returned 401 for it, and its renewal brought no value the run can set: %v",
+	w.takeOut(name, fmt.Sprintf("Store in the control plane a value of the model key %s that its provider accepts; the run stops setting the key: the provider returned 401 (unauthorized) for the key, and the renewal returned no value the run can set: %v",
 		accesskey.ShownName(name, true), accesskey.ShownError(err)))
 }
 

@@ -55,8 +55,8 @@ func TestAccountClaimRefusesWhatHasNoClaim(t *testing.T) {
 		token, pointer, want string
 	}{
 		"two parts":           {enc([]byte(`{}`)) + "." + enc([]byte(fakePayload)), accountPointer, "it is not three parts separated by dots"},
-		"over 8 KiB":          {fakeJWT(over), accountPointer, "its JWT payload is over 8192 bytes"},
-		"no base64url":        {"e30.not*base64.sig", accountPointer, "its JWT payload is not base64url"},
+		"over 8 KiB":          {fakeJWT(over), accountPointer, "the value's JWT payload is over 8192 bytes"},
+		"no base64url":        {"e30.not*base64.sig", accountPointer, "the value's JWT payload is not base64url"},
 		"no JSON":             {fakeJWT(`acct-fake-0001`), accountPointer, "not one JSON object"},
 		"a list":              {fakeJWT(`["acct-fake-0001"]`), "/0", "not one JSON object"},
 		"null":                {fakeJWT(`null`), accountPointer, "not one JSON object"},
@@ -70,7 +70,7 @@ func TestAccountClaimRefusesWhatHasNoClaim(t *testing.T) {
 		"an empty claim":      {fakeJWT(`{"id":""}`), "/id", "is empty"},
 		"a line feed":         {fakeJWT(`{"id":"acct-fake\n0001"}`), "/id", "has a control character"},
 		"a trailing space":    {fakeJWT(`{"id":"acct-fake-0001 "}`), "/id", "starts or ends with a space"},
-		"no pointer":          {fakeJWT(fakePayload), "id", "is no JSON pointer"},
+		"no pointer":          {fakeJWT(fakePayload), "id", "is not a JSON pointer"},
 		"an empty value":      {"", accountPointer, "it is not three parts"},
 		"a missing signature": {fakeJWT(fakePayload) + ".extra", accountPointer, "it is not three parts"},
 	} {

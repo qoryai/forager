@@ -117,10 +117,10 @@ func TestAPathLimitedSubscriptionSitsBesideAHostCredential(t *testing.T) {
 func TestAValueWithoutItsClaimLeavesTheGroup(t *testing.T) {
 	over := `{"https://auth.model.example/auth":{"account_id":"acct-fake-over"},"pad":"` + strings.Repeat("p", credential.MaxClaimPayload) + `"}`
 	for name, c := range map[string]struct{ value, cause string }{
-		"no claim":       {fakeToken(`{"https://auth.model.example/auth":{"org_id":"org-fake"}}`), "its JWT payload has no string at account_claim"},
-		"over 8 KiB":     {fakeToken(over), "its JWT payload is over 8192 bytes"},
-		"no JWT":         {"opaque-fake-token", "the value is no JWT"},
-		"a broken token": {"e30.not*base64.sig", "its JWT payload is not base64url"},
+		"no claim":       {fakeToken(`{"https://auth.model.example/auth":{"org_id":"org-fake"}}`), "the value's JWT payload has no string at account_claim"},
+		"over 8 KiB":     {fakeToken(over), "the value's JWT payload is over 8192 bytes"},
+		"no JWT":         {"opaque-fake-token", "the value is not a JWT"},
+		"a broken token": {"e30.not*base64.sig", "the value's JWT payload is not base64url"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			log := &reports{}
@@ -178,7 +178,7 @@ func TestARenewalWithoutTheClaimKeepsTheValue(t *testing.T) {
 	rep := &reports{}
 	r := renewRun(t, accountDoc, s, clock, rep, nil)
 	clock.step(t, time.Hour-credential.RenewBefore)
-	want := `run ` + runID + `: If this repeats, check the control plane: credential "subscription" was not renewed: its JWT payload has no string at account_claim "/https:~1~1auth.model.example~1auth/account_id"`
+	want := `run ` + runID + `: If this repeats, check the control plane: credential "subscription" was not renewed: the value's JWT payload has no string at account_claim "/https:~1~1auth.model.example~1auth/account_id"`
 	if value(r, "subscription") != first || !rep.reported(want) {
 		t.Fatalf("after the renewal: the value is the first %v, reports %q", value(r, "subscription") == first, rep.lines())
 	}

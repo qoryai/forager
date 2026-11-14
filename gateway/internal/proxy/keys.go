@@ -72,7 +72,7 @@ func (p *Proxy) limitPassed(w http.ResponseWriter, d Decision) {
 	p.observe(d)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusTooManyRequests)
-	fmt.Fprint(w, "The gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit, at its Use up to percentage, or out of use after a 401 of its provider, or the gateway could not send a request again with the next key after a limit response (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, whose session keeps one key).\n")
+	fmt.Fprint(w, "The gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit, at its Use up to percentage, or out of use after a 401 (unauthorized) of its provider, or the gateway could not send a request again with the next key after a limit response (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, whose session keeps one key).\n")
 }
 
 // resendKey marks the context of a request with a key of the group, with its [resend].
@@ -358,10 +358,10 @@ func (rs *resend) reject(h http.Header) (string, bool) {
 	g.Reject(rs.name, renew != nil)
 	shown := accesskey.ShownName(rs.name, true)
 	if renew != nil {
-		rs.k.log("model key " + shown + ": the provider returned 401; the gateway sets the key no more until its renewal brings a value")
+		rs.k.log("model key " + shown + ": the provider returned 401 (unauthorized); the gateway stops setting the key until a renewal returns a value")
 		renew()
 	} else {
-		rs.k.log("model key " + shown + ": the provider returned 401; the key has no expires_at and leaves the run's key group")
+		rs.k.log("model key " + shown + ": the provider returned 401 (unauthorized); the key has no expires_at, so the gateway removes the key from the run's key group")
 	}
 	return g.Pick()
 }

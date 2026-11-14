@@ -304,7 +304,7 @@ func readUnauthorized(dir string) ([]modelkey.Unauthorized, error) {
 	}
 	var k keptUnauthorized
 	if err := json.Unmarshal(b, &k); err != nil || k.Version != 1 {
-		return nil, fmt.Errorf("remove %s, or start another run: it is not a list of model keys the gateway wrote", accesskey.ShownValue(path, false))
+		return nil, fmt.Errorf("remove %s, or start another run: it is not a list of model keys out of use after a 401 that the gateway wrote", accesskey.ShownValue(path, false))
 	}
 	out := make([]modelkey.Unauthorized, 0, len(k.Keys))
 	for _, key := range k.Keys {

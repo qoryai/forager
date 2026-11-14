@@ -220,7 +220,7 @@ func part(p, k string) bool {
 
 // keyRefused is the error for flag with a pair that sets k.
 func keyRefused(flag, k string) error {
-	return fmt.Errorf("remove the %s that sets %s from the launch's arguments: the session sets it for Codex, or it changes where Codex sends its requests",
+	return fmt.Errorf("remove the %s that sets %s from the launch's arguments: the session sets that setting for Codex, or the setting changes where Codex sends its requests",
 		accesskey.ShownName(flag, false), accesskey.ShownName(k, false))
 }
 

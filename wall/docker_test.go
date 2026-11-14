@@ -1008,17 +1008,17 @@ func TestATargetThroughALinkInTheImageIsRefused(t *testing.T) {
 		read   []string
 	}{
 		"a parent that is a link": {map[string]tar.Header{"/var": dir, "/var/lib": link}, home,
-			`wall docker: Make "/var/lib" a directory or file in the image, not a symbolic link: "/var/lib" is a symbolic link in the ` +
-				"image, which the engine follows, so the bind could land over another mount or over /qory", []string{"/var", "/var/lib"}},
+			`wall docker: make "/var/lib" a directory or file in the image, not a symbolic link: "/var/lib" is a symbolic link in the ` +
+				"image, which the engine follows, so the bind could resolve over another mount or over /qory", []string{"/var", "/var/lib"}},
 		"the target is a link": {map[string]tar.Header{"/var": dir, "/var/lib": dir, "/var/lib/agent-home": link}, home,
-			`wall docker: Make "/var/lib/agent-home" a directory or file in the image, not a symbolic link`, nil},
+			`wall docker: make "/var/lib/agent-home" a directory or file in the image, not a symbolic link`, nil},
 		"a link inside another mount": {map[string]tar.Header{"/var": dir, "/var/lib": dir, "/var/lib/agent-home": dir,
 			"/var/lib/agent-home/hooks.json": link}, home, "", []string{"/var", "/var/lib", "/var/lib/agent-home"}},
 		"a link below a missing name": {map[string]tar.Header{"/var": dir, "/var/lib/agent-home": link}, home, "",
 			[]string{"/var", "/var/lib"}},
 		"a link at another mount's place": {map[string]tar.Header{"/work": link},
 			[]Mount{{Path: "/runs/r1/config", Target: "/work/.config"}},
-			`wall docker: Make "/work" a directory or file in the image, not a symbolic link`, nil},
+			`wall docker: make "/work" a directory or file in the image, not a symbolic link`, nil},
 		"a link inside the workspace": {map[string]tar.Header{"/work": dir, "/work/.config": link},
 			[]Mount{{Path: "/runs/r1/config", Target: "/work/.config"}}, "", []string{"/work"}},
 	} {
@@ -1073,7 +1073,7 @@ func TestADirectoryTheAgentWritesAboveAReadOnlyTargetIsRefused(t *testing.T) {
 		return tar.Header{Typeflag: tar.TypeDir, Mode: mode, Uid: uid, Gid: gid}
 	}
 	conf := []Mount{{Path: "/runs/r1/conf", ReadOnly: true, Target: "/x/y/conf"}}
-	refused := `wall docker: Make "/x" in the image owned by root and writable by root alone, or show the mount ` +
+	refused := `wall docker: make "/x" in the image owned by root and writable by root alone, or show the mount ` +
 		`"/runs/r1/conf" at a place outside it: "/x" has mode %04o and owner %d:%d in the image, so the agent, 1000:1000, ` +
 		`can rename "/x/y" on the way to the read-only mount at "/x/y/conf", and the bind moves with it`
 	for name, c := range map[string]struct {
@@ -1092,12 +1092,12 @@ func TestADirectoryTheAgentWritesAboveAReadOnlyTargetIsRefused(t *testing.T) {
 			fmt.Sprintf(refused, 0o775, 0, 1000)},
 		"another group may write it": {"1000:1000", map[string]tar.Header{"/x": dir(0o775, 0, 50)}, conf, ""},
 		"a group may write it, no group given": {"1000", map[string]tar.Header{"/x": dir(0o775, 0, 50)}, conf,
-			`wall docker: Make "/x" in the image owned by root and writable by root alone`},
+			`wall docker: make "/x" in the image owned by root and writable by root alone`},
 		"anyone may write it": {"1000:1000", map[string]tar.Header{"/x": dir(0o777, 0, 0)}, conf,
 			fmt.Sprintf(refused, 0o777, 0, 0)},
 		"a deeper one": {"1000:1000", map[string]tar.Header{"/x": root, "/x/y": dir(0o700, 1000, 0)},
 			[]Mount{{Path: "/runs/r1/conf", ReadOnly: true, Target: "/x/y/z/conf"}},
-			`wall docker: Make "/x/y" in the image owned by root and writable by root alone, or show the mount ` +
+			`wall docker: make "/x/y" in the image owned by root and writable by root alone, or show the mount ` +
 				`"/runs/r1/conf" at a place outside it: "/x/y" has mode 0700 and owner 1000:0 in the image, so the agent, ` +
 				`1000:1000, can rename "/x/y/z" on the way`},
 		"sticky, the next name the agent's": {"1000:1000", map[string]tar.Header{"/x": dir(0o1777, 0, 0),
@@ -1114,17 +1114,17 @@ func TestADirectoryTheAgentWritesAboveAReadOnlyTargetIsRefused(t *testing.T) {
 			[]Mount{{Path: "/runs/r1/conf", Target: "/x/y/conf"}}, ""},
 		// A wall's user that is a name has ids the check does not know.
 		"a name's, a user other than root's": {"agent", map[string]tar.Header{"/x": dir(0o555, 1000, 1000)}, conf,
-			`wall docker: Make "/x" in the image owned by root and writable by root alone, or show the mount "/runs/r1/conf" ` +
+			`wall docker: make "/x" in the image owned by root and writable by root alone, or show the mount "/runs/r1/conf" ` +
 				`at a place outside it: the agent runs as "agent", whose ids are not checked, and "/x" has mode 0555 and owner ` +
 				`1000:1000 in the image, owned by a user other than root, so the agent can rename "/x/y" on the way to the ` +
 				`read-only mount at "/x/y/conf", and the bind moves with it`},
 		"a name's, a group may write it": {"agent", map[string]tar.Header{"/x": dir(0o775, 0, 50)}, conf,
-			`wall docker: Make "/x" in the image owned by root and writable by root alone, or show the mount "/runs/r1/conf" ` +
+			`wall docker: make "/x" in the image owned by root and writable by root alone, or show the mount "/runs/r1/conf" ` +
 				`at a place outside it: the agent runs as "agent", whose ids are not checked, and "/x" has mode 0775 and owner ` +
-				`0:50 in the image, writable by its group or the others, so the agent can rename "/x/y"`},
+				`0:50 in the image, writable by its group or by other users, so the agent can rename "/x/y"`},
 		"a name's, sticky, the next name root's": {"agent", map[string]tar.Header{"/x": dir(0o1777, 0, 0), "/x/y": root}, conf, ""},
 		"a name's, sticky, the next name another's": {"agent", map[string]tar.Header{"/x": dir(0o1777, 0, 0),
-			"/x/y": dir(0o755, 1000, 0)}, conf, `wall docker: Make "/x" in the image owned by root and writable by root alone`},
+			"/x/y": dir(0o755, 1000, 0)}, conf, `wall docker: make "/x" in the image owned by root and writable by root alone`},
 		"a name's, root's alone": {"agent", map[string]tar.Header{"/x": root, "/x/y": root}, conf, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1167,7 +1167,7 @@ func TestADirectoryMadeForTheTranscriptAboveAReadOnlyTargetIsRefused(t *testing.
 	l.Socket = ""
 	l.Mounts = append(l.Mounts, Mount{Path: "/runs/r1/skill.md", ReadOnly: true, Target: "/home/agent/.claude/skills/x/SKILL.md"})
 	_, err = e.Wrap(context.Background(), l)
-	want := `wall docker: Show the mount "/runs/r1/skill.md" at a place outside "/home/agent/.claude": the wall makes ` +
+	want := `wall docker: show the mount "/runs/r1/skill.md" at a place outside "/home/agent/.claude": the wall makes ` +
 		`"/home/agent/.claude" for the transcript directory, mode 0700 and owned by the agent, 1000:1000, so the agent can ` +
 		`rename "/home/agent/.claude/skills" on the way to the read-only mount at "/home/agent/.claude/skills/x/SKILL.md", ` +
 		`and the bind moves with it`

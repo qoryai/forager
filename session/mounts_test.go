@@ -710,17 +710,17 @@ func TestTargetConflictsAreNoRun(t *testing.T) {
 		{"one target twice", "mount_target_conflict",
 			[]wall.Mount{{Path: home, Target: homeInside}, {Path: other, Target: homeInside}},
 			[]string{other, home},
-			"Show the mount " + other + " at " + homeInside + " at another place inside than the mount " + home + " at " +
+			"Show the mount " + other + " at " + homeInside + " at a place inside other than the mount " + home + " at " +
 				homeInside + ": one place inside can't show two places"},
 		{"a target at a mount's path", "mount_target_conflict",
 			[]wall.Mount{{Path: home}, {Path: other, ReadOnly: true, Target: home}},
 			[]string{other, home},
-			"Show the mount " + other + " at " + home + " at another place inside than the mount " + home +
+			"Show the mount " + other + " at " + home + " at a place inside other than the mount " + home +
 				": one place inside can't show two places"},
 		{"a target at the workspace", "mount_target_conflict",
 			[]wall.Mount{{Path: other, Target: ws}},
 			[]string{other, ws},
-			"Show the mount " + other + " at " + ws + " at another place inside than the workspace " + ws +
+			"Show the mount " + other + " at " + ws + " at a place inside other than the workspace " + ws +
 				": one place inside can't show two places"},
 		{"a target inside the workspace", "mount_target_conflict",
 			[]wall.Mount{{Path: other, ReadOnly: true, Target: ws + "/config"}},
@@ -846,14 +846,14 @@ func TestALinkInAWritableTargetOnTheWayToAPlaceIsNoRun(t *testing.T) {
 		}, func(home string) []string { return []string{hooks, home} }, func(home string) string {
 			return "Remove the symbolic link " + filepath.Join(home, "hooks.json") + " from the mount " + home + " at " + homeInside +
 				": the engine binds the mount " + hooks + " at " + homeInside + "/hooks.json through it and follows the link, " +
-				"so the bind could land outside the mount"
+				"so the bind could resolve to a place outside the mount"
 		}},
 		"above a writable place": {"a", func(home string) []wall.Mount {
 			return []wall.Mount{{Path: home, Target: homeInside}, {Path: inner, Target: homeInside + "/a/sessions"}}
 		}, func(home string) []string { return []string{inner, home} }, func(home string) string {
 			return "Remove the symbolic link " + filepath.Join(home, "a") + " from the mount " + home + " at " + homeInside +
 				": the engine binds the mount " + inner + " at " + homeInside + "/a/sessions through it and follows the link, " +
-				"so the bind could land outside the mount"
+				"so the bind could resolve to a place outside the mount"
 		}},
 	} {
 		t.Run(name+", at the join", func(t *testing.T) {
@@ -902,7 +902,7 @@ func TestALinkBetweenReadOnlyPlacesIsNoRun(t *testing.T) {
 	r := refusalOf(t, "mount_target_conflict", runErr(sp))
 	want := "Remove the symbolic link " + filepath.Join(outer, "c") + " from the mount " + outer + " at " + homeInside +
 		": the engine binds the mount " + inner + " at " + homeInside + "/c through it and follows the link, so the bind " +
-		"could land outside the mount"
+		"could resolve to a place outside the mount"
 	if !slices.Equal(r.Names, []string{inner, outer}) || r.Detail != want {
 		t.Errorf("names %q, detail %q\nwant %q", r.Names, r.Detail, want)
 	}

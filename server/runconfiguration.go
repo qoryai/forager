@@ -126,7 +126,7 @@ func CheckCredentials(creds []RunCredential, model string) error {
 			for _, p := range a.Paths {
 				if UnclearPath(p) {
 					return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-						"Write the path %s of the credential %s without a . or .. segment or an empty segment, each read up to its first ; or %%3B, a backslash, or an encoded slash, backslash, dot or percent sign: the proxy denies every request whose path has one, so the path would match none", accesskey.ShownValue(p, true), name)
+						"Remove from the path %s of the credential %s every empty, . or .. segment (each segment read up to its first ; or %%3B), every backslash, and every encoded slash, backslash, dot or percent sign: the proxy denies every request whose path has one, so the path would match no request", accesskey.ShownValue(p, true), name)
 				}
 			}
 		}

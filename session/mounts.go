@@ -1082,15 +1082,15 @@ func linkBelow(in, out shown, places []shown) error {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("Fix the error at the end of this message, then run the command again. Cannot check %s "+
-				"on the way to %s: %w", pathShown(named), in.shownAs(), accesskey.ShownError(err))
+			return fmt.Errorf("Fix the error at the end of this message, then run the command again. Checking %s "+
+				"on the way to %s failed: %w", pathShown(named), in.shownAs(), accesskey.ShownError(err))
 		}
 		if fi.Mode()&fs.ModeSymlink != 0 {
 			return &Refusal{
 				Code:  refusal.MountTargetConflict,
 				Names: pathsShown(in.path, out.path),
 				Detail: fmt.Sprintf("Remove the symbolic link %s from %s: the engine binds %s through it and follows "+
-					"the link, so the bind could land outside the mount", pathShown(named), out.shownAs(), in.shownAs()),
+					"the link, so the bind could resolve to a place outside the mount", pathShown(named), out.shownAs(), in.shownAs()),
 			}
 		}
 	}
@@ -1109,7 +1109,7 @@ func targetConflict(in, out shown, same bool) *Refusal {
 	detail := fmt.Sprintf("Show %s at a place inside apart from %s: %s lies inside %s, and a mount's target "+
 		"can't overlap the workspace inside", m.shownAs(), o.shownAs(), in.shownAs(), out.shownAs())
 	if same {
-		detail = fmt.Sprintf("Show %s at another place inside than %s: one place inside can't show two places",
+		detail = fmt.Sprintf("Show %s at a place inside other than %s: one place inside can't show two places",
 			in.shownAs(), out.shownAs())
 	}
 	return &Refusal{

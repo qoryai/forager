@@ -159,7 +159,7 @@ func (r *described) CheckArgs(args []string) error {
 			continue
 		}
 		if k, ok := SessionKey(PairKey(pair), keys); ok {
-			return fmt.Errorf("remove the %s pair that sets %s from the launch's arguments: the session sets %s, and a later pair wins over it",
+			return fmt.Errorf("remove the %s pair that sets %s from the launch's arguments: the session sets %s, and a later pair overrides the session's value",
 				accesskey.ShownName(flag, false), accesskey.ShownName(k, false), accesskey.ShownName(k, false))
 		}
 	}

@@ -720,12 +720,12 @@ func (lr *linkRun) decide(ctx, steps context.Context, d decision, authority func
 			})
 			lr.keys.OnStop(func(reason string) {
 				if err := markStop(dir, reason); err != nil {
-					g.report(fmt.Sprintf("run %s: check the run's record directory: writing the reason of its stop failed: %v", runID, err))
+					g.report(fmt.Sprintf("run %s: check the run's record directory: writing the reason for the run's stop failed: %v", runID, err))
 				}
 			})
 			lr.keys.OnUnauthorized(func(keys []modelkey.Unauthorized) {
 				if err := writeUnauthorized(dir, keys); err != nil {
-					g.report(fmt.Sprintf("run %s: check the run's record directory: writing its model keys after a 401 failed: %v", runID, err))
+					g.report(fmt.Sprintf("run %s: check the run's record directory: writing the run's model keys out of use after a 401 (unauthorized) failed: %v", runID, err))
 				}
 			})
 		}

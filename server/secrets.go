@@ -49,13 +49,13 @@ func (r SecretsRequest) Body() ([]byte, error) {
 		}
 	}
 	if len(r.Unauthorized) > MaxUnauthorized {
-		return nil, fmt.Errorf("report this bug in the gateway's secrets request to the Forager maintainers; the request lists %d unauthorized keys, and a request lists at most %d", len(r.Unauthorized), MaxUnauthorized)
+		return nil, fmt.Errorf("tell the Forager maintainers about this bug in the gateway's secrets request; the request lists %d unauthorized keys, and a request lists at most %d", len(r.Unauthorized), MaxUnauthorized)
 	}
 	last := -1
 	for _, name := range r.Unauthorized {
 		i := slices.Index(r.Credentials, name)
 		if i <= last {
-			return nil, errors.New("report this bug in the gateway's secrets request to the Forager maintainers; an unauthorized key is not in credentials, is listed twice, or is out of the order of credentials")
+			return nil, errors.New("tell the Forager maintainers about this bug in the gateway's secrets request; an unauthorized key is not in credentials, is listed twice, or is out of the order of credentials")
 		}
 		last = i
 	}

@@ -561,7 +561,7 @@ func (r *Resume) check() error {
 	case r.Place != "" && r.Place != PlaceBeforeLast:
 		return fmt.Errorf("resume: set place to %s or leave it out: %s is not a value of place", PlaceBeforeLast, accesskey.ShownValue(r.Place, true))
 	case r.Place != "" && r.After == "":
-		return fmt.Errorf("resume: set after with place %s: the arguments go before the last argument after it", r.Place)
+		return fmt.Errorf("resume: set resume.after when resume.place is %s: the resume arguments go before the first -- after the value of resume.after, or else before the last argument after it", r.Place)
 	}
 	return nil
 }

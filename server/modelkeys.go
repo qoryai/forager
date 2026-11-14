@@ -99,7 +99,7 @@ func (c *Client) PostModelKeys(ctx context.Context, runURL, runID string, rep Mo
 		keys = []ModelKeyState{}
 	}
 	if len(rep.Unauthorized) > MaxUnauthorized {
-		return nil, fmt.Errorf("report this bug in the gateway's model keys report to the Forager maintainers; the report lists %d unauthorized keys, and a report lists at most %d", len(rep.Unauthorized), MaxUnauthorized)
+		return nil, fmt.Errorf("tell the Forager maintainers about this bug in the gateway's model keys report; the report lists %d unauthorized keys, and a report lists at most %d", len(rep.Unauthorized), MaxUnauthorized)
 	}
 	body, err := json.Marshal(modelKeysBody{Version: 1, RunID: runID, Time: t, Keys: keys, Unauthorized: rep.Unauthorized})
 	if err != nil {
