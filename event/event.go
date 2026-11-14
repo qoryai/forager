@@ -141,8 +141,8 @@ const (
 	ReasonModelKeySwitch = "model_key_switch"
 	// ReasonModelKeyUnauthorized is the contract's reason, with failed, of a session
 	// stopped after the gateway's answer to a batch had stop with it, and of the close
-	// of a run whose last session ended with it: every key of the key group got a 401 of
-	// the model provider that no renewal brought back. The README section of
+	// of a run whose last session ended with it: every key of the key group is out, and
+	// a 401 of the model provider took at least one out. The README section of
 	// ReasonModelKeySwitch lists what the gateway and the session do with it.
 	ReasonModelKeyUnauthorized = "model_key_unauthorized"
 )

@@ -79,9 +79,9 @@ const (
 	// clashes: two mounts at one place inside, a Target that is, contains or lies inside
 	// the workspace or the session's directory inside, a mount with a Target whose path
 	// on this machine is, contains or lies inside another place's of the same mode, or a
-	// symbolic link on this machine among the names from a writable place's path down to
-	// a place inside it. Its names are the inner place and the outer one, in that order,
-	// each as passed.
+	// symbolic link on this machine among the names from the outer place's path, of
+	// either mode, down to the inner place inside it. Its names are the inner place and
+	// the outer one, in that order, each as passed.
 	MountTargetConflict = "mount_target_conflict"
 	// MountSharedWithRun is a walled run with a bind inside, or reached through, a
 	// writable bind of another walled run of this user's still going, a writable bind
