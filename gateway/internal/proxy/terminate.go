@@ -443,6 +443,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			r.Out.URL.Scheme = "https"
 			r.Out.URL.Host = strings.TrimSuffix(authority, ":443")
 			r.Out.Host = ""
+			r.Out.Body = endAtEOF(r.Out.Body)
 			// The request's trailer, which the server fills once the body is read: a
 			// copy made before that would carry none. To a host that gets a credential
 			// it sends none: the server merges every trailer it reads, declared or
@@ -923,6 +924,7 @@ func (t *terminator) toTool(w http.ResponseWriter, r *http.Request, d Decision, 
 				pr.Out.Trailer = out
 				pr.Out.Body = &trailing{ReadCloser: pr.Out.Body, in: in, out: out}
 			}
+			pr.Out.Body = endAtEOF(pr.Out.Body)
 		},
 		Transport:     tl.transport,
 		FlushInterval: -1,
@@ -972,6 +974,38 @@ func (t *trailing) Read(b []byte) (int, error) {
 		}
 	}
 	return n, err
+}
+
+// endedBody is a request body that returns io.EOF again once it has returned it, and
+// never reads the session's body after that. The transport reads a body with a length
+// once more past its end, and a server closes the session's body as the answer's
+// header goes out, so that read could fail with [http.ErrBodyReadAfterClose]: the
+// transport counts it as a failed write, closes the connection to the host and cuts
+// the answer.
+type endedBody struct {
+	io.ReadCloser
+	ended bool
+}
+
+// Read reads the body until its end, and returns io.EOF after it.
+func (b *endedBody) Read(p []byte) (int, error) {
+	if b.ended {
+		return 0, io.EOF
+	}
+	n, err := b.ReadCloser.Read(p)
+	if err == io.EOF {
+		b.ended = true
+	}
+	return n, err
+}
+
+// endAtEOF is body as an [endedBody]: nil and [http.NoBody] stay as they are, since the
+// transport sends a request with either as one with no body.
+func endAtEOF(body io.ReadCloser) io.ReadCloser {
+	if body == nil || body == http.NoBody {
+		return body
+	}
+	return &endedBody{ReadCloser: body}
 }
 
 // newRequestID is a request's id: 16 random bytes, hex.

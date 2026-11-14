@@ -1051,6 +1051,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	out := r.Clone(p.dialContext(r.Context(), d))
 	out.RequestURI = ""
+	out.Body = endAtEOF(out.Body)
 	// The host asked of upstream is the one decided on, in its form.
 	out.URL.Host = d.Host
 	if r.URL.Port() != "" {
