@@ -52,3 +52,17 @@ func TestABodyPastItsEndReadsEOF(t *testing.T) {
 		t.Error("nil or http.NoBody changed")
 	}
 }
+
+// TestABodyThatEndsEarlyStaysAnError pins that endAtEOF ends a body only at io.EOF: a
+// session's body that ends before its length, as a client that goes away, returns its
+// error, so the transport sends no shorter body as a whole one.
+func TestABodyThatEndsEarlyStaysAnError(t *testing.T) {
+	body := endAtEOF(io.NopCloser(io.MultiReader(strings.NewReader("00"), iotest.ErrReader(io.ErrUnexpectedEOF))))
+	b, err := io.ReadAll(body)
+	if string(b) != "00" || !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("the body %q %v; want 00 and an unexpected EOF", b, err)
+	}
+	if _, err := body.Read(make([]byte, 8)); errors.Is(err, io.EOF) {
+		t.Errorf("a read after the early end: %v; want no EOF", err)
+	}
+}
