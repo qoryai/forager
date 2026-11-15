@@ -1083,6 +1083,11 @@ func (lr *linkRun) end(e ending) {
 	if lr.timer != nil {
 		lr.timer.Stop()
 	}
+	if j := lr.openJoin(); j != nil && lr.reporter != nil {
+		// The run's end ends the open join's reports, with or without its
+		// session.started: its end report is made before release ends the reporter.
+		lr.reporter.closed(j.session)
+	}
 	startedAt := lr.startedAt
 	discarded := lr.discarded
 	lr.mu.Unlock()
@@ -1114,14 +1119,10 @@ func (lr *linkRun) end(e ending) {
 				c := *j
 				open = &c
 			}
-			reporter := lr.reporter
 			lr.mu.Unlock()
 			lr.batch.Unlock()
 			if open != nil {
 				lr.st.Emit(event.SessionExited, ended(e, open.session, open.startedAt))
-				if reporter != nil {
-					reporter.closed(open.session)
-				}
 			}
 			// The gateway holds no exit status of a session's runtime.
 			lr.st.Emit(event.RunExited, ended(e, 0, startedAt))

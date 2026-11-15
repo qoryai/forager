@@ -5,11 +5,14 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,6 +53,17 @@ type groupRun struct {
 // startGroupRun opens the run and posts its first batch.
 func startGroupRun(t *testing.T) *groupRun {
 	t.Helper()
+	return startGroupRunWith(t, false)
+}
+
+// forgeValue is the fake value of the host credential forge of startGroupRunWith.
+const forgeValue = "fake-forge-value-0001"
+
+// startGroupRunWith is startGroupRun, with, when forge is true, a host credential forge
+// for git.example whose placeholder is in GIT_TOKEN, so a join that passes GIT_TOKEN is
+// refused.
+func startGroupRunWith(t *testing.T, forge bool) *groupRun {
+	t.Helper()
 	g := &groupRun{limited: map[string]bool{}}
 	certFile, keyFile, roots := testCertificate(t, t.TempDir())
 	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
@@ -88,12 +102,18 @@ func startGroupRun(t *testing.T) *groupRun {
 	entry := func(name string) string {
 		return `{"name":"` + name + `","format":"anthropic-messages","endpoint":"` + g.url + `","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
 	}
-	doc := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"model_credential":"model","credentials":[` +
-		entry("model") + `,` + entry("model-2") + `,` + entry("model-3") + `]}`
+	allow, extra, secrets := `"localhost"`, "", maps.Clone(groupValues)
+	if forge {
+		allow += `,"git.example"`
+		extra = `,{"name":"forge","apply":[{"hosts":["git.example"],"scheme":"bearer"}],"placeholders":["GIT_TOKEN"]}`
+		secrets["forge"] = forgeValue
+	}
+	doc := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":[` + allow + `]}},"model_credential":"model","credentials":[` +
+		entry("model") + `,` + entry("model-2") + `,` + entry("model-3") + extra + `]}`
 	g.c = newControl(t)
 	g.c.serveDocument(doc, 'a')
 	g.c.mu.Lock()
-	g.c.secrets = groupValues
+	g.c.secrets = secrets
 	g.c.mu.Unlock()
 	intercept := func(w http.ResponseWriter, r *http.Request) bool {
 		if !strings.HasSuffix(r.URL.Path, "/model-keys") {
@@ -114,11 +134,15 @@ func startGroupRun(t *testing.T) *groupRun {
 		return true
 	}
 	g.c.intercept.Store(&intercept)
-	node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost"}}}
+	nodeAllow := []string{"localhost"}
+	if forge {
+		nodeAllow = append(nodeAllow, "git.example")
+	}
+	node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: nodeAllow}}
 	cfg := gateway.Config{Server: g.c.server(), Policy: node}
 	gateway.SetUpstreamRoots(&cfg, roots)
 	g.h = start(t, cfg)
-	for _, v := range groupValues {
+	for _, v := range secrets {
 		g.h.secrets = append(g.h.secrets, v)
 	}
 	a := g.h.open(server.LinkRunRequest{Wall: true})
@@ -455,22 +479,160 @@ func TestReportsFollowTheSessions(t *testing.T) {
 }
 
 // TestTheGatewaysSessionEndMakesAnEndReport pins the end report of a session the
-// gateway ends: a batch the link refuses ends the run, and the gateway's numbered
-// dev.qory.session.exited makes the session's end report, sent after the run's end.
+// gateway ends, with the reporter idle: a batch the link refuses ends the run, and the
+// session's end report goes after the run's end, with its number. A join with no
+// session.started that is open when the run ends gets its end report too, and no report
+// without a session follows.
 func TestTheGatewaysSessionEndMakesAnEndReport(t *testing.T) {
-	g := startGroupRun(t)
-	n := g.h.joined(g.runID)
-	g.h.post(sessionStarted(g.runID, n))
-	eventually(t, "the start report", func() bool { g.mu.Lock(); defer g.mu.Unlock(); return len(g.reports) == 1 })
-	if d := g.h.post(ev(g.runID, event.RunRegistered, map[string]any{})); d.End != "batch_refused" {
-		t.Fatalf("the refused batch: %+v", d)
+	for _, startSession := range []bool{true, false} {
+		g := startGroupRun(t)
+		n := g.h.joined(g.runID)
+		if startSession {
+			g.h.post(sessionStarted(g.runID, n))
+		}
+		eventually(t, "the start report", func() bool { g.mu.Lock(); defer g.mu.Unlock(); return len(g.reports) == 1 })
+		// The start report's answer is in, and the reporter waits for a change.
+		time.Sleep(100 * time.Millisecond)
+		if d := g.h.post(ev(g.runID, event.RunRegistered, map[string]any{})); d.End != "batch_refused" {
+			t.Fatalf("the refused batch: %+v", d)
+		}
+		eventually(t, "the end report", func() bool { g.mu.Lock(); defer g.mu.Unlock(); return len(g.reports) == 2 })
+		time.Sleep(1200 * time.Millisecond)
+		g.mu.Lock()
+		if len(g.reports) != 2 {
+			t.Errorf("session started %v: %d reports; want the start and end reports", startSession, len(g.reports))
+		}
+		for i, b := range g.reports {
+			if !strings.Contains(string(b), `"session":1,`) {
+				t.Errorf("session started %v: report %d %s; want session 1", startSession, i, b)
+			}
+		}
+		g.mu.Unlock()
 	}
-	eventually(t, "the end report", func() bool { g.mu.Lock(); defer g.mu.Unlock(); return len(g.reports) == 2 })
+}
+
+// TestARefusedJoinMakesNoReport pins a join the gateway refuses: it opens no session,
+// so neither the refusal nor its dev.qory.session.exited makes a report, and the next
+// join's start report is the first, with that join's number.
+func TestARefusedJoinMakesNoReport(t *testing.T) {
+	g := startGroupRunWith(t, true)
+	var r *accesskey.Refusal
+	if _, err := g.h.join(g.runID, "GIT_TOKEN"); !errors.As(err, &r) || r.Code != "placeholder_conflict" {
+		t.Fatalf("the conflicting join: %v", err)
+	}
+	refused := ev(g.runID, event.SessionExited, map[string]any{"session": 1, "state": "failed", "exit_code": -1, "reason": "placeholder_conflict", "duration_ms": 0})
+	if d := g.h.post(refused); !d.Accepted() {
+		t.Fatalf("the refused join's session.exited: %+v", d)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	g.mu.Lock()
+	n := len(g.reports)
+	g.mu.Unlock()
+	if n != 0 {
+		t.Errorf("%d reports after a refused join; want none", n)
+	}
+	if two := g.h.joined(g.runID); two != 2 {
+		t.Fatalf("the next join is session %d", two)
+	}
+	eventually(t, "the start report", func() bool { g.mu.Lock(); defer g.mu.Unlock(); return len(g.reports) == 1 })
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	for i, b := range g.reports {
-		if !strings.Contains(string(b), `"session":1,`) {
-			t.Errorf("report %d %s; want session 1", i, b)
+	if !strings.Contains(string(g.reports[0]), `"session":2,`) {
+		t.Errorf("the first report %s; want session 2", g.reports[0])
+	}
+}
+
+// TestTheOneAddressReportsReplayedAndReopenedJoins pins the reports of a run on the one
+// address: a join sent again, which gets its answer again, makes no second start
+// report; and after the gateway restarts with session 1 open, a change in the reopened
+// run makes a report with session 1, and no start report.
+func TestTheOneAddressReportsReplayedAndReopenedJoins(t *testing.T) {
+	certFile, keyFile, roots := testCertificate(t, t.TempDir())
+	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		w.Header().Set("Anthropic-Ratelimit-Unified-5h-Status", "allowed")
+		w.Header().Set("Anthropic-Ratelimit-Unified-5h-Utilization", "0.42")
+		io.WriteString(w, `{"type":"message"}`)
+	}))
+	origin.Config.ErrorLog = log.New(io.Discard, "", 0)
+	origin.TLS = &tls.Config{Certificates: []tls.Certificate{pair}}
+	origin.StartTLS()
+	t.Cleanup(origin.Close)
+	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+	url := "https://localhost:" + port + "/v1"
+	entry := func(name string) string {
+		return `{"name":"` + name + `","format":"anthropic-messages","endpoint":"` + url + `","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
+	}
+	c := gatewayControl(t)
+	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"model_credential":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
+	c.mu.Lock()
+	c.secrets = map[string]string{"model": "fake-group-value-0001", "model-2": "fake-group-value-0002"}
+	c.mu.Unlock()
+	var mu sync.Mutex
+	var reports []string
+	f := func(w http.ResponseWriter, r *http.Request) bool {
+		if !strings.HasSuffix(r.URL.Path, "/model-keys") {
+			return false
 		}
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		reports = append(reports, string(body))
+		mu.Unlock()
+		out := `{"version":1,"keys":[]}`
+		w.Header().Set(server.HeaderSignature, c.signer.SignAnswer(accesskey.Answer{Status: http.StatusOK, RequestSignature: r.Header.Get(server.HeaderSignature), Body: []byte(out)}))
+		io.WriteString(w, out)
+		return true
+	}
+	c.intercept.Store(&f)
+	sent := func() []string { mu.Lock(); defer mu.Unlock(); return slices.Clone(reports) }
+	node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost"}}}
+	cfg := gateway.Config{Dir: t.TempDir(), Policy: node}
+	gateway.SetUpstreamRoots(&cfg, roots)
+	before := startRemote(t, c, cfg)
+	runID := event.NewRunID()
+	key := runKeyFor(t, runID, nil)
+	e := before.open(t, key, server.LinkRunRequest{Wall: true})
+	joinPath := "/qory-link/run-configuration/" + runID + "/sessions"
+	for i := range 2 {
+		if a := before.do(t, key, http.MethodPost, joinPath, []byte(`{"version":1,"passes":[],"model_key":true}`)); a.status != http.StatusOK {
+			t.Fatalf("join try %d: %d %s", i+1, a.status, a.body)
+		}
+	}
+	eventually(t, "the start report", func() bool { return len(sent()) == 1 })
+	time.Sleep(1200 * time.Millisecond)
+	if got := sent(); len(got) != 1 || !strings.Contains(got[0], `"session":1,`) {
+		t.Fatalf("reports %q; want the one start report of session 1", got)
+	}
+	if got := e.post(t, sessionStarted(runID, 1)); got.status != http.StatusAccepted {
+		t.Fatalf("session 1's session.started: %d %s", got.status, got.body)
+	}
+
+	after := before.restart(t, cfg)
+	e.r = after
+	if got := e.post(t, heartbeat(runID)); got.status != http.StatusAccepted {
+		t.Fatalf("the batch that reopens the run: %d %s", got.status, got.body)
+	}
+	trusted := x509.NewCertPool()
+	trusted.AppendCertsFromPEM([]byte(e.a.CertificateAuthority))
+	agent := after.relay(t, key)
+	agent.Transport.(*http.Transport).TLSClientConfig = &tls.Config{RootCAs: trusted}
+	req, _ := http.NewRequest(http.MethodPost, url+"/messages", strings.NewReader(`{"model":"m"}`))
+	req.Header.Set("X-Api-Key", link.KeyPlaceholder("model"))
+	resp, err := agent.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the request after the reopen: %d", resp.StatusCode)
+	}
+	eventually(t, "a report of the change", func() bool { return len(sent()) == 2 })
+	if got := sent(); !strings.Contains(got[1], `"session":1,`) || !strings.Contains(got[1], `"utilization":42`) {
+		t.Errorf("the report after the reopen %s; want session 1 and the change", got[1])
 	}
 }

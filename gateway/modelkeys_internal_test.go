@@ -371,3 +371,84 @@ func TestTheRunsEndSendsAWaitingEndReport(t *testing.T) {
 		t.Errorf("the start and end reports are %v apart; want at least the gap", gap)
 	}
 }
+
+// TestNoReportAfterA404OrA410 pins the stop of the reports: after a 404, signed or not,
+// or a signed 410, no report goes, and the starts and ends of later sessions keep no
+// boundary report.
+func TestNoReportAfterA404OrA410(t *testing.T) {
+	for _, ae := range []*server.ModelKeysAnswerError{{Status: http.StatusNotFound}, {Status: http.StatusGone, Signed: true}} {
+		r := &recorder{fail: func(int, server.ModelKeysReport) bool { return true }}
+		g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}}, "model", nil)
+		k := newKeyReporter("run", "https://control.example/v1/runs", g, func(ctx context.Context, rep server.ModelKeysReport) ([]server.ModelKeyState, error) {
+			r.send(ctx, rep)
+			return nil, ae
+		}, func(string) {}, func(string) {})
+		k.gap = 0
+		done := make(chan struct{})
+		go func() { k.run(t.Context()); close(done) }()
+		k.opened(1)
+		<-done
+		for n := 1; n <= 50; n++ {
+			k.closed(n)
+			k.opened(n + 1)
+		}
+		k.mu.Lock()
+		waiting := len(k.pending)
+		k.mu.Unlock()
+		if sent := len(r.sent()); sent != 1 || waiting != 0 {
+			t.Errorf("after a %d: %d reports and %d waiting; want the one and none", ae.Status, sent, waiting)
+		}
+	}
+}
+
+// TestTheRunsEndLogsTheReportsThatDidNotGo pins the line of the reports after the run's
+// end that the control plane did not accept: the start and end reports that wait go
+// once each, and the gateway's log has one line with their count.
+func TestTheRunsEndLogsTheReportsThatDidNotGo(t *testing.T) {
+	r := &recorder{fail: func(int, server.ModelKeysReport) bool { return true }}
+	g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}}, "model", nil)
+	var mu sync.Mutex
+	var lines []string
+	k := newKeyReporter("run", "https://control.example/v1/runs", g, r.send, func(line string) { mu.Lock(); lines = append(lines, line); mu.Unlock() }, func(string) {})
+	k.gap, k.backoff = 0, []time.Duration{time.Hour}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { k.run(ctx); close(done) }()
+	k.opened(1)
+	r.wait(t, 1)
+	k.closed(1)
+	cancel()
+	<-done
+	if reps := r.sent(); len(reps) != 3 || reps[1].Session != 1 || reps[2].Session != 1 {
+		t.Errorf("reports %+v; want the start report, then the start and end reports once more", reps)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := "run run: If this repeats, check the control plane: 2 model keys reports after the run's end were not sent or not accepted within 10s"; len(lines) != 1 || lines[0] != want {
+		t.Errorf("log %q; want %q", lines, want)
+	}
+}
+
+// TestANewReportStartsTheBackoffAgain pins the backoff per report: a start report that
+// takes the place of a report of changes in a backoff waits the first backoff after its
+// own first try, not the next one of the report it replaced.
+func TestANewReportStartsTheBackoffAgain(t *testing.T) {
+	r := &recorder{}
+	k, change, _ := startedReporter(t, r, 0)
+	k.backoff = []time.Duration{100 * time.Millisecond, time.Hour}
+	r.mu.Lock()
+	r.fail = func(n int, _ server.ModelKeysReport) bool {
+		if n == 1 {
+			// k.opened takes no lock of the recorder's.
+			go k.opened(1)
+		}
+		return n <= 2
+	}
+	r.mu.Unlock()
+	change("0.10")
+	r.wait(t, 3)
+	reps := r.sent()
+	if reps[0].Session != 0 || reps[1].Session != 1 || reps[2].Session != 1 {
+		t.Errorf("reports %+v; want one of changes, then the start report twice", reps)
+	}
+}
