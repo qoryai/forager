@@ -3472,9 +3472,10 @@ cap rises with each window the list gains, in the report and in the answer:
 
 `session` is the number of the session that was open when the gateway made the report,
 as in `dev.qory.session.started`. A session is open from the gateway's `200` to its join
-until the gateway numbers its `dev.qory.session.exited`, the session's or the gateway's
-at the run's end. A report made while no session is open, before the first join,
-between sessions or after the last, has no `session`. A refused join opens no session.
+until the gateway numbers its `dev.qory.session.exited`, or until the run ends at the
+gateway while its join is open, with or without its `dev.qory.session.started`. A
+report made while no session is open, before the first join, between sessions or after
+the last, has no `session`. A refused join opens no session.
 
 Each entry of `keys` is one key and one limit window:
 
@@ -3517,19 +3518,26 @@ contains makes no second report.
 
 Each session also makes two boundary reports, with every window the gateway has, also
 when nothing changed: its start report at the join's `200`, and its end report when the
-gateway numbers its `dev.qory.session.exited`. A boundary report waits for the gap of a
+gateway numbers its `dev.qory.session.exited`, or when the run ends at the gateway while
+its join is open. A join sent again that gets its `200` again makes no second start
+report. A boundary report waits for the gap of a
 second after the report before, and keeps the session and the windows it was made with
 across its tries, with a new `time` for each try. So the end report of session 2 never
 has the state or the number of session 3, and reports reach the server in the order the
 gateway made them, each with a later `time` than the one before. A boundary report that
 waits takes the place of the next try of a report of changes, and contains its changes.
 The first report with a session's number is its start report, and the last is its end
-report.
+report, with two exceptions. A gateway that restarts while a session is open makes no
+start report for it when it reopens the run, and a start report made before the
+restart that had not gone is lost. A boundary report that has not gone within the 10
+seconds after the run's end is lost too.
 
-When the run ends while a change or a boundary report waits for its report, or a
-report waits for its next try, the gateway sends each waiting boundary report and then
-the newest state once more, a second apart and within 10 seconds, and takes nothing of
-the answers.
+When the run ends while a change waits for its report, a boundary report waits to go,
+or a report waits for its next try, the gateway sends each waiting boundary report and
+then the newest state once more, a second apart and within 10 seconds, and takes
+nothing of the answers. It writes one line to its log with the count of those reports
+that were not sent or not accepted. After a `404` or a signed `410` the gateway makes
+no more reports of the run, boundary reports included.
 An API key's windows are per minute, so its `utilization` can change by a whole percent
 up to 100 times a minute.
 

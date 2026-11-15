@@ -10,14 +10,15 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
-- Deploy a Qory Apiary that accepts `session` in the model keys report before the
-  gateway. A Qory Apiary built before this change answers a report with `session` with
+- Deploy in this order:
+  1. a Qory Apiary that accepts `session` in the model keys report;
+  2. the gateway;
+  3. a Qory Apiary that folds `dev.qory.run.target_write` and sends `use_up_to_percent`
+     and `use_up_to_windows`.
+
+  A Qory Apiary built before it accepts `session` answers a report with `session` with
   a signed `400` `invalid_request`, and the gateway drops that report, cooldowns
   included; every report made while a session is open has `session`.
-- Deploy in this order:
-  1. the gateway;
-  2. a Qory Apiary that folds `dev.qory.run.target_write` and sends `use_up_to_percent`
-     and `use_up_to_windows`.
 
   A Qory Apiary built before the type stores each `dev.qory.run.target_write`, and its
   fold skips it.
@@ -1126,10 +1127,12 @@ release may change what an existing document does, and says so under Upgrading.
 #### Added
 
 - The gateway sends a model keys report at each session's start, the join's `200`, and
-  at its end, when it numbers the session's `dev.qory.session.exited`, also when no
-  window changed. Each report made while a session is open has the session's number in
+  at its end, when it numbers the session's `dev.qory.session.exited` or when the run
+  ends at the gateway while the join is open, also when no window changed. Each report made while a session is open has the session's number in
   `session`. A start or end report keeps its session and windows across tries, with a
   new `time` for each try, and the reports keep the gap of a second and one in flight.
+  After the run's end, the gateway writes one line to its log with the count of the
+  reports that were not sent or not accepted within 10 seconds.
   `server.ModelKeysReport` has `Session`.
 - The gateway writes `dev.qory.run.target_write` for each git push over HTTP that the
   run's proxy reads, on a host it terminates or in a plain request: `started` as the

@@ -369,9 +369,10 @@ const beyondLinkSchema = "-beyond-schema-"
 // 257 runs or with a run in upper case, a model keys report whose entry has a
 // utilization over 100, a status, a source or a window outside the grammar, rejected
 // without cooldown_until or cooldown_until with another status, or no observed_at, or
-// whose time has a fraction or whose session is 0, a model keys answer without version, a link batch answer
-// whose stop has no reason or another one, a session.exited or a session's run.exited
-// failed or cancelled with model_key_limit, a session.exited paused with no reason or
+// whose time has a fraction or whose session is 0, a model keys answer without
+// version, a link batch answer whose stop has no reason or another one, a
+// session.exited or a session's run.exited failed or cancelled with model_key_limit, a
+// session.exited paused with no reason or
 // with stopped and exit code -1, a session's run.exited paused with no reason, a session.transcript numbered 0, with a negative offset,
 // without its session id or over 32 KiB, and a descriptor whose resume has no args, a
 // prefix outside the home or a path without {session_id}, and a run.target_write with a
