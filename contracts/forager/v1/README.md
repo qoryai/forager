@@ -3529,8 +3529,9 @@ waits takes the place of the next try of a report of changes, and contains its c
 The first report with a session's number is its start report, and the last is its end
 report, with two exceptions. A gateway that restarts while a session is open makes no
 start report for it when it reopens the run, and a start report made before the
-restart that had not gone is lost. A boundary report that has not gone within the 10
-seconds after the run's end is lost too.
+restart that had not gone may be lost: the stopping gateway sends it once more, within
+10 seconds, only while its process still runs. A boundary report that has not gone
+within the 10 seconds after the run's end is lost.
 
 When the run ends while a change waits for its report, a boundary report waits to go,
 or a report waits for its next try, the gateway sends each waiting boundary report and
@@ -5292,7 +5293,9 @@ object of the event's data.
 A rule's `sum`, optional, adds more fields: `over` is a dotted path to an object, and
 `fields` maps each field to a dotted path inside each member of that object. The field
 is the sum of the numbers at that path in the members that are objects and have a
-number there. A field that no member has a number for is left out, and so is every field
+whole number of at least 0 there, taken in the order of the members' names; a member
+that would take the total past 2^53 is left out of it. A field that no member has such
+a number for is left out, and so is every field
 when `over` is no object or does not exist. Claude Code's result rule has `over:
 modelUsage` and `usage.input: inputTokens`, so `{"model-a": {"inputTokens": 10},
 "model-b": {"inputTokens": 3}}` gives `usage.input` 13. A rule sets each field once, in
