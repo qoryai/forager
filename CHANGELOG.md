@@ -10,6 +10,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Deploy a Qory Apiary that accepts `session` in the model keys report before the
+  gateway. A Qory Apiary built before this change answers a report with `session` with
+  a signed `400` `invalid_request`, and the gateway drops that report, cooldowns
+  included; every report made while a session is open has `session`.
 - Deploy in this order:
   1. the gateway;
   2. a Qory Apiary that folds `dev.qory.run.target_write` and sends `use_up_to_percent`
@@ -257,6 +261,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The model keys report has `session`, an optional integer of at least 1: the number of
+  the session that was open when the gateway made the report, as in
+  `dev.qory.session.started`. A report made while no session is open has none.
+  `version` stays 1. Fixtures: `fixtures/model-keys-report/report-session.json`, and
+  `fixtures/invalid/model-keys-report-session-0.json`.
 - `policy.ImageWithoutUserInfo` returns an image reference without the user
   information it may start with: everything up to and with the last `@` before a
   trailing `@sha256:`, `@sha512:` or `@blake3:` digest, a scheme in front of it too.
@@ -1103,6 +1112,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The gateway sends a model keys report at each session's start, the join's `200`, and
+  at its end, when it numbers the session's `dev.qory.session.exited`, also when no
+  window changed. Each report made while a session is open has the session's number in
+  `session`. A start or end report keeps its session and windows across tries, with a
+  new `time` for each try, and the reports keep the gap of a second and one in flight.
+  `server.ModelKeysReport` has `Session`.
 - The gateway writes `dev.qory.run.target_write` for each git push over HTTP that the
   run's proxy reads, on a host it terminates or in a plain request: `started` as the
   push goes to the host, then `changed`, `refused` or `cut`. It reads the report status
