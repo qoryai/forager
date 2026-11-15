@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
@@ -26,8 +27,9 @@ const maxReportKeys = 66
 
 // keyReporter sends the state of a run's key group to the control plane, signed POST
 // <run.url>/<run_id>/model-keys (the contract's §The server, The model keys): one report
-// in flight at most, at most one a second, each with every window of the group, and
-// takes the newer states of the answer into the group.
+// in flight at most, at most one a second, each with every window of the group and the
+// number of the session open when it was made, and takes the newer states of the answer
+// into the group. Each session's start and end make a report, a boundary report.
 type keyReporter struct {
 	runID string
 	g     *modelkey.Group
@@ -41,6 +43,31 @@ type keyReporter struct {
 	// gap and backoff, when set, replace reportGap and reportBackoff; tests set them.
 	gap     time.Duration
 	backoff []time.Duration
+
+	// mu guards session, pending, made and stopped, so a report is made with the
+	// session and the boundary reports as one state.
+	mu sync.Mutex
+	// session is the number of the open session, 0 when none is open.
+	session int
+	// pending are the boundary reports not yet sent or dropped, oldest first.
+	pending []boundaryReport
+	// made counts the boundary reports made, so no two boundary reports have the same
+	// id.
+	made uint64
+	// stopped is true once run returned after a 404 or a 410: no boundary report is
+	// kept from then on.
+	stopped bool
+}
+
+// boundaryReport is the report made at a session's start or end: the session's number,
+// the keys as they were then, and the group's change count they cover. Each try sends
+// them with a new time.
+type boundaryReport struct {
+	// id is 1 for the first boundary report of the run, 2 for the next, and so on.
+	id      uint64
+	session int
+	keys    []server.ModelKeyState
+	covers  uint64
 }
 
 // newKeyReporter makes the reporter of the group g of the run runID, and has g wake it
@@ -60,44 +87,115 @@ func (k *keyReporter) poke() {
 	}
 }
 
-// lastWait is how long the last report of a run, sent once after the run ends, may take.
+// opened opens session n, from the gateway's 200 to its join, and makes its start
+// report.
+func (k *keyReporter) opened(n int) { k.boundary(n, n) }
+
+// closed closes session n, as the gateway numbers its dev.qory.session.exited, and makes
+// its end report.
+func (k *keyReporter) closed(n int) { k.boundary(n, 0) }
+
+// boundary makes the boundary report of session n, with every window the group has
+// now, also when nothing changed, and then sets open as the open session.
+func (k *keyReporter) boundary(n, open int) {
+	k.mu.Lock()
+	k.session = open
+	if k.stopped {
+		k.mu.Unlock()
+		return
+	}
+	ws, covers := k.g.Snapshot()
+	k.made++
+	k.pending = append(k.pending, boundaryReport{id: k.made, session: n, keys: entries(ws), covers: covers})
+	k.mu.Unlock()
+	k.poke()
+}
+
+// stop keeps no more boundary reports, and drops those that wait.
+func (k *keyReporter) stop() {
+	k.mu.Lock()
+	k.stopped, k.pending = true, nil
+	k.mu.Unlock()
+}
+
+// next is the report to send at now, the group's change count it covers, and its id:
+// the oldest boundary report, with its session, keys and id, else the group's newest
+// state with the open session and the id 0.
+func (k *keyReporter) next(now time.Time) (rep server.ModelKeysReport, covers, id uint64) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	t := server.RegistrationTime(now)
+	if len(k.pending) > 0 {
+		b := k.pending[0]
+		return server.ModelKeysReport{Time: t, Session: b.session, Keys: b.keys}, b.covers, b.id
+	}
+	ws, covers := k.g.Snapshot()
+	return server.ModelKeysReport{Time: t, Session: k.session, Keys: entries(ws)}, covers, 0
+}
+
+// done ends the boundary report id, sent or dropped; the id 0 ends none.
+func (k *keyReporter) done(id uint64) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if id != 0 && len(k.pending) > 0 && k.pending[0].id == id {
+		k.pending = k.pending[1:]
+	}
+}
+
+// waiting reports whether a boundary report waits.
+func (k *keyReporter) waiting() bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return len(k.pending) > 0
+}
+
+// lastWait is how long the last reports of a run, sent once after the run ends, may
+// take.
 const lastWait = 10 * time.Second
 
-// run sends reports until ctx ends, or the control plane returns 410 or 404: one
-// report per burst of changes. A report covers every change up to the group's change
-// count it was made at ([modelkey.Group.Snapshot]). A wake for changes that the last
-// report sent or dropped covers sends nothing: a change that came during the gap or a
-// backoff before that report goes in no second report. When ctx ends while a change
-// waits for its report, in the gap, in a backoff or in flight, the newest state goes
-// once more ([keyReporter.last]).
+// run sends reports until ctx ends, or the control plane returns 410 or 404: each
+// boundary report, then one report per burst of changes. A report covers every change
+// up to the group's change count it was made at ([modelkey.Group.Snapshot]). A wake for
+// changes that the last report sent or dropped covers sends nothing: a change that came
+// during the gap or a backoff before that report goes in no second report. A boundary
+// report goes also when nothing changed, and keeps its session and keys across tries;
+// one that waits takes the place of the next try of a report of changes, which it
+// covers. When ctx ends while a report waits, in the gap, in a backoff or in flight,
+// the waiting boundary reports and the newest state go once more ([keyReporter.last]).
 func (k *keyReporter) run(ctx context.Context) {
 	var last time.Time
 	// sent is the change count the last report sent or dropped covers.
 	var sent uint64
 	for {
-		select {
-		case <-ctx.Done():
-			if k.g.Changes() != sent {
-				k.last(ctx)
+		if !k.waiting() && k.g.Changes() == sent {
+			select {
+			case <-ctx.Done():
+				k.last(ctx, last, sent)
+				return
+			case <-k.wake:
+				continue
 			}
-			return
-		case <-k.wake:
-		}
-		if k.g.Changes() == sent {
-			continue
 		}
 		if !sleep(ctx, k.gap-time.Since(last)) {
-			k.last(ctx)
+			k.last(ctx, last, sent)
 			return
 		}
+		// current is the id of the report the tries are of; try counts its tries, so a
+		// new report starts the backoff again.
+		var current uint64
 		for try := 0; ; try++ {
 			last = time.Now()
-			rep, covers := k.report()
+			rep, covers, id := k.next(last)
+			if id != current {
+				current, try = id, 0
+			}
 			keys, err := k.send(ctx, rep)
 			if ctx.Err() != nil {
-				if err != nil || k.g.Changes() != covers {
-					k.last(ctx)
+				if err == nil {
+					sent = max(sent, covers)
+					k.done(id)
 				}
+				k.last(ctx, last, sent)
 				return
 			}
 			var ae *server.ModelKeysAnswerError
@@ -105,21 +203,25 @@ func (k *keyReporter) run(ctx context.Context) {
 			switch {
 			case err == nil:
 				k.g.Merge(windows(keys))
-				sent = covers
+				sent = max(sent, covers)
+				k.done(id)
 			case ae != nil && ae.Status == http.StatusNotFound:
+				k.stop()
 				k.logLine(fmt.Sprintf("Upgrade the control plane to share model key cooldowns between runs: %s returned 404 for model-keys", accesskey.ShownValue(k.runURL, false)))
 				return
 			case ae != nil && ae.Signed && ae.Status == http.StatusGone:
+				k.stop()
 				return
 			case ae != nil && (ae.Status == http.StatusUnauthorized || ae.Signed && (ae.Status == http.StatusBadRequest || ae.Status == http.StatusRequestEntityTooLarge)),
 				ae == nil && !retried(err):
 				k.reported(fmt.Sprintf("run %s: If this repeats, check the control plane: the model keys report was dropped: %v", k.runID, accesskey.ShownError(err)))
-				sent = covers
+				sent = max(sent, covers)
+				k.done(id)
 			default:
-				// A 429, a 5xx, another answer that did not verify, or none: the newest
-				// state goes again.
+				// A 429, a 5xx, another answer that did not verify, or none: the same
+				// boundary report, or the newest state, goes again.
 				if !sleep(ctx, k.backoff[min(try, len(k.backoff)-1)]) {
-					k.last(ctx)
+					k.last(ctx, last, sent)
 					return
 				}
 				continue
@@ -129,21 +231,52 @@ func (k *keyReporter) run(ctx context.Context) {
 	}
 }
 
-// report is a report of the group's newest state, at the clock's time, and the
-// group's change count it covers.
-func (k *keyReporter) report() (server.ModelKeysReport, uint64) {
-	ws, covers := k.g.Snapshot()
-	return server.ModelKeysReport{Time: server.RegistrationTime(time.Now()), Keys: entries(ws)}, covers
-}
-
-// last sends the newest state once after the run's end, within [lastWait], so the
-// control plane gets the last change and a report that waited in a backoff. Its answer
-// is not merged: the run sets no more keys.
-func (k *keyReporter) last(ctx context.Context) {
+// last sends, once each after the run's end and within [lastWait], the boundary reports
+// that wait and then the newest state, when a change came after sent, so the control
+// plane gets the last change and a report that waited in a backoff. Each starts the gap
+// after the one before, the first the gap after prev. Their answers are not merged: the
+// run sets no more keys. It writes one line to the gateway's log with the count of the
+// reports that were not sent or not accepted.
+func (k *keyReporter) last(ctx context.Context, prev time.Time, sent uint64) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lastWait)
 	defer cancel()
-	rep, _ := k.report()
-	k.send(ctx, rep)
+	lost := 0
+	defer func() {
+		if lost > 0 {
+			k.reported(fmt.Sprintf("run %s: If this repeats, check the control plane: %d model keys reports after the run's end were not sent or not accepted within %v", k.runID, lost, lastWait))
+		}
+	}()
+	for {
+		k.mu.Lock()
+		waiting := len(k.pending)
+		// A change after the last waiting boundary report's snapshot needs one more report.
+		covered := sent
+		if waiting > 0 {
+			covered = max(covered, k.pending[waiting-1].covers)
+		}
+		k.mu.Unlock()
+		changed := k.g.Changes() > covered
+		if waiting == 0 && !changed {
+			return
+		}
+		if !sleep(ctx, k.gap-time.Since(prev)) {
+			lost += waiting
+			if changed {
+				lost++
+			}
+			return
+		}
+		prev = time.Now()
+		rep, covers, id := k.next(prev)
+		if _, err := k.send(ctx, rep); err != nil {
+			lost++
+		}
+		if id == 0 {
+			return
+		}
+		sent = max(sent, covers)
+		k.done(id)
+	}
 }
 
 // retried reports whether err, a failure with no answer the table lists, is one a new
@@ -178,7 +311,8 @@ func entries(ws []modelkey.Window) []server.ModelKeyState {
 	if len(out) > maxReportKeys {
 		out = out[:maxReportKeys]
 	}
-	// The run id, the time and the members around them take less than 200 bytes.
+	// The run id, the time, the session and the members around them take less than 200
+	// bytes.
 	for len(out) > 0 {
 		b, _ := json.Marshal(out)
 		if len(b)+200 <= server.MaxModelKeysReport {

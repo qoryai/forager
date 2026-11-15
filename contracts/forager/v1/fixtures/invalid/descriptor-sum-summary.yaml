@@ -1,0 +1,17 @@
+# A sum may not set summary: the session sets it.
+version: 1
+runtime: example
+runtime_version: "1.0.0"
+sources:
+  output: {format: jsonl}
+rules:
+  - source: output
+    match: {type: result}
+    type: dev.qory.runtime.result
+    data:
+      session_id: session_id
+      outcome: subtype
+      is_error: is_error
+    sum:
+      over: modelUsage
+      fields: {summary: outputTokens}

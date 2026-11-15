@@ -31,18 +31,21 @@ type ModelKeyState struct {
 }
 
 // ModelKeysReport is a model keys report: the time it is sent, RFC 3339 in UTC with
-// whole seconds, empty for the clock's now, and every window the gateway has of the
-// run's key group.
+// whole seconds, empty for the clock's now; the number of the session open when the
+// gateway made it, 0 for none; and every window the gateway has of the run's key group.
 type ModelKeysReport struct {
-	Time string
-	Keys []ModelKeyState
+	Time    string
+	Session int
+	Keys    []ModelKeyState
 }
 
-// modelKeysBody is a report's bytes: the version, the run's id, the time and the keys.
+// modelKeysBody is a report's bytes: the version, the run's id, the time, the session
+// when one is open, and the keys.
 type modelKeysBody struct {
 	Version int             `json:"version"`
 	RunID   string          `json:"run_id"`
 	Time    string          `json:"time"`
+	Session int             `json:"session,omitempty"`
 	Keys    []ModelKeyState `json:"keys"`
 }
 
@@ -81,7 +84,7 @@ func (c *Client) PostModelKeys(ctx context.Context, runURL, runID string, rep Mo
 	if keys == nil {
 		keys = []ModelKeyState{}
 	}
-	body, err := json.Marshal(modelKeysBody{Version: 1, RunID: runID, Time: t, Keys: keys})
+	body, err := json.Marshal(modelKeysBody{Version: 1, RunID: runID, Time: t, Session: rep.Session, Keys: keys})
 	if err != nil {
 		return nil, err
 	}

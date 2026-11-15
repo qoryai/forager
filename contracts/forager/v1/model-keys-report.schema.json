@@ -22,6 +22,11 @@
       "format": "date-time",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
     },
+    "session": {
+      "description": "The number of the session that was open when the gateway made the report, as in dev.qory.session.started: from the gateway's 200 to the session's join until the gateway numbers its dev.qory.session.exited, or until the run ends at the gateway while the join is open. Absent when no session was open: before the first join, between sessions and after the last. The report the gateway makes at a session's start and at its end has the session's number, and keeps it and its keys across tries.",
+      "type": "integer",
+      "minimum": 1
+    },
     "keys": {
       "description": "One entry per key of the key group and limit window, each pair once; empty when the gateway has no window yet.",
       "type": "array",

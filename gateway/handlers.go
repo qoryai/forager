@@ -825,6 +825,10 @@ func (lr *linkRun) joined(ev event.Event) {
 	}
 	j := lr.joins[n-1]
 	if ev.Type == event.SessionExited {
+		if j.open() && lr.reporter != nil && !lr.ended {
+			// After the run's end, [linkRun.end] has made the join's end report.
+			lr.reporter.closed(n)
+		}
 		j.exited = true
 		j.reason, _ = data["reason"].(string)
 		// The session's join ended: a stop after a limit refusal ends with it.

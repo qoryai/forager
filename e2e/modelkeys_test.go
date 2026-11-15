@@ -690,9 +690,11 @@ type keysControl struct {
 	// docs are the run configurations by run id; values the credentials' values by name.
 	docs   map[string][]byte
 	values map[string]string
-	// answer is the keys of the answer to every report; reports the bodies received,
-	// and invalid the schema's refusal of each that failed it.
+	// answer is the keys of the answer to every report, or, when answers is set, to
+	// each report it returns true for, the others getting no key; reports the bodies
+	// received, and invalid the schema's refusal of each that failed it.
 	answer  []server.ModelKeyState
+	answers func(report []byte) bool
 	reports [][]byte
 	invalid []string
 	// transcripts are the transcripts by the id of the run that reads them; asked the
@@ -770,6 +772,9 @@ func startKeysControl(t *testing.T) *keysControl {
 				c.invalid = append(c.invalid, err.Error())
 			}
 			keys := c.answer
+			if c.answers != nil && !c.answers(body) {
+				keys = nil
+			}
 			c.mu.Unlock()
 			if keys == nil {
 				keys = []server.ModelKeyState{}
@@ -1095,9 +1100,10 @@ func TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun(t *testing.T) {
 // stub caps A, and serves B's first request with a Bash call after 3 seconds. The
 // gateway reports A's refusal with POST <run.url>/<run_id>/model-keys, and the fake
 // control plane returns that model-b is rejected in its five_hour window until an hour
-// from now. Every report is valid against model-keys-report.schema.json, and one has
-// model's five_hour window rejected, from the provider, with cooldown_until. After the
-// Bash call Claude Code's next request goes with C: the answer's cooldown keeps the
+// from now; to the session's start report, made at the join before A's refusal, it
+// returns no key. Every report is valid against model-keys-report.schema.json, and one
+// has model's five_hour window rejected, from the provider, with cooldown_until. After
+// the Bash call Claude Code's next request goes with C: the answer's cooldown keeps the
 // proxy from setting B.
 func TestDockerModelKeysReportAndTakeTheControlPlanesCooldown(t *testing.T) {
 	k := newKeysWall(t)
@@ -1109,6 +1115,7 @@ func TestDockerModelKeysReportAndTakeTheControlPlanesCooldown(t *testing.T) {
 	ctl.answer = []server.ModelKeyState{{Credential: "model-b", Window: "five_hour", Status: "rejected",
 		ResetsAt: server.RegistrationTime(now.Add(time.Hour)), CooldownUntil: server.RegistrationTime(now.Add(time.Hour)),
 		Source: "provider", ObservedAt: server.RegistrationTime(now)}}
+	ctl.answers = func(report []byte) bool { return bytes.Contains(report, []byte(`"status":"rejected"`)) }
 	ctl.mu.Unlock()
 	o := s.run(t)
 	log := k.stubLog(t, name)

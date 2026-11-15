@@ -46,6 +46,9 @@ type linkRun struct {
 	// keys is the run's key group, nil when the run has none: the start key's, from the
 	// run configuration's credentials.
 	keys *modelkey.Group
+	// reporter sends the key group's reports, nil when the run has no key group or no
+	// control plane. Set under mu.
+	reporter *keyReporter
 	// writes numbers the git pushes the run's proxy reads, nil until the proxy is made.
 	writes *writeLog
 	// secret is the run's proxy secret, held so that no print of the run shows it.
@@ -713,6 +716,13 @@ func (lr *linkRun) decide(ctx, steps context.Context, d decision, authority func
 				conf, _ := g.config()
 				return g.client.PostModelKeys(ctx, conf.Run.URL, runID, m)
 			}, g.report, lr.logLine)
+			lr.mu.Lock()
+			// A run that a gateway reopens may have a session open.
+			if j := lr.openJoin(); j != nil {
+				rep.session = j.session
+			}
+			lr.reporter = rep
+			lr.mu.Unlock()
 			routine.Go(routine.ForRun(g.report, runID), func() { rep.run(ctx) })
 		}
 	}
@@ -1072,6 +1082,11 @@ func (lr *linkRun) end(e ending) {
 	lr.ended, lr.how, lr.closed = true, e.runEnd(), e.closed
 	if lr.timer != nil {
 		lr.timer.Stop()
+	}
+	if j := lr.openJoin(); j != nil && lr.reporter != nil {
+		// The run's end ends the open join's reports, with or without its
+		// session.started: its end report is made before release ends the reporter.
+		lr.reporter.closed(j.session)
 	}
 	startedAt := lr.startedAt
 	discarded := lr.discarded

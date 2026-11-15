@@ -11,9 +11,14 @@ release may change what an existing document does, and says so under Upgrading.
 #### Upgrading
 
 - Deploy in this order:
-  1. the gateway;
-  2. a Qory Apiary that folds `dev.qory.run.target_write` and sends `use_up_to_percent`
+  1. a Qory Apiary that accepts `session` in the model keys report;
+  2. the gateway;
+  3. a Qory Apiary that folds `dev.qory.run.target_write` and sends `use_up_to_percent`
      and `use_up_to_windows`.
+
+  A Qory Apiary built before it accepts `session` answers a report with `session` with
+  a signed `400` `invalid_request`, and the gateway drops that report, cooldowns
+  included; every report made while a session is open has `session`.
 
   A Qory Apiary built before the type stores each `dev.qory.run.target_write`, and its
   fold skips it.
@@ -257,6 +262,24 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `dev.qory.runtime.result` has `usage`, the tokens of the runtime's launch so far,
+  subagents included: `input`, `output` (thinking included), `cache_read` and
+  `cache_write`, each an optional integer of at least 0; absent is unknown. A launch can
+  write several result lines, each with the launch's total up to it. Claude Code's rule
+  sums `modelUsage` over the models; a line with no `modelUsage` has no `usage`. Fixture:
+  `runtimes/claude/fixtures/background-result/`, three result lines of one launch with
+  a subagent in the background.
+- A descriptor rule can have `sum`: more fields of the event's data, each the sum of a
+  named number over the members of one object of the record, `over`. A field of `data`
+  or `sum` with dots, such as `usage.input`, is a member of a nested object. The
+  session refuses a rule that sets a field twice, or a field and a member of it. A
+  member of `session`, `line`, `truncated` or `summary` is refused like the name
+  itself.
+- The model keys report has `session`, an optional integer of at least 1: the number of
+  the session that was open when the gateway made the report, as in
+  `dev.qory.session.started`. A report made while no session is open has none.
+  `version` stays 1. Fixtures: `fixtures/model-keys-report/report-session.json`, and
+  `fixtures/invalid/model-keys-report-session-0.json`.
 - `policy.ImageWithoutUserInfo` returns an image reference without the user
   information it may start with: everything up to and with the last `@` before a
   trailing `@sha256:`, `@sha512:` or `@blake3:` digest, a scheme in front of it too.
@@ -1103,6 +1126,15 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The gateway sends a model keys report at each session's start, the join's `200`, and
+  at its end, when it numbers the session's `dev.qory.session.exited` or when the run
+  ends at the gateway while the join is open, also when no window changed. Each report
+  made while a session is open has the session's number in `session`. A start or end
+  report keeps its session and windows across tries, with a new `time` for each try,
+  and the reports keep the gap of a second and one in flight.
+  After the run's end, the gateway writes one line to its log with the count of the
+  reports that were not sent or not accepted within 10 seconds.
+  `server.ModelKeysReport` has `Session`.
 - The gateway writes `dev.qory.run.target_write` for each git push over HTTP that the
   run's proxy reads, on a host it terminates or in a plain request: `started` as the
   push goes to the host, then `changed`, `refused` or `cut`. It reads the report status
