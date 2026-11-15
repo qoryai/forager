@@ -193,3 +193,181 @@ func TestTheRunsEndSendsAWaitingReportOnce(t *testing.T) {
 		t.Errorf("%d reports at the end with no change; want none", len(times))
 	}
 }
+
+// recorder is the send of a key reporter that records each report, and fails the tries
+// fail returns true for with no answer.
+type recorder struct {
+	mu      sync.Mutex
+	reports []server.ModelKeysReport
+	at      []time.Time
+	fail    func(n int, rep server.ModelKeysReport) bool
+}
+
+func (r *recorder) send(_ context.Context, rep server.ModelKeysReport) ([]server.ModelKeyState, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reports = append(r.reports, rep)
+	r.at = append(r.at, time.Now())
+	if r.fail != nil && r.fail(len(r.reports), rep) {
+		return nil, errors.New("no answer")
+	}
+	return nil, nil
+}
+
+func (r *recorder) sent() []server.ModelKeysReport {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]server.ModelKeysReport(nil), r.reports...)
+}
+
+// wait waits until n reports are sent.
+func (r *recorder) wait(t *testing.T, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for len(r.sent()) < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d reports; want %d", len(r.sent()), n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// fiveHour is the utilization of the first entry for the five-hour window, -1 for none.
+func fiveHour(rep server.ModelKeysReport) int {
+	for _, s := range rep.Keys {
+		if s.Window == "five_hour" && s.Utilization != nil {
+			return *s.Utilization
+		}
+	}
+	return -1
+}
+
+// startedReporter runs a reporter of one key that sends to r with a gap of gap, until
+// the test's cleanup.
+func startedReporter(t *testing.T, r *recorder, gap time.Duration) (*keyReporter, func(string), func()) {
+	g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}}, "model", nil)
+	k := newKeyReporter("run", "https://control.example/v1/runs", g, r.send, func(string) {}, func(string) {})
+	k.gap = gap
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { k.run(ctx); close(done) }()
+	stop := func() { cancel(); <-done }
+	t.Cleanup(stop)
+	change := func(fraction string) {
+		g.Answered("model", http.StatusOK, http.Header{"Anthropic-Ratelimit-Unified-5h-Status": {"allowed"}, "Anthropic-Ratelimit-Unified-5h-Utilization": {fraction}})
+	}
+	return k, change, stop
+}
+
+// TestReportsHaveTheOpenSession pins the session of a report: none before the first
+// session and after it; the session's number in its start report, which goes with no
+// change, in each report made while it is open, and in its end report, which goes with
+// no change too; and the gap between the starts of the reports.
+func TestReportsHaveTheOpenSession(t *testing.T) {
+	r := &recorder{}
+	k, change, stop := startedReporter(t, r, 100*time.Millisecond)
+	change("0.10")
+	r.wait(t, 1)
+	k.opened(1)
+	r.wait(t, 2)
+	change("0.20")
+	r.wait(t, 3)
+	k.closed(1)
+	r.wait(t, 4)
+	change("0.30")
+	r.wait(t, 5)
+	time.Sleep(300 * time.Millisecond)
+	stop()
+	reps := r.sent()
+	want := []struct{ session, five int }{{0, 10}, {1, 10}, {1, 20}, {1, 20}, {0, 30}}
+	if len(reps) != len(want) {
+		t.Fatalf("%d reports %+v; want %d", len(reps), reps, len(want))
+	}
+	for i, w := range want {
+		if reps[i].Session != w.session || fiveHour(reps[i]) != w.five {
+			t.Errorf("report %d: session %d, utilization %d; want %d, %d", i, reps[i].Session, fiveHour(reps[i]), w.session, w.five)
+		}
+	}
+	for i := 1; i < len(r.at); i++ {
+		if gap := r.at[i].Sub(r.at[i-1]); gap < 95*time.Millisecond {
+			t.Errorf("reports %d and %d are %v apart; want at least the gap", i-1, i, gap)
+		}
+	}
+}
+
+// TestABoundaryReportKeepsItsStateAcrossTries pins the tries of an end report: a try
+// after the next session opened and the windows changed has the ended session's number
+// and keys, with a new time, and the next session's start report follows it with the
+// new keys; no report of changes goes between them or after.
+func TestABoundaryReportKeepsItsStateAcrossTries(t *testing.T) {
+	r := &recorder{}
+	k, change, stop := startedReporter(t, r, 0)
+	// Tries 1.1 seconds apart, so each try's time, in whole seconds, differs.
+	k.backoff = []time.Duration{1100 * time.Millisecond}
+	k.opened(1)
+	r.wait(t, 1)
+	change("0.10")
+	r.wait(t, 2)
+	r.mu.Lock()
+	r.fail = func(n int, _ server.ModelKeysReport) bool { return n == 3 }
+	r.mu.Unlock()
+	k.closed(1)
+	r.wait(t, 3)
+	change("0.20")
+	k.opened(2)
+	r.wait(t, 5)
+	time.Sleep(300 * time.Millisecond)
+	stop()
+	reps := r.sent()
+	want := []struct{ session, five int }{{1, -1}, {1, 10}, {1, 10}, {1, 10}, {2, 20}}
+	if len(reps) != len(want) {
+		t.Fatalf("%d reports %+v; want %d", len(reps), reps, len(want))
+	}
+	for i, w := range want {
+		if reps[i].Session != w.session || fiveHour(reps[i]) != w.five {
+			t.Errorf("report %d: session %d, utilization %d; want %d, %d", i, reps[i].Session, fiveHour(reps[i]), w.session, w.five)
+		}
+	}
+	if reps[2].Time == reps[3].Time {
+		t.Errorf("the end report's two tries have the time %s; want a new time per try", reps[2].Time)
+	}
+}
+
+// TestABoundaryReportTakesTheNextTry pins a report of changes in a backoff when a
+// session opens: the next try is the start report, which covers the changes, and no
+// report without a session follows it.
+func TestABoundaryReportTakesTheNextTry(t *testing.T) {
+	r := &recorder{fail: func(n int, _ server.ModelKeysReport) bool { return n == 1 }}
+	k, change, stop := startedReporter(t, r, 0)
+	k.backoff = []time.Duration{200 * time.Millisecond}
+	change("0.10")
+	r.wait(t, 1)
+	k.opened(1)
+	r.wait(t, 2)
+	time.Sleep(300 * time.Millisecond)
+	stop()
+	reps := r.sent()
+	if len(reps) != 2 || reps[0].Session != 0 || reps[1].Session != 1 || fiveHour(reps[1]) != 10 {
+		t.Errorf("reports %+v; want the failed one without a session, then the start report of session 1 with utilization 10", reps)
+	}
+}
+
+// TestTheRunsEndSendsAWaitingEndReport pins the end of a run within the gap after its
+// session's end: the start and end reports that wait go once each, the gap apart, with
+// the session's number, and nothing follows them.
+func TestTheRunsEndSendsAWaitingEndReport(t *testing.T) {
+	r := &recorder{}
+	k, change, stop := startedReporter(t, r, 200*time.Millisecond)
+	change("0.10")
+	r.wait(t, 1)
+	k.opened(1)
+	k.closed(1)
+	stop()
+	reps := r.sent()
+	if len(reps) != 3 || reps[1].Session != 1 || reps[2].Session != 1 || fiveHour(reps[2]) != 10 {
+		t.Errorf("reports %+v; want one without a session, then the start and end reports of session 1", reps)
+	}
+	if gap := r.at[2].Sub(r.at[1]); gap < 195*time.Millisecond {
+		t.Errorf("the start and end reports are %v apart; want at least the gap", gap)
+	}
+}

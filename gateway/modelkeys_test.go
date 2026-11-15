@@ -365,3 +365,112 @@ func TestARunExitedModelKeyLimitNeedsThePausedSession(t *testing.T) {
 		t.Errorf("a session.exited cancelled with model_key_limit: %+v", d)
 	}
 }
+
+// TestReportsFollowTheSessions pins the session of each model keys report through the
+// gateway: a report made before the first join has none; the join's 200 makes the
+// start report of session 1, with the keys of the report before when nothing changed; a
+// change during the session has its number; and its numbered dev.qory.session.exited
+// makes its end report, with the keys of the report before when nothing changed. Each
+// report passes the schema, and each has a later time than the one before.
+func TestReportsFollowTheSessions(t *testing.T) {
+	g := startGroupRun(t)
+	type report struct {
+		Time    string            `json:"time"`
+		Session int               `json:"session"`
+		Keys    []json.RawMessage `json:"keys"`
+	}
+	reports := func(n int) []report {
+		t.Helper()
+		eventually(t, strconv.Itoa(n)+" reports", func() bool { g.mu.Lock(); defer g.mu.Unlock(); return len(g.reports) >= n })
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		var out []report
+		for _, b := range g.reports {
+			var r report
+			if err := json.Unmarshal(b, &r); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, r)
+		}
+		return out
+	}
+	if status, calls := g.send(t); status != http.StatusOK || strings.Join(calls, ",") != "model" {
+		t.Fatalf("the request before the join: %d, %v", status, calls)
+	}
+	reports(1)
+	n := g.h.joined(g.runID)
+	reports(2)
+	g.h.post(sessionStarted(g.runID, n))
+	g.limit("model")
+	if status, calls := g.send(t); status != http.StatusOK || strings.Join(calls, ",") != "model,model-2" {
+		t.Fatalf("the request in the session: %d, %v", status, calls)
+	}
+	eventually(t, "a report with model-2", func() bool {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		return strings.Contains(string(g.reports[len(g.reports)-1]), `"credential":"model-2"`)
+	})
+	inSession := len(reports(1))
+	g.h.post(sessionExited(g.runID, n))
+	all := reports(inSession + 1)
+	time.Sleep(1500 * time.Millisecond)
+	if after := reports(1); len(after) != len(all) {
+		t.Errorf("%d reports; want %d, none after the end report", len(after), len(all))
+	}
+	for i, r := range all {
+		want := 1
+		if i == 0 {
+			want = 0
+		}
+		if r.Session != want {
+			t.Errorf("report %d has session %d; want %d", i, r.Session, want)
+		}
+		if i > 0 && r.Time <= all[i-1].Time {
+			t.Errorf("report %d has the time %s, report %d %s; want a later time", i, r.Time, i-1, all[i-1].Time)
+		}
+	}
+	same := func(a, b report) bool {
+		x, _ := json.Marshal(a.Keys)
+		y, _ := json.Marshal(b.Keys)
+		return string(x) == string(y)
+	}
+	if !same(all[0], all[1]) {
+		t.Errorf("the start report's keys %s; want those of the report before", all[1].Keys)
+	}
+	if last := len(all) - 1; !same(all[last], all[last-1]) {
+		t.Errorf("the end report's keys %s; want those of the report before", all[last].Keys)
+	}
+	schema, err := contracts.Compile("model-keys-report.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, r := range g.reports {
+		doc, _ := contracts.Decode("r.json", r)
+		if err := schema.Validate(doc); err != nil {
+			t.Errorf("the report %s fails the schema: %v", r, err)
+		}
+	}
+}
+
+// TestTheGatewaysSessionEndMakesAnEndReport pins the end report of a session the
+// gateway ends: a batch the link refuses ends the run, and the gateway's numbered
+// dev.qory.session.exited makes the session's end report, sent after the run's end.
+func TestTheGatewaysSessionEndMakesAnEndReport(t *testing.T) {
+	g := startGroupRun(t)
+	n := g.h.joined(g.runID)
+	g.h.post(sessionStarted(g.runID, n))
+	eventually(t, "the start report", func() bool { g.mu.Lock(); defer g.mu.Unlock(); return len(g.reports) == 1 })
+	if d := g.h.post(ev(g.runID, event.RunRegistered, map[string]any{})); d.End != "batch_refused" {
+		t.Fatalf("the refused batch: %+v", d)
+	}
+	eventually(t, "the end report", func() bool { g.mu.Lock(); defer g.mu.Unlock(); return len(g.reports) == 2 })
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for i, b := range g.reports {
+		if !strings.Contains(string(b), `"session":1,`) {
+			t.Errorf("report %d %s; want session 1", i, b)
+		}
+	}
+}
