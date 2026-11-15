@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -285,8 +286,9 @@ type Rule struct {
 
 // Sum is a rule's fields that add numbers over the members of the object at the path
 // Over: each field of Fields is the sum of the number at its path in every member that
-// is an object and has a number there. A field no member has a number for is left out,
-// and so is every field when Over is no object.
+// is an object and has a whole number of at least 0 there, in the order of the members'
+// names, leaving out a member that would take the total past 2^53. A field no member
+// has such a number for is left out, and so is every field when Over is no object.
 type Sum struct {
 	Over   string            `yaml:"over" json:"over"`
 	Fields map[string]string `yaml:"fields" json:"fields"`
@@ -632,15 +634,16 @@ func (rule *Rule) data(record map[string]any, element *any) map[string]any {
 	}
 	over, _ := read(record, element, rule.Sum.Over)
 	members, _ := over.(map[string]any)
+	names := slices.Sorted(maps.Keys(members))
 	for field, path := range rule.Sum.Fields {
 		total, found := 0.0, false
-		for _, m := range members {
-			obj, ok := m.(map[string]any)
+		for _, name := range names {
+			obj, ok := members[name].(map[string]any)
 			if !ok {
 				continue
 			}
 			v, _ := lookup(obj, path)
-			if n, ok := number(v); ok {
+			if n, ok := number(v); ok && n >= 0 && n == math.Trunc(n) && total+n <= maxSum {
 				total, found = total+n, true
 			}
 		}
@@ -650,6 +653,10 @@ func (rule *Rule) data(record map[string]any, element *any) map[string]any {
 	}
 	return out
 }
+
+// maxSum is the largest total of a sum, 2^53: every whole number up to it is exact in a
+// float64.
+const maxSum = 1 << 53
 
 // set writes v at the dotted field in out, making each object on the way.
 func set(out map[string]any, field string, v any) {

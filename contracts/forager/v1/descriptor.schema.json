@@ -352,7 +352,7 @@
             "additionalProperties": {"$ref": "#/$defs/path"}
           },
           "sum": {
-            "description": "More fields of the event's data, each the sum of a number over the members of one object of the record, such as the tokens per model of a result line. over is a dotted path to the object; in a rule with each, a path that starts with each. reads the element. Each key of fields is a field of the data, as in data, and each value a dotted path into each member: the field is the sum of the numbers at that path in the members that are objects and have a number there. A field that no member has a number for is left out, and so is every field when over is no object or does not exist.",
+            "description": "More fields of the event's data, each the sum of a number over the members of one object of the record, such as the tokens per model of a result line. over is a dotted path to the object; in a rule with each, a path that starts with each. reads the element. Each key of fields is a field of the data, as in data, and each value a dotted path into each member: the field is the sum of the numbers at that path in the members that are objects and have a whole number of at least 0 there, in the order of the members' names, leaving out a member that would take the total past 2^53. A field that no member has such a number for is left out, and so is every field when over is no object or does not exist.",
             "type": "object",
             "additionalProperties": false,
             "required": ["over", "fields"],

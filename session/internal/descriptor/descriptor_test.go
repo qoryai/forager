@@ -770,8 +770,9 @@ func TestResumeDecodes(t *testing.T) {
 }
 
 // TestSumAddsNamedFieldsOverMembers pins a rule's sum: each field is the sum of its
-// path's number over the members of the object that are objects and have a number
-// there, written at a dotted field as a nested object beside data's fields; a field no
+// path's number over the members of the object that are objects and have a whole number
+// of at least 0 there, in the order of their names, without a member that would take
+// the total past 2^53, written at a dotted field as a nested object beside data's fields; a field no
 // member has a number for is left out, and every field when the path is no object or
 // does not exist. In a rule with each, over reads the element.
 func TestSumAddsNamedFieldsOverMembers(t *testing.T) {
@@ -805,6 +806,11 @@ func TestSumAddsNamedFieldsOverMembers(t *testing.T) {
 			`{"meta":{"kind":"k"},"session_id":"s","usage":{"cache_read":7,"input":13,"output":7}}`},
 		{`{"type":"result","session_id":"s","perModel":{"model-a":{"inputTokens":"10"},"model-b":4,"model-c":{"inputTokens":1}}}`,
 			`{"session_id":"s","usage":{"input":1}}`},
+		{`{"type":"result","session_id":"s","perModel":{"model-a":{"inputTokens":1.5},"model-b":{"inputTokens":-3},"model-c":{"inputTokens":2}}}`,
+			`{"session_id":"s","usage":{"input":2}}`},
+		{`{"type":"result","session_id":"s","perModel":{"model-a":{"inputTokens":1e308},"model-b":{"inputTokens":1e308}}}`, `{"session_id":"s"}`},
+		{`{"type":"result","session_id":"s","perModel":{"model-a":{"inputTokens":9007199254740990},"model-b":{"inputTokens":5},"model-c":{"inputTokens":2}}}`,
+			`{"session_id":"s","usage":{"input":9007199254740992}}`},
 		{`{"type":"result","session_id":"s","perModel":{}}`, `{"session_id":"s"}`},
 		{`{"type":"result","session_id":"s","perModel":[{"inputTokens":1}]}`, `{"session_id":"s"}`},
 		{`{"type":"result","session_id":"s"}`, `{"session_id":"s"}`},
