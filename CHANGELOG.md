@@ -261,6 +261,19 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `dev.qory.runtime.result` has `usage`, the tokens of the runtime's launch so far,
+  subagents included: `input`, `output` (thinking included), `cache_read` and
+  `cache_write`, each an optional integer of at least 0; absent is unknown. A launch can
+  write several result lines, each with the launch's total up to it. Claude Code's rule
+  sums `modelUsage` over the models; a line with no `modelUsage` has no `usage`. Fixture:
+  `runtimes/claude/fixtures/background-result/`, three result lines of one launch with
+  a subagent in the background.
+- A descriptor rule can have `sum`: more fields of the event's data, each the sum of a
+  named number over the members of one object of the record, `over`. A field of `data`
+  or `sum` with dots, such as `usage.input`, is a member of a nested object. The
+  session refuses a rule that sets a field twice, or a field and a member of it. A
+  member of `session`, `line`, `truncated` or `summary` is refused like the name
+  itself.
 - The model keys report has `session`, an optional integer of at least 1: the number of
   the session that was open when the gateway made the report, as in
   `dev.qory.session.started`. A report made while no session is open has none.

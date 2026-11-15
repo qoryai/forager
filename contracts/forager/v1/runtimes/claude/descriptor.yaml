@@ -273,6 +273,10 @@ rules:
       reason: reason
       agent_id: agent_id
       agent_type: agent_type
+  # A launch can write several result lines: a subagent in the background adds one at
+  # its handback and one at its notification. modelUsage and total_cost_usd count the
+  # launch so far, subagents included; the line's usage counts neither the subagents
+  # nor the lines before, so usage comes from modelUsage.
   - source: output
     match: {type: result}
     type: dev.qory.runtime.result
@@ -284,6 +288,13 @@ rules:
       duration_ms: duration_ms
       cost_usd: total_cost_usd
       result: result
+    sum:
+      over: modelUsage
+      fields:
+        usage.input: inputTokens
+        usage.output: outputTokens
+        usage.cache_read: cacheReadInputTokens
+        usage.cache_write: cacheCreationInputTokens
   # Text and thinking blocks, in the order of the message's blocks: each text and
   # thinking block of an assistant message, of the main conversation or of a subagent,
   # and each text block of a subagent's user message, such as the first one, which
