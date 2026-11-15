@@ -5294,9 +5294,10 @@ A rule's `sum`, optional, adds more fields: `over` is a dotted path to an object
 `fields` maps each field to a dotted path inside each member of that object. The field
 is the sum of the numbers at that path in the members that are objects and have a
 whole number of at least 0 there, taken in the order of the members' names; a member
-that would take the total past 2^53 is left out of it. A field that no member has such
-a number for is left out, and so is every field
-when `over` is no object or does not exist. Claude Code's result rule has `over:
+that would take the total past 2^53 is left out of it. A field is left out when no
+member adds to it: when no member has such a number, or when every member that has one
+is left out, as `1e308` alone is. Every field is left out when `over` is no object or
+does not exist. Claude Code's result rule has `over:
 modelUsage` and `usage.input: inputTokens`, so `{"model-a": {"inputTokens": 10},
 "model-b": {"inputTokens": 3}}` gives `usage.input` 13. A rule sets each field once, in
 `data` or `sum`, and sets no member of a field it sets; the session refuses a

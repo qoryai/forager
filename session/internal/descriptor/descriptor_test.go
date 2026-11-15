@@ -770,11 +770,13 @@ func TestResumeDecodes(t *testing.T) {
 }
 
 // TestSumAddsNamedFieldsOverMembers pins a rule's sum: each field is the sum of its
-// path's number over the members of the object that are objects and have a whole number
-// of at least 0 there, in the order of their names, without a member that would take
-// the total past 2^53, written at a dotted field as a nested object beside data's fields; a field no
-// member has a number for is left out, and every field when the path is no object or
-// does not exist. In a rule with each, over reads the element.
+// path's number over the members of the object that are objects and have a whole
+// number of at least 0 there, in the order of their names, without a member that would
+// take the total past 2^53, written at a dotted field as a nested object beside data's
+// fields. A field no member adds to is left out, when no member has such a number or
+// when every member that has one is left out, as 1e308 alone is; every field is left
+// out when the path is no object or does not exist. In a rule with each, over reads the
+// element.
 func TestSumAddsNamedFieldsOverMembers(t *testing.T) {
 	d := &descriptor.Descriptor{Rules: []descriptor.Rule{
 		{Source: "output", Match: map[string]any{"type": "result"}, Type: "dev.qory.runtime.result",
@@ -811,6 +813,9 @@ func TestSumAddsNamedFieldsOverMembers(t *testing.T) {
 		{`{"type":"result","session_id":"s","perModel":{"model-a":{"inputTokens":1e308},"model-b":{"inputTokens":1e308}}}`, `{"session_id":"s"}`},
 		{`{"type":"result","session_id":"s","perModel":{"model-a":{"inputTokens":9007199254740990},"model-b":{"inputTokens":5},"model-c":{"inputTokens":2}}}`,
 			`{"session_id":"s","usage":{"input":9007199254740992}}`},
+		{`{"type":"result","session_id":"s","perModel":{"model-a":{"inputTokens":9007199254740991},"model-b":{"inputTokens":2}}}`,
+			`{"session_id":"s","usage":{"input":9007199254740991}}`},
+		{`{"type":"result","session_id":"s","perModel":{"model-a":{"inputTokens":1e308}}}`, `{"session_id":"s"}`},
 		{`{"type":"result","session_id":"s","perModel":{}}`, `{"session_id":"s"}`},
 		{`{"type":"result","session_id":"s","perModel":[{"inputTokens":1}]}`, `{"session_id":"s"}`},
 		{`{"type":"result","session_id":"s"}`, `{"session_id":"s"}`},

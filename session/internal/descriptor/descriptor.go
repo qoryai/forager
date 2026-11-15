@@ -288,7 +288,7 @@ type Rule struct {
 // Over: each field of Fields is the sum of the number at its path in every member that
 // is an object and has a whole number of at least 0 there, in the order of the members'
 // names, leaving out a member that would take the total past 2^53. A field no member
-// has such a number for is left out, and so is every field when Over is no object.
+// adds to is left out, and so is every field when Over is no object.
 type Sum struct {
 	Over   string            `yaml:"over" json:"over"`
 	Fields map[string]string `yaml:"fields" json:"fields"`
@@ -643,7 +643,7 @@ func (rule *Rule) data(record map[string]any, element *any) map[string]any {
 				continue
 			}
 			v, _ := lookup(obj, path)
-			if n, ok := number(v); ok && n >= 0 && n == math.Trunc(n) && total+n <= maxSum {
+			if n, ok := number(v); ok && n >= 0 && n == math.Trunc(n) && n <= maxSum-total {
 				total, found = total+n, true
 			}
 		}

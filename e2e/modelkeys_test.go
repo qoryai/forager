@@ -1101,9 +1101,9 @@ func TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun(t *testing.T) {
 // gateway reports A's refusal with POST <run.url>/<run_id>/model-keys, and the fake
 // control plane returns that model-b is rejected in its five_hour window until an hour
 // from now; to the session's start report, made at the join before A's refusal, it
-// returns no key. Every report is valid against model-keys-report.schema.json, and one has
-// model's five_hour window rejected, from the provider, with cooldown_until. After the
-// Bash call Claude Code's next request goes with C: the answer's cooldown keeps the
+// returns no key. Every report is valid against model-keys-report.schema.json, and one
+// has model's five_hour window rejected, from the provider, with cooldown_until. After
+// the Bash call Claude Code's next request goes with C: the answer's cooldown keeps the
 // proxy from setting B.
 func TestDockerModelKeysReportAndTakeTheControlPlanesCooldown(t *testing.T) {
 	k := newKeysWall(t)
