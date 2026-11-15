@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -9,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway/internal/modelkey"
+	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/server"
 )
 
@@ -431,7 +434,7 @@ func TestTheRunsEndLogsTheReportsThatDidNotGo(t *testing.T) {
 
 // TestANewReportStartsTheBackoffAgain pins the backoff per report: a start report that
 // takes the place of a report of changes in a backoff waits the first backoff after its
-// own first try, not the next one of the report it replaced.
+// first try, not the next one of the report it replaced.
 func TestANewReportStartsTheBackoffAgain(t *testing.T) {
 	r := &recorder{}
 	k, change, _ := startedReporter(t, r, 0)
@@ -450,5 +453,28 @@ func TestANewReportStartsTheBackoffAgain(t *testing.T) {
 	reps := r.sent()
 	if reps[0].Session != 0 || reps[1].Session != 1 || reps[2].Session != 1 {
 		t.Errorf("reports %+v; want one of changes, then the start report twice", reps)
+	}
+}
+
+// TestASessionExitedAfterTheRunsEndMakesNoSecondEndReport pins one end report per
+// session: a dev.qory.session.exited that a batch numbers after the run's end, which
+// made the open join's end report, makes no second one; before the end it makes one.
+func TestASessionExitedAfterTheRunsEndMakesNoSecondEndReport(t *testing.T) {
+	for _, ended := range []bool{false, true} {
+		g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}}, "model", nil)
+		k := newKeyReporter("run", "https://control.example/v1/runs", g, (&recorder{}).send, func(string) {}, func(string) {})
+		lr := &linkRun{id: "run", seen: map[string]bool{}, r: &run.Run{}, reporter: k, ended: ended,
+			joins: []*join{{session: 1, accepted: true, started: true}}}
+		lr.mu.Lock()
+		lr.joined(event.Event{Type: event.SessionExited, Data: json.RawMessage(`{"session":1,"state":"succeeded","exit_code":0,"duration_ms":5}`)})
+		lr.mu.Unlock()
+		want := 1
+		if ended {
+			want = 0
+		}
+		if k.mu.Lock(); len(k.pending) != want {
+			t.Errorf("run ended %v: %d end reports; want %d", ended, len(k.pending), want)
+		}
+		k.mu.Unlock()
 	}
 }

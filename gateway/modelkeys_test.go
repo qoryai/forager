@@ -636,3 +636,26 @@ func TestTheOneAddressReportsReplayedAndReopenedJoins(t *testing.T) {
 		t.Errorf("the report after the reopen %s; want session 1 and the change", got[1])
 	}
 }
+
+// TestARunsEndBesideTheSessionsEndMakesOneEndReport pins one end report when the run's
+// end and the session's dev.qory.session.exited race: a batch the link refuses ends the
+// run while another batch numbers the session's end, and the control gets the start
+// report and one end report of session 1, whichever comes first.
+func TestARunsEndBesideTheSessionsEndMakesOneEndReport(t *testing.T) {
+	g := startGroupRun(t)
+	n := g.h.joined(g.runID)
+	g.h.post(sessionStarted(g.runID, n))
+	eventually(t, "the start report", func() bool { g.mu.Lock(); defer g.mu.Unlock(); return len(g.reports) == 1 })
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); g.batch(t, ev(g.runID, event.RunRegistered, map[string]any{})) }()
+	go func() { defer wg.Done(); g.batch(t, sessionExited(g.runID, n)) }()
+	wg.Wait()
+	eventually(t, "the end report", func() bool { g.mu.Lock(); defer g.mu.Unlock(); return len(g.reports) >= 2 })
+	time.Sleep(1200 * time.Millisecond)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.reports) != 2 {
+		t.Errorf("%d reports %q; want the start report and one end report", len(g.reports), g.reports)
+	}
+}

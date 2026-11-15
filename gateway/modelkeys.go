@@ -51,7 +51,8 @@ type keyReporter struct {
 	session int
 	// pending are the boundary reports not yet sent or dropped, oldest first.
 	pending []boundaryReport
-	// made counts the boundary reports made, so each has its own id.
+	// made counts the boundary reports made, so no two boundary reports have the same
+	// id.
 	made uint64
 	// stopped is true once run returned after a 404 or a 410: no boundary report is
 	// kept from then on.
@@ -248,8 +249,13 @@ func (k *keyReporter) last(ctx context.Context, prev time.Time, sent uint64) {
 	for {
 		k.mu.Lock()
 		waiting := len(k.pending)
+		// A change after the last waiting boundary report's snapshot needs one more report.
+		covered := sent
+		if waiting > 0 {
+			covered = max(covered, k.pending[waiting-1].covers)
+		}
 		k.mu.Unlock()
-		changed := k.g.Changes() != sent
+		changed := k.g.Changes() > covered
 		if waiting == 0 && !changed {
 			return
 		}
