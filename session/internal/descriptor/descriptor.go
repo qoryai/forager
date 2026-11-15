@@ -13,7 +13,8 @@
 // source whose match holds produces one event, type and data, by copying values out of
 // the record. A rule with each produces one event per element of an array in the record
 // that a rule with that each matches, each by the first such rule it matches. It matches
-// and copies; it never computes, and there is nothing to configure that would make it.
+// and copies, and computes one thing alone: a rule's sum adds named numbers over the
+// members of an object, such as the token counts per model of a result line.
 // [Descriptor.Link] reads the descriptor's parent member: which tool call started a
 // subagent, for the session to set the subagent's parent.
 //
@@ -276,7 +277,19 @@ type Rule struct {
 	Match map[string]any `yaml:"match" json:"match"`
 	Type  string         `yaml:"type" json:"type"`
 	// Data holds the event's fields and the record paths their values are copied from.
+	// A field with dots, such as usage.input, is a member of a nested object.
 	Data map[string]string `yaml:"data" json:"data"`
+	// Sum, when set, adds more fields, each a sum over the members of an object.
+	Sum *Sum `yaml:"sum" json:"sum,omitempty"`
+}
+
+// Sum is a rule's fields that add numbers over the members of the object at the path
+// Over: each field of Fields is the sum of the number at its path in every member that
+// is an object and has a number there. A field no member has a number for is left out,
+// and so is every field when Over is no object.
+type Sum struct {
+	Over   string            `yaml:"over" json:"over"`
+	Fields map[string]string `yaml:"fields" json:"fields"`
 }
 
 // Event is one event a rule produces: its type and its data.
@@ -347,7 +360,29 @@ func Parse(name string, b []byte) (*Descriptor, error) {
 	if err := d.Resume.check(); err != nil {
 		return nil, fmt.Errorf("%s: %w", shown, err)
 	}
+	if err := d.checkRules(); err != nil {
+		return nil, fmt.Errorf("%s: %w", shown, err)
+	}
 	return &d, nil
+}
+
+// checkRules checks what the schema cannot express of each rule's fields, those of data
+// and of sum together: no field is set twice, and none is the object of another, as
+// usage is of usage.input.
+func (d *Descriptor) checkRules() error {
+	for i, r := range d.Rules {
+		fields := slices.Collect(maps.Keys(r.Data))
+		if r.Sum != nil {
+			fields = append(fields, slices.Collect(maps.Keys(r.Sum.Fields))...)
+		}
+		slices.Sort(fields)
+		for j := 1; j < len(fields); j++ {
+			if a, b := fields[j-1], fields[j]; a == b || strings.HasPrefix(b, a+".") {
+				return fmt.Errorf("rules[%d]: set %s once, and set no member of it: a rule's data and sum write each field once", i, a)
+			}
+		}
+	}
+	return nil
 }
 
 // check checks what the schema cannot express of resume: path starts with prefix, and
@@ -537,7 +572,7 @@ func (d *Descriptor) Map(r Record) []Event {
 		}
 		if rule.Each == "" {
 			if matches(rule.Match, r.Record, nil) {
-				return []Event{{Type: rule.Type, Data: copied(rule.Data, r.Record, nil)}}
+				return []Event{{Type: rule.Type, Data: rule.data(r.Record, nil)}}
 			}
 			continue
 		}
@@ -552,7 +587,7 @@ func (d *Descriptor) Map(r Record) []Event {
 			for j := i; j < len(d.Rules); j++ {
 				other := &d.Rules[j]
 				if other.Source == r.Source && other.Each == rule.Each && matches(other.Match, r.Record, element) {
-					events = append(events, Event{Type: other.Type, Data: copied(other.Data, r.Record, element)})
+					events = append(events, Event{Type: other.Type, Data: other.data(r.Record, element)})
 					break
 				}
 			}
@@ -583,15 +618,51 @@ func (d *Descriptor) Link(r Record) (agentID, toolUseID string, ok bool) {
 // eachPrefix is how a path of a rule with each starts when it reads the element.
 const eachPrefix = "each."
 
-// copied is the data of a rule's event: each field whose path exists, with its value.
-func copied(data map[string]string, record map[string]any, element *any) map[string]any {
+// data is the data of a rule's event: each field of Data whose path exists, with its
+// value, and each field of Sum that has a sum.
+func (rule *Rule) data(record map[string]any, element *any) map[string]any {
 	out := map[string]any{}
-	for field, path := range data {
+	for field, path := range rule.Data {
 		if v, ok := read(record, element, path); ok {
-			out[field] = v
+			set(out, field, v)
+		}
+	}
+	if rule.Sum == nil {
+		return out
+	}
+	over, _ := read(record, element, rule.Sum.Over)
+	members, _ := over.(map[string]any)
+	for field, path := range rule.Sum.Fields {
+		total, found := 0.0, false
+		for _, m := range members {
+			obj, ok := m.(map[string]any)
+			if !ok {
+				continue
+			}
+			v, _ := lookup(obj, path)
+			if n, ok := number(v); ok {
+				total, found = total+n, true
+			}
+		}
+		if found {
+			set(out, field, total)
 		}
 	}
 	return out
+}
+
+// set writes v at the dotted field in out, making each object on the way.
+func set(out map[string]any, field string, v any) {
+	keys := strings.Split(field, ".")
+	for _, k := range keys[:len(keys)-1] {
+		next, ok := out[k].(map[string]any)
+		if !ok {
+			next = map[string]any{}
+			out[k] = next
+		}
+		out = next
+	}
+	out[keys[len(keys)-1]] = v
 }
 
 // matches reports whether the record matches every entry of match, or the element for a

@@ -330,7 +330,9 @@ const beyondLinkSchema = "-beyond-schema-"
 // a run.exited without state, with a state other than the four, with a reason that is
 // not a code, with gateway_lost and a state other than failed, with quiet and no
 // quiet_seconds or with quiet_seconds and another reason, a run.refused with a code outside the list and no
-// status, a descriptor with an expression, a descriptor whose model section has a
+// status, a descriptor with an expression, a descriptor rule that maps a member of
+// session, or whose sum sets summary, has no over or fields or an over that is no
+// dotted path, a descriptor whose model section has a
 // format outside the list, a place of two kinds or of none, an empty list of values,
 // no formats, a member it does not define, an endpoint that is no variable,
 // overrides that are empty, list a name twice or list something other than a

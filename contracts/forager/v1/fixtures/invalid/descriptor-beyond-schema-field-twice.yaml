@@ -1,0 +1,19 @@
+# A rule sets usage.output once: in data and in sum is twice. Only the session's reader
+# checks it.
+version: 1
+runtime: example
+runtime_version: "1.0.0"
+sources:
+  output: {format: jsonl}
+rules:
+  - source: output
+    match: {type: result}
+    type: dev.qory.runtime.result
+    data:
+      session_id: session_id
+      outcome: subtype
+      is_error: is_error
+      usage.output: usage.output_tokens
+    sum:
+      over: modelUsage
+      fields: {usage.output: outputTokens}

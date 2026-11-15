@@ -345,16 +345,25 @@
             ]
           },
           "data": {
-            "description": "The event's data: each key is a field of the type's data, each value a dotted path into the record whose value is copied there unchanged. A path that does not exist leaves the field out. In a rule with each, a path that starts with each. reads the element. session, line, truncated and summary are the session's to set, and no rule sets them.",
+            "description": "The event's data: each key is a field of the type's data, each value a dotted path into the record whose value is copied there unchanged. A key with dots, such as usage.input, is a member of a nested object of the data, made when a value goes in it. A path that does not exist leaves the field out. In a rule with each, a path that starts with each. reads the element. session, line, truncated and summary are the session's to set, and no rule sets them or a member of them. A rule sets each field once, in data or sum, and sets no member of a field it sets, as usage and usage.input; the session's reader checks this.",
             "type": "object",
             "minProperties": 1,
-            "propertyNames": {
-              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
-              "not": {"enum": ["session", "line", "truncated", "summary"]}
-            },
-            "additionalProperties": {
-              "type": "string",
-              "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+            "propertyNames": {"$ref": "#/$defs/field"},
+            "additionalProperties": {"$ref": "#/$defs/path"}
+          },
+          "sum": {
+            "description": "More fields of the event's data, each the sum of a number over the members of one object of the record, such as the tokens per model of a result line. over is a dotted path to the object; in a rule with each, a path that starts with each. reads the element. Each key of fields is a field of the data, as in data, and each value a dotted path into each member: the field is the sum of the numbers at that path in the members that are objects and have a number there. A field that no member has a number for is left out, and so is every field when over is no object or does not exist.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["over", "fields"],
+            "properties": {
+              "over": {"$ref": "#/$defs/path"},
+              "fields": {
+                "type": "object",
+                "minProperties": 1,
+                "propertyNames": {"$ref": "#/$defs/field"},
+                "additionalProperties": {"$ref": "#/$defs/path"}
+              }
             }
           }
         }
@@ -394,6 +403,12 @@
       }
     },
     "path": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"},
+    "field": {
+      "description": "A field of an event's data that a rule sets, dotted for a member of a nested object; never session, line, truncated or summary, or a member of one, which the session sets.",
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$",
+      "not": {"pattern": "^(session|line|truncated|summary)(\\.|$)"}
+    },
     "place": {
       "description": "Where a value goes, exactly one of: flag, an argument the runtime is started with, which takes the value; setting, a dotted key in the JSON settings file the launch passes; variable, an environment variable.",
       "type": "object",

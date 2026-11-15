@@ -768,3 +768,93 @@ func TestResumeDecodes(t *testing.T) {
 		}
 	}
 }
+
+// TestSumAddsNamedFieldsOverMembers pins a rule's sum: each field is the sum of its
+// path's number over the members of the object that are objects and have a number
+// there, written at a dotted field as a nested object beside data's fields; a field no
+// member has a number for is left out, and every field when the path is no object or
+// does not exist. In a rule with each, over reads the element.
+func TestSumAddsNamedFieldsOverMembers(t *testing.T) {
+	d := &descriptor.Descriptor{Rules: []descriptor.Rule{
+		{Source: "output", Match: map[string]any{"type": "result"}, Type: "dev.qory.runtime.result",
+			Data: map[string]string{"session_id": "session_id", "meta.kind": "kind"},
+			Sum:  &descriptor.Sum{Over: "perModel", Fields: map[string]string{"usage.input": "inputTokens", "usage.output": "out.tokens", "usage.cache_read": "cacheRead"}}},
+		{Source: "output", Match: map[string]any{"type": "batch", "each.kind": "part"}, Each: "parts", Type: "dev.qory.runtime.result",
+			Data: map[string]string{"session_id": "session_id"},
+			Sum:  &descriptor.Sum{Over: "each.models", Fields: map[string]string{"usage.output": "outputTokens"}}},
+	}}
+	mapped := func(js string) []descriptor.Event {
+		t.Helper()
+		var m map[string]any
+		if err := json.Unmarshal([]byte(js), &m); err != nil {
+			t.Fatal(err)
+		}
+		return d.Map(descriptor.Record{Source: "output", Record: m})
+	}
+	data := func(js string) string {
+		t.Helper()
+		events := mapped(js)
+		if len(events) != 1 {
+			t.Fatalf("%s: %d events", js, len(events))
+		}
+		b, _ := json.Marshal(events[0].Data)
+		return string(b)
+	}
+	for _, c := range []struct{ record, want string }{
+		{`{"type":"result","session_id":"s","kind":"k","perModel":{"model-a":{"inputTokens":10,"out":{"tokens":5}},"model-b":{"inputTokens":3,"out":{"tokens":2},"cacheRead":7}}}`,
+			`{"meta":{"kind":"k"},"session_id":"s","usage":{"cache_read":7,"input":13,"output":7}}`},
+		{`{"type":"result","session_id":"s","perModel":{"model-a":{"inputTokens":"10"},"model-b":4,"model-c":{"inputTokens":1}}}`,
+			`{"session_id":"s","usage":{"input":1}}`},
+		{`{"type":"result","session_id":"s","perModel":{}}`, `{"session_id":"s"}`},
+		{`{"type":"result","session_id":"s","perModel":[{"inputTokens":1}]}`, `{"session_id":"s"}`},
+		{`{"type":"result","session_id":"s"}`, `{"session_id":"s"}`},
+	} {
+		if got := data(c.record); got != c.want {
+			t.Errorf("%s:\n got %s\nwant %s", c.record, got, c.want)
+		}
+	}
+	events := mapped(`{"type":"batch","session_id":"s","parts":[{"kind":"part","models":{"a":{"outputTokens":2},"b":{"outputTokens":3}}},{"kind":"part"}]}`)
+	if len(events) != 2 {
+		t.Fatalf("%d events; want 2", len(events))
+	}
+	if b, _ := json.Marshal(events[0].Data); string(b) != `{"session_id":"s","usage":{"output":5}}` {
+		t.Errorf("the first element's data %s", b)
+	}
+	if b, _ := json.Marshal(events[1].Data); string(b) != `{"session_id":"s"}` {
+		t.Errorf("the second element's data %s; want no usage", b)
+	}
+}
+
+// TestRuleFieldsAreSetOnce pins the fields of data and sum together: Parse refuses a
+// rule that sets a field twice or a field and a member of it, the fixtures under
+// fixtures/invalid named descriptor-beyond-schema-field-*, which pass the schema; and it
+// refuses the descriptor-sum-* fixtures and a member of session, which fail it.
+func TestRuleFieldsAreSetOnce(t *testing.T) {
+	entries, err := fs.ReadDir(contracts.FS, "fixtures/invalid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, "descriptor-beyond-schema-field-") && !strings.HasPrefix(name, "descriptor-sum-") && name != "descriptor-data-session-member.yaml" {
+			continue
+		}
+		n++
+		b, err := fs.ReadFile(contracts.FS, "fixtures/invalid/"+name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = descriptor.Parse(name, b)
+		if err == nil {
+			t.Errorf("%s was accepted", name)
+			continue
+		}
+		if strings.Contains(name, "beyond-schema") && !strings.Contains(err.Error(), "a rule's data and sum write each field once") {
+			t.Errorf("%s: %v; want the check of the rule's fields", name, err)
+		}
+	}
+	if n != 7 {
+		t.Errorf("%d fixtures; want 7: two fields set twice or with a member, a member of session, and four sums", n)
+	}
+}
