@@ -76,7 +76,12 @@ func fakeSetupRecords() int {
 		}
 		recs = append(recs, runtimes.Record{Source: runtimes.SourceSetup, Record: m})
 	}
-	if err := socket.Send(context.Background(), os.Getenv(session.EnvSocket), recs); err != nil {
+	addr := os.Getenv(session.EnvSocket)
+	if forged := os.Getenv("FAKE_AFTER_SOCKET"); forged != "" {
+		// A process of After's container that is told where the socket is.
+		addr = forged
+	}
+	if err := socket.Send(context.Background(), addr, recs); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 82
 	}
@@ -95,7 +100,12 @@ func fakeSocketRecords() int {
 		}
 		recs = append(recs, rec)
 	}
-	if err := socket.Send(context.Background(), os.Getenv(session.EnvSocket), recs); err != nil {
+	addr := os.Getenv(session.EnvSocket)
+	if forged := os.Getenv("FAKE_AFTER_SOCKET"); forged != "" {
+		// A process of After's container that is told where the socket is.
+		addr = forged
+	}
+	if err := socket.Send(context.Background(), addr, recs); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 82
 	}

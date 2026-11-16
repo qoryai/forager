@@ -54,10 +54,6 @@ var errTimeout = errors.New("the run's time limit")
 // run: a 410 on the link, or the gateway's 400 to a batch.
 var errRunClosed = errors.New("the run was closed")
 
-// errAfterLimit ends a launch whose after step ran past AfterTimeout, the 5 s of
-// SIGKILL's wait and the stop's grace.
-var errAfterLimit = errors.New("the after step's limit")
-
 var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // CheckRunID refuses a caller's run id that is not a UUID in the canonical lower-case

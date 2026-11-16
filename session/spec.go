@@ -459,44 +459,47 @@ type SessionSpec struct {
 	// dev.qory.session.exited. dev.qory.session.started reports the launch without it.
 	// The run's Wall needs one.
 	Exec []string
-	// After is a command, its program and arguments, that Exec runs inside the wall
-	// once the runtime exits, such as a commit of what the agent left in the workspace.
-	// Before it starts, Exec stops every other process of the agent's container: it
-	// kills each process of the agent's user but Exec and the container's init, and
-	// with nested Docker removes, through the inner daemon's API, the swarm's services,
-	// the swarm, each plugin and each container. A process that started after Exec,
-	// of any user, then counts as left; so does an inner object the daemon could not
-	// list or remove in time. After runs in Dir, as the runtime's user, with no input,
-	// in a new process group, with the runtime's environment but GIT_DIR,
-	// GIT_WORK_TREE, GIT_INDEX_FILE, GIT_EXEC_PATH, GIT_CONFIG*, GIT_SSH*, GIT_ASKPASS,
-	// BASH_ENV, ENV, LD_PRELOAD, LD_LIBRARY_PATH, XDG_* and QORY_RUN_SOCKET, with HOME
-	// a new, empty directory that nothing writes to, and with variables that keep git
-	// from reading the system's and the user's configuration, from running a hook, an
-	// fsmonitor, a credential helper or a signing program, and from reaching a remote
-	// other than over HTTPS. git 2.54 still runs a hook of .git/config's
-	// hook.<name>.command: the caller refuses such keys. PATH keeps only absolute
-	// directories that the agent's user does not own, nor any directory above them, and
-	// that no group or other user may write, but a directory with the sticky bit; a
-	// directory on a read-only mount counts as unchanged. After's program is refused,
-	// exit status 126, when it or a directory above it fails the same check. It is the
-	// session's after step, of kind event.StepAfter and name after: its lines are the
-	// command's output, and its exit status the command's. Its records reach the
-	// session with a key Exec makes and sends as the socket's first record, before the
-	// runtime starts: an after record without it is reported and not recorded. At
-	// AfterTimeout Exec sends SIGTERM to the command's process group and SIGKILL 5 s
-	// later: the step ends cancelled with reason timeout. When the kernel kills a process
-	// of the container for lack of memory while After runs, the step ends failed with
-	// reason out_of_memory. When Exec cannot stop the other processes within 2 s, After
-	// does not start and the step ends failed with 125. The step ends before the
-	// session's dev.qory.session.exited, whose state and exit status stay the
-	// runtime's; Result.After is the step's outcome. A runtime stopped at the Timeout
-	// still gets After: the session holds the launch until the after step ends, at most
-	// AfterTimeout, 10 s and StopGrace past its start, the 10 s being 2 s for each of
-	// the two stops, 5 s from SIGTERM to SIGKILL and 1 s for After's last output. A stop
-	// from outside, the context's end or the run's close, gives After no more time than
-	// StopGrace: its step then ends cancelled with -1. A runtime that does not exit
-	// within StopGrace of a stop signal gets no After. Empty means none. After needs the
-	// run's Wall, Exec and an AfterTimeout above zero, and its words no NUL.
+	// After is a command, its program and arguments, that runs in a new container of the
+	// wall once the runtime exits, such as a commit of what the agent left in the
+	// workspace. The session removes the agent's container first, which ends every
+	// process in it, with nested Docker the inner containers too, and then starts After's
+	// container: the run's image under the run's container runtime, as the wall's user
+	// with no capability and no nested Docker, on the wall's network with the run's proxy
+	// and no route to the caller, with the mount that holds Dir and a socket of its own,
+	// and none of the run's variables. Exec starts After there, with the option
+	// --after-only. After runs in Dir, with no input, in a new process group, with the
+	// container's environment but GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_EXEC_PATH,
+	// GIT_CONFIG*, GIT_SSH*, GIT_ASKPASS, BASH_ENV, ENV, LD_PRELOAD, LD_LIBRARY_PATH,
+	// XDG_* and QORY_RUN_SOCKET, with HOME a new, empty directory that nothing writes
+	// to, and with variables that keep git from reading the system's and the user's
+	// configuration, from running a hook, an fsmonitor, a credential helper or a signing
+	// program, and from reaching a remote other than over HTTPS. git 2.54 still runs a
+	// hook of .git/config's hook.<name>.command: the caller refuses such keys. PATH
+	// keeps only absolute directories that the agent's user does not own, nor any
+	// directory above them, and that no group or other user may write, but a directory
+	// with the sticky bit; a directory on a read-only mount counts as unchanged. So a
+	// write into the workspace by that user, also while After runs, cannot change which
+	// program runs. After's program is refused, exit status 126, when it or a directory
+	// above it fails the same check. It is the session's after step, of kind
+	// event.StepAfter and name after: its lines are the command's output, and its exit
+	// status the command's. Its records reach the session over the one connection that
+	// Exec opens before After starts, and the session reads that connection alone: a
+	// process After starts cannot write the step. At AfterTimeout Exec sends SIGTERM to
+	// the command's process group and SIGKILL 5 s later: the step ends cancelled with
+	// reason timeout. When the kernel kills a process of the container for lack of
+	// memory while After runs, the step ends failed with reason out_of_memory. When the
+	// agent's container cannot be removed, or After's cannot start, the step ends failed
+	// with -1 and the reason as its line. The step ends before the session's
+	// dev.qory.session.exited, whose state and exit status stay the runtime's;
+	// Result.After is the step's outcome. A runtime stopped at the Timeout, a pause and
+	// a runtime stopped by the context's end all get After. The step, the agent's
+	// container's removal and After's start included, is cut off at AfterTimeout, 5 s
+	// from SIGTERM to SIGKILL, 1 s for After's last output and 1 minute for the removal
+	// and the start; after the context's end it gets StopGrace from that moment, and its
+	// step then ends cancelled with -1. A run closed from outside starts no After. The
+	// setup container, when it still runs, stays: it does not reach After's socket. Empty
+	// means none. After needs the run's Wall, an enclosure that is a wall.AfterWrapper
+	// with an Unwrap, Exec and an AfterTimeout above zero, and its words no NUL.
 	After []string
 	// AfterTimeout is how long After may run: above zero with After, unused without.
 	AfterTimeout time.Duration
@@ -702,10 +705,8 @@ type Result struct {
 	// intervals, and batch_refused when it refused a batch from the run's session.
 	ClosedReason string
 	// After is the outcome of the session's after step, SessionSpec.After's: nil when
-	// the spec has no After, and when no record of the step's start reached the session,
-	// such as for a runtime that did not exit within StopGrace of a stop signal, or an
-	// Exec that a process of the agent's ended first. A caller that sets After treats nil
-	// as an After that did not run.
+	// the spec has no After, and when no After started: the run was closed from outside.
+	// A caller that sets After treats nil as an After that did not run.
 	After *AfterResult
 }
 
@@ -719,9 +720,9 @@ type AfterResult struct {
 	State string
 	// ExitCode is the command's exit status, 128 and the signal's number for a command a
 	// signal ended, 127 for a program Exec did not find, 126 for one it could not start
-	// or refused, 125 when Exec could not stop the container's other processes or make
-	// After's HOME, and -1 when the step ended with no status, at a stop from outside or
-	// a lost record.
+	// or refused, 125 when Exec could not make After's HOME, and -1 when the step ended
+	// with no status: the agent's container could not be removed, After's container did
+	// not start, no record of After's exit arrived, or the step was cut off.
 	ExitCode int
 	// Reason is event.ReasonTimeout at AfterTimeout, event.ReasonOutOfMemory for a
 	// container short of memory, and empty otherwise.

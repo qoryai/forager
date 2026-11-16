@@ -70,24 +70,6 @@ func TestMain(m *testing.M) {
 		}
 		session.SetCgroupRoot(root)
 		session.SetExecHooks(listFDs(os.Getenv("FAKE_FDS_OUT")), waitAfter(os.Getenv("FAKE_AFTER_WAIT")))
-		if file := os.Getenv("FAKE_AFTER_STOP"); file != "" {
-			session.SetAfterStop(func(docker bool) error {
-				f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-				if err != nil {
-					return err
-				}
-				defer f.Close()
-				_, err = fmt.Fprintf(f, "stop docker=%v\n", docker)
-				return err
-			})
-		}
-		if file := os.Getenv("FAKE_AFTER_KEY"); file != "" {
-			session.SetAfterKeyHook(func(key string) {
-				if err := os.WriteFile(file, []byte(key), 0o600); err != nil {
-					fmt.Fprintln(os.Stderr, err)
-				}
-			})
-		}
 		os.Exit(session.Exec(os.Args[2:], os.Stderr))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "setup-command" {

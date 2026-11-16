@@ -39,14 +39,13 @@ func checkExec(spec runSpec) error {
 }
 
 // withExec is the launch of command and args started through the helper's exec, which
-// unsets the names first, then starts the launch, measures the enclosure when it exits,
-// and runs after's command when it has one. The session calls it only behind a wall.
-func withExec(helper, unset []string, after afterLaunch, command string, args []string) (string, []string) {
+// unsets the names first, then starts the launch and measures the enclosure when it
+// exits. The session calls it only behind a wall.
+func withExec(helper, unset []string, command string, args []string) (string, []string) {
 	words := slices.Clone(helper[1:])
 	for _, name := range unset {
 		words = append(words, "--unset", name)
 	}
-	words = append(words, after.args()...)
 	return helper[0], append(append(words, "--", command), args...)
 }
 
@@ -65,7 +64,7 @@ func withExec(helper, unset []string, after afterLaunch, command string, args []
 // once the program exits. Before it starts the program it closes every file descriptor
 // above 2, apart from the Go runtime's poller, an eventpoll and an eventfd, which reach
 // no file. It runs as the program does: the same user, groups and capabilities. It is
-// not dumpable from its start, so no process of the agent's reads its /proc files or
+// not dumpable while it waits, so no process of the agent's reads its /proc files or
 // traces it. With nested Docker, [wall.Nest] executes Exec after it becomes the agent's
 // user. Exec starts the program in a separate process group, as a shell starts a job.
 // When its standard input is a terminal whose foreground group is Exec's, that group
@@ -85,27 +84,13 @@ func withExec(helper, unset []string, after afterLaunch, command string, args []
 // and a host's cgroup seen without a cgroup namespace. A value it cannot read is left
 // out of the record, and a record with no value is not sent.
 //
-// With --after-word, Exec first makes a random key, 32 bytes in hexadecimal, and sends
-// it to the socket as a record of the after source with event key, before it starts
-// the program: the socket's first record, sent while no process of the agent's runs.
-// When the key cannot be sent, the program does not start and Exec returns 125, its
-// reason written to stderr. The key is in no variable or argument. Once the program
-// has exited, Exec runs SessionSpec.After, as its documentation says, and reports it
-// to the socket as records of the after source, each with the key: that it started,
-// each line of its output, and its exit status with the reason, timeout or
-// out_of_memory, when it did not end by itself. Exec stops the container's other processes only when it is
-// the container's first program: the child of pid 1, an engine's init program such as
-// Docker's docker-init, in a pid namespace other than the machine's. Otherwise After
-// does not start and its exit status is 125. Exec sends the first record, that After
-// started, once it has stopped the other processes; when that record cannot be sent,
-// After does not run and Exec writes the reason to stderr. Signals that reach Exec
-// while After runs change nothing.
+// With --after-only, Exec runs no program: it runs SessionSpec.After in the After
+// container the session starts, as [execAfter] says, and nothing else of the above.
 //
-// Its arguments are --unset NAME, any number of times, then --after-timeout MS,
-// --after-word WORD once for each word of After, and --after-docker when the
-// enclosure runs nested Docker, or none of them, then -- and the program and its
-// arguments, which no option of its reaches. A NAME is a variable's name: letters,
-// digits and underscores, starting with a letter or an underscore. When a signal ended
+// Its arguments are --unset NAME, any number of times, then -- and the program and its
+// arguments, which no option of its reaches; or --after-only, --after-timeout MS and
+// --after-word WORD once for each word of After, and nothing after them. A NAME is a
+// variable's name: letters, digits and underscores, starting with a letter or an underscore. When a signal ended
 // the program, Exec ends by the same signal once it has sent the measure, so its
 // parent sees the end it saw when Exec executed the program in its place: docker-init
 // exits 128 and the signal's number, and a session without Docker sees the signal.
@@ -113,21 +98,18 @@ func withExec(helper, unset []string, after afterLaunch, command string, args []
 // signal, it returns 128 and the signal's number. Otherwise it returns the exit
 // status, as a shell does: the program's, 2 for arguments it cannot read, 127 for a
 // program it does not find, or finds only through . or an empty entry of PATH, 126
-// for one it cannot execute, and 125 when it cannot make itself not dumpable, its
-// reason written to stderr.
+// for one it cannot execute. With --after-only it returns 0 once After ran and its
+// exit was sent, and 125 when it cannot make itself not dumpable, connect to the
+// socket or send, its reason written to stderr.
 func Exec(args []string, stderr io.Writer) int {
-	// From its start, no process of the agent's reads Exec's memory, environment or
-	// descriptors, or traces it, After's key included: the program's execve makes the
-	// program dumpable again, and Exec stays as it is.
-	if err := undumpable(); err != nil {
-		fmt.Fprintf(stderr, "exec: allow prctl(PR_SET_DUMPABLE) in the wall's seccomp profile: Exec could not make itself not dumpable (%v), so the program did not start.\n", err)
-		return setupRunnerFailed
-	}
 	opts, argv, err := parseExec(args)
 	names := opts.names
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
+	}
+	if opts.afterOnly {
+		return execAfter(opts.after, stderr)
 	}
 	// The socket is the session's, whatever names the runtime has unset.
 	addr := os.Getenv(EnvSocket)
@@ -148,16 +130,6 @@ func Exec(args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "exec: %s: not found\n", program)
 		return 127
 	}
-	var key string
-	if len(opts.after.words) > 0 {
-		opts.after.kept = startingProcesses()
-		// The key reaches the session before the program starts, while no process of
-		// the agent's runs in the container: the socket's first record is Exec's.
-		if key, err = sendAfterKey(addr); err != nil {
-			fmt.Fprintf(stderr, "exec: run the launch where the run socket reaches the container: After's key could not be sent (%v), so the program did not start.\n", err)
-			return setupRunnerFailed
-		}
-	}
 	closeInherited()
 	notify := passedOn()
 	code, sig, err := startAndWait(path, argv, notify)
@@ -173,12 +145,6 @@ func Exec(args []string, stderr io.Writer) int {
 		// A session that is gone, or a socket that does not reach the enclosure, loses
 		// the measure and nothing else.
 		sendMeasure(addr, cgroupRoot)
-	}
-	if len(opts.after.words) > 0 {
-		// Exec keeps ignoring the signals, while After gets their default actions: a
-		// signal Exec catches, unlike one it ignores, has its default action in a child.
-		signal.Notify(make(chan os.Signal, 1), notify...)
-		runAfterStep(addr, key, opts.after, stderr)
 	}
 	if sig != 0 && endsByDefault(sig) {
 		raise(sig)
@@ -245,6 +211,9 @@ func startAndWait(path string, argv []string, notify []os.Signal) (int, syscall.
 	if foreground() {
 		attr.Foreground, attr.Ctty = true, 0
 	}
+	// While Exec waits, no process of the agent's reads its memory, environment or
+	// descriptors, or traces it: the program's execve makes the program dumpable again.
+	undumpable()
 	if beforeStart != nil {
 		beforeStart()
 	}
@@ -350,10 +319,12 @@ func readMeasure(root string) map[string]any {
 	return m
 }
 
-// execOptions are [Exec]'s options: the names to unset and SessionSpec.After.
+// execOptions are [Exec]'s options: the names to unset, and with afterOnly
+// SessionSpec.After.
 type execOptions struct {
-	names []string
-	after afterLaunch
+	names     []string
+	after     afterLaunch
+	afterOnly bool
 }
 
 // parseExec reads [Exec]'s arguments: its options, and the program and its arguments
@@ -361,7 +332,7 @@ type execOptions struct {
 // what is not a name may hold a value.
 func parseExec(args []string) (execOptions, []string, error) {
 	var opts execOptions
-	usage := errors.New("exec: want --unset NAME ... [--after-timeout MS --after-word WORD ... [--after-docker]] -- program [args]")
+	usage := errors.New("exec: want --unset NAME ... -- program [args], or --after-only --after-timeout MS --after-word WORD ...")
 	timeout := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -374,6 +345,8 @@ func parseExec(args []string) (execOptions, []string, error) {
 				return opts, nil, errors.New("exec: an --unset is not a variable's name: letters, digits and underscores, starting with a letter or an underscore, of at most 128")
 			}
 			opts.names = append(opts.names, args[i])
+		case "--after-only":
+			opts.afterOnly = true
 		case "--after-timeout":
 			if i+1 == len(args) {
 				return opts, nil, errors.New("exec: --after-timeout needs milliseconds")
@@ -390,21 +363,30 @@ func parseExec(args []string) (execOptions, []string, error) {
 			}
 			i++
 			opts.after.words = append(opts.after.words, args[i])
-		case "--after-docker":
-			opts.after.docker = true
 		case "--":
 			switch {
+			case opts.afterOnly:
+				return opts, nil, errors.New("exec: --after-only runs no program: nothing follows its options")
+			case timeout || len(opts.after.words) > 0:
+				return opts, nil, errors.New("exec: --after-timeout and --after-word go with --after-only")
 			case i+1 == len(args) || args[i+1] == "":
 				return opts, nil, errors.New("exec: want --unset NAME ... -- program [args]: the program is missing")
-			case timeout != (len(opts.after.words) > 0), opts.after.docker && !timeout:
-				return opts, nil, errors.New("exec: --after-timeout and --after-word go together, and --after-docker needs them")
-			case timeout && opts.after.words[0] == "":
-				return opts, nil, errors.New("exec: the first --after-word, After's program, is empty")
 			}
 			return opts, args[i+1:], nil
 		default:
 			return opts, nil, usage
 		}
+	}
+	if opts.afterOnly {
+		switch {
+		case !timeout || len(opts.after.words) == 0:
+			return opts, nil, errors.New("exec: --after-only needs --after-timeout and --after-word")
+		case opts.after.words[0] == "":
+			return opts, nil, errors.New("exec: the first --after-word, After's program, is empty")
+		case len(opts.names) > 0:
+			return opts, nil, errors.New("exec: --after-only takes no --unset")
+		}
+		return opts, nil, nil
 	}
 	return opts, nil, errors.New("exec: want --unset NAME ... -- program [args]: -- is missing")
 }

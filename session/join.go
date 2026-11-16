@@ -53,8 +53,10 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 // wall wraps the launch in the wall that [Open] built, and starts the runtime. Behind
 // the Docker wall the wrap writes the docker run of the agent's container, which
 // starts with the launch, after the wall step, and the session's end removes it; the
-// rest of the wall stays until [Run.Close]. Sessions of one run join one after
-// another.
+// rest of the wall stays until [Run.Close]. With SessionSpec.After the session removes
+// the agent's container once the runtime exits, then runs After in a new container of the
+// wall, and writes its after step before dev.qory.session.exited. Sessions of one run
+// join one after another.
 //
 // An error means the session did not start. An error before the join request, of a
 // spec the session refuses or of a run whose setup step of [Run.Setup] failed, writes
@@ -734,6 +736,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// come first, then the image and wall steps, so a failure of the wall follows the
 	// session's dev.qory.session.started.
 	var enclosure wall.Enclosure
+	// unwrapAgent removes the agent's container of an enclosure with an Unwrap; nil without one.
+	var unwrapAgent func(context.Context) error
 	var cols, rows int
 	if interactive {
 		cols, rows = terminalSize(spec.Stdin)
@@ -788,11 +792,28 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		}
 		open = r.startStep(event.StepWall, "start the wall")
 		enclosure = r.enclosure
+		if len(spec.After) > 0 {
+			if _, ok := enclosure.(wall.AfterWrapper); !ok {
+				return fail(fmt.Errorf("Use a wall that starts After's container, a wall.AfterWrapper, for SessionSpec.After: the %s wall does not.", r.open.Wall.Name()))
+			}
+			if _, ok := enclosure.(unwrapper); !ok {
+				return fail(errors.New("Use a wall whose enclosure removes the agent's container, with an Unwrap, for SessionSpec.After: After starts once it is gone."))
+			}
+		}
 		if u, ok := enclosure.(unwrapper); ok {
-			defer func() {
+			// unwrapAgent removes the agent's container once: before After starts, and
+			// otherwise as the session ends.
+			var tried bool
+			var unwrapErr error
+			unwrapAgent = func(c context.Context) error {
+				if tried {
+					return unwrapErr
+				}
+				tried = true
 				// The session's context may be what ended it; the agent's container is
 				// removed regardless.
-				if err := u.Unwrap(context.WithoutCancel(ctx)); err != nil {
+				err := u.Unwrap(c)
+				if err != nil {
 					r.open.Report("removing the wall: " + accesskey.ShownError(err).Error())
 					// The agent's container may outlive the session: the entry stays, and
 					// is the run's while one of the run's containers exists.
@@ -800,7 +821,10 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 					r.keptBy = n
 					r.wallFailed.Store(true)
 				}
-			}()
+				unwrapErr = err
+				return err
+			}
+			defer func() { unwrapAgent(context.WithoutCancel(ctx)) }()
 		} else if enclosure != nil {
 			// With no Unwrap the agent's container stays until the close, and may still
 			// run and write the run's binds after the session ended.
@@ -838,10 +862,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	var terminalMu sync.Mutex
 	stdout, stderr := &terminalWriter{mu: &terminalMu, w: spec.Stdout}, &terminalWriter{mu: &terminalMu, w: spec.Stderr}
 	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup, setupTerminal(interactive, stdout, stderr), neutral, hidden)
-	// The after step's start marks the runtime's exit: afterStart, set before the
-	// launch, decides how the runtime ended and holds the launch while After runs.
-	var afterStart func()
-	afterSteps := r.newAfterSteps(n, len(spec.After) > 0, setupTerminal(interactive, stdout, stderr), neutral, hidden, func() { afterStart() })
+	afterSteps := r.newAfterSteps(n, len(spec.After) > 0, setupTerminal(interactive, stdout, stderr), neutral, hidden)
 	// The mapper is reached from the socket's goroutine and the output's: it sets
 	// parent_agent_id on a subagent's start, which it may keep back for a while, and
 	// writes every event of the session's runtime in order. Each event is masked first,
@@ -871,9 +892,6 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		case runtimes.SourceSetup:
 			setupSteps.handle(rec)
 			return
-		case runtimes.SourceAfter:
-			afterSteps.handle(rec)
-			return
 		case runtimes.SourceMeasure:
 			if spec.Wall != nil {
 				measureMu.Lock()
@@ -887,20 +905,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		}
 		mapper.Handle(rec)
 	}
-	// The launch's Exec sends the after step's key as the socket's first record, before
-	// the program starts and while no process of the agent's runs: Serve reads the
-	// connections one at a time, in the order they connected, from one goroutine.
-	firstOnSocket := true
-	fromSocket := func(rec runtimes.Record) {
-		first := firstOnSocket
-		firstOnSocket = false
-		if rec.Source == runtimes.SourceAfter && rec.Record["event"] == afterKeyEvent {
-			afterSteps.takeKey(rec.Record, first)
-			return
-		}
-		records(rec)
-	}
-	go sock.Serve(fromSocket, func(err error) { r.open.Report("socket: " + accesskey.ShownError(err).Error()) })
+	go sock.Serve(records, func(err error) { r.open.Report("socket: " + accesskey.ShownError(err).Error()) })
 	closeSocket := sync.OnceFunc(func() { sock.Close() })
 	defer closeSocket()
 	defer mapper.Close()
@@ -974,8 +979,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		if err := r.listed.update(slices.Concat(again.sources, binds, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
 		}
-		after := afterLaunch{words: insideAll(spec.After, inside), timeout: spec.AfterTimeout, docker: r.img.Docker}
-		inner, innerArgs := withExec(spec.Exec, unset, after, command, args)
+		inner, innerArgs := withExec(spec.Exec, unset, command, args)
 		launch, err = enclosure.Wrap(runCtx, wall.Launch{
 			Command: inner, Args: innerArgs, Dir: shown.Dir, Interactive: interactive,
 			Env:   wrapEnv,
@@ -1033,7 +1037,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	defer stopRuntime(nil)
 	limited, cancelLimitCause := context.WithCancelCause(stoppable)
 	cancelLimit := func() { cancelLimitCause(nil) }
-	// The limit's timer stops as the after step starts: After's limit is AfterTimeout.
+	// The limit's timer stops once the runtime exits: After's limit is AfterTimeout.
 	stopLimit := func() {}
 	if spec.Timeout > 0 {
 		limit := time.AfterFunc(spec.Timeout, func() { cancelLimitCause(errTimeout) })
@@ -1049,7 +1053,6 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// exited by itself before that signal, whatever its status, is decided by its exit.
 	// What ends the context later changes nothing. A stop in the gateway's answer to a
 	// batch is decided after the exit, below.
-	// With After, the start of the after step is the moment of the runtime's exit.
 	var cancelled, timedOut bool
 	decide := sync.OnceFunc(func() {
 		cause := context.Cause(limited)
@@ -1060,37 +1063,6 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		decide()
 		if exitObserved != nil {
 			exitObserved()
-		}
-	}
-	// With After, the launch is held past the stop's grace once the after step starts,
-	// unless the stop came from outside, until afterBackstop has passed; then the
-	// session stops the launch.
-	afterStart = func() {}
-	if len(spec.After) > 0 {
-		proc.hold = newLaunchHold(runCtx)
-		defer proc.hold.end()
-		var backstop *time.Timer
-		var backstopMu sync.Mutex
-		defer func() {
-			backstopMu.Lock()
-			if backstop != nil {
-				backstop.Stop()
-			}
-			backstopMu.Unlock()
-		}()
-		afterStart = func() {
-			decide()
-			stopLimit()
-			if runCtx.Err() != nil {
-				return
-			}
-			proc.hold.engage()
-			backstopMu.Lock()
-			backstop = time.AfterFunc(afterBackstop(spec.AfterTimeout, proc.grace), func() {
-				proc.hold.end()
-				cancelLimitCause(errAfterLimit)
-			})
-			backstopMu.Unlock()
 		}
 	}
 	// The setup's records are recorded once the launch starts; a command that exits
@@ -1127,9 +1099,6 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	}
 	// A setup step still open when the launch ended has no exit status.
 	setupSteps.finish(closed || timedOut || cancelled)
-	// An after step still open has no exit status: cancelled when the session stopped
-	// the launch, failed otherwise.
-	afterSteps.finish(closed || cancelled || proc.stopped.Load())
 	if err != nil && !closed {
 		r.stops.end()
 		r.write(event.SessionExited, map[string]any{"session": n, "state": event.StateFailed, "exit_code": -1, "duration_ms": time.Since(start).Milliseconds()})
@@ -1150,6 +1119,17 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		cancelFlush()
 	}
 	keyLimit := r.stops.end() == event.ReasonModelKeyLimit
+	// After runs in a new container once the runtime exited, whatever ended it: its exit,
+	// the time limit, a pause or a stop from outside. A run closed from outside starts
+	// none. The step ends before the session's dev.qory.session.exited.
+	if len(spec.After) > 0 && !closed {
+		r.runAfter(afterRun{
+			ctx: ctx, runCtx: runCtx, spec: spec, enclosure: enclosure, unwrapAgent: unwrapAgent,
+			steps: afterSteps, dir: shown.Dir, mounts: shown.Mounts, proxy: fwd.Addr(),
+			words: insideAll(spec.After, inside), grace: proc.grace, session: n,
+		})
+		closed = errors.Is(context.Cause(runCtx), errRunClosed)
+	}
 	state, reason := event.StateFailed, ""
 	switch {
 	case closed:

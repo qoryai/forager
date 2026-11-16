@@ -16,14 +16,13 @@ func SetCgroupRoot(root string) { cgroupRoot = root }
 // has reaped it; nil for nothing.
 func SetExecHooks(before, after func()) { beforeStart, afterWait = before, after }
 
-// SetAfterKeyHook sets what [Exec] calls with each after key it makes; nil for
-// nothing.
-func SetAfterKeyHook(made func(key string)) { afterKeyMade = made }
-
-// SetAfterStop sets what [Exec] calls to stop the container's other processes before
-// and after SessionSpec.After, in place of stopping them.
-func SetAfterStop(stop func(docker bool) error) {
-	stopProcesses = func(docker bool, _ time.Duration, _ []procID) error { return stop(docker) }
+// SetAfterWindow sets how long the session allows the After step in place of the sum of
+// AfterTimeout and the waits for the container's start and its end, and returns a
+// function that restores it. A stop from outside still cuts it to the stop grace.
+func SetAfterWindow(d time.Duration) func() {
+	was := afterWindow
+	afterWindow = func(time.Duration) time.Duration { return d }
+	return func() { afterWindow = was }
 }
 
 // SetUserHome sets the home of the user the session runs as, where the session reads

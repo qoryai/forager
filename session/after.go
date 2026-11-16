@@ -2,8 +2,6 @@ package session
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -23,26 +21,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// afterKillWait is how long After's process group gets between SIGTERM at
-// AfterTimeout and SIGKILL: time for git to remove its index.lock.
-const afterKillWait = 5 * time.Second
-
-// stopOthersWait is how long Exec tries to stop the container's other processes
-// before After: when one is still there by then, After does not start.
-const stopOthersWait = 2 * time.Second
-
-// afterBackstop is how long the session holds a launch once its after step started,
-// for After's timeout and the stop's grace, grace: the stop of the other processes
-// before After and again after it, at most stopOthersWait each, timeout, the 5 s
-// between SIGTERM and SIGKILL, the second that Exec reads After's output after it
-// exits, and grace.
-func afterBackstop(timeout, grace time.Duration) time.Duration {
-	return 2*stopOthersWait + timeout + afterKillWait + setupOutputGrace + grace
-}
-
-// stopProcesses is [stopOthers], or a test's stand-in.
-var stopProcesses = stopOthers
-
 // afterName is the name of a session's after step.
 const afterName = "after"
 
@@ -54,7 +32,7 @@ func checkAfter(spec runSpec) error {
 	case len(spec.After) == 0:
 		return nil
 	case spec.Wall == nil:
-		return errors.New("Open the run with a wall to run SessionSpec.After: After runs inside the wall's container, once every other process of it is stopped.")
+		return errors.New("Open the run with a wall to run SessionSpec.After: After runs in a new container of the wall, once the agent's container is removed.")
 	case spec.AfterTimeout <= 0:
 		return errors.New("Set SessionSpec.AfterTimeout above zero: it is how long SessionSpec.After may run.")
 	case spec.After[0] == "":
@@ -65,107 +43,76 @@ func checkAfter(spec runSpec) error {
 	return nil
 }
 
-// afterLaunch is what the session passes Exec of SessionSpec.After: its words as the
-// enclosure has them, AfterTimeout, and whether the enclosure runs nested Docker.
+// afterLaunch is what the session passes the helper's exec of SessionSpec.After: its
+// words as the After container has them, and AfterTimeout.
 type afterLaunch struct {
 	words   []string
 	timeout time.Duration
-	docker  bool
-	// kept are the processes that ran as Exec started, which the stop leaves: Exec
-	// lists them, the session does not pass them.
-	kept []procID
 }
 
-// args are Exec's options for a: none when a has no words.
+// args are the exec options that run only After: --after-only, then --after-timeout and
+// each word.
 func (a afterLaunch) args() []string {
-	if len(a.words) == 0 {
-		return nil
-	}
-	out := []string{"--after-timeout", strconv.FormatInt(a.timeout.Milliseconds(), 10)}
+	out := []string{"--after-only", "--after-timeout", strconv.FormatInt(a.timeout.Milliseconds(), 10)}
 	for _, w := range a.words {
 		out = append(out, "--after-word", w)
-	}
-	if a.docker {
-		out = append(out, "--after-docker")
 	}
 	return out
 }
 
-// The record of the after source: After started, wrote a line, or exited. A line has
-// stream, stdout or stderr, and bytes in standard base64, and runner true on a line Exec
-// writes in place of the command's output; an exit has exit_code, from 0 to 255, and
-// reason, timeout or out_of_memory, when the command did not end by itself.
+// afterCommand is the command of the After container: the helper's exec, helper, with
+// a's options.
+func afterCommand(helper []string, a afterLaunch) (string, []string) {
+	return helper[0], append(slices.Clone(helper[1:]), a.args()...)
+}
+
+// The record of the after source: After wrote a line or exited. The session writes the
+// start of the step itself, when it starts the container. A line has stream, stdout or
+// stderr, and bytes in standard base64, and runner true on a line the helper writes in
+// place of the command's output; an exit has exit_code, from 0 to 255, and reason,
+// timeout or out_of_memory, when the command did not end by itself.
 const (
 	afterReasonTimeout   = "timeout"
 	afterReasonOutOfMemo = "out_of_memory"
 )
 
-// afterKeyEvent is the event of the after source's key record: the key [Exec] makes
-// for the launch, which it sends as the socket's first record, before the program
-// starts, and which each of its later after records has as key. The session records
-// an after record only with that key: a process of the agent's can reach the socket,
-// but not the key.
-const afterKeyEvent = "key"
-
-// afterKeySize is the length of an after key: 32 random bytes in lower-case
-// hexadecimal.
-const afterKeySize = 64
-
-// sendAfterKey makes a random after key and sends it to the socket at addr as one
-// record of the after source, with event key.
-func sendAfterKey(addr string) (string, error) {
+// execAfter is the helper's exec in its after-only mode, in the After container: it
+// makes itself not dumpable, so no other process of the container reads its descriptors
+// through /proc or traces it, connects to the session's socket at [EnvSocket] before
+// After's command starts, and sends every record of the after source over that
+// connection, which the session reads alone. It returns 0 once After ran and its exit
+// was sent, and 125 when it cannot make itself not dumpable, cannot connect or cannot
+// send, with the reason on stderr.
+func execAfter(a afterLaunch, stderr io.Writer) int {
+	if err := undumpable(); err != nil {
+		fmt.Fprintf(stderr, "exec: allow prctl(PR_SET_DUMPABLE) in the wall's seccomp profile: the helper could not make itself not dumpable (%v), so After did not run.\n", err)
+		return setupRunnerFailed
+	}
+	// A descriptor the engine or an earlier process left open is closed first; the
+	// connection made next is close-on-exec, so no process After starts has it.
+	closeInherited()
+	addr := os.Getenv(EnvSocket)
 	if addr == "" {
-		return "", errors.New(EnvSocket + " is not set")
+		fmt.Fprintf(stderr, "exec: %s is not set, so After did not run.\n", EnvSocket)
+		return setupRunnerFailed
 	}
-	b := make([]byte, afterKeySize/2)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
+	conn, err := socket.Dial(context.Background(), addr)
+	if err != nil {
+		fmt.Fprintf(stderr, "exec: run the launch where the run socket reaches the container: the connection could not be made (%v), so After did not run.\n", err)
+		return setupRunnerFailed
 	}
-	key := hex.EncodeToString(b)
-	if afterKeyMade != nil {
-		afterKeyMade(key)
-	}
-	rec := descriptor.Record{Source: descriptor.SourceAfter, Record: map[string]any{"event": afterKeyEvent, "key": key}}
-	if err := socket.Send(context.Background(), addr, []descriptor.Record{rec}); err != nil {
-		return "", err
-	}
-	return key, nil
-}
-
-// afterKeyMade, when set, gets each after key Exec makes: a test's hook.
-var afterKeyMade func(string)
-
-// runAfterStep runs After for [Exec] once the program exited and the measure was sent,
-// and reports it to the socket at addr as records of the after source, each with key.
-// It stops the container's other processes before it sends the first record, started,
-// so no process the agent left can fill the socket's queue first. When started cannot
-// be sent, After does not run: the session would not record a push it made.
-func runAfterStep(addr, key string, a afterLaunch, stderr io.Writer) {
-	ctx := context.Background()
+	defer conn.Close()
 	record := func(m map[string]any) descriptor.Record {
-		m["key"] = key
 		return descriptor.Record{Source: descriptor.SourceAfter, Record: m}
 	}
-	stopErr := stopProcesses(a.docker, stopOthersWait, a.kept)
-	if err := socket.Send(ctx, addr, []descriptor.Record{record(map[string]any{"event": setupStarted})}); err != nil {
-		fmt.Fprintf(stderr, "exec: run the launch where the run socket reaches the container: the after step's first record could not be sent (%v), so After did not run.\n", err)
-		return
-	}
-	sender := startSetupSender(ctx, addr)
+	sender := startSetupSender(conn.Send)
 	line := func(stream string, b []byte) {
 		sender.send(record(map[string]any{"event": setupLine, "stream": stream, "bytes": encode(b)}))
 	}
 	failed := func(b []byte) {
 		sender.send(record(map[string]any{"event": setupLine, "stream": "stderr", "bytes": encode(b), "runner": true}))
 	}
-	code, reason := setupRunnerFailed, ""
-	if stopErr != nil {
-		failed(fmt.Appendf(nil, "Stop the container's other processes before After: %v. After did not run.\n", stopErr))
-	} else {
-		code, reason = runAfter(a, line, failed)
-		// What After left running is stopped too: no process of it outlives the step.
-		stopProcesses(a.docker, stopOthersWait, a.kept)
-	}
+	code, reason := runAfter(a, line, failed)
 	exited := map[string]any{"event": setupExited, "exit_code": code}
 	if reason != "" {
 		exited["reason"] = reason
@@ -173,7 +120,9 @@ func runAfterStep(addr, key string, a afterLaunch, stderr io.Writer) {
 	sender.send(record(exited))
 	if err := sender.close(); err != nil {
 		fmt.Fprintf(stderr, "exec: the after step's records did not all reach the session: %v\n", err)
+		return setupRunnerFailed
 	}
+	return 0
 }
 
 // runAfter runs the words of a with no input, in a new process group, with
