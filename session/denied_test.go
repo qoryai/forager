@@ -116,9 +116,10 @@ func TestAWalledLaunchStartsThroughTheHelpersExec(t *testing.T) {
 // or the node's deny list removes, which nothing sets, is unset inside, so an image's
 // value for it does not show through: among them Claude Code's BUN_OPTIONS, which
 // loads code into its native binary, and CLAUDE_CODE_API_BASE_URL and
-// CLAUDE_CODE_REMOTE_SETTINGS_PATH, which move its API host and its remote settings; that a pattern of the deny list unsets nothing;
-// and that a name a source sets and wins with, or one the session or the wall sets for
-// the run, keeps its value and is never unset.
+// CLAUDE_CODE_REMOTE_SETTINGS_PATH, which move its API host and its remote settings;
+// that a pattern of the deny list unsets nothing; and that a name a source sets and
+// wins with, or one the session or the wall sets for the run, keeps its value and is
+// never unset.
 func TestADeniedNameIsUnsetBehindAWall(t *testing.T) {
 	w := &openWall{}
 	sp, g := specGateway(t, "INHERITED_DENIED=from-the-shell")
