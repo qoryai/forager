@@ -10,6 +10,15 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Send `push_ref` on the apply item of a credential that pushes, such as
+  `refs/heads/qory/wi_01`: from this change the gateway refuses every git push through
+  an item without it, and through a credential the machine defines with `env` or
+  `file`, which has none; an adapter may answer `push_ref` on an item. A gateway built
+  before this change fails a run whose run configuration has `push_ref` with
+  `run_configuration_invalid`, and reads a `{}` segment as the characters `{}`, so a
+  path with one matches no request.
+- Read `after` as a step kind, and `reason` on `dev.qory.run.step_exited`: a gateway
+  built before this change refuses a batch that has them.
 - A gateway built before this change fails a run with `run_configuration_invalid` when
   the run configuration's API credential has `resets_at`, `schedule_resets_at` or
   `pause_for_s`, and ignores the run configuration's `resume`. It also ends a run `batch_refused` for a batch with
@@ -250,6 +259,16 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- An apply item of a host credential, in the run configuration, the secrets answer and
+  an adapter's output, may have `push_ref`, the one branch a git push through it may
+  change (§Credentials, The push branch). A renewal keeps it.
+- The path grammar of `egress.paths` and of a credential's `paths` has a `{}` segment,
+  which matches one non-empty segment: `/repos/example-org/app/pulls/{}` matches
+  `/repos/example-org/app/pulls/12` and not `/repos/example-org/app/pulls/12/merge`. A
+  `{` or `}` anywhere else is refused.
+- `dev.qory.run.step_started` has the kind `after`, the session's after step, and
+  `dev.qory.run.step_exited` an optional `reason`, `timeout` or `out_of_memory`, which
+  an after step alone has. `record.schema.json` has the source `after`.
 - `dev.qory.runtime.result` has `usage`, the tokens of the runtime's launch so far,
   subagents included: `input`, `output` (thinking included), `cache_read` and
   `cache_write`, each an optional integer of at least 0; absent is unknown. A launch can
@@ -1114,6 +1133,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The proxy reads every git push to a host of a credential before it sends a byte: each
+  ref command must name the credential's `push_ref`. A push to another branch or a tag,
+  a push through a credential with no `push_ref`, a signed push, and any other form of
+  request that names `receive-pack` get a `403` with a one-line text, recorded as
+  `denied` with the rule `wall:push-ref`.
 - The gateway sends a model keys report at each session's start, the join's `200`, and
   at its end, when it numbers the session's `dev.qory.session.exited` or when the run
   ends at the gateway while the join is open, also when no window changed. Each report
@@ -1899,6 +1923,15 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `SessionSpec.After` and `AfterTimeout`: a command the helper's exec runs inside the
+  wall once the runtime exits, such as a commit of what the agent left. The exec first
+  stops every other process of the agent's container, and with nested Docker every
+  inner container, and runs After with git's hooks, fsmonitor, credential helpers,
+  signing and the system's and user's configuration off, and a `PATH` without a
+  directory the agent can write. The session writes it as an `after` step before
+  `dev.qory.session.exited`, and `Result.After` has its outcome. A runtime stopped at
+  `Timeout` still gets After. `Exec` takes `--after-timeout MS`, `--after-word WORD` and
+  `--after-docker`. Join refuses After without a wall or an `AfterTimeout`.
 - `(*session.Run).SetRunAPICheck`, `session.RunAPIRequest` and `session.RunAPIRefusal`:
   a check of each POST that a walled program sends to the run API, before anything of it
   reaches the gateway. Call `SetRunAPICheck` after `Open` and before `Setup` and the
@@ -2514,6 +2547,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The Docker suites check `SessionSpec.After`: a background job the runtime leaves is
+  stopped before After runs, and After stops at `AfterTimeout`.
 - `TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun` runs Claude Code 2.1.316
   behind the wall with two keys, each with `use_up_to_percent` 90. The stub serves
   each request with the five-hour window at 90 percent: the second request goes with

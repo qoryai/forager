@@ -420,7 +420,7 @@ returns and before `Close`. Each error starts with the fix, and writes nothing:
 
 | Call | When | Error |
 |---|---|---|
-| `StartStep` | a kind other than fetch, compose, build, push, machine and copy | `start a host step of kind fetch, compose, build, push, machine or copy, not "setup": Join writes the join, image and wall steps` |
+| `StartStep` | a kind other than fetch, compose, build, push, machine and copy | `start a host step of kind fetch, compose, build, push, machine or copy, not "setup": Join writes the join, image, wall, setup and after steps` |
 | `StartStep` | while a `Join` runs | `start the host step after Join returns: a session of the run is still running` |
 | `StartStep` | while step 1 is open | `exit step 1 before the next host step starts: one host step is open at a time` |
 | `StartStep` | after `Close` | `open a new run for the host step: the run is closed` |
@@ -1333,7 +1333,10 @@ request asks the gateway for, for this session.
   bundle instead.
 - `Wall` starts the runtime behind a wall. See [the wall](wall.md#from-go). A walled
   run needs `Exec`, the command that calls `session.Exec` inside the enclosure, which
-  every walled launch starts through.
+  every walled launch starts through, and which runs `After`. The session passes
+  `Exec` its options before `--`: `--unset NAME` for each name to unset, and for
+  `After` `--after-timeout MS`, `--after-word WORD` for each word, and
+  `--after-docker` when the image runs nested Docker.
   `Mounts` are what else of the machine the wall shows, and `ForagerFiles` the caller's
   files, which no mount may hold. See [Forager's files](wall.md#foragers-files).
 - `Written` are the places of this machine a walled run can write, as the caller records
@@ -1384,6 +1387,20 @@ request asks the gateway for, for this session.
   records to the run socket, `QORY_RUN_SOCKET`, and the session writes the step from
   them. Where the run socket does not cross into the enclosure, an engine in a virtual
   machine such as a Mac's, the runner exits 125 and the session with it.
+- `After` is a command that `Exec` runs inside the wall once the runtime exits, such as
+  qory's commit of what the agent left in the workspace, and `AfterTimeout`, above
+  zero, how long it may run. Before After starts, `Exec` stops every other process of
+  the agent's container, background jobs included, and with nested Docker every inner
+  container. After runs in `Dir` with no input, without the variables that point git
+  elsewhere, and with settings that keep git from running a hook, an fsmonitor, a
+  credential helper or a signing program; its `PATH` has no directory the agent can
+  write. It is the session's `after` step, with its output as the step's lines,
+  before `dev.qory.session.exited`, which keeps the runtime's status. At `AfterTimeout`
+  the step ends `cancelled` with reason `timeout`; when the kernel kills a process of
+  the container for lack of memory, `failed` with `out_of_memory`. A runtime stopped at
+  `Timeout` still gets After; a stop from the caller's context or the run's close gives
+  it no more than `StopGrace`. After needs a `Wall` and `Exec`. See
+  [the contract](../contracts/forager/v1/README.md#the-wall).
 - `Gateway` is the gateway the run speaks to, `session.LocalGateway(l)` with the local
   link the gateway hands out, `(*gateway.Gateway).LocalLink()`, or a
   `session.RemoteGateway` on a separate machine (see
@@ -1497,6 +1514,13 @@ request asks the gateway for, for this session.
   `batch_refused` when it refused a batch from the run's session. The runtime was stopped as at its time limit. A server's
   `410` closes no run: Qory Apiary records what a run reports and never ends a run it
   did not start.
+- `After`, for a spec with `After`, the after step's outcome: `Step`, its number;
+  `State`, `succeeded`, `failed` or `cancelled`; `ExitCode`, the command's status,
+  `125` when the container's other processes were not stopped and After did not start,
+  and `-1` when the step ended with no status; and `Reason`, `timeout`,
+  `out_of_memory` or empty. It is nil when no record of the step's start reached the
+  session: no After ran that the session saw, and a caller that set `After` treats
+  that as a failure.
 
 `(*session.Run).Close` takes a `session.Outcome`, the `State`, `Reason` and `ExitCode`
 of the run's `dev.qory.run.exited`, and writes that event once. A run no session joined,

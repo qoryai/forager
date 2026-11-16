@@ -459,7 +459,7 @@ egress:
 | `egress.allow` | lower-case host names, or `*.` followed by a name for every host below it. No ports, no paths, no schemes. An entry that names a host, not a `*.` suffix, is a host name or an IPv4 address in canonical form, four decimal parts with no leading zero; a document with any other is refused as one the schema refuses. Absent is empty, and `enforce` with an empty list reaches only the hosts `allow_first` lists |
 | `egress.allow_first` | hosts the session may reach in either mode, checked before `deny` and `allow`: a lower-case host name or an IPv4 address in canonical form, with no `*.` pattern, at most 64 entries. A host an entry matches is allowed, and the entry is the rule reported; a host below an entry is not matched. The guard of a walled proxy (§The wall), `wall:host-form`, `wall:plain-request`, the run limits and `paths` still apply. A document with any other entry is refused. Absent is empty |
 | `egress.deny` | hosts the session may not reach, in `allow`'s grammar, in either mode: a host an entry covers is denied before `allow` and the mode are consulted, unless `allow_first` lists the host, whatever `allow` contains, and the entry is the rule reported. Absent is empty |
-| `egress.paths` | by host, in `allow`'s grammar, the paths the session may request on it: a path matched whole, or up to a final `*` as a prefix. A host listed is terminated, which needs a wall; a host not listed is reached on every path. A host several entries cover is held to the most specific one: its name itself, else the `*.` entry with the longest suffix. An empty list is no path at all |
+| `egress.paths` | by host, in `allow`'s grammar, the paths the session may request on it: a path matched whole, or up to a final `*` as a prefix, in the path grammar (§The policy, The path grammar). A host listed is terminated, which needs a wall; a host not listed is reached on every path. A host several entries cover is held to the most specific one: its name itself, else the `*.` entry with the longest suffix. An empty list is no path at all |
 | `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, such as a repository, of at most 4096 characters. A policy defines none (§Credentials) |
 | `tools` | the tools of the machine's the run may reach: `name`, and an `argument` when the definition takes one, of at most 4096 characters. A policy defines none (§Tools) |
 | `image` | the image the run starts in: the machine's name for one of its images, or a reference pinned by digest, `NAME@sha256:` and 64 lower-case hexadecimal digits, under one of the machine's `images.allow` prefixes; absent is the machine's default. A policy defines no image (§Images) |
@@ -529,6 +529,18 @@ walled proxy (§The wall) decides before every list. In each list the first entr
 matches is the rule reported. A denial
 is a `403 Forbidden` with a one-line text body containing the host and the mode; a tunnel
 is never opened for it.
+
+**The path grammar.** An entry of `egress.paths`, of a credential's `paths` and of an
+apply item's `paths` starts with `/` and contains no `?`, `#` or white space. A final
+`*` makes the entry a prefix: `/repos/example-org/app/*` matches every path that starts
+with `/repos/example-org/app/`. A segment written exactly `{}` matches one segment that
+is not empty and contains no `/`: `/repos/example-org/app/pulls/{}` matches
+`/repos/example-org/app/pulls/12`, and neither `/repos/example-org/app/pulls/12/merge`
+nor `/repos/example-org/app/pulls/`. A `{}` may stand at any segment, and beside a final
+`*`: `/repos/{}/app/*` matches `/repos/example-org/app/pulls`. A `*` anywhere but at
+the end, and a `{` or `}` anywhere but in a `{}` segment, is refused when the entry is
+loaded. So a list can allow a repository's pull requests and leave out their merge:
+`/repos/example-org/app/pulls/{}` and no entry for `/repos/example-org/app/pulls/{}/merge`.
 
 **Matching a path.** On a terminated host every request is decided by the policy's
 paths for the host and by the paths of the host's credentials. It passes when every
@@ -741,7 +753,8 @@ fails, `placeholder_conflict`, and the run stays open.
 
 **Several credentials on one host.** Two credentials may claim one host when each has
 `paths` and no path of one overlaps a path of the other: two paths overlap when one
-request path can match both, such as `/example-org/*` and `/example-org/harness.git/*`.
+request path can match both, such as `/example-org/*` and `/example-org/harness.git/*`,
+or `/repos/{}/app` and `/repos/example-org/{}`. A `{}` segment overlaps every segment.
 The proxy sets the credential whose paths match the request, and a request that no
 credential's paths match gets none. A credential without `paths` stays alone on its
 hosts. Every answer from the host has the value of each of its credentials replaced
@@ -796,6 +809,32 @@ the body, another encoding of it, a copy inside a compressed payload such as a z
 file, and a value from before a renewal are not replaced. Nor is anything from another
 name or address of the same server that no credential is for: the proxy replaces the
 value only in answers from a host a credential is for. A tool's answers are the tool's.
+
+**The push branch.** On a host of a credential the gateway sets, the proxy reads every
+git push before it sends a byte of it, in either mode. A push is a request whose path
+or `Content-Type` contains `receive-pack`, in any case. Only `POST` to a path that ends
+in `/git-receive-pack`, with `Content-Type` `application/x-git-receive-pack-request`
+and no content coding other than `identity`, is read; any other form of push is
+refused. The credential the proxy sets on the push must have `push_ref` (§From the
+server): a push with no credential set, or with one that has no `push_ref`, is refused.
+A credential the machine defines with `env` or `file` has no `push_ref`, so no push
+goes through it; an adapter's answer may have `push_ref` on an item, as a run
+configuration's may. The proxy reads the request's `shallow` lines,
+then its ref commands up to their flush, each `<old id> <new id> <ref>`: every command
+must name `push_ref`, so the push creates, updates or deletes that branch alone. A
+signed push (`push-cert`), a line of another form, and commands longer than 64 KiB
+(65536 bytes) or slower than 10 seconds are refused. A request body of a flush alone,
+git's probe before a large push, names no ref and passes. A push that passes goes on as
+it came. A refused push gets a `403` with a one-line text body before anything reaches
+the host, and its `dev.qory.run.egress` is `denied` with the `path_rule`
+`wall:push-ref`; it has no `dev.qory.run.target_write`. Such texts are
+`qory: push only refs/heads/qory/wi_01 to git.example/example-org/app.git/git-receive-pack:
+the gateway refuses a push that creates, updates or deletes "refs/heads/main"` and
+`qory: push through qory's push step: the run's credential for git.example allows no
+push`. git shows the status alone: `The requested URL returned error: 403`. A push through a tunnel the proxy does
+not terminate is not read; a host of a credential is always terminated. The guard
+covers git's push over HTTP alone: a host's API that changes a ref, such as a merge, is
+left out by the item's `paths` (§The policy, The path grammar).
 
 **The record.** `dev.qory.run.policy_applied` contains each use, `name`, `argument`,
 `hosts`, `scheme` and `paths`, and the `terminated` hosts. Its `credential_variables` lists the
@@ -867,6 +906,10 @@ request (§The server, Secrets).
   `::` replaces.
 - An item's `paths`, 1 to 32, are in the policy's path grammar, absent meaning every
   path.
+- An item's `push_ref`, optional, is the one branch a git push through the item may
+  change, `refs/heads/` and a name, at most 255 characters, such as
+  `refs/heads/qory/wi_01` (§Credentials, The push branch). Absent, the item allows no
+  push.
 - `placeholders` are variables for the enclosure to get with the placeholder value.
 
 Forager checks a run configuration's `credentials` against the schema, then refuses a
@@ -936,7 +979,7 @@ credentials as before.
 **Renewal.** A value of the answer may have `expires_at`, when it stops working, and
 `apply`, where it is set (`sealed-plaintext.schema.json`). Each `apply` item is within
 one of its entry's items: its hosts among that item's hosts, the same `scheme`,
-`username` and `header`, and paths that the item's paths cover. An API credential's
+`username`, `header` and `push_ref`, and paths that the item's paths cover. An API credential's
 item is its endpoint's host with its `auth`. The items may narrow the entry and never
 widen it. The gateway sets the value on the answer's items, or on the entry's when the
 answer has none.
@@ -1894,7 +1937,10 @@ readable name such as `fetch github.com/example-org/app`, and `kind`, then a
 `dev.qory.run.exited`'s `state` but `paused`. `exit_code` is the exit status of the step's process,
 and `-1` when no process exit status exists, the rule of `dev.qory.run.exited`'s
 `exit_code`. `duration_ms` is the time from the step's start to its end. Each member of
-the two events is required.
+the two events is required, apart from `reason` on `dev.qory.run.step_exited`, which an
+`after` step alone has: `timeout`, cancelled at `SessionSpec.AfterTimeout`, or
+`out_of_memory`, failed when the kernel killed a process of the agent's container for
+lack of memory while the step ran.
 
 | `kind` | The step |
 |---|---|
@@ -1908,6 +1954,7 @@ the two events is required.
 | `push` | host work that sends the run's commits |
 | `machine` | the start of the machine the run runs on |
 | `copy` | host work that copies the session's work out of the wall |
+| `after` | the command `SessionSpec.After` runs inside the wall once the runtime exits (§The wall, After) |
 
 The steps come after `dev.qory.run.started`, numbered from 1 in the order they start,
 one at a time, apart from one case: a session with no runtime, `bare: true` in its
@@ -1922,7 +1969,13 @@ number as `step`, between its `dev.qory.run.step_started` and its
 `dev.qory.run.step_exited`. A host line outside every step has no `step`. `step` is
 optional on `dev.qory.run.log`, so a record with no steps validates. `setup` is the
 kind of a setup command wherever it runs. Forager writes a `setup` step for each
-command of `(*session.Run).Setup` and of `SessionSpec.Setup`.
+command of `(*session.Run).Setup` and of `SessionSpec.Setup`, and an `after` step,
+named `after`, for a session with `SessionSpec.After`: it lies inside the session, after
+the runtime's exit, and ends before the session's `dev.qory.session.exited`, which
+keeps the runtime's `state` and `exit_code`. Its lines are `dev.qory.run.log` events with
+`session` and `step`. A runtime event the session reads from the runtime's output may
+still follow the after step's `dev.qory.run.step_started`, since the output reaches the
+session through the launch's pipe and the after step's records through the socket.
 
 The caller writes the steps of its host work, `fetch`, `compose`, `build`, `push`,
 `machine` and `copy`, before the first join, between joins, or after the last join and
@@ -5572,7 +5625,12 @@ setup commands inside the wall (§The wall, Setup inside the wall). Its `record`
 `command`, the command's number from 1, and `event`: `started`; `line`, with `stream`,
 `stdout` or `stderr`, and `bytes`, the line in standard base64, a long line in parts of
 4096 bytes, and `runner: true` on a line the runner writes when it cannot start or
-wait for the command; or `exited`, with `exit_code`, 0 to 255. The session cuts off a connection
+wait for the command; or `exited`, with `exit_code`, 0 to 255. The helper's exec is a
+third client: once the runtime exits it writes a record of the `measure` source
+(§The events, The measure of the enclosure), and for a session with
+`SessionSpec.After` records of the `after` source, as the setup runner's without
+`command`, whose `exited` may have `reason`, `timeout` or `out_of_memory` (§The wall,
+After). The session cuts off a connection
 that stays open longer than 5 seconds, so the runner opens a connection for each batch
 of records. The socket is removed when the run ends.
 
@@ -5580,6 +5638,7 @@ of records. The socket is removed when the run ends.
 {"source": "setup", "record": {"command": 1, "event": "started"}}
 {"source": "setup", "record": {"command": 1, "event": "line", "stream": "stdout", "bytes": "YWRkZWQgMjE0IHBhY2thZ2VzCg=="}}
 {"source": "setup", "record": {"command": 1, "event": "exited", "exit_code": 0}}
+{"source": "after", "record": {"event": "exited", "exit_code": 143, "reason": "timeout"}}
 ```
 
 ## Images
@@ -6172,6 +6231,53 @@ The setup's records come from inside the enclosure, as the runtime's hook record
 code in the working folder can write records of the `setup` source to the socket, and
 so forge a setup step's lines or its exit status, as it can forge the runtime's events.
 
+**After.** A walled session may have `SessionSpec.After`, a program and its arguments,
+such as a commit of what the agent left in the workspace, with `AfterTimeout`, how long
+it may run, above zero. The helper's exec (§The wall, Names unset inside) runs it once
+the runtime exits and the measure is sent. It first stops every other process of the
+agent's container: it sends `SIGKILL` to each process of the agent's user but itself
+and the container's init, pid 1, and with nested Docker removes each container of the
+inner daemon through its API, until `/proc` lists none of them, for at most 2 seconds.
+It stops processes only as the container's first program: the child of pid 1, an
+engine's init program such as Docker's `docker-init`, in a pid namespace other than the
+machine's. A background job the agent started, such as a
+`nohup` or a `setsid` process, thus changes nothing after the runtime exits. After then
+runs in the working directory, as the runtime's user, with no input, in a process group
+of its own, with the runtime's environment less `GIT_DIR`, `GIT_WORK_TREE`,
+`GIT_INDEX_FILE`, `GIT_EXEC_PATH`, `GIT_OBJECT_DIRECTORY`,
+`GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_COMMON_DIR`, `GIT_NAMESPACE`, every name that
+starts with `GIT_CONFIG` or `GIT_SSH`, `GIT_ASKPASS`, `GIT_PROXY_COMMAND`,
+`GIT_EXTERNAL_DIFF`, `GIT_SEQUENCE_EDITOR`, `BASH_ENV`, `ENV`, `LD_PRELOAD`,
+`LD_LIBRARY_PATH`, `LD_AUDIT` and `QORY_RUN_SOCKET`. It gets `GIT_CONFIG_NOSYSTEM=1`,
+`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_TERMINAL_PROMPT=0`, `GIT_PAGER=cat`, `GIT_EDITOR=:`,
+and through `GIT_CONFIG_COUNT`, which wins over every configuration file,
+`.git/config` included: `core.hooksPath=/dev/null`, `core.fsmonitor=false`,
+`core.attributesFile=/dev/null`, `protocol.ext.allow=never`, `submodule.recurse=false`,
+`core.useReplaceRefs=false`, `core.commitGraph=false`, an empty `credential.helper`,
+`commit.gpgSign=false` and `tag.gpgSign=false`. Its `PATH` keeps the absolute
+directories that exist and that the agent's user cannot write, nor any directory above
+them; `/usr/bin:/bin` when none is left. Other keys of `.git/config`, such as a
+filter, still apply: the caller checks them first. At `AfterTimeout` the group gets
+`SIGTERM`, and `SIGKILL` 5 seconds later; the exec then stops the container's other
+processes again, as it does after every After.
+
+The exec reports After on `QORY_RUN_SOCKET` as records of the `after` source (§The
+local socket), and the session writes them as the session's `after` step (§The events,
+Steps): `succeeded` on 0, `failed` otherwise, `cancelled` with `reason` `timeout` at
+`AfterTimeout`, `failed` with `out_of_memory` when `oom_kill` in the cgroup's
+`memory.events` rose while After ran, and `failed` with `125` and its reason as the
+step's line when the other processes were not stopped, in which case After does not
+start. Where the socket does not cross into the enclosure, After still runs, its output
+on the launch's standard error, and the session writes no after step. The step's start
+marks the runtime's exit: the session decides there whether the runtime timed out,
+stops the run's time limit, and holds the launch for at most `AfterTimeout`, 5 seconds
+and the stop grace. A runtime stopped at the time limit still gets After. A stop from
+outside, the caller's context or the run's close, gives After no more than the stop
+grace; its step then ends `cancelled` with `-1`. A runtime that does not exit within
+the stop grace of a stop signal gets no After. After's records come from inside the
+enclosure, as a setup runner's do; an agent that kills the exec first leaves no after
+step, and `(*session.Result).After` is then nil. A run without a wall has no After.
+
 **Nested Docker.** *Experimental.* Under the nested runtime the enclosure has a root,
 and whether that root reaches the mounts the run lists as the machine's root is
 unverified, so the option is experimental: it may change, and a run that uses it mounts
@@ -6253,7 +6359,7 @@ the option experimental.
 
 | Directory | Contains | Validated against |
 |---|---|---|
-| `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list, enforce with a tool, a credential and a tool each with an argument of 4096 characters, the most one may have, and enforce with an image named by its reference pinned by digest | `policy.schema.json` |
+| `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list, enforce with a tool, a credential and a tool each with an argument of 4096 characters, the most one may have, and enforce with an image named by its reference pinned by digest, and enforce with paths that have a `{}` segment | `policy.schema.json` |
 | `fixtures/server/` | server documents that are accepted, with the fixture access key id and the fixture signing key as the pin, one of them with `via`, its `ca_file` and its pin | `server.schema.json` |
 | `fixtures/configuration/` | configuration documents a server returns: with its events and run endpoints, with a section this revision does not define, with `secrets` and two keys of a rotation, a gateway key's, with no `workspaces` | `configuration.schema.json` |
 | `fixtures/run-registration/` | registration bodies: one without labels or `about`, and one with labels and an `about` of every member; and in the gateway shape, one with labels, `about` and `attach_seconds`, and one with `version`, `run_id` and `time` alone | `run-registration.schema.json` |
@@ -6262,7 +6368,7 @@ the option experimental.
 | `fixtures/batch-answer/` | bodies of a signed `2xx` to a batch: an `end` with a reason, one without, and none | `batch-answer.schema.json` |
 | `fixtures/api-format/` | each API format of the list, one per file | `api-format.schema.json` |
 | `fixtures/descriptor/` | descriptors that are accepted: one whose `model` places the model id in a setting, the run's effort in a variable and an agent's in the frontmatter, with two formats, a key for each, one of them in two auths, and two `overrides`, one whose `model` has no `effort`, and one with `resume` | `descriptor.schema.json` |
-| `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, with neither, which leaves the node's policy in force, and with an image named by its reference pinned by digest and no policy; `credentials.json`, with `model_credential`, an API credential with `key_prefixes` and `pause_for_s`, an API credential whose endpoint has an IPv6 host and a port, and a host credential on an IPv4 host and a name; `credentials-forge.json`, with an API credential with `oauth` and `pause_for_s` and a forge's host credential with two `apply` items and a placeholder; `stack-hosts.json`, with `stack_hosts` of two names, a `*.` suffix and an IPv4 address; `harness.json`, with `harness_hidden`, a harness credential and a work credential on one host; `model-keys.json`, a key group of three API credentials with `resets_at`, `schedule_resets_at` and `pause_for_s`, and a host credential; `model-keys-cooling.json`, a key group whose start key has `chosen` and whose third key has `cooldown_until`; `model-keys-no-pause-for.json`, a key group of two subscription keys whose second key has no `pause_for_s`; `model-keys-use-up-to.json`, a key group of two subscription keys, each with `use_up_to_percent` and `use_up_to_windows`, the second with `cooldown_until`; `resume.json`, with `resume`; `resume-runs.json`, with `resume` and its `runs` of three runs | `run-configuration.schema.json` |
+| `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, with neither, which leaves the node's policy in force, and with an image named by its reference pinned by digest and no policy; `credentials.json`, with `model_credential`, an API credential with `key_prefixes` and `pause_for_s`, an API credential whose endpoint has an IPv6 host and a port, and a host credential on an IPv4 host and a name; `credentials-forge.json`, with an API credential with `oauth` and `pause_for_s` and a forge's host credential with two `apply` items and a placeholder; `credentials-forge-push.json`, a forge's host credential whose `apply` item has `push_ref` and paths with a `{}` segment; `stack-hosts.json`, with `stack_hosts` of two names, a `*.` suffix and an IPv4 address; `harness.json`, with `harness_hidden`, a harness credential and a work credential on one host; `model-keys.json`, a key group of three API credentials with `resets_at`, `schedule_resets_at` and `pause_for_s`, and a host credential; `model-keys-cooling.json`, a key group whose start key has `chosen` and whose third key has `cooldown_until`; `model-keys-no-pause-for.json`, a key group of two subscription keys whose second key has no `pause_for_s`; `model-keys-use-up-to.json`, a key group of two subscription keys, each with `use_up_to_percent` and `use_up_to_windows`, the second with `cooldown_until`; `resume.json`, with `resume`; `resume-runs.json`, with `resume` and its `runs` of three runs | `run-configuration.schema.json` |
 | `fixtures/model-keys-report/` | model keys reports: windows of two keys, one `rejected` with its cooldown, one `allowed_warning` and one `allowed`; cooldowns from `schedule` and `pause_for` with the windows `key` and `spend_limit`; one with no window; and one made while session 2 is open | `model-keys-report.schema.json` |
 | `fixtures/model-keys-answer/` | answers to a model keys report: the windows of three keys, and none | `model-keys-answer.schema.json` |
 | `fixtures/batch/` | delivery bodies: a first batch, with the open's `dev.qory.run.started` and `dev.qory.run.policy_applied` and the first `dev.qory.session.started`, the `dev.qory.run.refused` of a run whose run configuration was refused, `run_configuration_invalid`; the gateway's `dev.qory.session.exited` and `dev.qory.run.exited` of a session's run whose starter gave no outcome while its session ran, each `cancelled` with `stopped` and `exit_code` `-1`, `session-stopped.json`; and the `dev.qory.run.refused` of the server's `not_found` with its `status` `404`, `refused-not-found.json`, and of a code of the server's the schema's list does not hold, with its `status`, `refused-unlisted-server-code.json`; and the `dev.qory.run.policy_applied` of a walled run whose policy file was put under a ceiling with path rules, with its `ceiling_paths`, `policy-applied-ceiling-paths.json`; and the `dev.qory.run.built` of an image built from a commit of 64 characters, `built-sha256-commit.json`, and one with `environment_image` and `base`, `built-environment-image-base.json`; and the open's `dev.qory.run.policy_applied` with a harness credential and the stack proxy's `dev.qory.run.egress` of a request and of a tunnel, `harness.json`, and the same under `harness_hidden`, `harness-hidden.json`; and the `dev.qory.run.egress` of a request of the route to the run API and of a request outside its six shapes, `run-api.json`; and the `dev.qory.run.target_write` events of two pushes, one `changed` and one `cut` at the run's end, `target-write.json` | `batch.schema.json` |

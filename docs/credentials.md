@@ -287,7 +287,7 @@ values. An entry is one of two kinds:
   in [Model keys](#model-keys).
 - A host credential is any other secret: `{name, apply, placeholders}`. Each of its 1
   to 16 `apply` items is one place and way the value is set: `{hosts, scheme, username,
-  header, paths}`.
+  header, paths, push_ref}`.
 
 ```json
 {"version": 1,
@@ -305,6 +305,27 @@ values. An entry is one of two kinds:
     "placeholders": ["GIT_TOKEN"]}]}
 ```
 
+- A path in `paths` is matched whole, or up to a final `*` as a prefix. A segment
+  written `{}` matches any one segment: `/repos/example-org/app/pulls/{}` matches
+  `/repos/example-org/app/pulls/12`, and not `/repos/example-org/app/pulls/12/merge`.
+  So an item can allow a repository's pull requests and leave out their merge. Two
+  paths of one host overlap when one request can match both, and a `{}` overlaps every
+  segment.
+- `push_ref` is the one branch a git push through the item may change, such as
+  `refs/heads/qory/wi_01`. The proxy reads every push to a host of a credential before
+  it sends a byte: each ref the push creates, updates or deletes must be `push_ref`.
+  A push through an item with no `push_ref`, a push to another branch or a tag, and a
+  signed push get a `403`, and the record has the request `denied` with the rule
+  `wall:push-ref`. Through such an item a push to another branch fails with:
+
+  ```text
+  qory: push only refs/heads/qory/wi_01 to git.example/example-org/app.git/git-receive-pack: the gateway refuses a push that creates, updates or deletes "refs/heads/main"
+  ```
+
+  git itself prints only `The requested URL returned error: 403`. An adapter's output
+  may have `push_ref` on an item in the same form. A credential defined with `env` or
+  `file` has no `push_ref`, so no push goes through it.
+
 - The run needs no wall: the gateway sets these credentials with or without one.
   On an unwalled local run the agent can read the gateway's access key, which opens the
   sealed values. The program that starts the run must refuse stored credentials there,
@@ -314,7 +335,7 @@ values. An entry is one of two kinds:
   with none of its `key_prefixes` stops the run with `run_configuration_invalid`.
 - The control plane may send a value with `expires_at`, when it stops working, and
   `apply`, where it is set. `apply` may narrow the entry's items, such as to fewer hosts
-  or paths, and never widen them. A value that expired before the run started, or an
+  or paths, with the same `push_ref`, and never widen them. A value that expired before the run started, or an
   item outside its entry, stops the run with `run_configuration_invalid`.
 - The gateway fetches a value with `expires_at` again 5 minutes before it expires, and
   after a host answers `401` to a request with the value, at most every 30 seconds per
