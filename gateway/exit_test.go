@@ -67,9 +67,9 @@ func TestTheLinkRefusesARunExitedBeyondItsSchema(t *testing.T) {
 // close's: any state, with no reason, timeout or interrupted, no_session only in a run
 // with no join, and image_missing, image_user_root, image_access_denied,
 // image_rate_limited, image_registry_unreachable, workflow_not_in_harness,
-// read_needs_wall, read_needs_setup_outside, read_needs_no_nested_docker and
-// read_needs_setup_removed only failed with exit_code -1 in a run with no join, are
-// taken; a reason the gateway decides, or a starter's, is refused, and the run ends
+// read_needs_wall, read_needs_setup_outside, read_needs_no_nested_docker,
+// read_needs_setup_removed and write_needs_wall only failed with exit_code -1 in a run
+// with no join, are taken; a reason the gateway decides, or a starter's, is refused, and the run ends
 // failed, batch_refused, its reason in the report.
 func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 	h := start(t, gateway.Config{})
@@ -133,6 +133,11 @@ func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 		{map[string]any{"state": "failed", "exit_code": 0, "reason": "read_needs_setup_removed"}, false, "a run.exited read_needs_setup_removed that is not failed with exit_code -1"},
 		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "read_needs_setup_removed"}, false, "a run.exited read_needs_setup_removed that is not failed with exit_code -1"},
 		{map[string]any{"state": "failed", "reason": "read_needs_setup_removed"}, false, "a run.exited read_needs_setup_removed that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "write_needs_wall"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "write_needs_wall"}, true, "a run.exited write_needs_wall of a run with a join"},
+		{map[string]any{"state": "failed", "exit_code": 0, "reason": "write_needs_wall"}, false, "a run.exited write_needs_wall that is not failed with exit_code -1"},
+		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "write_needs_wall"}, false, "a run.exited write_needs_wall that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "reason": "write_needs_wall"}, false, "a run.exited write_needs_wall that is not failed with exit_code -1"},
 		{map[string]any{"state": "failed", "exit_code": 130, "reason": "interrupted"}, false, "one link-batch.schema.json refuses"},
 		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "timeout"}, false, "one link-batch.schema.json refuses"},
 		{map[string]any{"state": "failed", "exit_code": -1, "reason": "session_lost"}, false, "one link-batch.schema.json refuses"},

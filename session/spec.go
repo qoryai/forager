@@ -481,8 +481,9 @@ func checkMachine(spec OpenSpec) error {
 // read_needs_setup_outside, read_needs_no_nested_docker and read_needs_setup_removed,
 // failed with -1 for a read run (the contract's §The events, How a run ends) no session
 // joined that has no wall, whose setup is set to run inside the agent's container, whose image runs nested
-// Docker, or whose setup container could not be removed, or a code of the caller's,
-// which is none of Forager's reserved codes; and
+// Docker, or whose setup container could not be removed, write_needs_wall, failed with
+// -1 for a write run, a run that is not a read run, no session joined that has no wall,
+// or a code of the caller's, which is none of Forager's reserved codes; and
 // ExitCode, the run's exit code: the last session's, 124 at the run's time limit, -1
 // when no session ran. A failed run with no reason that no session joined is closed as
 // failed with no_session and -1.
@@ -499,8 +500,9 @@ type Outcome struct {
 // model_key_limit, model_key_limit in a run with no join or
 // after a last session that ended with another reason, lastReason, and image_missing, image_user_root, image_access_denied,
 // image_rate_limited, image_registry_unreachable, workflow_not_in_harness, read_needs_wall, read_needs_setup_outside,
-// read_needs_no_nested_docker and read_needs_setup_removed other than failed with -1 for
-// a run no session joined, the one outcome with each of them that the gateway accepts.
+// read_needs_no_nested_docker, read_needs_setup_removed and write_needs_wall other than
+// failed with -1 for a run no session joined, the one outcome with each of them that the
+// gateway accepts.
 // joined is true when a join of the run was numbered, or may have been.
 func checkOutcome(o Outcome, joined bool, lastReason string) error {
 	switch {
@@ -513,7 +515,8 @@ func checkOutcome(o Outcome, joined bool, lastReason string) error {
 	case o.Reason == refusal.ImageMissing, o.Reason == refusal.ImageUserRoot, o.Reason == refusal.ImageAccessDenied,
 		o.Reason == refusal.ImageRateLimited, o.Reason == refusal.ImageRegistryUnreachable, o.Reason == event.ReasonWorkflowNotInHarness,
 		o.Reason == event.ReasonReadNeedsWall, o.Reason == event.ReasonReadNeedsSetupOutside,
-		o.Reason == event.ReasonReadNeedsNoNestedDocker, o.Reason == event.ReasonReadNeedsSetupRemoved:
+		o.Reason == event.ReasonReadNeedsNoNestedDocker, o.Reason == event.ReasonReadNeedsSetupRemoved,
+		o.Reason == event.ReasonWriteNeedsWall:
 		if o.State != event.StateFailed || o.ExitCode != -1 || joined {
 			return fmt.Errorf("an outcome with the reason %s is failed with the exit code -1, of a run no session joined", o.Reason)
 		}

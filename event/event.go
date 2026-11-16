@@ -154,6 +154,12 @@ const (
 	ReasonReadNeedsSetupRemoved   = "read_needs_setup_removed"
 )
 
+// ReasonWriteNeedsWall is the reason qory gives the close of a write run, a run that is
+// not a read run, with no join that has no wall, failed with exit code -1. It is a
+// caller's code, not one of Forager's reserved codes; the close and the gateway accept
+// it only failed with exit code -1, for a run with no join.
+const ReasonWriteNeedsWall = "write_needs_wall"
+
 // The states of dev.qory.run.exited and dev.qory.session.exited: the run or the session
 // ended well, ended badly, was stopped before it said how it went, or paused at the
 // model key limit. A step ends with the first three, and so does a run's starter's

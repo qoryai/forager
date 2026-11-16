@@ -1510,8 +1510,10 @@ contract's §The events, How a run ends) that no session joined with `failed` an
 and `read_needs_wall` when the run has no wall, `read_needs_setup_outside` when its
 setup is set to run inside the agent's container, `read_needs_no_nested_docker` when its
 image runs nested Docker, which is when `Docker` is true in the image `(*session.Run).Image` returns, or
-`read_needs_setup_removed` when its setup container could not be removed.
-`Close` refuses each of the ten codes with another state or exit
+`read_needs_setup_removed` when its setup container could not be removed. Close a
+write run, a run that is not a read run, that no session joined and that has no wall
+with `failed`, `write_needs_wall` and `-1`.
+`Close` refuses each of the eleven codes with another state or exit
 code, or after a join, as the gateway does. Close a run whose last session ended with
 `model_key_limit` with `paused`, `model_key_limit` and that session's `ExitCode`: a
 control plane reads it as a pause of the run. `Close` returns an error for `model_key_limit` with
