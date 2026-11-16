@@ -1,10 +1,12 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -50,17 +52,27 @@ type procID struct {
 
 // startingProcesses are the processes /proc lists as Exec starts, before the program:
 // pid 1, Exec, and with nested Docker the inner daemon and its containerd, which
-// [wall.Nest] started as root. No process of the agent's runs yet.
+// [wall.Nest] started as root. No process of the agent's runs yet. A process whose
+// start time cannot be read is not kept, so a stop counts it as left.
 func startingProcesses() []procID {
 	var out []procID
-	walkProcesses(func(p procID, _ string) { out = append(out, p) })
+	walkProcesses(func(p procID, _ string) {
+		if p.start != 0 {
+			out = append(out, p)
+		}
+	})
 	return out
 }
 
+// procRoot is /proc, or a test's stand-in.
+var procRoot = "/proc"
+
 // walkProcesses calls f with each process /proc lists that has not exited, and its
-// real user's number, and returns an error when /proc cannot be read.
+// real user's number, and returns an error when /proc cannot be read. A process whose
+// stat file cannot be read or parsed gets start time 0 and no user, unless its /proc
+// folder is gone, which means it exited: f still gets it, so a stop counts it as left.
 func walkProcesses(f func(p procID, uid string)) error {
-	entries, err := os.ReadDir("/proc")
+	entries, err := os.ReadDir(procRoot)
 	if err != nil {
 		return err
 	}
@@ -69,26 +81,19 @@ func walkProcesses(f func(p procID, uid string)) error {
 		if err != nil {
 			continue
 		}
-		stat, err := os.ReadFile("/proc/" + e.Name() + "/stat")
-		if err != nil {
+		dir := procRoot + "/" + e.Name()
+		state, start, ok := readStat(dir)
+		if !ok {
+			if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
+				f(procID{pid, 0}, "")
+			}
 			continue
 		}
-		// The fields after the command's name, which may contain spaces and ), are the
-		// state, third, and the start time, the 22nd.
-		cut := strings.LastIndexByte(string(stat), ')')
-		if cut < 0 {
-			continue
-		}
-		fields := strings.Fields(string(stat[cut+1:]))
-		if len(fields) < 20 || fields[0] == "Z" || fields[0] == "X" {
-			continue
-		}
-		start, err := strconv.ParseUint(fields[19], 10, 64)
-		if err != nil {
+		if state == "Z" || state == "X" {
 			continue
 		}
 		uid := ""
-		if b, err := os.ReadFile("/proc/" + e.Name() + "/status"); err == nil {
+		if b, err := os.ReadFile(dir + "/status"); err == nil {
 			for _, l := range strings.Split(string(b), "\n") {
 				if f := strings.Fields(l); len(f) >= 2 && f[0] == "Uid:" {
 					uid = f[1]
@@ -98,6 +103,30 @@ func walkProcesses(f func(p procID, uid string)) error {
 		f(procID{pid, start}, uid)
 	}
 	return nil
+}
+
+// readStat reads the state and the start time of the process whose /proc folder is
+// dir, and reports false when its stat file cannot be read or has another form.
+func readStat(dir string) (state string, start uint64, ok bool) {
+	stat, err := os.ReadFile(dir + "/stat")
+	if err != nil {
+		return "", 0, false
+	}
+	// The fields after the command's name, which may contain spaces and ), are the
+	// state, third, and the start time, the 22nd.
+	cut := bytes.LastIndexByte(stat, ')')
+	if cut < 0 {
+		return "", 0, false
+	}
+	fields := strings.Fields(string(stat[cut+1:]))
+	if len(fields) < 20 {
+		return "", 0, false
+	}
+	start, err = strconv.ParseUint(fields[19], 10, 64)
+	if err != nil || start == 0 {
+		return "", 0, false
+	}
+	return fields[0], start, true
 }
 
 // stopOthers stops every other process of the container that Exec can stop: it sends

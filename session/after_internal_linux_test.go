@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -139,5 +140,49 @@ func TestRemoveInnerFailsClosed(t *testing.T) {
 	defer func() { innerSocket = old }()
 	if _, err := removeInner(time.Now().Add(time.Second)); err == nil {
 		t.Error("removeInner with no daemon returned no error")
+	}
+}
+
+// TestOthersLeftCountsAProcessWhoseStatCannotBeRead pins the stop's count of a process
+// it cannot read: one whose stat file cannot be read or parsed counts as left while its
+// /proc folder is there, and is not kept as a starting process; a zombie does not count.
+func TestOthersLeftCountsAProcessWhoseStatCannotBeRead(t *testing.T) {
+	root := t.TempDir()
+	// Numbers above the largest pid_max, 2^22, so the test's process is none of them.
+	stat := func(state, start string) string {
+		return "100 (a b) c) " + state + " 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 " + start + " 0 0\n"
+	}
+	for name, content := range map[string]string{
+		"4194401": stat("S", "500"),
+		"4194402": "",
+		"4194403": "garbage\n",
+		"4194404": stat("Z", "600"),
+		"4194405": stat("S", "0"),
+	} {
+		dir := filepath.Join(root, name)
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case name == "4194402":
+			// A folder in place of the file: reading it fails.
+			if err := os.Mkdir(filepath.Join(dir, "stat"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		default:
+			if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	was := procRoot
+	procRoot = root
+	defer func() { procRoot = was }()
+	kept := startingProcesses()
+	if want := []procID{{4194401, 500}}; !slices.Equal(kept, want) {
+		t.Errorf("startingProcesses: %v; want %v", kept, want)
+	}
+	if n, err := othersLeft(kept); err != nil || n != 3 {
+		t.Errorf("othersLeft: %d, %v; want 3, for the unreadable, the unparsed and the zero start", n, err)
 	}
 }
