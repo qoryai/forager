@@ -765,8 +765,12 @@ func (r *Run) write(typ string, data any) {
 }
 
 // writeRouteEgress writes data, a decision of the route to link.QoryHost, as a
-// dev.qory.run.egress, with the mode of the policy in force.
+// dev.qory.run.egress, with the mode of the policy in force. The run's masker replaces
+// a secret of the run in the path, as in the runtime's events.
 func (r *Run) writeRouteEgress(data map[string]any) {
+	if p, ok := data["path"].(string); ok {
+		data["path"] = r.masker.Replace(p)
+	}
 	r.emitMu.Lock()
 	defer r.emitMu.Unlock()
 	mode, _ := r.members["mode"].(string)

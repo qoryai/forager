@@ -35,6 +35,9 @@ const (
 	qoryHostWait = 30 * time.Second
 	// maxQoryHostPath is the most bytes of a request's path its record has.
 	maxQoryHostPath = 1 << 10
+	// qoryHostRecordEvery is the interval in which at most one refusal of each status,
+	// 400, 429 and 503, is recorded.
+	qoryHostRecordEvery = time.Second
 )
 
 // The codes of the forwarder's answers on the route.
@@ -58,7 +61,7 @@ var (
 	qoryHostRateText  = fmt.Sprintf("Retry in 1 second: the run sent more than %d requests to %s in a second.", qoryHostRate, link.EnvQoryHost)
 	qoryHostFlight    = fmt.Sprintf("Retry in 1 second: the run has %d requests to %s in flight, the most it may have.", qoryHostInFlight, link.EnvQoryHost)
 	qoryHostLarge     = fmt.Sprintf("Shrink the body to at most %d bytes: the run's proxy takes no more on %s.", link.MaxQoryHostBody, link.EnvQoryHost)
-	qoryHostSlow      = "Send the request again later: the handler did not answer within 30 seconds."
+	qoryHostSlow      = "Send the request again later: the handler did not return within 30 seconds."
 	qoryHostBig       = fmt.Sprintf("Report this to whoever runs qory: the handler's answer has more than %d bytes, which the run's proxy does not pass on.", link.MaxQoryHostBody)
 	qoryHostBadStatus = "Report this to whoever runs qory: the handler answered with a status outside 200 to 599, or 407, which the run's proxy does not pass on."
 	qoryHostPanicked  = "Report this to whoever runs qory: the handler failed before it answered."
@@ -66,7 +69,8 @@ var (
 
 // qoryRoute is a run's route to OpenSpec.QoryRoute, which the run's forwarders share:
 // the run's wall forwarder, and the forwarder of each unwalled session. It holds the
-// session that runs, the run's limits, and how a request is recorded.
+// session that runs, the passwords of the walled sessions' proxy URLs, the run's
+// limits, and how a request is recorded.
 type qoryRoute struct {
 	handler http.Handler
 	// record writes a decision of the route, a dev.qory.run.egress, which it completes
@@ -84,11 +88,19 @@ type qoryRoute struct {
 	mu sync.Mutex
 	// session is the number of the session whose launch runs, 0 for none, and ctx ends
 	// when that session ends.
-	session  int
-	ctx      context.Context
+	session int
+	ctx     context.Context
+	// passwords are the passwords of the proxy URLs of the run's walled sessions with a
+	// route, by session number: behind a wall the forwarder serves a request only with
+	// one of them, so a connection from the setup container, which has none, never
+	// reaches the handler.
+	passwords map[int]string
+	// inFlight counts the handler's calls that have not returned.
 	inFlight int
 	tokens   float64
 	at       time.Time
+	// recorded is when a refusal of each status, 400, 429 and 503, was last recorded.
+	recorded map[int]time.Time
 }
 
 // newQoryRoute is the route to handler of a run that closes with done.
@@ -97,14 +109,23 @@ func newQoryRoute(handler http.Handler, done context.Context, record func(map[st
 }
 
 // open opens the route to session n, whose launch starts, and returns what closes it
-// again, before the session's end is written. A nil route opens nothing.
-func (q *qoryRoute) open(n int) (closeRoute func()) {
+// again, before the session's end is written. password, behind a wall, is the password
+// of the session's proxy URL, which a request to the route must carry; without a wall it
+// is empty, since the session's forwarder serves that session alone. A nil route opens
+// nothing.
+func (q *qoryRoute) open(n int, password string) (closeRoute func()) {
 	if q == nil {
 		return func() {}
 	}
 	ctx, cancel := context.WithCancel(q.done)
 	q.mu.Lock()
 	q.session, q.ctx = n, ctx
+	if password != "" {
+		if q.passwords == nil {
+			q.passwords = map[int]string{}
+		}
+		q.passwords[n] = password
+	}
 	q.mu.Unlock()
 	return sync.OnceFunc(func() {
 		q.mu.Lock()
@@ -124,15 +145,62 @@ func (q *qoryRoute) current() (int, context.Context) {
 	return q.session, q.ctx
 }
 
+// sessionOf is the walled session whose proxy URL's password logins, the values of a
+// request's Proxy-Authorization headers, carry: exactly one, Basic, compared in
+// constant time with each session's. It is 0 for none, so the request goes to the
+// gateway's proxy, which denies the route's host, as in a run with no route.
+func (q *qoryRoute) sessionOf(logins []string) int {
+	if len(logins) != 1 {
+		return 0
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	found := 0
+	for n, password := range q.passwords {
+		if proxyLogin(logins[0], password) {
+			found = n
+		}
+	}
+	return found
+}
+
+// clock is the time the rate limit and the records' limit read.
+func (q *qoryRoute) clock() time.Time {
+	if q.now != nil {
+		return q.now()
+	}
+	return time.Now()
+}
+
+// recordRefusal reports whether a refusal of status is recorded: every refusal but one
+// of 400, 429 or 503 that follows another of the same status within
+// [qoryHostRecordEvery], so a program at a limit adds at most one event a second per
+// status to the record, as the gateway's proxy does for its limits.
+func (q *qoryRoute) recordRefusal(status int) bool {
+	switch status {
+	case http.StatusBadRequest, http.StatusTooManyRequests, http.StatusServiceUnavailable:
+	default:
+		return true
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	now := q.clock()
+	if last, ok := q.recorded[status]; ok && now.Sub(last) < qoryHostRecordEvery && !now.Before(last) {
+		return false
+	}
+	if q.recorded == nil {
+		q.recorded = map[int]time.Time{}
+	}
+	q.recorded[status] = now
+	return true
+}
+
 // admit takes one of the run's tokens, which number [qoryHostRate] at most and gain
 // that many a second, and reports whether it held one.
 func (q *qoryRoute) admit() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	now := time.Now()
-	if q.now != nil {
-		now = q.now()
-	}
+	now := q.clock()
 	if q.at.IsZero() {
 		q.tokens, q.at = qoryHostRate, now
 	}
@@ -147,8 +215,8 @@ func (q *qoryRoute) admit() bool {
 	return true
 }
 
-// enter counts one more request in flight, and returns false, counting nothing, at
-// [qoryHostInFlight].
+// enter counts one more call of the handler in flight, and returns false, counting
+// nothing, at [qoryHostInFlight].
 func (q *qoryRoute) enter() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -159,7 +227,7 @@ func (q *qoryRoute) enter() bool {
 	return true
 }
 
-// leave counts one request fewer in flight.
+// leave counts one call of the handler fewer in flight, once it returned.
 func (q *qoryRoute) leave() {
 	q.mu.Lock()
 	q.inFlight--
@@ -294,8 +362,12 @@ var errQoryHostAnswer = errors.New("the answer is over the route's limit")
 // Header returns the answer's header, of which the program gets Content-Type alone.
 func (a *qoryHostAnswer) Header() http.Header { return a.header }
 
-// WriteHeader keeps the first status the handler writes.
+// WriteHeader keeps the first status the handler writes, but a 1xx other than 101,
+// which net/http sends ahead of the answer and the forwarder drops.
 func (a *qoryHostAnswer) WriteHeader(status int) {
+	if status >= 100 && status < 200 && status != http.StatusSwitchingProtocols {
+		return
+	}
 	if a.status == 0 {
 		a.status = status
 	}
@@ -313,10 +385,11 @@ func (a *qoryHostAnswer) Write(b []byte) (int, error) {
 }
 
 // serve answers one request to the route whose head is head and whose body follows in
-// from, on the program's connection c, and records it. bound is the session whose
-// forwarder read it, or 0 for the run's wall forwarder, which serves whichever session
-// runs. The connection carries this one request.
-func (q *qoryRoute) serve(c net.Conn, head []byte, from *bufio.Reader, bound int) {
+// from, on the program's connection c, and records it. n is the session the request
+// comes from: the session of an unwalled forwarder, or the walled session whose proxy
+// password the request carried. Only while n runs does the handler get it. The
+// connection carries this one request.
+func (q *qoryRoute) serve(c net.Conn, head []byte, from *bufio.Reader, n int) {
 	start := time.Now()
 	d := map[string]any{
 		"host": link.QoryHost, "port": 80, "method": "HTTP",
@@ -324,19 +397,24 @@ func (q *qoryRoute) serve(c net.Conn, head []byte, from *bufio.Reader, bound int
 		"channel": link.QoryHostChannel, "rule": link.QoryHostRule,
 		"decision": "denied", "outcome": "refused",
 	}
+	// noBody is true for a HEAD, whose answer has no body.
+	noBody := false
 	refuse := func(status int, code, text string, unread int64) {
 		d["status"] = status
-		q.record(d)
-		writeQoryHostError(c, from, unread, status, code, text)
+		if q.recordRefusal(status) {
+			q.record(d)
+		}
+		writeQoryHostError(c, from, unread, status, code, text, noBody)
 	}
 	p, err := readQoryHostRequest(head)
 	if err != nil {
 		refuse(http.StatusBadRequest, qoryHostBadRequest, err.Error(), -1)
 		return
 	}
+	noBody = p.req.Method == http.MethodHead
 	d["request_method"], d["path"] = shownQoryMethod(p.req.Method), shownQoryPath(p.req.URL)
-	n, sessionCtx := q.current()
-	if n == 0 || bound != 0 && n != bound {
+	current, sessionCtx := q.current()
+	if current == 0 || current != n {
 		refuse(http.StatusServiceUnavailable, qoryHostNoSession, qoryHostNoRun, p.length)
 		return
 	}
@@ -344,11 +422,6 @@ func (q *qoryRoute) serve(c net.Conn, head []byte, from *bufio.Reader, bound int
 		refuse(http.StatusTooManyRequests, qoryHostRateLimited, qoryHostRateText, p.length)
 		return
 	}
-	if !q.enter() {
-		refuse(http.StatusTooManyRequests, qoryHostRateLimited, qoryHostFlight, p.length)
-		return
-	}
-	defer q.leave()
 	if p.length > link.MaxQoryHostBody {
 		refuse(http.StatusRequestEntityTooLarge, qoryHostTooLarge, qoryHostLarge, p.length)
 		return
@@ -370,10 +443,23 @@ func (q *qoryRoute) serve(c net.Conn, head []byte, from *bufio.Reader, bound int
 		return
 	}
 	c.SetReadDeadline(time.Time{})
+	// A session that ended while the body arrived gets no call, whatever runs now.
+	if sessionCtx.Err() != nil {
+		refuse(http.StatusServiceUnavailable, qoryHostNoSession, qoryHostNoRun, 0)
+		return
+	}
+	// The slot is the handler's: it is taken once the body is read, and freed when the
+	// handler returns, also after the forwarder stopped waiting for it.
+	if !q.enter() {
+		refuse(http.StatusTooManyRequests, qoryHostRateLimited, qoryHostFlight, 0)
+		return
+	}
 	ctx, cancel := context.WithDeadline(sessionCtx, deadline)
 	defer cancel()
-	d["decision"] = "allowed"
-	ans, err := q.call(ctx, p.req, buf.Bytes(), n)
+	ans, called, err := q.call(ctx, p.req, buf.Bytes(), n)
+	if called {
+		d["decision"] = "allowed"
+	}
 	switch {
 	case errors.Is(err, context.DeadlineExceeded) && sessionCtx.Err() == nil:
 		refuse(http.StatusGatewayTimeout, qoryHostTimeout, qoryHostSlow, maxProxyHead)
@@ -398,7 +484,7 @@ func (q *qoryRoute) serve(c net.Conn, head []byte, from *bufio.Reader, bound int
 	}
 	d["status"] = status
 	q.record(d)
-	writeQoryHostReply(c, from, maxProxyHead, status, ans.header.Get("Content-Type"), ans.body.Bytes())
+	writeQoryHostReply(c, from, maxProxyHead, status, ans.header.Get("Content-Type"), ans.body.Bytes(), noBody)
 }
 
 // cmpStatus is the status of an answer whose handler wrote nothing: 200, as net/http
@@ -415,9 +501,15 @@ var errQoryHostPanic = errors.New("the handler panicked")
 
 // call calls the handler with the request read from req, the body and the session's
 // number, under ctx, and returns its answer once it returns, or ctx's error once ctx
-// ends first: the forwarder does not wait for a handler that outlasts it. A panic is a
+// ends first: the forwarder does not wait for a handler that outlasts it. It takes over
+// the slot [qoryRoute.enter] took, and frees it when the handler returns, or at once when
+// ctx ended before the call, which then does not start and called is false. A panic is a
 // Report line and [errQoryHostPanic].
-func (q *qoryRoute) call(ctx context.Context, read *http.Request, body []byte, n int) (*qoryHostAnswer, error) {
+func (q *qoryRoute) call(ctx context.Context, read *http.Request, body []byte, n int) (ans *qoryHostAnswer, called bool, err error) {
+	if err := ctx.Err(); err != nil {
+		q.leave()
+		return nil, false, err
+	}
 	u := &url.URL{Scheme: "http", Host: link.QoryHost, Path: read.URL.Path, RawPath: read.URL.RawPath, RawQuery: read.URL.RawQuery}
 	header := http.Header{}
 	if ct := read.Header.Values("Content-Type"); len(ct) > 0 {
@@ -433,9 +525,10 @@ func (q *qoryRoute) call(ctx context.Context, read *http.Request, body []byte, n
 		Header: header, Body: rc, ContentLength: int64(len(body)), Host: link.QoryHost,
 		RequestURI: u.RequestURI(),
 	}).WithContext(ctx)
-	ans := &qoryHostAnswer{header: http.Header{}}
+	ans = &qoryHostAnswer{header: http.Header{}}
 	done := make(chan error, 1)
 	go func() {
+		defer q.leave()
 		defer func() {
 			if v := recover(); v != nil {
 				if q.report != nil && v != http.ErrAbortHandler {
@@ -451,11 +544,11 @@ func (q *qoryRoute) call(ctx context.Context, read *http.Request, body []byte, n
 	case err := <-done:
 		if err == nil && ctx.Err() != nil {
 			// A handler that returned after its context ended outlasted it.
-			return nil, ctx.Err()
+			return nil, true, ctx.Err()
 		}
-		return ans, err
+		return ans, true, err
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, true, ctx.Err()
 	}
 }
 
@@ -506,31 +599,39 @@ func shownQoryPath(u *url.URL) string {
 
 // writeQoryHostError writes the program the forwarder's answer of status, with a JSON
 // body of code and text, as [writeQoryHostReply] does.
-func writeQoryHostError(c net.Conn, from io.Reader, unread int64, status int, code, text string) {
+func writeQoryHostError(c net.Conn, from io.Reader, unread int64, status int, code, text string, noBody bool) {
 	b, _ := json.Marshal(struct {
 		Error   string `json:"error"`
 		Message string `json:"message"`
 	}{code, text})
-	writeQoryHostReply(c, from, unread, status, "application/json", b)
+	writeQoryHostReply(c, from, unread, status, "application/json", b, noBody)
 }
 
 // writeQoryHostReply writes the program an answer of status, with Content-Type when it
-// is set, the body b and Connection: close. It then ends the connection's writing half
-// and reads and drops what the program still sends, up to unread bytes, or
-// [maxQoryHostDrain] when unread is below zero or over it, for at most
-// [runAPIDrainWait] in all, so the close that follows does not reset the connection
-// before the program reads the answer.
-func writeQoryHostReply(c net.Conn, from io.Reader, unread int64, status int, contentType string, b []byte) {
+// is set, the body b and Connection: close. The answer to a HEAD, noBody, and a 204 or
+// 304 have no body; a 204 and a 304 have no Content-Length either, and a HEAD's is b's
+// length. It then ends the connection's writing half and reads and drops what the
+// program still sends, up to unread bytes, or [maxQoryHostDrain] when unread is below
+// zero or over it, for at most [runAPIDrainWait] in all, so the close that follows does
+// not reset the connection before the program reads the answer.
+func writeQoryHostReply(c net.Conn, from io.Reader, unread int64, status int, contentType string, b []byte, noBody bool) {
 	var head strings.Builder
 	text := http.StatusText(status)
 	if text == "" {
 		text = "status code " + strconv.Itoa(status)
 	}
-	fmt.Fprintf(&head, "HTTP/1.1 %d %s\r\nConnection: close\r\nContent-Length: %d\r\n", status, text, len(b))
+	fmt.Fprintf(&head, "HTTP/1.1 %d %s\r\nConnection: close\r\n", status, text)
+	bodyless := status == http.StatusNoContent || status == http.StatusNotModified
+	if !bodyless {
+		fmt.Fprintf(&head, "Content-Length: %d\r\n", len(b))
+	}
 	if contentType != "" && validValue([]byte(contentType)) {
 		fmt.Fprintf(&head, "Content-Type: %s\r\n", contentType)
 	}
 	head.WriteString("\r\n")
+	if noBody || bodyless {
+		b = nil
+	}
 	c.SetWriteDeadline(time.Now().Add(link.PreambleWait))
 	if _, err := io.WriteString(c, head.String()); err != nil {
 		return

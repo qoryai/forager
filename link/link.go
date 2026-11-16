@@ -22,6 +22,10 @@ const Loopback = "127.0.0.1:0"
 // is reached directly.
 const NoProxy = "localhost,127.0.0.1,::1"
 
+// ProxyUser is the user name of a proxy URL with a password: the session's forwarder
+// checks the password alone.
+const ProxyUser = "qory"
+
 // ProxyEnv returns the variables that point a program at the proxy at u, in both cases,
 // because curl reads http_proxy in lower case only and other programs document the
 // upper case. A wall names the proxy by the address the enclosure reaches it on.

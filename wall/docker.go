@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -386,6 +387,16 @@ func (e *dockerEnclosure) prepare(ctx context.Context) (Enclosure, error) {
 		return nil, errors.Join(errors.New("wall docker: the inside network got no IPv6 subnet"), e.Close(context.WithoutCancel(ctx)))
 	}
 	return e, nil
+}
+
+// relayURL is the proxy URL of the relay inside: with password, the password of the
+// agent's proxy URL, under the user name qory.
+func relayURL(password string) string {
+	u := url.URL{Scheme: "http", Host: net.JoinHostPort(relayAlias, strconv.Itoa(relayPort))}
+	if password != "" {
+		u.User = url.UserPassword(link.ProxyUser, password)
+	}
+	return u.String()
 }
 
 // ipv6Subnet reports whether s, written as CIDR, is an IPv6 subnet.
@@ -1140,7 +1151,8 @@ func (e *dockerEnclosure) firstUse(ctx context.Context, ca []byte) (string, erro
 // internal network only, the launch's mounts at the paths they have on this machine or
 // at their Targets, the workspace as the working directory inside one of them, the
 // helper read-only, the socket's directory, and the launch's environment through a
-// file, so no value is on a command line. It starts the relay first when it has not
+// file, so no value is on a command line. The proxy variables name the relay, with
+// l.ProxyPassword in the URL when it is set. It starts the relay first when it has not
 // started, [dockerEnclosure.StartRelay], and runs the run's first use of the enclosure
 // when no container of the run's image ran it. With a transcript directory it creates
 // the agent's container, makes the bind's parents in it, [dockerEnclosure.copyDirs],
@@ -1161,7 +1173,7 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	}
 	// Everything that can be refused is, before anything is started.
 	env := append([]string(nil), l.Env...)
-	env = append(env, link.ProxyEnv(fmt.Sprintf("http://%s:%d", relayAlias, relayPort))...)
+	env = append(env, link.ProxyEnv(relayURL(l.ProxyPassword))...)
 	if l.Socket != "" {
 		env = append(env, link.EnvRunSocket+"="+path.Join(hooksDir, filepath.Base(l.Socket)))
 	}

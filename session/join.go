@@ -673,8 +673,13 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if r.answer.RunAPI != "" {
 		ownEnv = append(ownEnv, EnvRunAPI+"="+r.answer.RunAPI)
 	}
-	// The route's URL is the launch's alone: the run's setup never gets it.
-	if r.route != nil {
+	// The route to OpenSpec.QoryRoute is a runtime's launch's alone: the run's setup
+	// and a session with no runtime, such as a host step's, never get it.
+	route := r.route
+	if spec.Runtime == nil {
+		route = nil
+	}
+	if route != nil {
 		ownEnv = append(ownEnv, EnvQoryHost+"="+link.QoryHostURL)
 	}
 	if spec.HarnessHome != "" {
@@ -704,6 +709,17 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			return fail(err)
 		}
 		r.addPassword(password)
+	}
+	// routePassword, behind a wall with the route, is the password of the agent's proxy
+	// URL, which the wall writes into the proxy variables inside: the run's forwarder
+	// serves a request to the route only with it, so the setup container, which shares
+	// the relay and has no password, never reaches the handler.
+	var routePassword string
+	if spec.Wall != nil && route != nil {
+		if routePassword, err = newForwarderSecret(); err != nil {
+			return fail(err)
+		}
+		r.addPassword(routePassword)
 	}
 	// The session masks with the run's masker even while it is empty: a reload may add
 	// a server's variable value to it while the session runs.
@@ -796,9 +812,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if spec.Wall == nil {
 		// The session's forwarder serves the run's route for this session alone.
 		if r.remote == nil {
-			fwd, err = listenForwarding(link.Loopback, forwarding{dial: dialTCP(r.disc.Proxy.Address), secret: r.answer.ProxySecret, password: password, route: r.route, session: n})
+			fwd, err = listenForwarding(link.Loopback, forwarding{dial: dialTCP(r.disc.Proxy.Address), secret: r.answer.ProxySecret, password: password, route: route, session: n})
 		} else {
-			fwd, err = listenForwarding(link.Loopback, forwarding{dial: r.link.DialProxy, hold: gatewayHold, password: password, route: r.route, session: n})
+			fwd, err = listenForwarding(link.Loopback, forwarding{dial: r.link.DialProxy, hold: gatewayHold, password: password, route: route, session: n})
 		}
 		if err != nil {
 			return fail(err)
@@ -940,7 +956,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			Env:   wrapEnv,
 			CA:    r.authority,
 			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: shown.Mounts, Limits: spec.Limits,
-			ProxyToken: r.relayToken,
+			ProxyToken: r.relayToken, ProxyPassword: routePassword,
 			Transcript: wall.Transcript{Path: transcriptDir, Under: transcriptUnder},
 		})
 		if err != nil {
@@ -1023,7 +1039,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	var exit exitStatus
 	// The route to OpenSpec.QoryRoute is open to this session while its launch runs,
 	// and closes before anything of the session's end is written.
-	closeRoute := r.route.open(n)
+	closeRoute := route.open(n, routePassword)
 	defer closeRoute()
 	if interactive {
 		exit, err = proc.runPTY(limited)

@@ -179,6 +179,14 @@ type Launch struct {
 	// TLS. An adapter gives it to its relay and to nothing inside the enclosure, so the
 	// proxy serves this run's relay alone, whoever else reaches its address.
 	ProxyToken string
+	// ProxyPassword, when not empty, is the password of the agent's proxy URL: given to
+	// Wrap, the proxy variables inside are http://qory:<password>@ and the relay's
+	// address, so every request of the agent carries it in its Proxy-Authorization.
+	// The session sets it for a run with a route to its caller, and the run's forwarder
+	// serves a request to host.qory.invalid only with the password of a session's
+	// launch. StartSetup does not read it, so nothing the setup container sends carries
+	// it.
+	ProxyPassword string
 	// CA, when not empty, is the certificate of the run's authority, PEM: the proxy
 	// answers as some hosts itself, to set a credential the enclosure never holds, and
 	// what runs inside must trust it for those. An adapter shows the enclosure one

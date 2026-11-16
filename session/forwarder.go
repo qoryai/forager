@@ -74,9 +74,10 @@ const (
 // set the run's check of its run API is read one request at a time, as without a wall,
 // and a POST to the run API goes on only once the check returns nil, nil. With the run's
 // route to OpenSpec.QoryRoute, every connection is read one request at a time too,
-// walled or not, and a plain request to link.QoryHost goes to the route's handler, never
-// to the proxy. A connection that shows the preamble with neither passes on as it is,
-// after the same preamble.
+// walled or not, and a plain request to link.QoryHost from a session goes to the route's
+// handler, never to the proxy: behind a wall, one whose Proxy-Authorization carries the
+// password of a session's proxy URL. A connection that shows the preamble with neither
+// passes on as it is, after the same preamble.
 //
 // The secrets are held in memory alone: never in a file or a report, and in an
 // environment only as that password, in the unwalled agent's proxy URL.
@@ -146,10 +147,14 @@ type forwarding struct {
 	// the relay sent, and with it the forwarder reads the request after the preamble.
 	checkRelay string
 	// route, when set, is the run's route to OpenSpec.QoryRoute: the forwarder serves
-	// every plain request to link.QoryHost with it, and nothing of such a request
-	// reaches the proxy. Without a password it reads one request per connection, as with
-	// the check. session is the session this forwarder serves alone, without a wall,
-	// and 0 for the run's wall forwarder, which serves whichever session runs.
+	// a plain request to link.QoryHost with it, and nothing of such a request reaches
+	// the proxy. session is the session this forwarder serves alone, without a wall,
+	// and 0 for the run's wall forwarder. Without a password, behind a wall, it reads one
+	// request per connection, as with the check, takes every Proxy-Authorization off
+	// the head, and serves a request to link.QoryHost only when its one
+	// Proxy-Authorization carries the proxy password of one of the run's walled
+	// sessions: any other, the setup container's among them, goes to the proxy, which
+	// denies the host.
 	route   *qoryRoute
 	session int
 }
@@ -207,9 +212,9 @@ func (f *forwarder) URL() string {
 	return u.String()
 }
 
-// proxyUser is the user name of an unwalled agent's proxy URL, which the forwarder
-// ignores.
-const proxyUser = "qory"
+// proxyUser is the user name of an agent's proxy URL with a password, which the
+// forwarder ignores.
+const proxyUser = link.ProxyUser
 
 // newForwarderSecret makes a secret of this run's forwarder alone: 32 bytes from
 // crypto/rand, base64url without padding. Behind a wall and a separate gateway it is the
@@ -378,7 +383,22 @@ func (f *forwarder) serve(c net.Conn) {
 	var from *bufio.Reader
 	if way.password == "" && (way.check != nil || way.route != nil) {
 		c.SetReadDeadline(time.Now().Add(f.headWait()))
-		head, rest, err := readHead(c, nil)
+		// With the route, the head's Proxy-Authorization is the walled session's
+		// password, which picks the session a request to the route comes from; it is
+		// taken off, so nothing of it reaches the proxy.
+		var header func([]byte) (bool, bool)
+		var logins []string
+		if way.route != nil {
+			header = func(l []byte) (keep, ok bool) {
+				name, value, found := bytes.Cut(l, []byte(":"))
+				if !found || !strings.EqualFold(string(name), "Proxy-Authorization") {
+					return true, true
+				}
+				logins = append(logins, string(bytes.TrimSpace(value)))
+				return false, true
+			}
+		}
+		head, rest, err := readHead(c, header)
 		if errors.Is(err, errHeadLimits) {
 			plainError(c, http.StatusRequestHeaderFieldsTooLarge, err)
 			return
@@ -393,11 +413,17 @@ func (f *forwarder) serve(c net.Conn) {
 			badRequest(c, err)
 			return
 		}
+		// A request to the route's host without a session's password, such as one from
+		// the setup container, goes to the proxy, which denies the host.
+		routed := 0
+		if way.route != nil && !connectHead(head) && forQoryHost(head) {
+			routed = way.route.sessionOf(logins)
+		}
 		switch {
 		case connectHead(head):
 			src = io.MultiReader(bytes.NewReader(closingHead(head)), rest)
-		case way.route != nil && forQoryHost(head):
-			way.route.serve(c, head, rest, way.session)
+		case routed != 0:
+			way.route.serve(c, head, rest, routed)
 			return
 		case way.check != nil && forRunAPIPost(head):
 			if checked, from = way.check.pass(f.ctx, c, head, rest), rest; checked == nil {

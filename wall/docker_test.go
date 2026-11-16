@@ -1294,3 +1294,14 @@ func TestTheAdaptersCommandsRunWithTheRecordedSelection(t *testing.T) {
 		t.Errorf("the launch runs with %q", wrapped.Env)
 	}
 }
+
+// TestTheRelayURLHasTheLaunchsPassword pins the proxy URL the agent's container gets:
+// the relay alone, and with Launch.ProxyPassword the password under the user qory.
+func TestTheRelayURLHasTheLaunchsPassword(t *testing.T) {
+	if got := relayURL(""); got != "http://qory-proxy:3128" {
+		t.Errorf("without a password: %q", got)
+	}
+	if got := relayURL("pass-word"); got != "http://qory:pass-word@qory-proxy:3128" {
+		t.Errorf("with a password: %q", got)
+	}
+}

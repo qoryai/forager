@@ -3,8 +3,11 @@ package session_test
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,6 +21,7 @@ import (
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/mask"
 	"github.com/qoryai/forager/session"
 )
 
@@ -237,11 +241,27 @@ func TestTheRouteWorksWithoutAWallBehindASeparateGateway(t *testing.T) {
 }
 
 // relayedRoute sends a GET to the route through the walled run's forwarder at addr, as
-// the wall's relay does, and returns the status and the forwarder's code, empty for an
-// answer of the handler's.
-func relayedRoute(t *testing.T, addr, token string) (int, string) {
+// the wall's relay does, with proxyURL's password in its Proxy-Authorization, none for
+// an empty one, and returns the status, the forwarder's code, empty for an answer of the
+// handler's or the proxy's, and the body.
+func relayedRoute(t *testing.T, addr, token, proxyURL string) (int, string, string) {
 	t.Helper()
-	out := relayed(t, addr, token, "GET "+link.QoryHostURL+"/tests HTTP/1.1\r\nHost: "+link.QoryHost+"\r\n\r\n")
+	login := ""
+	if u, err := url.Parse(proxyURL); err == nil && u.User != nil {
+		password, _ := u.User.Password()
+		login = "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(u.User.Username()+":"+password)) + "\r\n"
+	}
+	// The connection stays open for the answer: a program that ends its side of it
+	// before the answer gets none from the proxy.
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	io.WriteString(c, link.RelayLine(token)+"GET "+link.QoryHostURL+"/tests HTTP/1.1\r\nHost: "+link.QoryHost+"\r\n"+login+"\r\n")
+	c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	raw, _ := io.ReadAll(c)
+	out := string(raw)
 	resp, err := http.ReadResponse(bufio.NewReader(strings.NewReader(out)), nil)
 	if err != nil {
 		t.Fatalf("no answer in %q", out)
@@ -251,50 +271,39 @@ func relayedRoute(t *testing.T, addr, token string) (int, string) {
 	if i := strings.Index(string(b), `"error":"`); i >= 0 {
 		code, _, _ = strings.Cut(string(b)[i+len(`"error":"`):], `"`)
 	}
-	return resp.StatusCode, code
+	return resp.StatusCode, code, string(b)
 }
 
 // TestTheRouteWorksBehindAWallAndIsClosedBetweenSessions pins the route through a walled
-// run's forwarder: before the first session a request gets 503 session_not_running and
-// reaches no handler; during the session the handler answers; the enclosure's
-// environment has QORY_HOST_URL; and after the session the request gets 503 again.
+// run's forwarder: the session's launch gets a proxy URL with a password, which the
+// wall writes inside, and QORY_HOST_URL; during the session a request with that
+// password reaches the handler, and one without it goes to the gateway's proxy; after
+// the session the request with the password gets 503 session_not_running.
 func TestTheRouteWorksBehindAWallAndIsClosedBetweenSessions(t *testing.T) {
-	sp, _ := specGateway(t)
+	sp, g := specGateway(t)
 	w := &openWall{}
 	sp.Wall, sp.Image = w, "example.com/agent:1"
 	h := &recorder{}
-	dir := t.TempDir()
-	envFile, done := filepath.Join(dir, "env"), filepath.Join(dir, "done")
-	sp.Env = append(sp.Env, "FAKE_ROUTE_ENV="+envFile, "FAKE_ROUTE_DONE="+done)
-	sp.Forwarder = nil
-	sp.QoryRoute = h
-	ctx := context.Background()
-	r, err := session.Open(ctx, opened(sp))
-	if err != nil {
-		t.Fatal(err)
+	s := startRouteSession(t, sp, h)
+	defer s.r.Close(context.Background(), session.Outcome{State: event.StateSucceeded})
+	addr, token := s.r.WallProxy()
+	if u, err := url.Parse(s.proxy); err != nil || u.User == nil {
+		t.Fatalf("the launch's proxy URL %q has no password", s.proxy)
 	}
-	defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
-	addr, token := r.WallProxy()
-	if status, code := relayedRoute(t, addr, token); status != http.StatusServiceUnavailable || code != "session_not_running" {
-		t.Errorf("before the session: %d %s", status, code)
+	if status, code, body := relayedRoute(t, addr, token, s.proxy); status != http.StatusCreated || code != "" || body != "made" {
+		t.Errorf("during the session: %d %s %q", status, code, body)
 	}
-	results := make(chan error, 1)
-	go func() {
-		_, err := r.Join(ctx, sp.SessionSpec)
-		results <- err
-	}()
-	waitFor(t, func() bool { _, err := os.Stat(envFile); return err == nil })
-	if status, code := relayedRoute(t, addr, token); status != http.StatusCreated || code != "" {
-		t.Errorf("during the session: %d %s", status, code)
+	if status, _, body := relayedRoute(t, addr, token, ""); status != http.StatusOK || body != "ok" || !slices.Contains(g.Proxied(), "GET "+link.QoryHostURL+"/tests") {
+		t.Errorf("without the password: %d %q, the proxy got %q", status, body, g.Proxied())
 	}
-	os.WriteFile(done, nil, 0o600)
-	if err := <-results; err != nil {
-		t.Fatal(err)
+	os.WriteFile(s.done, nil, 0o600)
+	if res := <-s.results; res == nil || res.State != event.StateSucceeded {
+		t.Fatalf("the session's result %+v", res)
 	}
 	if got, want := entriesOf(w.got.Env, session.EnvQoryHost), []string{session.EnvQoryHost + "=" + link.QoryHostURL}; !slices.Equal(got, want) {
 		t.Errorf("the enclosure's environment has %v, want %v", got, want)
 	}
-	if status, code := relayedRoute(t, addr, token); status != http.StatusServiceUnavailable || code != "session_not_running" {
+	if status, code, _ := relayedRoute(t, addr, token, s.proxy); status != http.StatusServiceUnavailable || code != "session_not_running" {
 		t.Errorf("after the session: %d %s", status, code)
 	}
 	if got := h.got(); len(got) != 1 || !strings.HasPrefix(got[0], "GET /tests? session=1") {
@@ -302,14 +311,20 @@ func TestTheRouteWorksBehindAWallAndIsClosedBetweenSessions(t *testing.T) {
 	}
 }
 
-// TestTheSetupGetsNoQoryHostURLAndNoRoute pins the run's setup: the setup container's
-// environment has no QORY_HOST_URL, and a request from it to the route gets 503.
-func TestTheSetupGetsNoQoryHostURLAndNoRoute(t *testing.T) {
-	sp, _ := specGateway(t, "FAKE_EXIT=0")
+// TestTheSetupContainerNeverReachesTheRoute pins the run's setup: the setup container's
+// environment has no QORY_HOST_URL and no proxy password, and while a session runs, a
+// request from the setup container, which shares the wall's relay, goes to the gateway's
+// proxy and reaches no handler; the session's request, with its password, does.
+func TestTheSetupContainerNeverReachesTheRoute(t *testing.T) {
+	sp, g := specGateway(t)
 	w := &setupWall{}
 	sp.Wall, sp.Image = w, "example.com/agent:1"
 	h := &recorder{}
 	sp.QoryRoute = h
+	sp.Forwarder = nil
+	dir := t.TempDir()
+	envFile, done := filepath.Join(dir, "env"), filepath.Join(dir, "done")
+	sp.Env = append(sp.Env, "FAKE_ROUTE_ENV="+envFile, "FAKE_ROUTE_DONE="+done)
 	ctx := context.Background()
 	r, err := session.Open(ctx, opened(sp))
 	if err != nil {
@@ -319,14 +334,118 @@ func TestTheSetupGetsNoQoryHostURLAndNoRoute(t *testing.T) {
 	if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands[:1]}); err != nil {
 		t.Fatal(err)
 	}
-	if got := entriesOf(w.setup.Env, session.EnvQoryHost); len(got) != 0 {
-		t.Errorf("the setup container's environment has %v", got)
+	if got := entriesOf(w.setup.Env, session.EnvQoryHost); len(got) != 0 || w.setup.ProxyPassword != "" {
+		t.Errorf("the setup container's environment has %v, its password %q", got, w.setup.ProxyPassword)
 	}
-	if status, code := relayedRoute(t, w.setup.Proxy, w.setup.ProxyToken); status != http.StatusServiceUnavailable || code != "session_not_running" {
-		t.Errorf("a request of the setup container: %d %s", status, code)
+	results := make(chan error, 1)
+	go func() {
+		_, err := r.Join(ctx, sp.SessionSpec)
+		results <- err
+	}()
+	var proxy string
+	waitFor(t, func() bool {
+		b, err := os.ReadFile(envFile)
+		proxy, _, _ = strings.Cut(string(b), "\n")
+		return err == nil
+	})
+	if status, _, body := relayedRoute(t, w.setup.Proxy, w.setup.ProxyToken, ""); status != http.StatusOK || body != "ok" || !slices.Contains(g.Proxied(), "GET "+link.QoryHostURL+"/tests") {
+		t.Errorf("a request of the setup container during the session: %d %q, the proxy got %q", status, body, g.Proxied())
 	}
 	if got := h.got(); len(got) != 0 {
+		t.Errorf("the handler got %q from the setup container", got)
+	}
+	if status, _, body := relayedRoute(t, w.setup.Proxy, w.setup.ProxyToken, proxy); status != http.StatusCreated || body != "made" {
+		t.Errorf("the session's request: %d %q", status, body)
+	}
+	os.WriteFile(done, nil, 0o600)
+	if err := <-results; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestASessionWithNoRuntimeGetsNoRoute pins a session with no runtime, such as a host
+// step's, in a run with a route: its launch has no QORY_HOST_URL, and its request to the
+// host goes to the gateway's proxy and reaches no handler.
+func TestASessionWithNoRuntimeGetsNoRoute(t *testing.T) {
+	sp, g := specGateway(t)
+	sp.Runtime, sp.Args = nil, nil
+	h := &recorder{}
+	s := startRouteSession(t, sp, h)
+	if s.host != "unset" {
+		t.Errorf("QORY_HOST_URL is %q", s.host)
+	}
+	resp, err := s.client(t).Get(link.QoryHostURL + "/tests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(b) != "ok" || !slices.Contains(g.Proxied(), "GET "+link.QoryHostURL+"/tests") {
+		t.Errorf("the request got %d %q, the proxy got %q", resp.StatusCode, b, g.Proxied())
+	}
+	s.end(t)
+	if got := h.got(); len(got) != 0 {
 		t.Errorf("the handler got %q", got)
+	}
+}
+
+// TestARecordedPathHasNoSecretOfTheRun pins the run's masker on the route's record: a
+// request whose path contains a secret of the run reaches the handler with that path,
+// and the record's path has the masker's replacement in its place.
+func TestARecordedPathHasNoSecretOfTheRun(t *testing.T) {
+	const secret = "run-secret-value-0123456789"
+	sp, _ := specGateway(t)
+	sp.Masker = mask.New()
+	if err := sp.Masker.AddSecret([]byte(secret)); err != nil {
+		t.Fatal(err)
+	}
+	h := &recorder{}
+	s := startRouteSession(t, sp, h)
+	resp, err := s.client(t).Get(link.QoryHostURL + "/keys/" + secret + "/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	res := s.end(t)
+	if got := h.got(); len(got) != 1 || !strings.Contains(got[0], "/keys/"+secret+"/x") {
+		t.Errorf("the handler got %q", got)
+	}
+	var paths []string
+	for _, e := range ofType(events(t, res), event.RunEgress) {
+		if d := data(e); d["host"] == link.QoryHost {
+			paths = append(paths, fmt.Sprint(d["path"]))
+		}
+	}
+	if len(paths) != 1 || strings.Contains(paths[0], secret) || paths[0] != "/keys/"+mask.Secret+"/x" {
+		t.Errorf("the record's paths %q", paths)
+	}
+}
+
+// TestACallersQoryHostURLIsReserved pins that a value of QORY_HOST_URL a caller passes
+// into a wall is variable_reserved, in a run with a route and in one with none: at a
+// join, from --env, wall.env and what the run inherits.
+func TestACallersQoryHostURLIsReserved(t *testing.T) {
+	const forged = session.EnvQoryHost + "=http://forged.example"
+	for what, set := range map[string]func(sp *runSpec){
+		"--env":                 func(sp *runSpec) { sp.Variables.Run = []string{forged} },
+		"wall.env":              func(sp *runSpec) { sp.Variables.Machine = []string{forged} },
+		"what the run inherits": func(sp *runSpec) { sp.Env = append(sp.Env, forged) },
+	} {
+		for _, routed := range []bool{true, false} {
+			t.Run(fmt.Sprint(what, " ", routed), func(t *testing.T) {
+				sp, _ := specGateway(t, "FAKE_EXIT=0")
+				if routed {
+					sp.QoryRoute = &recorder{}
+				}
+				sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+				set(&sp)
+				_, err := run(context.Background(), sp)
+				var ref *session.Refusal
+				if !errors.As(err, &ref) || ref.Code != "variable_reserved" || !slices.Contains(ref.Names, session.EnvQoryHost) {
+					t.Errorf("%v, want variable_reserved", err)
+				}
+			})
+		}
 	}
 }
 
