@@ -249,6 +249,16 @@ type Resumes interface {
 // Each path starts with ~/, the runtime's home.
 type Resume = descriptor.Resume
 
+// InstallRequired is implemented by a runtime that can say whether the session starts
+// it only from a folder the caller installed it in, a descriptor's install_required. It
+// is optional and checked by type assertion, so [Runtime] keeps its methods: a session
+// of a runtime without it may leave SessionSpec.RuntimeInstall unset.
+type InstallRequired interface {
+	// InstallRequired reports whether a session of the runtime needs
+	// SessionSpec.RuntimeInstall.
+	InstallRequired() bool
+}
+
 // Parents is implemented by a runtime that reports which tool call started a subagent.
 // It is optional and checked by type assertion, so [Runtime] keeps its methods: the
 // session sets no parent_agent_id for a runtime without it.
@@ -461,6 +471,9 @@ func (r *described) Secrets() Declarations {
 	}
 	return out
 }
+
+// InstallRequired is the descriptor's install_required.
+func (r *described) InstallRequired() bool { return r.d.InstallRequired }
 
 // Resume is the descriptor's resume, a copy, and true; the zero Resume and false when
 // it has none.

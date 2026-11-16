@@ -22,9 +22,10 @@
 // keeps for itself, and its [Model] the API formats the runtime sends, where a composer
 // writes a run's model id, effort value and model endpoint, and the variables it reads
 // a model key from. Its Fixed is the variables the session sets for the runtime in
-// every launch, over every other source, and its EgressHosts the hosts the runtime
-// needs to reach. [Runtimes] renders the four, for every descriptor the contract ships,
-// as runtimes.json, the file a server vendors.
+// every launch, over every other source, its EgressHosts the hosts the runtime needs
+// to reach, and its InstallRequired whether a session of it needs the caller's
+// installed folder. [Runtimes] renders the five, for every descriptor the contract
+// ships, as runtimes.json, the file a server vendors.
 package descriptor
 
 import (
@@ -62,6 +63,10 @@ type Descriptor struct {
 	// server to allow for a run. No code of this module applies them to a run's policy.
 	// Nil when the descriptor has none.
 	EgressHosts []string `yaml:"egress_hosts" json:"egress_hosts,omitempty"`
+	// InstallRequired says the session starts the runtime only from a folder the caller
+	// installed it in: a session of it without SessionSpec.RuntimeInstall is refused.
+	// False starts it also as the caller names it, such as from the run's image.
+	InstallRequired bool `yaml:"install_required" json:"install_required,omitempty"`
 	// Resume is where the runtime writes the transcript of its session, and how the
 	// session starts the runtime again from it. Nil when the runtime has no resume.
 	Resume *Resume `yaml:"resume" json:"resume,omitempty"`

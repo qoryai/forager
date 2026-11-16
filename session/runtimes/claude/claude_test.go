@@ -26,6 +26,9 @@ func TestClaudeCodeIsARuntime(t *testing.T) {
 	if rt.Name() != claude.Name || !rt.ReadsOutput() {
 		t.Errorf("name %q, reads output %v", rt.Name(), rt.ReadsOutput())
 	}
+	if r, ok := rt.(runtimes.InstallRequired); !ok || !r.InstallRequired() {
+		t.Error("Claude Code does not require an installed folder")
+	}
 	runtimetest.Conforms(t, rt)
 	runtimetest.Replays(t, rt, contracts.FS, "runtimes/claude/fixtures")
 }

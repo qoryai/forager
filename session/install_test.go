@@ -163,6 +163,11 @@ func TestJoinRefusesARuntimeInstallItCannotStart(t *testing.T) {
 			sp.RuntimeInstall.Dir += "\x00x"
 		}, "set SessionSpec.RuntimeInstall.Dir to an absolute, clean path"},
 		"a runtime whose name no folder has": {func(_ *testing.T, sp *runSpec) { sp.Runtime = runtimes.Bare("Other") }, "name the runtime with a lowercase letter"},
+		// A runtime that does not require an install still has every check of one it is
+		// given.
+		"an install a runtime does not require": {func(_ *testing.T, sp *runSpec) {
+			sp.Runtime, sp.Command = runtimes.Bare("codex"), installedProgram
+		}, "set SessionSpec.Command to a program inside SessionSpec.RuntimeInstall.Dir"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sp := spec(t, "FAKE_EXIT=0")
@@ -610,5 +615,78 @@ func TestAnUnwalledRuntimeIsListedAmongTheWalledRuns(t *testing.T) {
 	other.Mounts, other.Dir = []wall.Mount{{Path: root}}, root
 	if res, err := run(t.Context(), other); err != nil || res.ExitCode != 0 {
 		t.Errorf("the walled run after the session: %+v, %v", res, err)
+	}
+}
+
+// codexWithoutInstall is a Codex runtime of a descriptor that has no install_required,
+// as a catalog directory may have one.
+func codexWithoutInstall(t *testing.T) runtimes.Runtime {
+	t.Helper()
+	doc := "version: 1\nruntime: codex\nsources:\n  output: {format: jsonl}\nrules:\n  - {source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}\n"
+	rt, err := runtimes.Described("codex.yaml", []byte(doc), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rt
+}
+
+// TestOnlyARuntimeThatRequiresAnInstallNeedsOne pins install_required: Join refuses a
+// Claude Code session with no RuntimeInstall, and a Codex session with none, bare or
+// described, starts its program as the caller names it, with no runtime folder for the
+// wall, the same launch and the same mounts as a session with no runtime, and no
+// runtime_version.
+func TestOnlyARuntimeThatRequiresAnInstallNeedsOne(t *testing.T) {
+	sp := spec(t, "FAKE_EXIT=0")
+	sp.RuntimeInstall = nil
+	const want = "set SessionSpec.RuntimeInstall for a session of the runtime claude: the session starts a runtime only from the folder it was installed in"
+	if res, err := run(t.Context(), sp); err == nil || err.Error() != want {
+		t.Errorf("Claude Code with no install: %+v, %v; want %q", res, err, want)
+	}
+
+	for name, rt := range map[string]func(*testing.T) runtimes.Runtime{
+		"bare":      func(*testing.T) runtimes.Runtime { return runtimes.Bare("codex") },
+		"described": codexWithoutInstall,
+	} {
+		t.Run(name, func(t *testing.T) {
+			sp := spec(t, "FAKE_EXIT=0")
+			sp.Runtime, sp.RuntimeInstall = rt(t), nil
+			res, err := run(t.Context(), sp)
+			if err != nil || res.ExitCode != 0 {
+				t.Fatalf("an unwalled session: %+v, %v", res, err)
+			}
+			started := sessionStarted(t, events(t, res))
+			if v, ok := started["runtime_version"]; ok || started["command"] != installedProgram || started["runtime"] != "codex" {
+				t.Errorf("runtime %v, command %v, runtime_version %v", started["runtime"], started["command"], v)
+			}
+
+			launches := map[bool]wall.Launch{}
+			for _, codex := range []bool{true, false} {
+				w := &openWall{}
+				sp := walledSpec(t, w)
+				sp.RuntimeInstall = nil
+				sp.Runtime = nil
+				if codex {
+					sp.Runtime = rt(t)
+				}
+				res, err := run(t.Context(), sp)
+				if err != nil || res.ExitCode != 0 {
+					t.Fatalf("a walled session, codex %v: %+v, %v", codex, res, err)
+				}
+				if w.got.Runtime != (wall.RuntimeFolder{}) {
+					t.Errorf("codex %v: the wall got the runtime folder %+v", codex, w.got.Runtime)
+				}
+				words := strings.Join(append([]string{w.got.Command}, w.got.Args...), " ")
+				if !strings.Contains(words, installedProgram) || strings.Contains(words, wall.RuntimeDir) {
+					t.Errorf("codex %v: the launch inside is %s", codex, words)
+				}
+				// The session directory differs per run: compare the rest.
+				l := w.got
+				l.Mounts = slices.DeleteFunc(slices.Clone(l.Mounts), func(m wall.Mount) bool { return m.Path == res.SessionDir })
+				launches[codex] = l
+			}
+			if a, b := launches[true], launches[false]; a.Command != b.Command || len(a.Mounts) != len(b.Mounts) {
+				t.Errorf("codex launch %q with mounts %v; with no runtime %q with mounts %v", a.Command, a.Mounts, b.Command, b.Mounts)
+			}
+		})
 	}
 }

@@ -246,8 +246,13 @@ type SessionSpec struct {
 	// Runtime sets bare in dev.qory.session.started.
 	Runtime runtimes.Runtime
 	// RuntimeInstall is the folder the caller installed the runtime's program in, and
-	// the version it installed. A session with a Runtime requires it, and a session
-	// with none refuses it: [Run.Join] returns an error. The program is a file inside
+	// the version it installed. A session of a Runtime that is
+	// [runtimes.InstallRequired] and reports true, such as Claude Code, requires it, and
+	// a session with no Runtime refuses it: [Run.Join] returns an error. A session of
+	// another Runtime, such as Codex, may leave it nil: the session starts Command as
+	// the caller names it, from the Image behind a Wall, binds no folder and reports no
+	// runtime_version. A RuntimeInstall that is set has every check of
+	// [RuntimeInstall], for any Runtime. The program is a file inside
 	// Dir: Command, or, behind a Wall, the argument after the first -- in Args when
 	// Command is [wall.HelperPath], Forager's helper, which the caller starts the
 	// program through; the words before that -- are the caller's and are not checked.

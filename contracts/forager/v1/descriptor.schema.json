@@ -267,6 +267,10 @@
       "uniqueItems": true,
       "items": {"$ref": "#/$defs/exact_host"}
     },
+    "install_required": {
+      "description": "True when the session starts the runtime only from a folder the caller installed it in, SessionSpec.RuntimeInstall: Join refuses a session of the runtime without one. Absent or false, a session may also start the runtime as the caller names it, such as from the run's image, with no installed folder. runtimes.json lists it for every descriptor the contract ships.",
+      "type": "boolean"
+    },
     "resume": {
       "description": "Where the runtime writes the transcript of its session, and how the session starts the runtime again from it. The session reads the transcript as the runtime appends to it and writes it as dev.qory.session.transcript. In a run with resume in its run configuration, it writes the paused run's transcript at the run configuration's resume.path before the runtime starts, and adds args. Absent, the runtime has no resume: the session writes no dev.qory.session.transcript, and a continuation starts the runtime without a resume.",
       "type": "object",

@@ -162,6 +162,9 @@ fixed:
 # The hosts Claude Code needs to reach, for a server to allow for a run. A machine's
 # policy can still block them.
 egress_hosts: [api.anthropic.com]
+# The session starts Claude Code only from the folder of SessionSpec.RuntimeInstall,
+# and refuses a session of it without one.
+install_required: true
 # Claude Code writes the transcript of its session to the file whose path each hook's
 # input contains as transcript_path: ~/.claude/projects/, the working directory with
 # every character other than an ASCII letter or digit replaced by -, then the session

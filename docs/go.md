@@ -1318,8 +1318,12 @@ request asks the gateway for, for this session.
 - `RuntimeInstall` is where you installed the runtime's program on this machine: `Dir`,
   the folder, an absolute path such as `/opt/runtimes/claude/2.1.320`, and `Version`,
   the version you installed, such as `2.1.320`. The session starts the program from
-  that folder, never from the image. A session with a `Runtime` needs it, and a
-  session with no runtime leaves it nil. The program is a file inside `Dir`:
+  that folder, never from the image. A session of a runtime whose descriptor sets
+  `install_required`, such as Claude Code, needs it, and a session with no runtime
+  leaves it nil. A session of another runtime, such as Codex, may leave it nil: the
+  session then starts `Command` as you name it, from the image behind a `Wall`, with no
+  folder bound and no `runtime_version`. When you set it, every check below applies.
+  The program is a file inside `Dir`:
   `Command`, or, behind a `Wall`, the argument after the first `--` in `Args` when
   `Command` is `wall.HelperPath`, as qory starts the agent:
   `/qory/qory run agent-env … -- <program>`. In that form the session checks only the
@@ -1332,7 +1336,7 @@ request asks the gateway for, for this session.
   session does not run the program to check it. Keep the folder unchanged until the
   run ends. `Join` returns an error that starts with the fix, before the join request,
   and writes nothing, when:
-  - `RuntimeInstall` is nil for a session with a `Runtime`: `set
+  - `RuntimeInstall` is nil for a session of a runtime that requires it: `set
     SessionSpec.RuntimeInstall for a session of the runtime claude: the session starts
     a runtime only from the folder it was installed in`; or it is set for a session
     with no runtime;

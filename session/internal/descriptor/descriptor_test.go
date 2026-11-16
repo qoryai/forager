@@ -563,18 +563,49 @@ func TestEgressHostsAreListed(t *testing.T) {
 	}
 }
 
+// TestInstallRequiredIsListed pins that a descriptor's install_required decodes, false
+// when absent, that runtimes.json lists it for every runtime, and that the schema
+// accepts only a boolean.
+func TestInstallRequiredIsListed(t *testing.T) {
+	const head = "version: 1\nruntime: amp\ntitle: Amp\nsources: {output: {format: jsonl}}\n" +
+		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n"
+	for doc, want := range map[string]bool{head: false, head + "install_required: false\n": false, head + "install_required: true\n": true} {
+		d, err := descriptor.Parse("amp.yaml", []byte(doc))
+		if err != nil || d.InstallRequired != want {
+			t.Errorf("%q: InstallRequired %v, %v; want %v", doc, d != nil && d.InstallRequired, err, want)
+		}
+		rendered, err := descriptor.Runtimes(fstest.MapFS{"runtimes/amp/descriptor.yaml": {Data: []byte(doc)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var file struct {
+			Runtimes []struct {
+				InstallRequired *bool `json:"install_required"`
+			} `json:"runtimes"`
+		}
+		if err := json.Unmarshal(rendered, &file); err != nil || len(file.Runtimes) != 1 || file.Runtimes[0].InstallRequired == nil || *file.Runtimes[0].InstallRequired != want {
+			t.Errorf("%q: runtimes.json is %s (%v); want install_required %v", doc, rendered, err, want)
+		}
+	}
+	if _, err := descriptor.Parse("amp.yaml", []byte(head+"install_required: \"yes\"\n")); err == nil {
+		t.Error("install_required as a string passed; want a schema failure")
+	}
+}
+
 // TestRuntimesJSONShape pins the members of runtimes.json a server reads: version and
 // runtimes; per runtime its name, title, reserves, denies, credential_files, declares,
-// one_of, fixed and egress_hosts, every one present, fixed an object of strings; per declaration id, title, name, hosts, auth with its
-// scheme, the header of a header scheme and the username of a basic scheme, and paths
+// one_of, fixed, egress_hosts and install_required, every one present, fixed an object
+// of strings and install_required a boolean; per declaration id, title, name, hosts,
+// auth with its scheme, the header of a header scheme and the username of a basic scheme, and paths
 // when it has some; per group id, required and of; and model when the descriptor has
 // one, with formats, model, endpoint with its variable and optionally effort, with run
 // and optionally agent, each place being exactly one of flag, setting and variable, and
 // optionally overrides. The claude runtime has a model with overrides, and its fixed
 // sets CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC and
 // CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL to 1, CLAUDE_CODE_MAX_RETRIES
-// to 15 and DISABLE_AUTOUPDATER to 1, and nothing else, and its egress_hosts is api.anthropic.com alone. Every built-in descriptor is one runtime, in
-// name order.
+// to 15 and DISABLE_AUTOUPDATER to 1, and nothing else, its egress_hosts is
+// api.anthropic.com alone, and its install_required is true. Every built-in
+// descriptor is one runtime, in name order.
 func TestRuntimesJSONShape(t *testing.T) {
 	b, err := fs.ReadFile(contracts.FS, descriptor.RuntimesFile)
 	if err != nil {
@@ -661,7 +692,7 @@ func TestRuntimesJSONShape(t *testing.T) {
 		t.Fatalf("%d runtimes for %d descriptors", len(runtimes), len(dirs))
 	}
 	for i, r := range runtimes {
-		rt := members("runtime", r, []string{"name", "title", "reserves", "denies", "credential_files", "declares", "one_of", "fixed", "egress_hosts"}, "model")
+		rt := members("runtime", r, []string{"name", "title", "reserves", "denies", "credential_files", "declares", "one_of", "fixed", "egress_hosts", "install_required"}, "model")
 		if rt["name"] != dirs[i].Name() || rt["title"] == "" {
 			t.Errorf("runtime %d is %v, %v; want %s and a title", i, rt["name"], rt["title"], dirs[i].Name())
 		}
@@ -679,6 +710,13 @@ func TestRuntimesJSONShape(t *testing.T) {
 		}
 		for _, k := range []string{"reserves", "denies", "credential_files"} {
 			strs(k, rt[k])
+		}
+		required, ok := rt["install_required"].(bool)
+		if !ok {
+			t.Errorf("install_required of %v is %v; want a boolean", rt["name"], rt["install_required"])
+		}
+		if rt["name"] == "claude" && !required {
+			t.Error("the claude runtime's install_required is false; want true")
 		}
 		hosts := strs("egress_hosts", rt["egress_hosts"])
 		if want := []string{"api.anthropic.com"}; rt["name"] == "claude" && !reflect.DeepEqual(hosts, want) {

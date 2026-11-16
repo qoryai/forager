@@ -49,8 +49,10 @@ release may change what an existing document does, and says so under Upgrading.
   rules: the descriptor schema refuses a rule that maps one, since the session sets them.
 - Read `runtime_version` of `dev.qory.session.started` as the version of the runtime the
   caller installed, `SessionSpec.RuntimeInstall.Version`, such as `2.1.320`. It is
-  absent for a session with no runtime. Before, it was the version the runtime's
-  descriptor expected, and absent for a bare runtime.
+  absent for a session without `RuntimeInstall`: a session with no runtime, and one of
+  a runtime without `install_required`, such as Codex, that starts from the image.
+  Before, it was the version the runtime's descriptor expected, and absent for a bare
+  runtime.
 - Expect `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` in every Claude Code launch,
   walled or not: the Claude Code descriptor's `fixed` sets it. A value of it from the
   server, `--env`, `wall.env`, a harness default or the environment the run inherits
@@ -419,6 +421,12 @@ release may change what an existing document does, and says so under Upgrading.
   `egress_hosts` for every runtime, `[]` when the descriptor has none, for a server to
   allow for a run, and a machine's policy can still block them. No Forager code applies
   the list to a run's policy. The Claude Code descriptor lists `api.anthropic.com`.
+- `install_required` in a runtime descriptor: `true` when the session starts the
+  runtime only from a folder the caller installed it in, `SessionSpec.RuntimeInstall`.
+  `Run.Join` refuses a session of such a runtime without one. `runtimes.json` lists
+  `install_required` for every runtime, `false` when the descriptor has none. The
+  Claude Code descriptor sets it; a runtime without it, such as Codex, still starts
+  from the image when the caller passes no folder.
 - `parent_agent_id` in `dev.qory.runtime.subagent_started`: the subagent that started
   this one, when the runtime reports it. Claude Code 2.1.292 and later reports it in a
   session on pipes with `--output-format stream-json --verbose`. A descriptor sets where
@@ -1897,23 +1905,26 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
-- Install the runtime's program on the machine and set `SessionSpec.RuntimeInstall`,
-  the folder and the version you installed, for each session with a `Runtime`: the
-  session starts the program from that folder, never from the image, so a run image
-  needs no runtime. `Command`, or behind a wall the argument after the first `--` in
-  `Args` when `Command` is `wall.HelperPath`, is a file inside `RuntimeInstall.Dir`, such
-  as `/opt/runtimes/claude/2.1.320/bin/claude`, by a clean path. Let others read and
-  enter the folder and read and execute the program (`chmod o+rx`). Give the folder,
-  each folder down to the program and the program to root or to the user that runs
-  Forager, with no write for the group or others (`chmod go-w`), give the program no
-  second hard link, and install the folder under folders only those two users can
-  write. Behind a wall, keep the folder away from `/qory` on the machine. Keep the
-  folder unchanged until the run ends. `Join` returns an error that starts with the
-  fix, before the join request, for a session with a `Runtime` and no
-  `RuntimeInstall`, for a `RuntimeInstall` on a session with no runtime, and for a
-  folder, a program or a version it refuses, as `docs/go.md` lists under The spec. A
-  version starts with a letter or a digit. Before, the session started `Command` as
-  given, behind a wall from the image.
+- Install the runtime's program on the machine and set `SessionSpec.RuntimeInstall`, the
+  folder and the version you installed, for each session of a runtime whose descriptor
+  sets `install_required`, such as Claude Code: the session starts the program from that
+  folder, never from the image, so a run image needs no such runtime. A session of
+  another runtime, such as Codex, may leave `RuntimeInstall` nil and starts `Command` as
+  given, behind a wall from the image, as before; when you set it, every check below
+  applies. `Command`, or behind a wall the argument after the first `--` in `Args` when
+  `Command` is `wall.HelperPath`, is a file inside `RuntimeInstall.Dir`, such as
+  `/opt/runtimes/claude/2.1.320/bin/claude`, by a clean path. Let others read and enter
+  the folder and read and execute the program (`chmod o+rx`). Give the folder, each
+  folder down to the program and the program to root or to the user that runs Forager,
+  with no write for the group or others (`chmod go-w`), give the program no second hard
+  link, and install the folder under folders only those two users can write. Behind a
+  wall, keep the folder away from `/qory` on the machine. Keep the folder unchanged
+  until the run ends. `Join` returns an error that starts with the fix, before the join
+  request, for a session of a runtime that requires it and no `RuntimeInstall`, for a
+  `RuntimeInstall` on a session with no runtime, and for a folder, a program or a
+  version it refuses, as `docs/go.md` lists under The spec. A version starts with a
+  letter or a digit. Before, the session started `Command` as given, behind a wall from
+  the image.
 - Stop calling `Version` of a `runtimes.Runtime`, and remove it from a runtime written
   in Go: the interface no longer has it. Read the version you installed from your
   `SessionSpec.RuntimeInstall.Version`.
@@ -2503,19 +2514,19 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
-- Behind a wall the enclosure binds the runtime's installed folder read-only at
-  `/qory/runtime/<runtime>`, such as `/qory/runtime/claude`, and the session writes
-  `RuntimeInstall.Dir` as that path in the command, in each argument and in each
-  variable value it prepares. In a walled run the folder is one of Forager's files, so a
-  mount or a workspace that is, contains or lies inside it is
-  `mount_contains_forager_files`, and the registry of walled runs lists it among the
-  wall's binds. With or without a wall, a folder that is, contains or lies in a place a
-  walled run can write fails the session before the runtime starts.
-- A session without a wall lists its runtime's installed folder in the registry of
-  walled runs, read-only, from before the runtime starts until the session ends. A
-  walled run that starts meanwhile and binds the folder, or a folder that contains it,
-  writable is `mount_shared_with_run`. Such an entry is removed as soon as its session
-  is gone, since no container outlives it.
+- Behind a wall, for a session with `RuntimeInstall`, the enclosure binds the runtime's
+  installed folder read-only at `/qory/runtime/<runtime>`, such as
+  `/qory/runtime/claude`, and the session writes `RuntimeInstall.Dir` as that path in
+  the command, in each argument and in each variable value it prepares. In a walled run
+  the folder is one of Forager's files, so a mount or a workspace that is, contains or
+  lies inside it is `mount_contains_forager_files`, and the registry of walled runs
+  lists it among the wall's binds. With or without a wall, a folder that is, contains or
+  lies in a place a walled run can write fails the session before the runtime starts.
+- A session without a wall and with `RuntimeInstall` lists its runtime's installed
+  folder in the registry of walled runs, read-only, from before the runtime starts until
+  the session ends. A walled run that starts meanwhile and binds the folder, or a folder
+  that contains it, writable is `mount_shared_with_run`. Such an entry is removed as
+  soon as its session is gone, since no container outlives it.
 - On Linux `session.Exec` exits 125, before it starts the program, with a line that
   starts with the fix, when `/qory` or `/qory/runtime` is a symbolic link, or when it
   cannot read `/proc/self/mountinfo`. It exits 125 too when a mount lies at `/qory`, at

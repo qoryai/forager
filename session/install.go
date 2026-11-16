@@ -48,8 +48,8 @@ var qoryDir = path.Dir(wall.HelperPath)
 
 // checkInstall checks a session's RuntimeInstall against its runtime and its program,
 // as [RuntimeInstall] says, and returns it checked; nil for a session with no
-// runtime. rt is the runtime the caller set, nil for none; walled says the run has a
-// wall.
+// runtime, and for one with no RuntimeInstall whose runtime does not require one. rt
+// is the runtime the caller set, nil for none; walled says the run has a wall.
 func checkInstall(spec SessionSpec, rt runtimes.Runtime, walled bool) (*installed, error) {
 	in := spec.RuntimeInstall
 	if rt == nil {
@@ -60,6 +60,12 @@ func checkInstall(spec SessionSpec, rt runtimes.Runtime, walled bool) (*installe
 	}
 	name := rt.Name()
 	if in == nil {
+		// A runtime whose descriptor has no install_required, such as Codex, starts as
+		// the caller names it, from the image or this machine's PATH, with no folder
+		// bound.
+		if r, ok := rt.(runtimes.InstallRequired); !ok || !r.InstallRequired() {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("set SessionSpec.RuntimeInstall for a session of the runtime %s: the session starts a runtime only from the folder it was installed in", accesskey.ShownName(name, false))
 	}
 	if !runtimeNameShape.MatchString(name) {

@@ -82,6 +82,9 @@ func TestABareRuntimeIsRunAndNotRead(t *testing.T) {
 	if rt.Headless([]string{"-p", "hi"}) {
 		t.Error("a bare runtime knows nothing of its arguments, so none is headless")
 	}
+	if _, ok := rt.(runtimes.InstallRequired); ok {
+		t.Error("a bare runtime requires an installed folder")
+	}
 }
 
 // TestTheDescriptorSaysWhichArgumentsMeanHeadless pins the matching rule: a short

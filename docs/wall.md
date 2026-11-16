@@ -760,9 +760,12 @@ So the wall needs no separate image.
 
 ### The runtime's folder
 
-The runtime does not come from the image. The caller installs the runtime's program on
+Claude Code does not come from the image. The caller installs the runtime's program on
 the node and passes the folder and the version as `SessionSpec.RuntimeInstall` (see
-[the spec](go.md#the-spec)). The enclosure binds the folder `Dir` leads to read-only at
+[the spec](go.md#the-spec)). A runtime whose descriptor sets `install_required`, such as
+Claude Code, needs the folder; a session of another runtime, such as Codex, may pass
+none and then starts the program from the image, with nothing bound at
+`/qory/runtime`. The enclosure binds the folder `Dir` leads to read-only at
 `/qory/runtime/<runtime>`, such as `/qory/runtime/claude`, so the agent cannot change
 the program it runs. The session writes `Dir` as that path in `Command`, in each
 argument and in each variable value it prepares: `/opt/runtimes/claude/2.1.320/bin/claude`
