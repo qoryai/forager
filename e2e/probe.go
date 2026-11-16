@@ -116,6 +116,9 @@ type report struct {
 	// QoryHost is what the probe found of the route to the caller's handler, when
 	// PROBE_QORY_HOST is 1: the probe then tries nothing else.
 	QoryHost *qoryHostReport `json:"qory_host,omitempty"`
+	// SetupRoute is what the setup container's requests to the route got, when
+	// PROBE_SETUP_ROUTE is 1, [probeSetupRoute]: the probe then tries nothing else.
+	SetupRoute string `json:"setup_route,omitempty"`
 	// Planted is what the probe planted in its HOME and the workspace, when
 	// PROBE_PLANT_HOME is 1: the probe then tries nothing else.
 	Planted *plantReport `json:"planted,omitempty"`
@@ -454,6 +457,12 @@ func probe(args []string) int {
 	}
 	if os.Getenv("PROBE_QORY_HOST") == "1" {
 		r.QoryHost = probeQoryHost()
+		b, _ := json.Marshal(r)
+		fmt.Println(probePrefix + string(b))
+		return 0
+	}
+	if os.Getenv("PROBE_SETUP_ROUTE") == "1" {
+		r.SetupRoute = probeSetupRoute()
 		b, _ := json.Marshal(r)
 		fmt.Println(probePrefix + string(b))
 		return 0
