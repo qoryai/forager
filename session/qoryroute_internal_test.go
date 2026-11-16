@@ -454,6 +454,41 @@ func TestTheRouteServesTheAgentsAddressAlone(t *testing.T) {
 	mu.Unlock()
 }
 
+// TestAPeerLineAfterTheRelaysIsNotRead pins that a program behind the wall cannot claim
+// the agent's address: the relay writes the peer line of the setup container at
+// 10.89.0.9, and the program then writes a peer line of the agent's address, 10.89.0.2,
+// and a request to the route with the session's password. The forwarder answers 400 or
+// closes the connection unanswered, and the handler gets no call.
+func TestAPeerLineAfterTheRelaysIsNotRead(t *testing.T) {
+	h := &routeHandler{}
+	q := newQoryRoute(h, context.Background(), (&routeRecords{}).record, nil)
+	q.agent = func(context.Context) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("10.89.0.2")}, nil
+	}
+	f := walledRoute(t, startRouteProxy(t), q)
+	defer q.open(1, routePassword)()
+	for _, forged := range []string{
+		link.RelayPeerLine(netip.MustParseAddr("10.89.0.2")),
+		link.RelayPeerLine(netip.MustParseAddr("10.89.0.2")) + link.RelayPeerLine(netip.MustParseAddr("10.89.0.2")),
+	} {
+		c, err := net.Dial("tcp", f.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		go io.WriteString(c, link.RelayLine(checkHop)+link.RelayPeerLine(netip.MustParseAddr("10.89.0.9"))+forged+toRoute("GET", "/tests", ""))
+		out := readAllOf(c)
+		c.Close()
+		if out != "" {
+			if status, _ := errorOf(t, out); status != http.StatusBadRequest {
+				t.Errorf("a peer line of the program's, %d bytes: %d %q, want 400 or no answer", len(forged), status, out)
+			}
+		}
+	}
+	if got := h.got(); len(got) != 0 {
+		t.Errorf("the handler got %v", got)
+	}
+}
+
 // TestAFailedAgentLookupIsReported pins the Report line of a failed call for the agent's
 // addresses: the line starts with the fix, has the session's number, no text of the
 // error, which can contain an address, and the wait for a call that timed out; at most
