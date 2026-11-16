@@ -74,8 +74,12 @@ if err != nil {                                   // the run did not open
 	return err
 }
 res, err := run.Join(ctx, session.SessionSpec{
-	Runtime:   rt,
-	Command:   "claude",
+	Runtime: rt,
+	RuntimeInstall: &session.RuntimeInstall{      // where you installed the runtime, see below
+		Dir:     "/opt/runtimes/claude/2.1.320",
+		Version: "2.1.320",
+	},
+	Command:   "/opt/runtimes/claude/2.1.320/bin/claude", // a file inside RuntimeInstall.Dir
 	Args:      []string{"--settings", settings, "-p", "Reply pong."},
 	Forwarder: []string{exe, "forward"},          // the hook command, see below
 })
@@ -1311,6 +1315,45 @@ source that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_`
 `qecd_` as the value's phrase in its place. `ModelCredential` is the credential the join
 request asks the gateway for, for this session.
 
+- `RuntimeInstall` is where you installed the runtime's program on this machine: `Dir`,
+  the folder, an absolute path such as `/opt/runtimes/claude/2.1.320`, and `Version`,
+  the version you installed, such as `2.1.320`. The session starts the program from
+  that folder, never from the image. A session with a `Runtime` needs it, and a
+  session with no runtime leaves it nil. The program is a file inside `Dir`:
+  `Command`, or, behind a `Wall`, the argument after the first `--` in `Args` when
+  `Command` is `wall.HelperPath`, as qory starts the agent:
+  `/qory/qory run agent-env … -- <program>`. Without a `Wall`, `Command` is the
+  program. Behind a `Wall` the enclosure sees the folder read-only at
+  `/qory/runtime/<runtime>`, such as `/qory/runtime/claude`, and the session writes
+  `Dir` as that path in `Command`, in each argument and in each variable value it
+  prepares. `dev.qory.session.started` reports `Version` as `runtime_version`; the
+  session does not run the program to check it. Keep the folder unchanged until the
+  run ends. `Join` returns an error that starts with the fix, before the join request,
+  and writes nothing, when:
+  - `RuntimeInstall` is nil for a session with a `Runtime`: `set
+    SessionSpec.RuntimeInstall for a session of the runtime claude: the session starts
+    a runtime only from the folder it was installed in`; or it is set for a session
+    with no runtime;
+  - `Dir` is not absolute and clean, does not exist, is not a folder, or is a folder
+    that others cannot read and enter: `let others read and enter
+    /opt/runtimes/claude/2.1.320 (chmod o+rx): behind a wall the runtime runs as a user
+    that may not own it`. `Dir` may itself be a symbolic link: the session uses the
+    folder it leads to;
+  - the program lies outside `Dir`, is reached through a symbolic link below `Dir`, or
+    is not a regular file that others can read and execute;
+  - `Version` is empty, has more than 64 bytes, or has a character other than a
+    letter, a digit, `.`, `+` or `-`;
+  - the runtime's name is not a lowercase letter followed by up to 63 lowercase
+    letters, digits or `-`, the name of its folder in `/qory/runtime`.
+
+  A `Dir` that is, contains or lies in a place a walled run can write fails the
+  session before the runtime starts, with or without a `Wall`: `install the runtime in
+  a folder no walled run can write: SessionSpec.RuntimeInstall.Dir …`. Those places are
+  `Written` and the writable binds of the other walled runs still going, and behind a
+  `Wall` also the workspace and the run's writable binds. Behind a `Wall`, a mount or
+  a workspace that is, contains or lies inside `Dir` is
+  `mount_contains_forager_files`. See
+  [the contract](../contracts/forager/v1/README.md#the-runtime).
 - `Declared` is the egress the harness declared. The record reports it as
   `harness_hosts`, a host that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`,
   `qecg_`, `qeci_` or `qecd_` as the value's phrase in its place, and it decides

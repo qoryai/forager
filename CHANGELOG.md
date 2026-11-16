@@ -44,11 +44,10 @@ release may change what an existing document does, and says so under Upgrading.
   `dev.qory.run.exited` as it reads `image_missing`.
 - Remove `session`, `line`, `truncated` and `summary` from the `data` of a descriptor's
   rules: the descriptor schema refuses a rule that maps one, since the session sets them.
-- Build run images with Claude Code 2.1.316: `runtime_version` in the Claude Code
-  descriptor is 2.1.316, up from 2.1.273. A qory that pins this Forager fails
-  `qory image check`, with exit status 1, for an image whose `claude --version` is any
-  other version, older or newer, and prints `install @anthropic-ai/claude-code@2.1.316`.
-  Forager itself does not check the installed version.
+- Read `runtime_version` of `dev.qory.session.started` as the version of the runtime the
+  caller installed, `SessionSpec.RuntimeInstall.Version`, such as `2.1.320`. It is
+  absent for a session with no runtime. Before, it was the version the runtime's
+  descriptor expected, and absent for a bare runtime.
 - Expect `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` in every Claude Code launch,
   walled or not: the Claude Code descriptor's `fixed` sets it. A value of it from the
   server, `--env`, `wall.env`, a harness default or the environment the run inherits
@@ -1002,6 +1001,13 @@ release may change what an existing document does, and says so under Upgrading.
   no `Retry-After`. `enrolment.schema.json` describes the `Retry-After` too. The
   revision stays 1.
 
+#### Removed
+
+- `runtime_version` of a runtime descriptor: a descriptor pins no version, since the
+  session starts the runtime the caller installed. The descriptor schema refuses a
+  descriptor that sets it, so remove it from a descriptor of yours. The Claude Code
+  descriptor had `2.1.316`.
+
 #### Fixed
 
 - `fmt` and `encoding/json` print `server.LinkRunAnswer` with the image's `ref` and
@@ -1051,6 +1057,23 @@ release may change what an existing document does, and says so under Upgrading.
   run whose workspace qory binds read-only for the agent. Before, they said the run's
   workflow is read-only, which is false for a run of a `write` workflow that qory binds
   read-only. The codes stay.
+
+#### Security
+
+- The Claude Code descriptor denies 7 more variables, so no value of the server's, the
+  run's or the machine's reaches Claude Code, and a walled run has them unset.
+  `CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD`, `ANTHROPIC_GOOGLE_CLOUD_BASE_URL`,
+  `CLAUDE_CODE_USE_GATEWAY` and `CLAUDE_CODE_USE_MANTLE` switch Claude Code to Google
+  Cloud's, a gateway's or Mantle's endpoint. `CLAUDE_CODE_CUSTOM_OAUTH_URL` and
+  `CLAUDE_CODE_CLIENT_DATA_URL` move the host of the login and the host client data goes
+  to. `CLAUDE_CODE_REMOTE` turns on the mode of a cloud session. Each is in the Claude
+  Code 2.1.325 binary.
+- The Claude Code descriptor's `fixed` sets `DISABLE_AUTOUPDATER=1` in every Claude Code
+  launch, walled or not, in the launch and in the `--settings` copy. With it, Claude Code
+  does not update itself, so the session runs the version the caller installed. A value
+  of it from the server, `--env`, `wall.env`, a harness default or the environment the
+  run inherits no longer applies, and `dev.qory.run.policy_applied` lists the values
+  that lost.
 
 ### Gateway
 
@@ -1696,6 +1719,18 @@ release may change what an existing document does, and says so under Upgrading.
   a continuation's resume finds no transcript inside. Implement
   `wall.TranscriptChecker` when the wall cannot always bind it where the agent's user
   writes: the session then binds none, adds no resume arguments and writes one line.
+- Bind `Launch.Runtime.Path` read-only at `/qory/runtime/<Launch.Runtime.Name>` in a
+  wall outside Forager, as `wall.Docker` does. Behind a wall the session writes the
+  runtime's installed folder as that path in the launch, so a wall that ignores it
+  starts a program that is missing inside.
+- Set `e2e.Options.Install` when you run the conformance suite: a folder with a copy of
+  the helper at `bin/claude`, which `e2e.Install` makes. Each session of the suite
+  starts the probe from that folder, and the suite checks that the agent cannot create,
+  change, rename or remove a file in it or in `/qory`, also from a container it starts
+  with a nested Docker, and that `dev.qory.session.started` reports
+  `e2e.InstallVersion`. The tests that run Claude Code take its installed folder from
+  `QORY_WALL_CLAUDE_INSTALL`, with the program at `bin/claude`, and its version from
+  `QORY_WALL_CLAUDE_VERSION`; `QORY_WALL_CLAUDE_IMAGE` is an image with no Claude Code.
 
 #### Added
 
@@ -1810,6 +1845,9 @@ release may change what an existing document does, and says so under Upgrading.
   end when it closes; each session starts and removes only the agent's container.
 - The relay now starts from the machine's default image, never from the run's, when the
   machine has a default image.
+- The Docker wall refuses a mount with no `Target` whose `Path` is, contains or lies
+  under `/qory`, where the wall binds its helper, the bundle and the runtime's folder:
+  such a mount is shown at its `Path`. Before, it checked only a `Target`.
 
 #### Fixed
 
@@ -1849,6 +1887,18 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Install the runtime's program on the machine and set `SessionSpec.RuntimeInstall`,
+  the folder and the version you installed, for each session with a `Runtime`: the
+  session starts the program from that folder, never from the image, so a run image
+  needs no runtime. `Command`, or behind a wall the argument after the first `--` in
+  `Args` when `Command` is `wall.HelperPath`, is a file inside `RuntimeInstall.Dir`, such
+  as `/opt/runtimes/claude/2.1.320/bin/claude`. Let others read and enter the folder and
+  read and execute the program (`chmod o+rx`), and keep the folder unchanged until the
+  run ends. `Join` returns an error that starts with the fix, before the join request,
+  for a session with a `Runtime` and no `RuntimeInstall`, for a `RuntimeInstall` on a
+  session with no runtime, and for a folder, a program or a version it refuses, as
+  `docs/go.md` lists under The spec. Before, the session started `Command` as given,
+  behind a wall from the image.
 - Return `[]runtimes.Event` from `Map` in a runtime written in Go: `Runtime.Map` returns
   the events of one record in order, each with its type and data, and nil for none.
   Before, it returned one type, its data and `ok`.
@@ -2430,6 +2480,14 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- Behind a wall the enclosure binds the runtime's installed folder read-only at
+  `/qory/runtime/<runtime>`, such as `/qory/runtime/claude`, and the session writes
+  `RuntimeInstall.Dir` as that path in the command, in each argument and in each
+  variable value it prepares. In a walled run the folder is one of Forager's files, so a
+  mount or a workspace that is, contains or lies inside it is
+  `mount_contains_forager_files`, and the registry of walled runs lists it among the
+  wall's binds. With or without a wall, a folder that is, contains or lies in a place a
+  walled run can write fails the session before the runtime starts.
 - Behind a separate gateway, every forwarder of the session holds a connection it took
   while the gateway cannot be reached: it keeps the agent's connection open, writes
   nothing to it, and dials the gateway again for up to 120 seconds, waiting 250 ms after
@@ -2509,6 +2567,12 @@ release may change what an existing document does, and says so under Upgrading.
 - The `engine_unreachable` sentence of a walled run now reads "The check for a
   container of the walled run <id> failed, so this run does not start: <the error>",
   and, for `session.RunsBinding`, "… so the run counts as still going: …".
+
+#### Removed
+
+- `Version` of `runtimes.Runtime`: a runtime expects no version.
+  `dev.qory.session.started` reports `SessionSpec.RuntimeInstall.Version` as
+  `runtime_version` instead.
 
 ### e2e and CI
 
