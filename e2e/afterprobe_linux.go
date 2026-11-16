@@ -44,7 +44,7 @@ func afterInspect() int {
 		}
 		cmdline, _ := os.ReadFile("/proc/" + e.Name() + "/cmdline")
 		// The helper's command line is the helper's path, exec and --after-only; the
-		// container's init has them too, after its own, and is not the helper.
+		// container's init has them too, after the init's path, and is not the helper.
 		if !strings.HasPrefix(string(cmdline), wall.HelperPath+"\x00") || !strings.Contains(string(cmdline), "--after-only") {
 			continue
 		}
