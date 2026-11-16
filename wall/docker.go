@@ -11,6 +11,8 @@ import (
 	"io"
 	"io/fs"
 	"net"
+	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -386,6 +388,16 @@ func (e *dockerEnclosure) prepare(ctx context.Context) (Enclosure, error) {
 		return nil, errors.Join(errors.New("wall docker: the inside network got no IPv6 subnet"), e.Close(context.WithoutCancel(ctx)))
 	}
 	return e, nil
+}
+
+// relayURL is the proxy URL of the relay inside: with password, the password of the
+// agent's proxy URL, under the user name qory.
+func relayURL(password string) string {
+	u := url.URL{Scheme: "http", Host: net.JoinHostPort(relayAlias, strconv.Itoa(relayPort))}
+	if password != "" {
+		u.User = url.UserPassword(link.ProxyUser, password)
+	}
+	return u.String()
 }
 
 // ipv6Subnet reports whether s, written as CIDR, is an IPv6 subnet.
@@ -1033,9 +1045,10 @@ func (e *dockerEnclosure) relayImage() string {
 
 // StartRelay starts the relay towards the proxy at l.Proxy, from the request's
 // RelayImage, the machine's default, with l.ProxyToken as what it opens every connection
-// with, and waits until it listens. The session calls it once the run's forwarder
-// listens, as the run opens; Wrap and StartSetup call it when the relay has not started,
-// and a relay that started is left as it is. Only l.Proxy and l.ProxyToken are read.
+// with, followed by the peer line with l.ProxyPeer, and waits until it listens. The
+// session calls it once the run's forwarder listens, as the run opens; Wrap and
+// StartSetup call it when the relay has not started, and a relay that started is left
+// as it is. Only l.Proxy, l.ProxyToken and l.ProxyPeer are read.
 func (e *dockerEnclosure) StartRelay(ctx context.Context, l Launch) error {
 	if e.relayed {
 		return nil
@@ -1051,6 +1064,9 @@ func (e *dockerEnclosure) StartRelay(ctx context.Context, l Launch) error {
 	relayEnv := []string{RelayInsideEnv + "=" + strings.Join(e.subnets, ",")}
 	if l.ProxyToken != "" {
 		relayEnv = append(relayEnv, RelayTokenEnv+"="+l.ProxyToken)
+	}
+	if l.ProxyPeer {
+		relayEnv = append(relayEnv, RelayPeerEnv+"=1")
 	}
 	relayEnvFile, err := e.envFile("relay-env", relayEnv)
 	if err != nil {
@@ -1140,7 +1156,8 @@ func (e *dockerEnclosure) firstUse(ctx context.Context, ca []byte) (string, erro
 // internal network only, the launch's mounts at the paths they have on this machine or
 // at their Targets, the workspace as the working directory inside one of them, the
 // helper read-only, the socket's directory, and the launch's environment through a
-// file, so no value is on a command line. It starts the relay first when it has not
+// file, so no value is on a command line. The proxy variables name the relay, with
+// l.ProxyPassword in the URL when it is set. It starts the relay first when it has not
 // started, [dockerEnclosure.StartRelay], and runs the run's first use of the enclosure
 // when no container of the run's image ran it. With a transcript directory it creates
 // the agent's container, makes the bind's parents in it, [dockerEnclosure.copyDirs],
@@ -1161,7 +1178,7 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	}
 	// Everything that can be refused is, before anything is started.
 	env := append([]string(nil), l.Env...)
-	env = append(env, link.ProxyEnv(fmt.Sprintf("http://%s:%d", relayAlias, relayPort))...)
+	env = append(env, link.ProxyEnv(relayURL(l.ProxyPassword))...)
 	if l.Socket != "" {
 		env = append(env, link.EnvRunSocket+"="+path.Join(hooksDir, filepath.Base(l.Socket)))
 	}
@@ -1264,6 +1281,51 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 		cli = withSelection(cli, e.env)
 	}
 	return Launch{Command: e.command(), Args: run, Env: cli, Dir: dir}, nil
+}
+
+// AgentAddrs returns the addresses of the agent's container on the inside network,
+// read with docker inspect: its IPv4 address and, with nested Docker, its IPv6 one. A
+// container that does not run, or has no address there, is an error, so the route
+// serves no request until the agent's container of the session runs.
+func (e *dockerEnclosure) AgentAddrs(ctx context.Context) ([]netip.Addr, error) {
+	// The endpoint is read as JSON: from Docker 29 on, a template prints an unset
+	// address field as "invalid IP", and JSON prints it as "".
+	format := fmt.Sprintf("{{if .State.Running}}{{json (index .NetworkSettings.Networks %q)}}{{end}}", e.inside())
+	out, err := e.docker(ctx, "inspect", "--type", "container", "--format", format, e.agent())
+	if err != nil {
+		return nil, err
+	}
+	return endpointAddrs(out)
+}
+
+// endpointAddrs returns the IPv4 and IPv6 addresses in out, the JSON of a container's
+// endpoint on a network that docker inspect prints. An empty field is no address; an
+// empty out, or null for a container not on the network, has none, which is an error.
+func endpointAddrs(out []byte) ([]netip.Addr, error) {
+	var endpoint struct {
+		IPAddress         string
+		GlobalIPv6Address string
+	}
+	if s := strings.TrimSpace(string(out)); s != "" {
+		if err := json.Unmarshal([]byte(s), &endpoint); err != nil {
+			return nil, fmt.Errorf("wall docker: the agent's endpoint on the inside network: %w", err)
+		}
+	}
+	var addrs []netip.Addr
+	for _, f := range []string{endpoint.IPAddress, endpoint.GlobalIPv6Address} {
+		if f == "" {
+			continue
+		}
+		a, err := netip.ParseAddr(f)
+		if err != nil {
+			return nil, fmt.Errorf("wall docker: the agent's address %s on the inside network: %w", accesskey.ShownValue(f, false), err)
+		}
+		addrs = append(addrs, a.Unmap())
+	}
+	if len(addrs) == 0 {
+		return nil, errors.New("wall docker: the agent's container runs with no address on the inside network")
+	}
+	return addrs, nil
 }
 
 // Unwrap removes the agent's container that Wrap's launch started, within closeWait,

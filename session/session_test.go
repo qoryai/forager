@@ -106,6 +106,8 @@ func TestMain(m *testing.M) {
 			os.Exit(1)
 		}
 		os.Exit(0)
+	case os.Getenv("FAKE_ROUTE_ENV") != "":
+		os.Exit(routeRuntime())
 	case os.Getenv("FAKE_RUNTIME") != "":
 		os.Exit(fakeRuntime())
 	}

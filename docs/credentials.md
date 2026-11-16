@@ -87,6 +87,16 @@ A credential's secret comes from one of three sources:
   failing location and keyword, at most 5 and then how many more, with no value, and no
   member name other than the schema's. A tool's lines on standard error have `***` in place of
   the shapes too.
+- The route to the caller, `http://host.qory.invalid` in `QORY_HOST_URL`, sets no
+  credential. The session's forwarder takes every header off a request but
+  `Content-Type`, `Proxy-Authorization` among them, adds `Qory-Session`, the number of
+  the session that sent the request, and passes the request only to the handler the
+  caller gave in `OpenSpec.QoryRoute`. Behind a wall, the agent's proxy URL then has a
+  password of the session's launch alone, which the run's masker replaces in the
+  output. The forwarder serves the route only to a request with that password from the
+  address of the session's agent container, which the wall's relay writes for each
+  connection. The setup container never reaches the handler, also with the password.
+  See [Forager from Go](go.md#the-route-to-the-caller).
 
 In `qory`, the `gateway.credentials` section of `forager.yaml` defines them. See
 [qory's docs][qory-credentials].

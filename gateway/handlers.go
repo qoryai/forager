@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/gateway/internal/stream"
+	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
 )
@@ -663,6 +665,57 @@ func otherOpen(joins map[int]join, n int) bool {
 	return false
 }
 
+// sessionEgress is why the link refuses a dev.qory.run.egress in a session's batch,
+// empty when it takes it: the gateway writes every other decision, so it takes only a
+// decision of the route to link.QoryHost, which the session's forwarder serves. Each
+// must hold: channel qory_host, rule wall:qory-host, host host.qory.invalid, port 80
+// and method HTTP, and no credential, tool or path_rule, which only the gateway's
+// decisions have. The text contains the first field that differs and the value it has.
+func sessionEgress(data map[string]any) string {
+	for _, f := range []struct {
+		name string
+		want any
+	}{
+		{"channel", link.QoryHostChannel},
+		{"rule", link.QoryHostRule},
+		{"host", link.QoryHost},
+		{"port", float64(80)},
+		{"method", "HTTP"},
+	} {
+		if got, ok := data[f.name]; !ok || got != f.want {
+			return fmt.Sprintf("a run.egress from the session whose %s is %s, not %v: the session writes only decisions of the route to %s", f.name, shownField(got, ok), f.want, link.QoryHost)
+		}
+	}
+	for _, name := range []string{"credential", "tool", "path_rule"} {
+		if got, ok := data[name]; ok {
+			return fmt.Sprintf("a run.egress from the session whose %s is %s, not absent: the session writes only decisions of the route to %s", name, shownField(got, ok), link.QoryHost)
+		}
+	}
+	return ""
+}
+
+// shownField is the value of a field of an event as a refusal's text shows it: absent,
+// a number, or text quoted, at most 64 bytes of it, with a phrase in place of a value
+// that contains a secret.
+func shownField(v any, ok bool) string {
+	switch s := v.(type) {
+	case nil:
+		if !ok {
+			return "absent"
+		}
+		return "null"
+	case string:
+		if len(s) > 64 {
+			s = strings.ToValidUTF8(s[:64], "") + "..."
+		}
+		return accesskey.ShownValue(s, true)
+	case float64:
+		return strconv.FormatFloat(s, 'f', -1, 64)
+	default:
+		return fmt.Sprintf("a JSON %T", v)
+	}
+}
+
 // gatewayName is a refusal's name of the form only a gateway's refusal carries.
 var gatewayName = regexp.MustCompile(`^(labels|about\.details)\.[^=]*=`)
 
@@ -707,8 +760,12 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 			}
 		}
 		switch ev.Type {
-		case event.RunRegistered, event.RunEgress, event.RunTargetWrite:
+		case event.RunRegistered, event.RunTargetWrite:
 			return "an event of a type the gateway writes"
+		case event.RunEgress:
+			if why := sessionEgress(data); why != "" {
+				return why
+			}
 		case event.RunStarted:
 			if data["opened_by"] != event.OpenedByRun {
 				return "a run.started not opened by the run"

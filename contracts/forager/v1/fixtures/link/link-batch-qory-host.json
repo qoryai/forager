@@ -1,0 +1,48 @@
+[
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-900000000001",
+    "source": "urn:qory:run:0198a6b7-d283-7495-a06b-1c2d3e4f5a6b",
+    "type": "dev.qory.run.egress",
+    "subject": "0198a6b7-d283-7495-a06b-1c2d3e4f5a6b",
+    "time": "2026-11-16T09:10:00.000Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.egress.schema.json",
+    "data": {
+      "host": "host.qory.invalid",
+      "port": 80,
+      "method": "HTTP",
+      "request_method": "POST",
+      "path": "/push",
+      "request_id": "0123456789abcdef0123456789abcdef",
+      "status": 202,
+      "channel": "qory_host",
+      "decision": "allowed",
+      "outcome": "connected",
+      "mode": "enforce",
+      "rule": "wall:qory-host"
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-900000000002",
+    "source": "urn:qory:run:0198a6b7-d283-7495-a06b-1c2d3e4f5a6b",
+    "type": "dev.qory.run.egress",
+    "subject": "0198a6b7-d283-7495-a06b-1c2d3e4f5a6b",
+    "time": "2026-11-16T09:10:00.000Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.egress.schema.json",
+    "data": {
+      "host": "host.qory.invalid",
+      "port": 80,
+      "method": "HTTP",
+      "request_method": "GET",
+      "path": "/tests",
+      "request_id": "0123456789abcdef0123456789abcde1",
+      "channel": "qory_host",
+      "decision": "denied",
+      "outcome": "refused",
+      "mode": "enforce",
+      "rule": "wall:qory-host",
+      "status": 503
+    }
+  }
+]

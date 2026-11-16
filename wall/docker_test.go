@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path"
@@ -93,6 +94,8 @@ type recorder struct {
 	// order, the last one again once the others are used: an empty output succeeds, any
 	// other fails with exit status 1.
 	rms []string
+	// agentAddrs is what the inspect of the agent's container's addresses prints.
+	agentAddrs string
 }
 
 // statPath is the path inside of a docker cp that checks one, of the form docker cp
@@ -209,6 +212,8 @@ func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
 		return []byte("true\n"), nil
 	case strings.Contains(line, " inspect --format {{.State"):
 		return []byte("true\n"), nil
+	case strings.Contains(line, ".NetworkSettings.Networks"):
+		return []byte(r.agentAddrs), nil
 	case strings.Contains(line, " logs ") && strings.HasSuffix(line, "-setup"):
 		return []byte("hold: told to stop\n"), nil
 	case strings.Contains(line, " logs "):
@@ -1292,5 +1297,124 @@ func TestTheAdaptersCommandsRunWithTheRecordedSelection(t *testing.T) {
 	}
 	if !slices.Contains(wrapped.Env, "DOCKER_CONTEXT=orbstack") {
 		t.Errorf("the launch runs with %q", wrapped.Env)
+	}
+}
+
+// TestTheRelayURLHasTheLaunchsPassword pins the proxy URL the agent's container gets:
+// the relay alone, and with Launch.ProxyPassword the password under the user qory.
+func TestTheRelayURLHasTheLaunchsPassword(t *testing.T) {
+	if got := relayURL(""); got != "http://qory-proxy:3128" {
+		t.Errorf("without a password: %q", got)
+	}
+	if got := relayURL("pass-word"); got != "http://qory:pass-word@qory-proxy:3128" {
+		t.Errorf("with a password: %q", got)
+	}
+}
+
+// TestTheAgentsProxyVariablesHaveThePassword pins Wrap with Launch.ProxyPassword: each
+// of HTTP_PROXY, HTTPS_PROXY, http_proxy and https_proxy in the agent's environment file
+// is the relay's URL with the password, and the password is on no command line.
+func TestTheAgentsProxyVariablesHaveThePassword(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, sys: rec}
+	e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close(context.Background())
+	l := launch()
+	l.ProxyPassword = "pass-word"
+	wrapped, err := e.Wrap(context.Background(), l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.Index(wrapped.Args, "--env-file")
+	if i < 0 {
+		t.Fatalf("no environment file in %q", wrapped.Args)
+	}
+	b, err := os.ReadFile(wrapped.Args[i+1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{}
+	for _, line := range strings.Split(string(b), "\n") {
+		name, value, _ := strings.Cut(line, "=")
+		env[name] = value
+	}
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+		if got := env[name]; got != "http://qory:pass-word@qory-proxy:3128" {
+			t.Errorf("%s=%q", name, got)
+		}
+	}
+	if strings.Contains(strings.Join(rec.lines, "\n")+strings.Join(wrapped.Args, " "), "pass-word") {
+		t.Error("the password is on a command line")
+	}
+}
+
+// TestTheRelayWritesThePeerLineWhenTold pins Launch.ProxyPeer: the relay's environment
+// file has RelayPeerEnv=1 with it and not without it.
+func TestTheRelayWritesThePeerLineWhenTold(t *testing.T) {
+	for _, peer := range []bool{false, true} {
+		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+		d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, sys: rec}
+		e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.(*dockerEnclosure).StartRelay(context.Background(), Launch{Proxy: "127.0.0.1:50123", ProxyToken: "not-a-real-token", ProxyPeer: peer}); err != nil {
+			t.Fatal(err)
+		}
+		e.Close(context.Background())
+		if got := strings.Contains(rec.relayEnv, RelayPeerEnv+"=1\n"); got != peer {
+			t.Errorf("with ProxyPeer %v the relay's environment is %q", peer, rec.relayEnv)
+		}
+	}
+}
+
+// endpointIPv4 and endpointIPv6 are what docker inspect of Docker Engine 29.8 prints
+// for {{json (index .NetworkSettings.Networks NAME)}} of a running container, on a
+// network without IPv6 and on one with it. Docker 29 prints the unset
+// GlobalIPv6Address of endpointIPv4 as "invalid IP" in a template, and as "" in JSON.
+const (
+	endpointIPv4 = `{"IPAMConfig":null,"Links":null,"Aliases":null,"DriverOpts":null,"GwPriority":0,"NetworkID":"2b321507678f16dd0dbd68b0a9adb7c5501b0c61738df5597cca84f65108cdb6","EndpointID":"b19ebdd6a595b0df2ac7266f322cb393c3322720dde6d6f51d07ff7fdfb60201","Gateway":"10.89.0.1","IPAddress":"10.89.0.2","MacAddress":"7e:79:8c:41:6b:ac","IPPrefixLen":24,"IPv6Gateway":"","GlobalIPv6Address":"","GlobalIPv6PrefixLen":0,"DNSNames":["qory-run-agent","9879f8c2ce26"]}` + "\n"
+	endpointIPv6 = `{"IPAMConfig":null,"Links":null,"Aliases":null,"DriverOpts":null,"GwPriority":0,"NetworkID":"cb87d4ec8a4cc8378e9aeaf166bf40712bfddbfc29c9fc35c944b7a915638bc9","EndpointID":"10d7b888b4b084881cb129ba53ff1d34a7850ec0f53fac617f6babe31c475b7f","Gateway":"10.89.0.1","IPAddress":"10.89.0.2","MacAddress":"6e:3a:0c:77:c7:64","IPPrefixLen":24,"IPv6Gateway":"fd8a:1b2c:3d4e:5f60::1","GlobalIPv6Address":"fd8a:1b2c:3d4e:5f60::2","GlobalIPv6PrefixLen":64,"DNSNames":["qory-run-agent","7dfaae39045e"]}` + "\n"
+)
+
+// TestTheAgentsAddressesComeFromTheEngine pins AgentAddrs: the inspect of the agent's
+// container reads its endpoint on the inside network as JSON, with its IPv4 and IPv6
+// addresses; a container that does not run (no output) or is not on the network
+// (null), an endpoint with no address, an unreadable address or endpoint, and a failed
+// inspect are errors.
+func TestTheAgentsAddressesComeFromTheEngine(t *testing.T) {
+	for _, c := range []struct {
+		out, fail string
+		want      []netip.Addr
+	}{
+		{out: endpointIPv4, want: []netip.Addr{netip.MustParseAddr("10.89.0.2")}},
+		{out: endpointIPv6, want: []netip.Addr{netip.MustParseAddr("10.89.0.2"), netip.MustParseAddr("fd8a:1b2c:3d4e:5f60::2")}},
+		{out: `{"IPAddress":"::ffff:10.89.0.2","GlobalIPv6Address":""}`, want: []netip.Addr{netip.MustParseAddr("10.89.0.2")}},
+		{out: "\n"},
+		{out: "null\n"},
+		{out: `{"IPAddress":"","GlobalIPv6Address":""}`},
+		{out: `{"IPAddress":"not-an-address","GlobalIPv6Address":""}`},
+		{out: `{"IPAddress":"10.89.0.2","GlobalIPv6Address":"invalid IP"}`},
+		{out: "10.89.0.2 \n"},
+		{out: endpointIPv4, fail: "NetworkSettings"},
+	} {
+		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, agentAddrs: c.out, fail: c.fail}
+		d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, sys: rec}
+		e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := e.(AgentAddresser).AgentAddrs(context.Background())
+		e.Close(context.Background())
+		if !slices.Equal(got, c.want) || (err == nil) != (c.want != nil) {
+			t.Errorf("%q, failing %q: %v %v, want %v", c.out, c.fail, got, err, c.want)
+		}
+		i := slices.IndexFunc(rec.lines, func(l string) bool { return strings.Contains(l, "NetworkSettings") })
+		if i < 0 || !strings.HasSuffix(rec.lines[i], "-agent") || !strings.Contains(rec.lines[i], "-in") || !strings.Contains(rec.lines[i], "{{json (index .NetworkSettings.Networks") {
+			t.Errorf("the inspect does not read the JSON of the agent's container on the inside network: %q", rec.lines)
+		}
 	}
 }

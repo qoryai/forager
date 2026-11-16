@@ -16,6 +16,7 @@ package wall
 
 import (
 	"context"
+	"net/netip"
 )
 
 // Wall is one way of building an enclosure: one implementation per container
@@ -179,6 +180,20 @@ type Launch struct {
 	// TLS. An adapter gives it to its relay and to nothing inside the enclosure, so the
 	// proxy serves this run's relay alone, whoever else reaches its address.
 	ProxyToken string
+	// ProxyPassword, when not empty, is the password of the agent's proxy URL: given to
+	// Wrap, the proxy variables inside are http://qory:<password>@ and the relay's
+	// address, so every request of the agent carries it in its Proxy-Authorization.
+	// The session sets it for a run with a route to its caller, and the run's forwarder
+	// serves a request to host.qory.invalid only with the password of a session's
+	// launch, from the address of the agent's container ([Launch.ProxyPeer]).
+	// StartSetup does not read it, so no environment of the setup container has it.
+	ProxyPassword string
+	// ProxyPeer, given to the call that starts the relay, has the relay write the
+	// address each connection came from inside the enclosure right after the preamble,
+	// link.RelayPeerLine. The session sets it for a run with a route to its caller,
+	// with an enclosure that is an [AgentAddresser]: the run's forwarder then serves a
+	// request to host.qory.invalid only from an address of the agent's container.
+	ProxyPeer bool
 	// CA, when not empty, is the certificate of the run's authority, PEM: the proxy
 	// answers as some hosts itself, to set a credential the enclosure never holds, and
 	// what runs inside must trust it for those. An adapter shows the enclosure one
@@ -198,6 +213,19 @@ type Launch struct {
 	// Transcript is the session's transcript directory, which the enclosure binds
 	// writable; the zero value binds none.
 	Transcript Transcript
+}
+
+// AgentAddresser is an enclosure that reports where the agent's container of the
+// session that runs is on the enclosure's network, and whose relay writes the peer line
+// for a launch with [Launch.ProxyPeer]. A run with a route to its caller needs such an
+// enclosure behind a wall: the route serves a request only from one of these addresses
+// and with the session's proxy password, so another container of the enclosure, the
+// setup container among them, never reaches it.
+type AgentAddresser interface {
+	// AgentAddrs returns the addresses of the agent's container on the enclosure's
+	// network, as the relay sees a connection from it: an IPv4 address unmapped. It
+	// returns an error when that container does not run, or has no such address.
+	AgentAddrs(ctx context.Context) ([]netip.Addr, error)
 }
 
 // Transcript is a directory of this machine that the session makes for one session,
