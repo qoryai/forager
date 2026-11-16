@@ -1707,7 +1707,7 @@ The types, one namespace. Forager's:
 | `dev.qory.run.built` | the run's caller wrote the result of a build of an image of an environment (`(*session.Run).Built`); at most one per run, after `dev.qory.run.started` and before `dev.qory.run.exited`, outside every session and every step. Forager checks the form of each member, and `Built` returns an error for an image, an environment image or a base image that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` in any case | `image`, the image by its digest, `NAME@sha256:` and 64 lower-case hexadecimal digits; `size`, its size in bytes, 1 or more; `commit`, the full commit id the image was built from, 40 or 64 lower-case hexadecimal characters; `environment_ref`, the caller's reference to the environment the image is for, 1 character or more, with `qory-proxy-password` in place of a forwarder's password, and a phrase in place of a reference that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_`, as in a step's `name`; and, when the caller reports them, `environment_image`, the environment image the build pushed or started from, and `base`, the base image the build pulled, each by its digest, of the form of `image` |
 | `dev.qory.run.log` | one per chunk of a session's output, with the session's number as `session`, or of the run's host work outside every session, which the caller writes with `stream: stderr` and no `session`, and with the step's number as `step` inside a step: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes`, `session`, `step` |
 | `dev.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size takes effect; never on pipes | `cols`, `rows`, `session` |
-| `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request, and on a host a tool serves one per tool invocation; the same for the stack proxy, with `channel: stack`; one per request of the route to the run API, with `channel: run_api` (§The run API); one per request a session's forwarder read for the route to `host.qory.invalid`, with `channel: qory_host`, which the session writes (§The route to the caller) | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_id`, `status`, `request_method`, `path`, `path_rule`, `credential`, `tool`; `channel` on the stack proxy's and the run API's |
+| `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request, and on a host a tool serves one per tool invocation; the same for the stack proxy, with `channel: stack`; one per request of the route to the run API, with `channel: run_api` (§The run API); one per request a session's forwarder serves for the route to `host.qory.invalid`, with `channel: qory_host`, which the session writes, of its refusals with `400`, `429` and `503` at most one each a second (§The route to the caller) | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_id`, `status`, `request_method`, `path`, `path_rule`, `credential`, `tool`; `channel` on the stack proxy's and the run API's |
 | `dev.qory.run.target_write` | a request the proxy reads counts as a write to a place in another system, a git push over HTTP: one when the write begins, and one when it ends, before `dev.qory.run.exited` (§The events, Writes to a target) | `system`, `path`, `state`, and `request_id`, that of the request's `dev.qory.run.egress` |
 | `dev.qory.run.heartbeat` | every `interval_seconds` from the accepted registration until the final event, or from `dev.qory.run.started` when the run has no server; `elapsed_seconds` counts since the open's discovery of its gateway's link | `elapsed_seconds`, `interval_seconds` |
 | `dev.qory.session.exited` | a session ended: its runtime exited or was stopped, its join was refused, or the run ended while it ran, when the gateway's or the resend's `dev.qory.session.exited` comes right before the run's `dev.qory.run.exited`; one per join, the last event of the session's | `session`, `state`, `exit_code`, `signal`, `reason`, `duration_ms`, `peak_memory_bytes`, `cpu_time_ms` |
@@ -4624,10 +4624,11 @@ when any of its events:
 - has a type the gateway writes, `dev.qory.run.registered` or
   `dev.qory.run.target_write`;
 - is a `dev.qory.run.egress` that is not a decision of the route to
-  `host.qory.invalid`: the gateway takes one only when all four hold, `channel:
-  qory_host`, `rule: wall:qory-host`, `host: host.qory.invalid` and `port: 80`. Its
-  report line contains the first field that differs and its value, such as `a run.egress
-  from the session whose port is 443, not 80`;
+  `host.qory.invalid`: the gateway takes one only with `channel: qory_host`,
+  `rule: wall:qory-host`, `host: host.qory.invalid`, `port: 80` and `method: HTTP`,
+  and with no `credential`, `tool` or `path_rule`. Its report line contains the first
+  field that differs and its value, such as `a run.egress from the session whose port
+  is 443, not 80`;
 - is a `dev.qory.run.started` whose `opened_by` is not `run`, or whose `labels`
   differ from the run's labels as the gateway holds them, none behind a separate
   gateway;
@@ -4692,7 +4693,7 @@ when any of its events:
   only those old refusals carried.
 
 `link-batch.schema.json` states what a schema can: neither type the gateway writes, and
-a `dev.qory.run.egress` as `events/run.egress.schema.json` has it, whose four values the
+a `dev.qory.run.egress` as `events/run.egress.schema.json` has it, whose values the
 gateway checks so that its report line contains the field; an
 `opened_by` of `run`, `timeout`, `interrupted`, `no_session` and `model_key_limit` as
 the only ones of Forager's reasons of a `dev.qory.run.exited`, `cancelled` as the state
@@ -5237,10 +5238,12 @@ http://host.qory.invalid
 ```
 
 Send each request as a plain `http://` request through `HTTP_PROXY`, any method and any
-path, with no credential. `NO_PROXY` does not list the host. Each session's launch gets
-`QORY_HOST_URL`, its setup commands among them; a run's setup gets neither the variable
-nor the route. The route is open while a session's launch runs, and closed before the
-first session, between sessions and after the last.
+path. `NO_PROXY` does not list the host. The launch of each session with a runtime gets
+`QORY_HOST_URL`, its setup commands among them; a session with no runtime, such as a
+host step's, and a run's setup get neither the variable nor the route. The route is open
+while a session's launch runs, and closed before the first session, between sessions
+and after the last. `QORY_HOST_URL` is a `fixed` name in every run, with a route or
+not: behind a wall a value from the caller is `variable_reserved`.
 
 **Where it is served.** The session's forwarder, in the process that runs the session,
 serves the route, walled or not, with a gateway on the machine or a separate one.
@@ -5248,44 +5251,63 @@ Nothing of a request reaches the gateway, and the route sets no credential and r
 nothing of the machine but the handler. If the process ends during a request, the
 program's connection closes with no answer.
 
+**Which program reaches it.** Without a wall, each session has a forwarder of its own,
+whose proxy URL has a password. Behind a wall, each session's launch gets a proxy URL
+with a password of that session alone, `http://qory:<password>@qory-proxy:3128`, and
+the forwarder serves a request to the route only when its one `Proxy-Authorization`
+carries that password. A request without it goes to the gateway's proxy, which denies
+the host: a request of the setup container, which shares the wall's relay but has no
+password, never reaches the handler. A container of an earlier session that the wall
+leaves running has that session's password, and gets `503` `session_not_running` while
+a later session runs. The forwarder takes every `Proxy-Authorization` off a request
+before anything of it reaches the gateway.
+
 **What the handler gets.** The method, the path, the query, `Content-Type`, the body,
-read whole first, and `Qory-Session`, the number of the session that runs. The forwarder
-takes every other header off, `Proxy-Authorization` among them. The handler's context
-ends after 30 seconds, at the session's end or at the run's close. The program gets the
-answer's status, `Content-Type` and body after the handler returns, with
-`Connection: close`.
+read whole first, and `Qory-Session`, the number of the session that sent the request.
+The forwarder takes every other header off. The handler's context ends after 30
+seconds, at the session's end or at the run's close; a program that goes away does not
+end it. The program gets the answer's status, `Content-Type` and body after the handler
+returns, with `Connection: close`. The answer to a `HEAD` has the `Content-Length` of
+the handler's body and no body; a `204` and a `304` have neither; a `1xx` other than
+`101` that the handler writes first is dropped.
 
 **Limits and codes.** The forwarder answers these itself, with a JSON body
 `{"error":<code>,"message":<text>}`:
 
 | Status | `error` | When |
 |---|---|---|
-| `400` | `bad_request` | the request is not sent over HTTP/1.1 to `http://host.qory.invalid/` with one `Host` header of that host, or its body has more than one `Content-Length`, a `Transfer-Encoding`, or does not arrive in time; the handler is not called |
+| `400` | `bad_request` | the request line is not `<method> http://host.qory.invalid/<path> HTTP/1.1`, with the host in lower case, no port and no trailing dot; the head has not exactly one `Host: host.qory.invalid`, in any case and with no port, or has a line that does not end in CRLF; the body has more than one `Content-Length` or a `Transfer-Encoding`; or the body does not arrive whole within 30 seconds of the head. The handler is not called |
 | `413` | `payload_too_large` | the body is over 1 MiB; the handler is not called |
-| `429` | `rate_limited` | the run sends over 10 requests in a second, or over 4 are in flight; the handler is not called |
-| `503` | `session_not_running` | no session runs, or the session or the run ends before the handler returns |
+| `429` | `rate_limited` | the run sends over 10 requests in a second, or 4 calls of the handler have not returned, those that outlast their context among them; the handler is not called |
+| `503` | `session_not_running` | the request's session does not run, it ends while the body arrives, or it or the run ends before the handler returns |
 | `504` | `timeout` | the handler does not return within 30 seconds |
 | `502` | `bad_answer` | the answer is over 1 MiB, its status is outside 200 to 599 or is `407`, or the handler panics, which is a report line too |
 
 **Keep-alive.** Behind a wall, once the run has a route, the run's forwarder reads one
 plain request per connection, as it does once `Run.SetRunAPICheck` sets a check:
 plain-HTTP keep-alive ends after each request, and the program opens a new connection
-for the next one. A `CONNECT` tunnel does not change.
+for the next one. A `CONNECT` tunnel does not change. A program that ends its side of
+the connection before the answer to a request that goes to the gateway's proxy gets no
+answer.
 
-**The record.** Each request the forwarder reads is one `dev.qory.run.egress` with
+**The record.** Each request the forwarder serves is one `dev.qory.run.egress` with
 `host: host.qory.invalid`, `port: 80`, `method: HTTP`, `channel: qory_host` and
 `rule: wall:qory-host`: `allowed` once the handler is called, `denied` for a request the
-forwarder answers itself, with the status the program got. The session writes it in its
-link batch, and the gateway takes a session's `dev.qory.run.egress` only with all four of
-those `channel`, `rule`, `host` and `port` values (§The gateway's link batch rules).
+forwarder answers itself, with the status the program got. Of the refusals with `400`,
+`429` and `503`, at most one each a second is recorded, as the gateway's proxy records
+its limits. The run's masker replaces a secret of the run in the path. The session
+writes the record in its link batch, and the gateway takes a session's
+`dev.qory.run.egress` only with those values of `channel`, `rule`, `host`, `port` and
+`method`, and with no `credential`, `tool` or `path_rule` (§The gateway's link batch
+rules).
 
 **No tunnel, no other path.** The gateway's proxy denies every request to
 `host.qory.invalid` that reaches it with a `403` and the rule `wall:qory-host`, in
 either mode, whatever the policy lists: a `CONNECT` to the host, a request through a
-host proxy, the stack proxy or the engine proxy, and any request in a run with no route.
-The name in upper case or with a trailing dot is the same host. The `403`'s body
-contains the fix: send plain `http://` requests to `QORY_HOST_URL` from a session of a
-run with a route.
+host proxy, the stack proxy or the engine proxy, one without a session's password
+behind a wall, and any request in a run with no route. The name in upper case or with a
+trailing dot is the same host. The `403`'s body contains the fix: send plain `http://`
+requests to `QORY_HOST_URL` from a session of a run with a route.
 
 ## The runtime
 

@@ -264,11 +264,15 @@ release may change what an existing document does, and says so under Upgrading.
 
 - The route to the caller: a session's program sends plain `http://` requests to
   `http://host.qory.invalid`, read from `QORY_HOST_URL`, and the caller's handler
-  answers. `QORY_HOST_URL` is a `fixed` name. `dev.qory.run.egress` has the channel
-  `qory_host`, and its `path` for that channel is decoded and escaped again per segment.
-  A link batch may have a session's `dev.qory.run.egress` with `channel: qory_host`,
-  `rule: wall:qory-host`, `host: host.qory.invalid` and `port: 80`; the gateway checks
-  the four values, so `link-batch.schema.json` no longer refuses the type. Fixtures:
+  answers. `QORY_HOST_URL` is a `fixed` name in every run, with a route or not: behind a
+  wall a value from the caller is `variable_reserved`. `dev.qory.run.egress` has the
+  channel `qory_host`; its `path` for that channel is decoded and escaped again per
+  segment, with the run's secrets masked, and of the route's refusals with 400, 429 and
+  503 at most one each a second is recorded. A link batch may have a session's
+  `dev.qory.run.egress` with `channel: qory_host`, `rule: wall:qory-host`,
+  `host: host.qory.invalid`, `port: 80` and `method: HTTP`, and no `credential`, `tool`
+  or `path_rule`; the gateway checks these, so `link-batch.schema.json` no longer
+  refuses the type. Fixtures:
   `fixtures/link/link-batch-qory-host.json`, and
   `fixtures/invalid/link-batch-beyond-schema-run-egress-{gateway,channel,rule,host,port}.json`,
   the first renamed from `link-batch-run-egress.json`. See the contract's README, §The
@@ -1140,9 +1144,10 @@ release may change what an existing document does, and says so under Upgrading.
 - The proxy denies every request to `host.qory.invalid`, a `CONNECT` among them, with a
   `403` and the rule `wall:qory-host`, in either mode and whatever the policy lists. The
   `403`'s body starts with the fix. The link takes a session's `dev.qory.run.egress`
-  only with `channel: qory_host`, `rule: wall:qory-host`, `host: host.qory.invalid` and
-  `port: 80`; for another value it ends the run `batch_refused`, and the report line
-  contains the field and its value, such as `whose port is 443, not 80`.
+  only with `channel: qory_host`, `rule: wall:qory-host`, `host: host.qory.invalid`,
+  `port: 80` and `method: HTTP`, and with no `credential`, `tool` or `path_rule`; for
+  another value it ends the run `batch_refused`, and the report line contains the field
+  and its value, such as `whose port is 443, not 80`.
 - The gateway sends a model keys report at each session's start, the join's `200`, and
   at its end, when it numbers the session's `dev.qory.session.exited` or when the run
   ends at the gateway while the join is open, also when no window changed. Each report
@@ -1931,17 +1936,25 @@ release may change what an existing document does, and says so under Upgrading.
 
 - `OpenSpec.QoryRoute`, an `http.Handler` that serves a session's plain HTTP requests
   to `http://host.qory.invalid/`, walled or not, on one machine or behind a separate
-  gateway. Each session's launch gets `QORY_HOST_URL` (`session.EnvQoryHost`); `Run.Setup`
-  does not, and the route is closed outside a launch. The handler gets the method, the
-  path, the query, `Content-Type`, the body and `Qory-Session`
-  (`link.QorySessionHeader`), with 30 seconds to answer. The forwarder answers `400`
-  `bad_request`, `413` `payload_too_large` (over 1 MiB), `429` `rate_limited` (over 10 a
-  second or 4 in flight), `503` `session_not_running`, `504` `timeout` and `502`
-  `bad_answer` itself. Each request is one `dev.qory.run.egress` with
+  gateway. The launch of each session with a runtime gets `QORY_HOST_URL`
+  (`session.EnvQoryHost`); a session with no runtime and `Run.Setup` do not, and the
+  route is closed outside such a launch. The handler gets the method, the path, the
+  query, `Content-Type`, the body and `Qory-Session` (`link.QorySessionHeader`), with 30
+  seconds to answer. The forwarder answers `400` `bad_request`, `413`
+  `payload_too_large` (over 1 MiB), `429` `rate_limited` (over 10 a second, or 4 calls
+  of the handler that have not returned), `503` `session_not_running`, `504` `timeout`
+  and `502` `bad_answer` itself. Each request is one `dev.qory.run.egress` with
   `channel: qory_host`. Behind a wall, with a route set, the forwarder reads one plain
   request per connection: plain-HTTP keep-alive ends after each request. New names in
   `link`: `QoryHost`, `QoryHostURL`, `EnvQoryHost`, `QorySessionHeader`,
-  `MaxQoryHostBody`, `QoryHostChannel` and `QoryHostRule`.
+  `MaxQoryHostBody`, `QoryHostChannel`, `QoryHostRule` and `ProxyUser`.
+- `wall.Launch.ProxyPassword`: behind a wall with a route, the session gives `Wrap` a
+  password of the session's launch alone, and the Docker wall writes it into the proxy
+  URL inside, `http://qory:<password>@qory-proxy:3128`. The run's forwarder serves the
+  route only to a request with that password, so the setup container, which shares the
+  relay and gets no password, never reaches the handler, and a container of an earlier
+  session gets `503`. A wall written outside Forager must write the password into the
+  proxy variables of `Wrap`'s launch for the route to work behind it.
 - `(*session.Run).SetRunAPICheck`, `session.RunAPIRequest` and `session.RunAPIRefusal`:
   a check of each POST that a walled program sends to the run API, before anything of it
   reaches the gateway. Call `SetRunAPICheck` after `Open` and before `Setup` and the

@@ -89,8 +89,12 @@ A credential's secret comes from one of three sources:
   the shapes too.
 - The route to the caller, `http://host.qory.invalid` in `QORY_HOST_URL`, sets no
   credential. The session's forwarder takes every header off a request but
-  `Content-Type`, `Proxy-Authorization` among them, and passes the request only to the
-  handler the caller gave in `OpenSpec.QoryRoute`. See [Forager from Go](go.md#the-route-to-the-caller).
+  `Content-Type`, `Proxy-Authorization` among them, adds `Qory-Session`, the number of
+  the session that sent the request, and passes the request only to the handler the
+  caller gave in `OpenSpec.QoryRoute`. Behind a wall, the agent's proxy URL then has a
+  password of the session's launch alone, which the run's masker replaces in the
+  output; the forwarder serves the route only with it, so the setup container never
+  reaches the handler. See [Forager from Go](go.md#the-route-to-the-caller).
 
 In `qory`, the `gateway.credentials` section of `forager.yaml` defines them. See
 [qory's docs][qory-credentials].
