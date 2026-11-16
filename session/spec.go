@@ -482,8 +482,8 @@ func checkMachine(spec OpenSpec) error {
 // failed with -1 for a read run (the contract's §The events, How a run ends) no session
 // joined that has no wall, whose setup is set to run inside the agent's container, whose image runs nested
 // Docker, or whose setup container could not be removed, write_needs_wall, failed with
-// -1 for a write run, a run that is not a read run, no session joined that has no wall,
-// or a code of the caller's, which is none of Forager's reserved codes; and
+// -1 for a run no session joined whose access is not read and that has no wall, or a
+// code of the caller's, which is none of Forager's reserved codes; and
 // ExitCode, the run's exit code: the last session's, 124 at the run's time limit, -1
 // when no session ran. A failed run with no reason that no session joined is closed as
 // failed with no_session and -1.

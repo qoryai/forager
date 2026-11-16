@@ -1194,8 +1194,8 @@ release may change what an existing document does, and says so under Upgrading.
   `read_needs_setup_removed`, which qory gives the close of a read run whose setup
   container could not be removed, follows the same rule, as
   `event.ReasonReadNeedsSetupRemoved`.
-  `write_needs_wall`, which qory gives the close of a write run, a run that is not a
-  read run, that has no wall, follows the same rule, as `event.ReasonWriteNeedsWall`.
+  `write_needs_wall`, which qory gives the close of a run whose access is not read and
+  that has no wall, follows the same rule, as `event.ReasonWriteNeedsWall`.
 - The gateway replaces text in the shape of a known key (`mask.Shapes`) with `***` in
   the line of an adapter that fails, in the error of a run's start and in a renewal's
   report, and in each line a tool writes to standard error, in its report and in the

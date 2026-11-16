@@ -69,8 +69,8 @@ func TestTheLinkRefusesARunExitedBeyondItsSchema(t *testing.T) {
 // image_rate_limited, image_registry_unreachable, workflow_not_in_harness,
 // read_needs_wall, read_needs_setup_outside, read_needs_no_nested_docker,
 // read_needs_setup_removed and write_needs_wall only failed with exit_code -1 in a run
-// with no join, are taken; a reason the gateway decides, or a starter's, is refused, and the run ends
-// failed, batch_refused, its reason in the report.
+// with no join, are taken; a reason the gateway decides, or a starter's, is refused,
+// and the run ends failed, batch_refused, its reason in the report.
 func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 	h := start(t, gateway.Config{})
 	for _, c := range []struct {
