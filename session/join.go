@@ -40,14 +40,22 @@ var exitObserved func()
 // read-only.
 const SessionsDir = "sessions"
 
+// dockerRunFailed is the status of a docker run that could not run its container, such as
+// one with an image or a mount the engine refuses. A launch that exits with it started
+// nothing in the workspace.
+const dockerRunFailed = 125
+
 // endedBeforeJoin is what a refusal of a session whose run the gateway closed before
 // its runtime started says.
 const endedBeforeJoin = "the session did not start: the run has ended already"
 
 // Join runs one session in the open run and returns when the runtime has exited, the
 // session's dev.qory.session.exited is written and the gateway accepted it, within 15
-// seconds, so the next join may follow. It sends the gateway the join request with the
-// names of the variables the session passes a value for and its model key, then checks
+// seconds, so the next join may follow. With SessionSpec.After the 15 seconds do not
+// include After's step, which the session allows AfterTimeout + 66 seconds: the agent's
+// container's removal and the start of After's container (60 s together), the 5 s
+// between SIGTERM and SIGKILL, and 1 s of output. After a stop from outside it allows
+// StopGrace. It sends the gateway the join request with the names of the variables the session passes a value for and its model key, then checks
 // the session's places, prepares the runtime, resolves the variables, writes
 // dev.qory.session.started and the session's dev.qory.run.policy_applied, behind a
 // wall wraps the launch in the wall that [Open] built, and starts the runtime. Behind
@@ -794,25 +802,30 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		enclosure = r.enclosure
 		if len(spec.After) > 0 {
 			if _, ok := enclosure.(wall.AfterWrapper); !ok {
-				return fail(fmt.Errorf("Use a wall that starts After's container, a wall.AfterWrapper, for SessionSpec.After: the %s wall does not.", r.open.Wall.Name()))
+				return fail(fmt.Errorf("Use a wall that is a wall.AfterWrapper for SessionSpec.After.\nThe %s wall does not start After's container.", r.open.Wall.Name()))
 			}
 			if _, ok := enclosure.(unwrapper); !ok {
-				return fail(errors.New("Use a wall whose enclosure removes the agent's container, with an Unwrap, for SessionSpec.After: After starts once it is gone."))
+				return fail(errors.New("Use a wall whose enclosure has an Unwrap for SessionSpec.After.\nAfter starts once the enclosure has removed the agent's container."))
 			}
 		}
 		if u, ok := enclosure.(unwrapper); ok {
 			// unwrapAgent removes the agent's container once: before After starts, and
-			// otherwise as the session ends.
+			// otherwise as the session ends. A removal that fails after its context
+			// ended leaves the container's state unknown: it is not cached or flagged,
+			// and the next call removes again.
 			var tried bool
 			var unwrapErr error
 			unwrapAgent = func(c context.Context) error {
 				if tried {
 					return unwrapErr
 				}
-				tried = true
 				// The session's context may be what ended it; the agent's container is
 				// removed regardless.
 				err := u.Unwrap(c)
+				if err != nil && c.Err() != nil {
+					return err
+				}
+				tried = true
 				if err != nil {
 					r.open.Report("removing the wall: " + accesskey.ShownError(err).Error())
 					// The agent's container may outlive the session: the entry stays, and
@@ -1121,8 +1134,10 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	keyLimit := r.stops.end() == event.ReasonModelKeyLimit
 	// After runs in a new container once the runtime exited, whatever ended it: its exit,
 	// the time limit, a pause or a stop from outside. A run closed from outside starts
-	// none. The step ends before the session's dev.qory.session.exited.
-	if len(spec.After) > 0 && !closed {
+	// none, and neither does a launch that exits with docker's status for a container it
+	// could not run: the workspace is unchanged. The step ends before the session's
+	// dev.qory.session.exited.
+	if len(spec.After) > 0 && !closed && exit.code != dockerRunFailed {
 		r.runAfter(afterRun{
 			ctx: ctx, runCtx: runCtx, spec: spec, enclosure: enclosure, unwrapAgent: unwrapAgent,
 			steps: afterSteps, dir: shown.Dir, mounts: shown.Mounts, proxy: fwd.Addr(),

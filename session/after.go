@@ -32,7 +32,7 @@ func checkAfter(spec runSpec) error {
 	case len(spec.After) == 0:
 		return nil
 	case spec.Wall == nil:
-		return errors.New("Open the run with a wall to run SessionSpec.After: After runs in a new container of the wall, once the agent's container is removed.")
+		return errors.New("Open the run with a wall to run SessionSpec.After.\nAfter runs in a new container of the wall, once the agent's container is removed.")
 	case spec.AfterTimeout <= 0:
 		return errors.New("Set SessionSpec.AfterTimeout above zero: it is how long SessionSpec.After may run.")
 	case spec.After[0] == "":
@@ -85,7 +85,7 @@ const (
 // send, with the reason on stderr.
 func execAfter(a afterLaunch, stderr io.Writer) int {
 	if err := undumpable(); err != nil {
-		fmt.Fprintf(stderr, "exec: allow prctl(PR_SET_DUMPABLE) in the wall's seccomp profile: the helper could not make itself not dumpable (%v), so After did not run.\n", err)
+		fmt.Fprintf(stderr, "exec: allow prctl(PR_SET_DUMPABLE) in the wall's seccomp profile.\nThe helper could not make itself not dumpable (%v), so After did not run.\n", err)
 		return setupRunnerFailed
 	}
 	// A descriptor the engine or an earlier process left open is closed first; the
@@ -93,12 +93,12 @@ func execAfter(a afterLaunch, stderr io.Writer) int {
 	closeInherited()
 	addr := os.Getenv(EnvSocket)
 	if addr == "" {
-		fmt.Fprintf(stderr, "exec: %s is not set, so After did not run.\n", EnvSocket)
+		fmt.Fprintf(stderr, "exec: set %s to the session's socket.\nIt is not set, so After did not run.\n", EnvSocket)
 		return setupRunnerFailed
 	}
 	conn, err := socket.Dial(context.Background(), addr)
 	if err != nil {
-		fmt.Fprintf(stderr, "exec: run the launch where the run socket reaches the container: the connection could not be made (%v), so After did not run.\n", err)
+		fmt.Fprintf(stderr, "exec: run the launch where the run socket reaches the container.\nThe connection could not be made (%v), so After did not run.\n", err)
 		return setupRunnerFailed
 	}
 	defer conn.Close()
@@ -119,7 +119,7 @@ func execAfter(a afterLaunch, stderr io.Writer) int {
 	}
 	sender.send(record(exited))
 	if err := sender.close(); err != nil {
-		fmt.Fprintf(stderr, "exec: the after step's records did not all reach the session: %v\n", err)
+		fmt.Fprintf(stderr, "exec: run the launch where the run socket reaches the container.\nThe after step's records did not all reach the session: %v\n", err)
 		return setupRunnerFailed
 	}
 	return 0
@@ -220,8 +220,9 @@ var afterDropped = []string{
 }
 
 // hookEvents are the events of githooks(5). git 2.55 and later run no hook of
-// .git/config's hook.<name>.command for an event whose hook.<event>.enabled is false;
-// git 2.54 runs them whatever this setting is.
+// .git/config's hook.<name>.command for an event whose hook.<event>.enabled is false.
+// git 2.54.0 has no such setting: hook.<name>.enabled turns off one name, which After
+// cannot list for a repository it does not know, so there those hooks run.
 var hookEvents = []string{
 	"applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "pre-merge-commit",
 	"prepare-commit-msg", "commit-msg", "post-commit", "pre-rebase", "post-checkout", "post-merge",

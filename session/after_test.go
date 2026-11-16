@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -74,7 +75,7 @@ func afterOrder(evs []map[string]any) []string {
 // the workspace with no input and git's settings; the session writes it as one after
 // step, named after, with its lines, between the runtime and the session's exit, which
 // keeps the runtime's status. The container gets the mount of the workspace, a socket
-// of its own and none of the run's variables.
+// that no other container binds and none of the run's variables.
 func TestAfterRunsOnceTheRuntimeExits(t *testing.T) {
 	sp, w := afterSpec(t, "echo runtime; exit 3",
 		"/bin/sh", "-c", `echo committed; echo a warning >&2; env > after-env; cat > after-input; exit 4`)
@@ -281,12 +282,14 @@ func TestAfterRunsAfterACancelledContext(t *testing.T) {
 }
 
 // TestAfterIsCutAtItsWindow pins the session's bound on the after step: After that the
-// helper does not end, here one that ignores SIGTERM, is cut off at the window by the
-// removal of its container, and the step ends cancelled with -1 and reason timeout.
+// helper does not end, here one that ignores SIGTERM for longer than AfterTimeout and
+// the helper's SIGKILL 5 s later, is cut off at the window by the removal of its
+// container, and the step ends cancelled with -1 and reason timeout. The helper's
+// SIGKILL comes 35 s in, so a session that returns within 6 s was cut by the window.
 func TestAfterIsCutAtItsWindow(t *testing.T) {
 	defer session.SetAfterWindow(time.Second)()
-	sp, w := afterSpec(t, "exit 0", "/bin/sh", "-c", `trap '' TERM; sleep 8`)
-	sp.AfterTimeout = 300 * time.Millisecond
+	sp, w := afterSpec(t, "exit 0", "/bin/sh", "-c", `trap '' TERM; sleep 60`)
+	sp.AfterTimeout = 30 * time.Second
 	start := time.Now()
 	res, err := run(context.Background(), sp)
 	if err != nil {
@@ -300,6 +303,40 @@ func TestAfterIsCutAtItsWindow(t *testing.T) {
 	}
 	if got := w.calls(); !slices.Contains(got, "unwrap after") {
 		t.Errorf("the wall's calls %q; want the removal of After's container", got)
+	}
+}
+
+// TestARunClosedDuringAfterCutsItAtOnce pins a run the gateway closes while After runs:
+// After is cut off at once, not at the stop grace, the session reports the run closed,
+// and After's command does not finish.
+func TestARunClosedDuringAfterCutsItAtOnce(t *testing.T) {
+	sp, g, w, _ := afterRemote(t, "exit 0", "/bin/sh", "-c", "sleep 30; echo late > after-ran")
+	sp.StopGrace = 8 * time.Second
+	g.SetInterval(1)
+	g.OnBatch(func(evs []map[string]any) linktest.Reply {
+		for _, e := range evs {
+			if d, _ := e["data"].(map[string]any); e["type"] == event.StepStarted && d["kind"] == event.StepAfter {
+				return *gone("stopped", "cancelled", "no_longer_needed")
+			}
+		}
+		return linktest.Reply{Status: 200}
+	})
+	start := time.Now()
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.RunClosed {
+		t.Errorf("result %+v; want a closed run", res)
+	}
+	if took := time.Since(start); took > 4*time.Second {
+		t.Errorf("the session took %s after the close; want After cut at once, not at the grace of 8 s", took)
+	}
+	if got := w.calls(); !slices.Contains(got, "unwrap after") {
+		t.Errorf("the wall's calls %q; want the removal of After's container", got)
+	}
+	if _, err := os.Stat(filepath.Join(sp.Dir, "after-ran")); err == nil {
+		t.Error("After finished")
 	}
 }
 
@@ -338,14 +375,14 @@ func TestAClosedRunStartsNoAfter(t *testing.T) {
 
 // TestAfterFailsWhenItsContainerCannotStart pins the after step's failures before
 // After runs: each ends it failed with -1 and a line that says why, and the session's
-// own state stays the runtime's.
+// state stays the runtime's.
 func TestAfterFailsWhenItsContainerCannotStart(t *testing.T) {
 	for name, c := range map[string]struct {
 		set   func(w *afterWall)
 		line  string
 		calls []string
 	}{
-		"the agent's container stays": {func(w *afterWall) { w.failUnwrap = errors.New("engine down") }, "may still run, so After did not run: engine down", []string{"unwrap"}},
+		"the agent's container stays": {func(w *afterWall) { w.failUnwrap = errors.New("engine down") }, "Close the run to remove the agent's container, which may still run.\nAfter did not run: the removal failed: engine down", []string{"unwrap"}},
 		"the wall cannot wrap":        {func(w *afterWall) { w.failWrapAfter = errors.New("no image") }, "its container could not be set up: no image", []string{"unwrap", "wrap after"}},
 		"the helper cannot connect":   {func(w *afterWall) { w.socket = "/nonexistent/sock" }, "so After did not run", []string{"unwrap", "wrap after", "unwrap after"}},
 	} {
@@ -376,6 +413,174 @@ func TestAfterFailsWhenItsContainerCannotStart(t *testing.T) {
 				t.Error("After ran")
 			}
 		})
+	}
+}
+
+// removalWall is an afterWall whose first Unwrap waits for its context to end and fails
+// with its error, as a docker rm does that the window or a close cuts.
+type removalWall struct {
+	*afterWall
+	n atomic.Int32
+}
+
+func (w *removalWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.afterWall.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *removalWall) Unwrap(ctx context.Context) error {
+	w.note("unwrap")
+	if w.n.Add(1) == 1 {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return nil
+}
+
+// TestARemovalTheContextCutsIsTriedAgain pins the agent's container's removal that the
+// end of its context cuts: the session does not keep that failure as the removal's
+// result, reports no removal failed and flags no wall, and the removal at the session's
+// end runs again and succeeds.
+func TestARemovalTheContextCutsIsTriedAgain(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	file := filepath.Join(t.TempDir(), "pid")
+	sp, aw := afterSpec(t, fmt.Sprintf(`echo $$ > %q; exec sleep 30`, file), "/bin/sh", "-c", "true")
+	w := &removalWall{afterWall: aw}
+	sp.Wall = w
+	sp.StopGrace = 300 * time.Millisecond
+	reports := reportsOf(t, &sp)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { pidOf(t, file); cancel() }()
+	res, closed, err := runClosed(ctx, sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := w.calls(); len(got) < 2 || got[0] != "unwrap" || got[1] != "unwrap" {
+		t.Errorf("the wall's calls %q; want the removal, cut, then once more at the session's end", got)
+	}
+	if res.After == nil || res.After.State != event.StateCancelled {
+		t.Errorf("Result.After %+v; want cancelled", res.After)
+	}
+	for _, r := range reports() {
+		if strings.Contains(r, "removing the wall") {
+			t.Errorf("the report %q: the session took a cut removal for a failed one", r)
+		}
+	}
+	if closed != nil && closed.WallKept {
+		t.Errorf("the close %+v; want the agent's container removed", closed)
+	}
+}
+
+// TestARunClosedDuringTheRemovalIsTriedAgain pins the same retry for a run the gateway
+// closes while the agent's container is removed.
+func TestARunClosedDuringTheRemovalIsTriedAgain(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	sp, g, aw, _ := afterRemote(t, "exit 0", "/bin/sh", "-c", "true")
+	w := &removalWall{afterWall: aw}
+	sp.Wall = w
+	g.SetInterval(1)
+	g.OnBatch(func(evs []map[string]any) linktest.Reply {
+		for _, e := range evs {
+			if d, _ := e["data"].(map[string]any); e["type"] == event.StepStarted && d["kind"] == event.StepAfter {
+				return *gone("stopped", "cancelled", "no_longer_needed")
+			}
+		}
+		return linktest.Reply{Status: 200}
+	})
+	res, closed, err := runClosed(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.RunClosed {
+		t.Errorf("result %+v; want a closed run", res)
+	}
+	if got := w.calls(); len(got) < 2 || got[0] != "unwrap" || got[1] != "unwrap" {
+		t.Errorf("the wall's calls %q; want the removal, cut by the close, then once more at the session's end", got)
+	}
+	if closed != nil && closed.WallKept {
+		t.Errorf("the close %+v; want the agent's container removed", closed)
+	}
+}
+
+// TestNoAfterRunsWhenTheAgentsContainerNeverStarted pins a launch that exits 125, the
+// status of a docker run that could not run its container: the workspace is unchanged,
+// so the session removes the agent's container, starts no After container, writes no
+// after step and has no Result.After.
+func TestNoAfterRunsWhenTheAgentsContainerNeverStarted(t *testing.T) {
+	sp, w := afterSpec(t, "exit 125", "/bin/sh", "-c", "touch after-ran")
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 125 || res.After != nil {
+		t.Errorf("result %+v, After %+v; want the launch's 125 and no After", res, res.After)
+	}
+	if got := w.calls(); !slices.Equal(got, []string{"unwrap"}) {
+		t.Errorf("the wall's calls %q; want the agent's container's removal alone", got)
+	}
+	for _, s := range steps(t, events(t, res)) {
+		if s.started["kind"] == event.StepAfter {
+			t.Errorf("an after step %+v", s)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(sp.Dir, "after-ran")); err == nil {
+		t.Error("After ran")
+	}
+}
+
+// socketDirsWall is an afterWall that records, at each call that matters, how many
+// socket directories of sessions, the qory-run-* directories of the temporary directory,
+// exist.
+type socketDirsWall struct {
+	*afterWall
+	at map[string]int
+}
+
+func (w *socketDirsWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.afterWall.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *socketDirsWall) count(call string) {
+	dirs, _ := filepath.Glob(filepath.Join(os.TempDir(), "qory-run-*"))
+	w.mu.Lock()
+	w.at[call] = len(dirs)
+	w.mu.Unlock()
+}
+
+func (w *socketDirsWall) Unwrap(ctx context.Context) error {
+	w.count("unwrap")
+	return w.afterWall.Unwrap(ctx)
+}
+
+func (w *socketDirsWall) WrapAfter(ctx context.Context, l wall.Launch) (wall.Launch, error) {
+	w.count("wrap after")
+	return w.afterWall.WrapAfter(ctx, l)
+}
+
+// TestAftersSocketIsMadeOnceTheAgentsContainerIsRemoved pins the order the README
+// promises: when the wall removes the agent's container, no socket directory of the
+// session exists, so no process of the agent's container could have seen After's; when
+// the wall starts After's container, After's exists.
+func TestAftersSocketIsMadeOnceTheAgentsContainerIsRemoved(t *testing.T) {
+	// A short path: a socket's address has at most 104 bytes on macOS.
+	tmp, err := os.MkdirTemp("", "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmp)
+	t.Setenv("TMPDIR", tmp)
+	sp, aw := afterSpec(t, "exit 0", "/bin/sh", "-c", "true")
+	w := &socketDirsWall{afterWall: aw, at: map[string]int{}}
+	sp.Wall = w
+	if _, err := run(context.Background(), sp); err != nil {
+		t.Fatal(err)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.at["unwrap"] != 0 || w.at["wrap after"] != 1 {
+		t.Errorf("socket directories at the agent's removal and at After's start: %d and %d; want 0 and 1", w.at["unwrap"], w.at["wrap after"])
 	}
 }
 
@@ -425,7 +630,7 @@ func TestAfterNeedsAWallExecAndATimeout(t *testing.T) {
 		timeout time.Duration
 		want    string
 	}{
-		"no wall":       {false, true, []string{"true"}, time.Second, "Open the run with a wall to run SessionSpec.After: After runs in a new container of the wall, once the agent's container is removed."},
+		"no wall":       {false, true, []string{"true"}, time.Second, "Open the run with a wall to run SessionSpec.After.\nAfter runs in a new container of the wall, once the agent's container is removed."},
 		"no exec":       {true, false, []string{"true"}, time.Second, `Set SessionSpec.Exec to the helper's exec, such as {wall.HelperPath, "exec"}: a walled run starts every launch through it`},
 		"no timeout":    {true, true, []string{"true"}, 0, "Set SessionSpec.AfterTimeout above zero: it is how long SessionSpec.After may run."},
 		"empty program": {true, true, []string{"", "x"}, time.Second, "Give SessionSpec.After a program: its first word is empty."},
@@ -451,7 +656,7 @@ func TestAfterNeedsAWallExecAndATimeout(t *testing.T) {
 	t.Run("a wall that cannot start After's container", func(t *testing.T) {
 		sp := preparedSpec(t, "touch runtime-ran")
 		sp.After, sp.AfterTimeout = []string{"true"}, time.Second
-		if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "a wall.AfterWrapper") {
+		if _, err := run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "Use a wall that is a wall.AfterWrapper for SessionSpec.After.\n") {
 			t.Errorf("error %v; want a wall that is an AfterWrapper", err)
 		}
 		if _, err := os.Stat(filepath.Join(sp.Dir, "runtime-ran")); err == nil {
@@ -535,15 +740,32 @@ func TestAnAfterRecordOnTheLaunchesSocketIsNotRecorded(t *testing.T) {
 	}
 }
 
+// gitVersion returns the major and minor number of the git in PATH.
+func gitVersion(t *testing.T) (major, minor int) {
+	t.Helper()
+	out, err := exec.Command("git", "--version").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fmt.Sscanf(strings.TrimPrefix(string(out), "git version "), "%d.%d", &major, &minor); err != nil {
+		t.Fatalf("git's version %q: %v", out, err)
+	}
+	return major, minor
+}
+
 // TestAfterGitRunsNothingTheRepositoryPlants pins After's git settings and HOME: a
 // remote with a local path, whose receivepack setting git would run, is refused, since
-// git reaches a remote only over HTTPS; a hook of .git/config's hook.<name>.command does
-// not run on git 2.55 and later, nor on a git without such hooks; and HOME is a new,
-// empty directory, removed once After exits.
+// git reaches a remote only over HTTPS; a hook in .git/hooks does not run; a hook of
+// .git/config's hook.<name>.command does not run on git 2.55 and later, which has the
+// setting that turns it off, hook.<event>.enabled (git 2.54 runs it: no setting turns
+// config hooks off for every name, so the test does not look for it there); and HOME is
+// a new, empty directory, removed once After exits.
 func TestAfterGitRunsNothingTheRepositoryPlants(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
+	major, minor := gitVersion(t)
+	configHooksOff := major > 2 || (major == 2 && minor >= 55)
 	sp, _ := afterSpec(t, "exit 0", "/bin/sh", "-c", `echo "$HOME" > after-home; ls -A "$HOME" > after-home-list
 git commit -q --allow-empty -m after; echo "commit $?" >> after-git
 git push -q planted HEAD:refs/heads/after; echo "push $?" >> after-git`)
@@ -562,6 +784,10 @@ git push -q planted HEAD:refs/heads/after; echo "push $?" >> after-git`)
 			t.Fatalf("git %q: %v\n%s", args, err, out)
 		}
 	}
+	classic := filepath.Join(sp.Dir, ".git", "hooks", "pre-commit")
+	if err := os.WriteFile(classic, []byte("#!/bin/sh\ntouch classic-hook-ran\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
@@ -576,9 +802,13 @@ git push -q planted HEAD:refs/heads/after; echo "push $?" >> after-git`)
 	if got := read("after-git"); !strings.HasPrefix(got, "commit 0\npush ") || got == "commit 0\npush 0\n" {
 		t.Errorf("After's git: %q; want the commit and a refused push", got)
 	}
-	for _, f := range []string{"hook-ran", "receivepack-ran"} {
+	planted := []string{"classic-hook-ran", "receivepack-ran"}
+	if configHooksOff {
+		planted = append(planted, "hook-ran")
+	}
+	for _, f := range planted {
 		if _, err := os.Stat(filepath.Join(sp.Dir, f)); err == nil {
-			t.Errorf("%s exists: git ran what .git/config planted", f)
+			t.Errorf("%s exists: git ran what .git planted", f)
 		}
 	}
 	home := strings.TrimSpace(read("after-home"))

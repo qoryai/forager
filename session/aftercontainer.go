@@ -75,9 +75,6 @@ func (r *Run) runAfter(a afterRun) {
 	wrapper := a.enclosure.(wall.AfterWrapper)
 	timeout := a.spec.AfterTimeout
 	window := afterWindow(timeout)
-	if a.ctx.Err() != nil {
-		window = a.grace
-	}
 	ctx, cancel := context.WithCancelCause(context.WithoutCancel(a.ctx))
 	defer cancel(nil)
 	deadline := time.Now().Add(window)
@@ -100,24 +97,24 @@ func (r *Run) runAfter(a afterRun) {
 		steps.finish(ctx.Err() != nil)
 	}
 	if err := a.unwrapAgent(ctx); err != nil {
-		fail(fmt.Sprintf("Close the run: the agent's container could not be removed and may still run, so After did not run: %v.", accesskey.ShownError(err)))
+		fail(fmt.Sprintf("Close the run to remove the agent's container, which may still run.\nAfter did not run: the removal failed: %v.", accesskey.ShownError(err)))
 		return
 	}
 	sock, err := socket.ListenAfter(a.spec.SocketGrace)
 	if err != nil {
-		fail(fmt.Sprintf("After did not run: the socket for its records could not be opened: %v.", err))
+		fail(fmt.Sprintf("Free space in the temporary directory, or allow writes to it.\nAfter did not run: the socket for its records could not be opened: %v.", err))
 		return
 	}
 	defer sock.Close()
 	go sock.ServeFirst(steps.handle, func(err error) { r.open.Report("socket: " + accesskey.ShownError(err).Error()) }, window+setupOutputGrace)
 	command, args := afterCommand(a.spec.Exec, afterLaunch{words: a.words, timeout: timeout})
 	launch, err := wrapper.WrapAfter(ctx, wall.Launch{
-		Command: command, Args: args, Dir: a.dir, Env: r.caVars,
+		Command: command, Args: args, Dir: a.dir,
 		CA: r.authority, Proxy: a.proxy, ProxyToken: r.relayToken, Socket: sock.Path(),
 		Mounts: mountHolding(a.mounts, a.dir), Limits: a.spec.Limits,
 	})
 	if err != nil {
-		fail(fmt.Sprintf("After did not run: its container could not be set up: %v.", accesskey.ShownError(err)))
+		fail(fmt.Sprintf("Fix the cause on the next line, then run the session again.\nAfter did not run: its container could not be set up: %v.", accesskey.ShownError(err)))
 		return
 	}
 	defer func() {
@@ -132,7 +129,7 @@ func (r *Run) runAfter(a afterRun) {
 	cmd := exec.Command(launch.Command, launch.Args...)
 	cmd.Env, cmd.Dir, cmd.Stdout, cmd.Stderr = launch.Env, launch.Dir, out, out
 	if err := cmd.Start(); err != nil {
-		fail(fmt.Sprintf("After did not run: its container could not be started: %v.", accesskey.ShownError(err)))
+		fail(fmt.Sprintf("Fix the cause on the next line, then run the session again.\nAfter did not run: its container could not be started: %v.", accesskey.ShownError(err)))
 		return
 	}
 	done := make(chan error, 1)
@@ -155,7 +152,7 @@ func (r *Run) runAfter(a afterRun) {
 			if waitErr != nil {
 				text = fmt.Sprintf("%v: %s", waitErr, text)
 			}
-			fail(fmt.Sprintf("After's container ended with no exit status for After: %s.", accesskey.ShownValue(text, false)))
+			fail(fmt.Sprintf("Fix what the next line shows, then run the session again.\nAfter's container ended with no exit status for After: %s.", accesskey.ShownValue(text, false)))
 		}
 	case steps.running():
 		reason := ""

@@ -140,8 +140,8 @@ func (r *Run) openWall(ctx context.Context) error {
 
 // ContainerKept reports whether a container of the run that can write the run's binds
 // may still run outside a session: true when removing the agent's container of a
-// session, as the session ended, or the setup container, in [Run.RemoveSetup], failed,
-// and stays true then. In a run whose wall has no Unwrap, it is also true from the end of
+// session, as the session ended, After's container, or the setup container, in
+// [Run.RemoveSetup], failed, and stays true then. In a run whose wall has no Unwrap, it is also true from the end of
 // the first session until Close, since the agent's container stays until the close.
 // During a session it does not count the container of the session that runs. Run work
 // on the binds before Close, such as a push, only after Join returned and RemoveSetup

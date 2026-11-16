@@ -21,7 +21,7 @@ func TestTheAfterHelperStopsWhenItCannotBeUndumpable(t *testing.T) {
 	}
 	var stderr strings.Builder
 	code := Exec([]string{"--after-only", "--after-timeout", "1000", "--after-word", "true"}, &stderr)
-	if want := "exec: allow prctl(PR_SET_DUMPABLE) in the wall's seccomp profile: "; code != setupRunnerFailed || !strings.HasPrefix(stderr.String(), want) {
+	if want := "exec: allow prctl(PR_SET_DUMPABLE) in the wall's seccomp profile.\n"; code != setupRunnerFailed || !strings.HasPrefix(stderr.String(), want) {
 		t.Errorf("Exec: %d, %q; want 125 and a line that starts %q", code, stderr.String(), want)
 	}
 }
