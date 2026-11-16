@@ -3,7 +3,9 @@ package e2e
 // The end-to-end check of qory's transcript link: Claude Code 2.1.316 starts behind the
 // Docker wall through a Linux build of qory, `qory run agent-env`, with
 // CLAUDE_CONFIG_DIR at qory's agent home /tmp/qory-agent-home, as a dispatched walled
-// run of qory starts it. The qory commit that CI builds is in testdata/qory-commit.
+// run of qory starts it. The qory build is the wall's helper, at /qory/qory inside, and
+// the session's command is that path with Claude Code after --, as qory starts the
+// agent. The qory commit that CI builds is in testdata/qory-commit.
 
 import (
 	"bufio"
@@ -82,10 +84,26 @@ const qoryAgentHome = "/tmp/qory-agent-home"
 // walled run of Claude Code.
 var qoryLaunchFixed = []string{"CLAUDE_CONFIG_DIR=" + qoryAgentHome}
 
-// qoryFolder makes a folder in t.TempDir() with two files: qory, a copy of the build at
-// the path in [envQoryBin], and kept, the file of kept names that qory run writes for a
-// dispatched walled run of Claude Code. The wall mounts the folder read-only at the
-// same path.
+// The words that select qory's hidden verbs when the qory build is the wall's helper,
+// as qory's cmd/run.go and cmd/agentenv.go set them: the relay, the start of a nested
+// Docker, the hook forwarder, the exec step, and agent-env, which starts the agent.
+// If qory changes them, these tests break, not production: change them here to match.
+var (
+	qoryRelayArgs    = []string{"run", "relay"}
+	qoryNestArgs     = []string{"run", "nest"}
+	qoryForwardArgs  = []string{"run", "forward"}
+	qoryExecArgs     = []string{"run", "exec"}
+	qoryAgentEnvArgs = []string{"run", "agent-env"}
+)
+
+// qoryRun is what [qoryFolder] makes for a run through qory: helper, a copy of the
+// build at the path in [envQoryBin], which the wall binds as its helper, and folder,
+// with kept, the file of kept names that qory run writes for a dispatched walled run of
+// Claude Code, which the wall mounts read-only at the same path. They lie in two
+// folders, as with qory, since no mount may contain the helper's folder.
+type qoryRun struct{ helper, folder string }
+
+// qoryFolder makes the two folders of a [qoryRun] in t.TempDir().
 //
 // qoryFolder writes the kept file itself, by the steps of keptNames and writeKept in
 // qory's cmd/agentenv.go for a run with no run API and no harness home: the wall's
@@ -93,20 +111,21 @@ var qoryLaunchFixed = []string{"CLAUDE_CONFIG_DIR=" + qoryAgentHome}
 // its model keys and endpoint, the fixed variables of its entry in runtimes.json and
 // the launch's fixed values, with the authority's names apart. If qory changes those
 // steps, this test breaks, not production: change them here to match.
-func qoryFolder(t *testing.T) string {
+func qoryFolder(t *testing.T) *qoryRun {
 	t.Helper()
 	src := os.Getenv(envQoryBin)
 	if src == "" {
 		Skip(t, "Set "+envQoryBin+" to the path of a Linux build of qory; it is empty")
 	}
-	dir := t.TempDir()
+	q := &qoryRun{helper: filepath.Join(t.TempDir(), "qory"), folder: t.TempDir()}
 	b, err := os.ReadFile(src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "qory"), b, 0o755); err != nil {
+	if err := os.WriteFile(q.helper, b, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	dir := q.folder
 	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +140,7 @@ func qoryFolder(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(dir, "kept"), []byte(text.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return dir
+	return q
 }
 
 // qoryKept are the names of the kept file of [qoryFolder], sorted, each once: always,
@@ -366,8 +385,8 @@ func TestDockerQoryLinkPausesAndResumesUnderAnotherKey(t *testing.T) {
 		t.Errorf("the control plane was asked for the transcript of %q; want run 2's once", asked)
 	}
 	continued(t, ctl, run2, transcript, sessionID, tpath)
-	noKeyValue(t, o1, s1.dir, qory)
-	noKeyValue(t, o2, s2.dir, qory)
+	noKeyValue(t, o1, s1.dir, qory.folder)
+	noKeyValue(t, o2, s2.dir, qory.folder)
 }
 
 // TestDockerQoryWithoutTheLinkSendsNoTranscript is the control of

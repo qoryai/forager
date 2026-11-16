@@ -174,7 +174,7 @@ jobs:
           printf '%s\n' "FROM $BASE_IMAGE" \
             'RUN mkdir -p /home/agent && chmod 1777 /home/agent' \
             'ENV HOME=/home/agent' \
-            | docker build --tag qory-walltest-claude --file - "$RUNNER_TEMP"
+            | docker build --tag qory-walltest-claude -
           echo "QORY_WALL_CLAUDE_IMAGE=qory-walltest-claude" >> "$GITHUB_ENV"
           echo "QORY_WALL_CLAUDE_INSTALL=$dir" >> "$GITHUB_ENV"
           echo "QORY_WALL_CLAUDE_VERSION=$CLAUDE_CODE_VERSION" >> "$GITHUB_ENV"
@@ -312,7 +312,7 @@ jobs:
           printf '%s\n' "FROM $BASE_IMAGE" \
             'RUN mkdir -p /home/agent && chmod 1777 /home/agent' \
             'ENV HOME=/home/agent' \
-            | docker build --tag qory-walltest-claude --file - "$RUNNER_TEMP"
+            | docker build --tag qory-walltest-claude -
           echo "QORY_WALL_CLAUDE_IMAGE=qory-walltest-claude" >> "$GITHUB_ENV"
           echo "QORY_WALL_CLAUDE_INSTALL=$dir" >> "$GITHUB_ENV"
           echo "QORY_WALL_CLAUDE_VERSION=$CLAUDE_CODE_VERSION" >> "$GITHUB_ENV"

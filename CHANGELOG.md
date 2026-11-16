@@ -2650,6 +2650,14 @@ release may change what an existing document does, and says so under Upgrading.
   the engine, as production's run machines do, because sysbox-runc fails under Docker
   29.5's time namespaces (nestybox/sysbox#1011). If a step fails, the job prints
   Sysbox's journal and the kernel's AppArmor denials.
+- The tests of qory's transcript link, `TestDockerQoryLinkPausesAndResumesUnderAnotherKey`
+  and `TestDockerQoryWithoutTheLinkSendsNoTranscript`, bind the qory build as the
+  wall's helper and start Claude Code as qory does: the command is `/qory/qory` with
+  `run agent-env`, and Claude Code at `/qory/runtime/claude/bin/claude` after `--`. The
+  relay, the hook forwarder and the exec step run qory's verbs. Before, the command was
+  the qory build in a mounted folder, which the session now refuses.
+- CI builds the image for Claude Code from a Dockerfile on standard input with no build
+  context. Before, it sent all of `$RUNNER_TEMP` to the engine.
 
 ## [0.7.0] - 2026-10-12
 

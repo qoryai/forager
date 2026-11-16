@@ -520,11 +520,11 @@ type keysSession struct {
 	dir     string
 	walled  *keysWall
 	timeout time.Duration
-	// qory, when set, is a folder that [qoryFolder] makes: the launch starts Claude Code
-	// through qory run agent-env with CLAUDE_CONFIG_DIR at qory's agent home, as a
-	// dispatched walled run of qory does. link are the verb's words between the kept
-	// file and --.
-	qory string
+	// qory, when set, is what [qoryFolder] makes: the wall's helper is the qory build,
+	// and the launch starts Claude Code as a dispatched walled run of qory does,
+	// through the helper's qory run agent-env with CLAUDE_CONFIG_DIR at qory's agent
+	// home. link are the verb's words between the kept file and --.
+	qory *qoryRun
 	link []string
 }
 
@@ -566,10 +566,12 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 		Dir:            dir,
 		Stdin:          strings.NewReader(""),
 	}
-	if s.qory != "" {
-		join.Args = append(append(append([]string{"run", "agent-env", filepath.Join(s.qory, "kept")}, s.link...), "--", join.Command), join.Args...)
-		join.Command = filepath.Join(s.qory, "qory")
-		join.Mounts = append(join.Mounts, wall.Mount{Path: s.qory, ReadOnly: true})
+	if s.qory != nil {
+		// qory starts the agent at the helper's path with the program after --, as
+		// qory's cmd/agentenv.go writes it: the session checks that program.
+		join.Args = slices.Concat(qoryAgentEnvArgs, []string{filepath.Join(s.qory.folder, "kept")}, s.link, []string{"--", join.Command}, join.Args)
+		join.Command = wall.HelperPath
+		join.Mounts = append(join.Mounts, wall.Mount{Path: s.qory.folder, ReadOnly: true})
 		join.LaunchFixed = slices.Clone(qoryLaunchFixed)
 	}
 	if s.walled != nil {
@@ -577,6 +579,12 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 		open.Image = s.walled.image
 		join.Forwarder = []string{wall.HelperPath, "forward"}
 		join.Exec = append([]string{wall.HelperPath}, ExecArgs...)
+		if s.qory != nil {
+			// The helper is the qory build, with qory's verbs, as qory run binds it.
+			open.Wall = &wall.Docker{Command: s.walled.command, Helper: s.qory.helper, RelayArgs: qoryRelayArgs, NestArgs: qoryNestArgs}
+			join.Forwarder = append([]string{wall.HelperPath}, qoryForwardArgs...)
+			join.Exec = append([]string{wall.HelperPath}, qoryExecArgs...)
+		}
 	} else {
 		exe, err := os.Executable()
 		if err != nil {
