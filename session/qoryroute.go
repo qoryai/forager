@@ -525,7 +525,9 @@ func (q *qoryRoute) call(ctx context.Context, read *http.Request, body []byte, n
 		Header: header, Body: rc, ContentLength: int64(len(body)), Host: link.QoryHost,
 		RequestURI: u.RequestURI(),
 	}).WithContext(ctx)
-	ans = &qoryHostAnswer{header: http.Header{}}
+	// The handler writes to answer, a variable of this call alone: the goroutine may
+	// outlast the call, whose results it must not touch.
+	answer := &qoryHostAnswer{header: http.Header{}}
 	done := make(chan error, 1)
 	go func() {
 		defer q.leave()
@@ -537,7 +539,7 @@ func (q *qoryRoute) call(ctx context.Context, read *http.Request, body []byte, n
 				done <- errQoryHostPanic
 			}
 		}()
-		q.handler.ServeHTTP(ans, req)
+		q.handler.ServeHTTP(answer, req)
 		done <- nil
 	}()
 	select {
@@ -546,7 +548,7 @@ func (q *qoryRoute) call(ctx context.Context, read *http.Request, body []byte, n
 			// A handler that returned after its context ended outlasted it.
 			return nil, true, ctx.Err()
 		}
-		return ans, true, err
+		return answer, true, err
 	case <-ctx.Done():
 		return nil, true, ctx.Err()
 	}
