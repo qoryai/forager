@@ -2580,8 +2580,8 @@ release may change what an existing document does, and says so under Upgrading.
   as the same user as the runtime, so it can write a line to the runtime's standard
   output through `/proc/<pid>/fd/1`, and the session reads that line as output. Only the
   helper process is out of its reach, because the helper makes itself not dumpable.
-- Report at most 10 lines per connection to the run socket that are not records, or are
-  records of the `output` source. The session reports no further such line of that
+- The session reports at most 10 lines per connection to the run socket that are not
+  records, or are records of the `output` source. It reports no further such line of that
   connection, and at its end reports one line with the count, such as "socket: skipped
   2481 more lines on one connection that are not records or are output records".
   Before, every such line was one report, so a process in the agent's container could

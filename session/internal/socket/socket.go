@@ -121,7 +121,7 @@ var errOutput = errors.New("refused a record of the output source: output record
 // of the output source, [Listener.Serve] passes to bad. Each one becomes a report to
 // the control plane, and any process in the agent's container can write millions of
 // them within [Patience]. 10 shows a client's first mistakes, which say what is wrong,
-// and the rest add a count, not a message each.
+// and the lines after them are only counted.
 const MaxBadLines = 10
 
 // read decodes one connection's lines until end of file. A record of the output source
@@ -166,7 +166,11 @@ func read(r io.Reader, handle func(descriptor.Record), bad func(error)) {
 		handle(rec)
 	}
 	if skipped > 0 {
-		bad(fmt.Errorf("skipped %d more lines on one connection that are not records or are output records", skipped))
+		noun := "lines"
+		if skipped == 1 {
+			noun = "line"
+		}
+		bad(fmt.Errorf("skipped %d more %s on one connection that are not records or are output records", skipped, noun))
 	}
 	if err := s.Err(); err != nil && bad != nil {
 		bad(err)

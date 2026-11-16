@@ -207,17 +207,22 @@ type capServer struct {
 	done chan struct{}
 }
 
-func newCapServer(t *testing.T) *capServer {
+func newCapServer(t *testing.T) *capServer { return serveCap(t, true) }
+
+// serveCap starts a capServer; with collect false, Serve gets a nil bad function.
+func serveCap(t *testing.T, collect bool) *capServer {
 	t.Helper()
 	l, err := socket.Listen(0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := &capServer{t: t, l: l, done: make(chan struct{})}
+	var bad func(error)
+	if collect {
+		bad = func(err error) { s.mu.Lock(); s.bad = append(s.bad, err); s.mu.Unlock() }
+	}
 	go func() {
-		l.Serve(
-			func(r descriptor.Record) { s.mu.Lock(); s.got = append(s.got, r); s.mu.Unlock() },
-			func(err error) { s.mu.Lock(); s.bad = append(s.bad, err); s.mu.Unlock() })
+		l.Serve(func(r descriptor.Record) { s.mu.Lock(); s.got = append(s.got, r); s.mu.Unlock() }, bad)
 		close(s.done)
 	}()
 	t.Cleanup(func() { l.Close(); <-s.done })
@@ -276,7 +281,11 @@ const (
 func TestBadLinesOfOneConnectionAreCapped(t *testing.T) {
 	max := socket.MaxBadLines
 	summary := func(n int) string {
-		return "skipped " + strconv.Itoa(n) + " more lines on one connection that are not records or are output records"
+		noun := " more lines"
+		if n == 1 {
+			noun = " more line"
+		}
+		return "skipped " + strconv.Itoa(n) + noun + " on one connection that are not records or are output records"
 	}
 	t.Run("under the cap", func(t *testing.T) {
 		s := newCapServer(t)
@@ -311,6 +320,22 @@ func TestBadLinesOfOneConnectionAreCapped(t *testing.T) {
 		}
 		if len(got) != 1 || got[0].Source != "hooks" {
 			t.Errorf("records after the cap: %+v, want the one good record", got)
+		}
+	})
+	t.Run("one line over the cap", func(t *testing.T) {
+		s := newCapServer(t)
+		s.connection(lines(max+1, "junk"))
+		_, bad := s.wait(0, max+1)
+		if len(bad) != max+1 || bad[max] != summary(1) {
+			t.Fatalf("errors: %q; want %d and the summary %q", bad, max+1, summary(1))
+		}
+	})
+	t.Run("with no bad function, records still arrive", func(t *testing.T) {
+		s := serveCap(t, false)
+		s.connection(lines(max+5, "junk") + goodLine + "\n")
+		got, _ := s.wait(1, 0)
+		if len(got) != 1 || got[0].Source != "hooks" {
+			t.Errorf("records: %+v, want the one good record", got)
 		}
 	})
 	t.Run("the cap starts again for the next connection", func(t *testing.T) {
