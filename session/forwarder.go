@@ -13,6 +13,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"slices"
@@ -76,7 +77,8 @@ const (
 // route to OpenSpec.QoryRoute, every connection is read one request at a time too,
 // walled or not, and a plain request to link.QoryHost from a session goes to the route's
 // handler, never to the proxy: behind a wall, one whose Proxy-Authorization carries the
-// password of a session's proxy URL. A connection that shows the preamble with neither
+// password of a session's proxy URL and that comes from the agent's container, by the
+// address in the relay's peer line. A connection that shows the preamble with neither
 // passes on as it is, after the same preamble.
 //
 // The secrets are held in memory alone: never in a file or a report, and in an
@@ -153,8 +155,9 @@ type forwarding struct {
 	// request per connection, as with the check, takes every Proxy-Authorization off
 	// the head, and serves a request to link.QoryHost only when its one
 	// Proxy-Authorization carries the proxy password of one of the run's walled
-	// sessions: any other, the setup container's among them, goes to the proxy, which
-	// denies the host.
+	// sessions and, for the session that runs, the relay's peer line, which it reads
+	// after the preamble, has an address of that session's agent container: any other,
+	// the setup container's among them, goes to the proxy, which denies the host.
 	route   *qoryRoute
 	session int
 }
@@ -352,6 +355,8 @@ func (f *forwarder) serve(c net.Conn) {
 	// hop is the secret of the relay's preamble that the connection must open with:
 	// behind a separate gateway the hop, and on one machine the run's proxy secret.
 	hop, wait := f.way.hop, link.PreambleWait
+	// peer is the address the relay wrote for the connection, with the route.
+	var peer netip.Addr
 	if hop == "" && f.way.checkRelay != "" {
 		hop, wait = f.way.checkRelay, f.headWait()
 	}
@@ -360,6 +365,15 @@ func (f *forwarder) serve(c net.Conn) {
 		c.SetReadDeadline(time.Now().Add(wait))
 		if ok, err := link.ReadRelayPreamble(c, hop); !ok || err != nil {
 			return
+		}
+		// With the route, the relay writes the address the connection came from right
+		// after the preamble, which picks the agent's container from the others.
+		if f.way.route != nil {
+			p, err := link.ReadRelayPeer(c)
+			if err != nil {
+				return
+			}
+			peer = p
 		}
 		c.SetReadDeadline(time.Time{})
 		if f.way.password == "" && !f.admit(c) {
@@ -413,11 +427,12 @@ func (f *forwarder) serve(c net.Conn) {
 			badRequest(c, err)
 			return
 		}
-		// A request to the route's host without a session's password, such as one from
-		// the setup container, goes to the proxy, which denies the host.
+		// A request to the route's host without a session's password, or from another
+		// address than the agent container's, such as one from the setup container, goes
+		// to the proxy, which denies the host.
 		routed := 0
 		if way.route != nil && !connectHead(head) && forQoryHost(head) {
-			routed = way.route.sessionOf(logins)
+			routed = way.route.sessionOf(f.ctx, logins, peer)
 		}
 		switch {
 		case connectHead(head):

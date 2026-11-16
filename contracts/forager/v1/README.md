@@ -4903,7 +4903,12 @@ without one, opens every connection to the gateway's one address over TLS 1.3, w
 the link is (The binding, above), and with `QORY-RELAY`, a space, the run key and a
 newline. Behind a wall the forwarder takes the relay's connection, which opens with
 `QORY-RELAY` and a value the session makes for the run's forwarder alone, and takes that
-line off before anything reaches the gateway. After any failed dial to the gateway's one
+line off before anything reaches the gateway. Behind a wall, in a run with a route to
+the caller, the relay writes a second line right after the first: `QORY-PEER`, a space,
+the 16 bytes of the address the connection came from on the enclosure's network in
+lower-case hex, an IPv4 address in its IPv4-mapped form, and a newline. The run's
+forwarder reads that line and takes it off, on one machine as behind a separate
+gateway, so the gateway never gets it. After any failed dial to the gateway's one
 address, such as a connection refused or reset, a TLS handshake cut short or a binding
 that fails, the forwarder keeps the connection it took open, writes nothing to it, and
 dials again for up to 120 seconds, waiting 250 ms after the first failed dial and twice
@@ -5257,14 +5262,19 @@ program's connection closes with no answer.
 
 **Which program reaches it.** Without a wall, each session has a forwarder of its own,
 whose proxy URL has a password. Behind a wall, each session's launch gets a proxy URL
-with a password of that session alone, `http://qory:<password>@qory-proxy:3128`, and
-the forwarder serves a request to the route only when its one `Proxy-Authorization`
-carries that password. A request without it goes to the gateway's proxy, which denies
-the host: a request of the setup container, which shares the wall's relay but has no
-password, never reaches the handler. A container of an earlier session that the wall
-leaves running has that session's password, and gets `503` `session_not_running` while
-a later session runs. The forwarder takes every `Proxy-Authorization` off a request
-before anything of it reaches the gateway.
+with a password of that session alone, `http://qory:<password>@qory-proxy:3128`. The
+wall's relay writes the address each connection comes from on the enclosure's network
+before the request, and the forwarder serves a request to the route only when its one
+`Proxy-Authorization` carries that password and it comes from the address of the
+session's agent container, which the wall reports. Any other request goes to the
+gateway's proxy, which denies the host with `403` and rule `wall:qory-host`: a request
+of the setup container, which shares the wall's relay, never reaches the handler, also
+when it carries the session's password, such as one a program read from the workspace.
+A container of an earlier session that the wall leaves running has that session's
+password, and gets `503` `session_not_running` while a later session runs. The
+forwarder takes every `Proxy-Authorization` off a request before anything of it
+reaches the gateway. A run with a route behind a wall that does not report the agent's
+address does not open.
 
 **What the handler gets.** The method, the path, the query, `Content-Type`, the body,
 read whole first, and `Qory-Session`, the number of the session that sent the request.

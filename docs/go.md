@@ -764,8 +764,12 @@ The session's forwarder serves the route in the process that calls `Join`, walle
 with a gateway on the machine or a separate one; nothing of a request reaches the
 gateway. Behind a wall, the session gives the wall a proxy password of the session's
 launch alone, `wall.Launch.ProxyPassword`, which the wall writes into the proxy URL
-inside, and the forwarder serves a request to the route only with it: the setup
-container's requests go to the gateway, which denies them. The handler gets the method,
+inside. The wall's relay writes the address each connection comes from
+(`wall.Launch.ProxyPeer`), and the forwarder serves a request to the route only with the
+password and from the address of the session's agent container, which the enclosure
+reports (`wall.AgentAddresser`). The setup container's requests go to the gateway, which
+denies them, also with the session's password. `Open` fails for a run with a route
+behind a wall that is no `wall.AgentAddresser`. The handler gets the method,
 the path, the query, `Content-Type`, the body read whole, and `Qory-Session`, and its
 context ends after 30 seconds, at the session's end or at the run's close. The forwarder
 answers these itself, with `{"error":<code>,"message":<text>}`:

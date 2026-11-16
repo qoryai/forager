@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -1044,9 +1045,10 @@ func (e *dockerEnclosure) relayImage() string {
 
 // StartRelay starts the relay towards the proxy at l.Proxy, from the request's
 // RelayImage, the machine's default, with l.ProxyToken as what it opens every connection
-// with, and waits until it listens. The session calls it once the run's forwarder
-// listens, as the run opens; Wrap and StartSetup call it when the relay has not started,
-// and a relay that started is left as it is. Only l.Proxy and l.ProxyToken are read.
+// with, followed by the peer line with l.ProxyPeer, and waits until it listens. The
+// session calls it once the run's forwarder listens, as the run opens; Wrap and
+// StartSetup call it when the relay has not started, and a relay that started is left
+// as it is. Only l.Proxy, l.ProxyToken and l.ProxyPeer are read.
 func (e *dockerEnclosure) StartRelay(ctx context.Context, l Launch) error {
 	if e.relayed {
 		return nil
@@ -1062,6 +1064,9 @@ func (e *dockerEnclosure) StartRelay(ctx context.Context, l Launch) error {
 	relayEnv := []string{RelayInsideEnv + "=" + strings.Join(e.subnets, ",")}
 	if l.ProxyToken != "" {
 		relayEnv = append(relayEnv, RelayTokenEnv+"="+l.ProxyToken)
+	}
+	if l.ProxyPeer {
+		relayEnv = append(relayEnv, RelayPeerEnv+"=1")
 	}
 	relayEnvFile, err := e.envFile("relay-env", relayEnv)
 	if err != nil {
@@ -1276,6 +1281,30 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 		cli = withSelection(cli, e.env)
 	}
 	return Launch{Command: e.command(), Args: run, Env: cli, Dir: dir}, nil
+}
+
+// AgentAddrs returns the addresses of the agent's container on the inside network,
+// read with docker inspect: its IPv4 address and, with nested Docker, its IPv6 one. A
+// container that does not run, or has no address there, is an error, so the route
+// serves no request until the agent's container of the session runs.
+func (e *dockerEnclosure) AgentAddrs(ctx context.Context) ([]netip.Addr, error) {
+	format := fmt.Sprintf("{{if .State.Running}}{{with index .NetworkSettings.Networks %q}}{{.IPAddress}} {{.GlobalIPv6Address}}{{end}}{{end}}", e.inside())
+	out, err := e.docker(ctx, "inspect", "--type", "container", "--format", format, e.agent())
+	if err != nil {
+		return nil, err
+	}
+	var addrs []netip.Addr
+	for _, f := range strings.Fields(string(out)) {
+		a, err := netip.ParseAddr(f)
+		if err != nil {
+			return nil, fmt.Errorf("wall docker: the agent's address %s on the inside network: %w", accesskey.ShownValue(f, false), err)
+		}
+		addrs = append(addrs, a.Unmap())
+	}
+	if len(addrs) == 0 {
+		return nil, errors.New("wall docker: the agent's container runs with no address on the inside network")
+	}
+	return addrs, nil
 }
 
 // Unwrap removes the agent's container that Wrap's launch started, within closeWait,

@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strings"
@@ -143,19 +145,41 @@ func withLogin(what, login string) string {
 	return line + "\n" + login + "\r\n" + rest
 }
 
+// agentAddr is the address of the agent's container in the tests of the route: their
+// connections come from loopback.
+var agentAddr = netip.MustParseAddr("127.0.0.1")
+
+// loopbackAgent is the enclosure's report of the agent's addresses in the tests of the
+// route: agentAddr alone.
+func loopbackAgent(context.Context) ([]netip.Addr, error) { return []netip.Addr{agentAddr}, nil }
+
+// peerLineOf is the line the wall's relay writes after its preamble on a connection
+// from agentAddr to f: the peer line for a forwarder with the route, none without.
+func peerLineOf(f *forwarder) string {
+	if f.way.route == nil {
+		return ""
+	}
+	return link.RelayPeerLine(agentAddr)
+}
+
 // routeFor is a route to h whose walled session 1 runs, with routePassword, and its
-// records.
+// records. The agent's container is at agentAddr.
 func routeFor(t *testing.T, h http.Handler) (*qoryRoute, *routeRecords, func()) {
 	t.Helper()
 	recs := &routeRecords{}
 	q := newQoryRoute(h, context.Background(), recs.record, func(l string) { t.Log("report:", l) })
+	q.agent = loopbackAgent
 	return q, recs, q.open(1, routePassword)
 }
 
 // walledRoute starts a walled forwarder behind a separate gateway, with the hop, to the
-// fake proxy p, with the route q.
+// fake proxy p, with the route q, whose agent's container is at agentAddr unless q
+// says otherwise.
 func walledRoute(t *testing.T, p *routeProxy, q *qoryRoute) *forwarder {
 	t.Helper()
+	if q.agent == nil {
+		q.agent = loopbackAgent
+	}
 	f, err := listenForwarding("127.0.0.1:0", forwarding{dial: dialTCP(p.ln.Addr().String()), secret: checkSecret, hop: checkHop, route: q})
 	if err != nil {
 		t.Fatal(err)
@@ -352,6 +376,84 @@ func TestNoSessionGets503AndNoHandlerCall(t *testing.T) {
 	}
 }
 
+// TestTheRouteServesTheAgentsAddressAlone pins the walled forwarder's second gate on
+// the route: a request with the session's password from an address that is not the
+// agent container's, such as the setup container's, goes to the proxy; one from the
+// agent's address reaches the handler. The enclosure is asked for the agent's addresses
+// once per session while it answers; a failed answer sends the request to the proxy and
+// is asked again, and a peer line that is not one closes the connection unanswered.
+func TestTheRouteServesTheAgentsAddressAlone(t *testing.T) {
+	h := &routeHandler{}
+	q := newQoryRoute(h, context.Background(), (&routeRecords{}).record, nil)
+	var mu sync.Mutex
+	asked, fail := 0, true
+	q.agent = func(context.Context) ([]netip.Addr, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		asked++
+		if fail {
+			return nil, errors.New("the agent's container does not run")
+		}
+		return []netip.Addr{netip.MustParseAddr("10.89.0.2"), netip.MustParseAddr("fd8a::2")}, nil
+	}
+	p := startRouteProxy(t)
+	f := walledRoute(t, p, q)
+	from := func(peer string) int {
+		c, err := net.Dial("tcp", f.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		go io.WriteString(c, link.RelayLine(checkHop)+link.RelayPeerLine(netip.MustParseAddr(peer))+toRoute("GET", "/tests", ""))
+		status, _ := errorOf(t, readAllOf(c))
+		return status
+	}
+	closeRoute := q.open(1, routePassword)
+	if status := from("10.89.0.2"); status != http.StatusForbidden {
+		t.Errorf("before the agent's container runs: %d", status)
+	}
+	mu.Lock()
+	fail = false
+	mu.Unlock()
+	for _, peer := range []string{"10.89.0.3", "::ffff:10.89.0.3", "fd8a::3"} {
+		if status := from(peer); status != http.StatusForbidden {
+			t.Errorf("from %s with the session's password: %d", peer, status)
+		}
+	}
+	for _, peer := range []string{"10.89.0.2", "::ffff:10.89.0.2", "fd8a::2"} {
+		if status := from(peer); status != http.StatusOK {
+			t.Errorf("from the agent at %s: %d", peer, status)
+		}
+	}
+	if got := len(h.got()); got != 3 {
+		t.Errorf("the handler got %d calls, want 3", got)
+	}
+	if n := len(p.requests()); n != 4 {
+		t.Errorf("the proxy got %d requests, want 4: %q", n, p.requests())
+	}
+	mu.Lock()
+	if asked != 2 {
+		t.Errorf("the enclosure was asked %d times, want 2", asked)
+	}
+	mu.Unlock()
+	closeRoute()
+	q.open(2, routePassword2)
+	c, err := net.Dial("tcp", f.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	go io.WriteString(c, link.RelayLine(checkHop)+toRoute("GET", "/tests", ""))
+	if out := readAllOf(c); out != "" {
+		t.Errorf("a connection without the peer line got %q", out)
+	}
+	mu.Lock()
+	if asked != 2 {
+		t.Errorf("the enclosure was asked %d times after session 1", asked)
+	}
+	mu.Unlock()
+}
+
 // TestARequestWithoutASessionsPasswordGoesToTheProxy pins the walled forwarder's
 // gate on the route: a request to the route's host with no Proxy-Authorization, as the
 // setup container sends it, with another password, or with two, goes to the proxy,
@@ -534,7 +636,7 @@ func TestARecordedPathHasNoSecret(t *testing.T) {
 }
 
 // relayConn opens a connection to the walled forwarder f as the wall's relay does, with
-// the hop's preamble written.
+// the hop's preamble and the peer line of agentAddr written.
 func relayConn(t *testing.T, f *forwarder) net.Conn {
 	t.Helper()
 	c, err := net.Dial("tcp", f.Addr())
@@ -542,7 +644,7 @@ func relayConn(t *testing.T, f *forwarder) net.Conn {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { c.Close() })
-	io.WriteString(c, link.RelayLine(checkHop))
+	io.WriteString(c, link.RelayLine(checkHop)+peerLineOf(f))
 	return c
 }
 
@@ -808,7 +910,7 @@ func TestAWalledForwarderWithARouteStillCarriesOtherRequests(t *testing.T) {
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				c, err := (&net.Dialer{}).DialContext(ctx, network, addr)
 				if err == nil {
-					_, err = io.WriteString(c, link.RelayLine(checkHop))
+					_, err = io.WriteString(c, link.RelayLine(checkHop)+link.RelayPeerLine(agentAddr))
 				}
 				return c, err
 			},

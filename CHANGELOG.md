@@ -1941,10 +1941,17 @@ release may change what an existing document does, and says so under Upgrading.
 - `wall.Launch.ProxyPassword`: behind a wall with a route, the session gives `Wrap` a
   password of the session's launch alone, and the Docker wall writes it into the proxy
   URL inside, `http://qory:<password>@qory-proxy:3128`. The run's forwarder serves the
-  route only to a request with that password, so the setup container, which shares the
-  relay and gets no password, never reaches the handler, and a container of an earlier
-  session gets `503`. A wall written outside Forager must write the password into the
-  proxy variables of `Wrap`'s launch for the route to work behind it.
+  route only to a request with that password, and a container of an earlier session
+  gets `503`. A wall written outside Forager must write the password into the proxy
+  variables of `Wrap`'s launch for the route to work behind it.
+- `wall.Launch.ProxyPeer`, `wall.AgentAddresser`, `wall.RelayPeerEnv`,
+  `link.RelayPeerLine` and `link.ReadRelayPeer`: behind a wall with a route, the
+  relay writes the address each connection comes from after its preamble, and the
+  run's forwarder serves the route only from the address of the session's agent
+  container, which the Docker wall reads with `docker inspect`. The setup container,
+  which shares the relay, never reaches the handler, also with the session's password.
+  A run with a route behind a wall whose enclosure is no `wall.AgentAddresser` does
+  not open.
 - `(*session.Run).SetRunAPICheck`, `session.RunAPIRequest` and `session.RunAPIRefusal`:
   a check of each POST that a walled program sends to the run API, before anything of it
   reaches the gateway. Call `SetRunAPICheck` after `Open` and before `Setup` and the

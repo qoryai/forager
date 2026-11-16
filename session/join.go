@@ -712,8 +712,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	}
 	// routePassword, behind a wall with the route, is the password of the agent's proxy
 	// URL, which the wall writes into the proxy variables inside: the run's forwarder
-	// serves a request to the route only with it, so the setup container, which shares
-	// the relay and has no password, never reaches the handler.
+	// serves a request to the route only with it, and only from the address of the
+	// agent's container, so the setup container, which shares the relay, never reaches
+	// the handler.
 	var routePassword string
 	if spec.Wall != nil && route != nil {
 		if routePassword, err = newForwarderSecret(); err != nil {
@@ -956,7 +957,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			Env:   wrapEnv,
 			CA:    r.authority,
 			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: shown.Mounts, Limits: spec.Limits,
-			ProxyToken: r.relayToken, ProxyPassword: routePassword,
+			ProxyToken: r.relayToken, ProxyPassword: routePassword, ProxyPeer: r.route != nil,
 			Transcript: wall.Transcript{Path: transcriptDir, Under: transcriptUnder},
 		})
 		if err != nil {

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/mask"
 	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/wall"
 )
 
 // The tests of this file pin the route to link.QoryHost, OpenSpec.QoryRoute, from the
@@ -241,10 +243,10 @@ func TestTheRouteWorksWithoutAWallBehindASeparateGateway(t *testing.T) {
 }
 
 // relayedRoute sends a GET to the route through the walled run's forwarder at addr, as
-// the wall's relay does, with proxyURL's password in its Proxy-Authorization, none for
-// an empty one, and returns the status, the forwarder's code, empty for an answer of the
-// handler's or the proxy's, and the body.
-func relayedRoute(t *testing.T, addr, token, proxyURL string) (int, string, string) {
+// the wall's relay does for a connection from peer, with proxyURL's password in its
+// Proxy-Authorization, none for an empty one, and returns the status, the forwarder's
+// code, empty for an answer of the handler's or the proxy's, and the body.
+func relayedRoute(t *testing.T, addr, token string, peer netip.Addr, proxyURL string) (int, string, string) {
 	t.Helper()
 	login := ""
 	if u, err := url.Parse(proxyURL); err == nil && u.User != nil {
@@ -258,7 +260,7 @@ func relayedRoute(t *testing.T, addr, token, proxyURL string) (int, string, stri
 		t.Fatal(err)
 	}
 	defer c.Close()
-	io.WriteString(c, link.RelayLine(token)+"GET "+link.QoryHostURL+"/tests HTTP/1.1\r\nHost: "+link.QoryHost+"\r\n"+login+"\r\n")
+	io.WriteString(c, link.RelayLine(token)+link.RelayPeerLine(peer)+"GET "+link.QoryHostURL+"/tests HTTP/1.1\r\nHost: "+link.QoryHost+"\r\n"+login+"\r\n")
 	c.SetReadDeadline(time.Now().Add(10 * time.Second))
 	raw, _ := io.ReadAll(c)
 	out := string(raw)
@@ -290,10 +292,10 @@ func TestTheRouteWorksBehindAWallAndIsClosedBetweenSessions(t *testing.T) {
 	if u, err := url.Parse(s.proxy); err != nil || u.User == nil {
 		t.Fatalf("the launch's proxy URL %q has no password", s.proxy)
 	}
-	if status, code, body := relayedRoute(t, addr, token, s.proxy); status != http.StatusCreated || code != "" || body != "made" {
+	if status, code, body := relayedRoute(t, addr, token, agentAddr, s.proxy); status != http.StatusCreated || code != "" || body != "made" {
 		t.Errorf("during the session: %d %s %q", status, code, body)
 	}
-	if status, _, body := relayedRoute(t, addr, token, ""); status != http.StatusOK || body != "ok" || !slices.Contains(g.Proxied(), "GET "+link.QoryHostURL+"/tests") {
+	if status, _, body := relayedRoute(t, addr, token, agentAddr, ""); status != http.StatusOK || body != "ok" || !slices.Contains(g.Proxied(), "GET "+link.QoryHostURL+"/tests") {
 		t.Errorf("without the password: %d %q, the proxy got %q", status, body, g.Proxied())
 	}
 	os.WriteFile(s.done, nil, 0o600)
@@ -303,7 +305,7 @@ func TestTheRouteWorksBehindAWallAndIsClosedBetweenSessions(t *testing.T) {
 	if got, want := entriesOf(w.got.Env, session.EnvQoryHost), []string{session.EnvQoryHost + "=" + link.QoryHostURL}; !slices.Equal(got, want) {
 		t.Errorf("the enclosure's environment has %v, want %v", got, want)
 	}
-	if status, code, _ := relayedRoute(t, addr, token, s.proxy); status != http.StatusServiceUnavailable || code != "session_not_running" {
+	if status, code, _ := relayedRoute(t, addr, token, agentAddr, s.proxy); status != http.StatusServiceUnavailable || code != "session_not_running" {
 		t.Errorf("after the session: %d %s", status, code)
 	}
 	if got := h.got(); len(got) != 1 || !strings.HasPrefix(got[0], "GET /tests? session=1") {
@@ -313,8 +315,9 @@ func TestTheRouteWorksBehindAWallAndIsClosedBetweenSessions(t *testing.T) {
 
 // TestTheSetupContainerNeverReachesTheRoute pins the run's setup: the setup container's
 // environment has no QORY_HOST_URL and no proxy password, and while a session runs, a
-// request from the setup container, which shares the wall's relay, goes to the gateway's
-// proxy and reaches no handler; the session's request, with its password, does.
+// request from the setup container's address, which shares the wall's relay, goes to the
+// gateway's proxy and reaches no handler, also with the session's password; the
+// session's request, from the agent's address with its password, does.
 func TestTheSetupContainerNeverReachesTheRoute(t *testing.T) {
 	sp, g := specGateway(t)
 	w := &setupWall{}
@@ -348,18 +351,63 @@ func TestTheSetupContainerNeverReachesTheRoute(t *testing.T) {
 		proxy, _, _ = strings.Cut(string(b), "\n")
 		return err == nil
 	})
-	if status, _, body := relayedRoute(t, w.setup.Proxy, w.setup.ProxyToken, ""); status != http.StatusOK || body != "ok" || !slices.Contains(g.Proxied(), "GET "+link.QoryHostURL+"/tests") {
-		t.Errorf("a request of the setup container during the session: %d %q, the proxy got %q", status, body, g.Proxied())
+	if !w.setup.ProxyPeer {
+		t.Error("the setup's launch does not have the relay write the peer line")
+	}
+	// The setup container is at another address of the enclosure's network than the
+	// agent's container: without the session's password, and with it, as a program
+	// that read it from the workspace would send it, its request goes to the proxy.
+	setupAddr := netip.MustParseAddr("10.89.0.3")
+	for _, login := range []string{"", proxy} {
+		if status, _, body := relayedRoute(t, w.setup.Proxy, w.setup.ProxyToken, setupAddr, login); status != http.StatusOK || body != "ok" {
+			t.Errorf("a request of the setup container during the session, with the password %v: %d %q", login != "", status, body)
+		}
+	}
+	if n := strings.Count(strings.Join(g.Proxied(), "\n"), "GET "+link.QoryHostURL+"/tests"); n != 2 {
+		t.Errorf("the proxy got %d requests to the route, want 2: %q", n, g.Proxied())
 	}
 	if got := h.got(); len(got) != 0 {
 		t.Errorf("the handler got %q from the setup container", got)
 	}
-	if status, _, body := relayedRoute(t, w.setup.Proxy, w.setup.ProxyToken, proxy); status != http.StatusCreated || body != "made" {
+	if status, _, body := relayedRoute(t, w.setup.Proxy, w.setup.ProxyToken, agentAddr, proxy); status != http.StatusCreated || body != "made" {
 		t.Errorf("the session's request: %d %q", status, body)
 	}
 	os.WriteFile(done, nil, 0o600)
 	if err := <-results; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// addresslessWall is an open wall whose enclosure does not report the agent's address.
+type addresslessWall struct{ openWall }
+
+func (w *addresslessWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	e, err := w.openWall.Prepare(ctx, req)
+	return struct{ wall.Enclosure }{e}, err
+}
+
+// TestARouteNeedsAWallThatReportsTheAgentsAddress pins that a run with a route behind a
+// wall whose enclosure is no wall.AgentAddresser does not open, since its forwarder
+// could not tell the agent's container from the setup container; the same wall opens a
+// run with no route.
+func TestARouteNeedsAWallThatReportsTheAgentsAddress(t *testing.T) {
+	for _, routed := range []bool{true, false} {
+		sp, _ := specGateway(t)
+		w := &addresslessWall{}
+		sp.Wall, sp.Image = w, "example.com/agent:1"
+		if routed {
+			sp.QoryRoute = &recorder{}
+		}
+		r, err := session.Open(context.Background(), opened(sp))
+		if err == nil {
+			r.Close(context.Background(), session.Outcome{State: event.StateSucceeded})
+		}
+		if routed && (err == nil || !strings.Contains(err.Error(), "reports the agent's address")) {
+			t.Errorf("a run with a route opened: %v", err)
+		}
+		if !routed && err != nil {
+			t.Errorf("a run with no route: %v", err)
+		}
 	}
 }
 

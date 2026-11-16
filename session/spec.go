@@ -194,12 +194,16 @@ type OpenSpec struct {
 	//
 	// Behind a wall, each session's launch gets a proxy URL with a password of that
 	// session alone, which the wall writes into the proxy variables inside
-	// (wall.Launch.ProxyPassword), and the forwarder serves a request to the route only
-	// with it. A request without it, such as one from the setup container, which shares
-	// the wall's relay, goes to the gateway, which denies it with 403. A container of an
-	// earlier session that a wall without Unwrap leaves running has that session's
-	// password, and gets 503 session_not_running while a later session runs: it never
-	// reaches the handler as the later session.
+	// (wall.Launch.ProxyPassword), and the wall's relay writes the address each
+	// connection comes from (wall.Launch.ProxyPeer). The forwarder serves a request to
+	// the route only with the password and from the address of the session's agent
+	// container, which the enclosure reports (wall.AgentAddresser); Open fails for a
+	// wall whose enclosure does not. Any other request, such as one from the setup
+	// container, which shares the wall's relay, goes to the gateway, which denies it
+	// with 403, also when it carries the session's password. A container of an earlier
+	// session that a wall without Unwrap leaves running has that session's password,
+	// and gets 503 session_not_running while a later session runs: it never reaches the
+	// handler as the later session.
 	//
 	// The handler gets the method, the path, the query, Content-Type, the body, read
 	// whole first, and Qory-Session (link.QorySessionHeader), the number of the session

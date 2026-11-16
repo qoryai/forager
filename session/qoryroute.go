@@ -12,7 +12,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +40,9 @@ const (
 	// qoryHostRecordEvery is the interval in which at most one refusal of each status,
 	// 400, 429 and 503, is recorded.
 	qoryHostRecordEvery = time.Second
+	// qoryHostAgentWait is how long the enclosure has to report the addresses of the
+	// agent's container, wall.AgentAddresser.
+	qoryHostAgentWait = 10 * time.Second
 )
 
 // The codes of the forwarder's answers on the route.
@@ -92,9 +97,17 @@ type qoryRoute struct {
 	ctx     context.Context
 	// passwords are the passwords of the proxy URLs of the run's walled sessions with a
 	// route, by session number: behind a wall the forwarder serves a request only with
-	// one of them, so a connection from the setup container, which has none, never
-	// reaches the handler.
+	// one of them.
 	passwords map[int]string
+	// agent, behind a wall, returns the addresses of the agent's container of the
+	// session that runs, wall.AgentAddresser; addrs are what it returned for that
+	// session, by session number, until the session ends. Behind a wall the forwarder
+	// serves a request of the session that runs only from one of them, so a program
+	// outside the agent's container that holds the password, such as one in the setup
+	// container, never reaches the handler. lookup lets one call of agent run at a time.
+	agent  func(context.Context) ([]netip.Addr, error)
+	addrs  map[int][]netip.Addr
+	lookup sync.Mutex
 	// inFlight counts the handler's calls that have not returned.
 	inFlight int
 	tokens   float64
@@ -132,6 +145,7 @@ func (q *qoryRoute) open(n int, password string) (closeRoute func()) {
 		if q.session == n {
 			q.session, q.ctx = 0, nil
 		}
+		delete(q.addrs, n)
 		q.mu.Unlock()
 		cancel()
 	})
@@ -147,21 +161,65 @@ func (q *qoryRoute) current() (int, context.Context) {
 
 // sessionOf is the walled session whose proxy URL's password logins, the values of a
 // request's Proxy-Authorization headers, carry: exactly one, Basic, compared in
-// constant time with each session's. It is 0 for none, so the request goes to the
-// gateway's proxy, which denies the route's host, as in a run with no route.
-func (q *qoryRoute) sessionOf(logins []string) int {
+// constant time with each session's. For the session that runs, peer, the address the
+// relay wrote for the connection, must also be an address of that session's agent's
+// container ([qoryRoute.fromAgent]). It is 0 for none, so the request goes to the
+// gateway's proxy, which denies the route's host, as in a run with no route. A
+// password of a session that has ended passes without the address, since
+// [qoryRoute.serve] answers 503 to it and calls no handler.
+func (q *qoryRoute) sessionOf(ctx context.Context, logins []string, peer netip.Addr) int {
 	if len(logins) != 1 {
 		return 0
 	}
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	found := 0
 	for n, password := range q.passwords {
 		if proxyLogin(logins[0], password) {
 			found = n
 		}
 	}
+	current := q.session
+	q.mu.Unlock()
+	if found == 0 || found != current {
+		return found
+	}
+	if !q.fromAgent(ctx, found, peer) {
+		return 0
+	}
 	return found
+}
+
+// fromAgent reports whether peer is an address of the agent's container of session n,
+// which [qoryRoute.agent] returns: once per session, kept until the session ends. A
+// route with no agent, an invalid peer and a failed call are false, and a failed call
+// is made again for the next request.
+func (q *qoryRoute) fromAgent(ctx context.Context, n int, peer netip.Addr) bool {
+	if q.agent == nil || !peer.IsValid() {
+		return false
+	}
+	q.lookup.Lock()
+	defer q.lookup.Unlock()
+	q.mu.Lock()
+	addrs, ok := q.addrs[n]
+	q.mu.Unlock()
+	if !ok {
+		ctx, cancel := context.WithTimeout(ctx, qoryHostAgentWait)
+		got, err := q.agent(ctx)
+		cancel()
+		if err != nil {
+			return false
+		}
+		q.mu.Lock()
+		if q.session == n {
+			if q.addrs == nil {
+				q.addrs = map[int][]netip.Addr{}
+			}
+			q.addrs[n] = got
+		}
+		q.mu.Unlock()
+		addrs = got
+	}
+	return slices.Contains(addrs, peer.Unmap())
 }
 
 // clock is the time the rate limit and the records' limit read.
