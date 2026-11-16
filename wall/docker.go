@@ -1288,13 +1288,34 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 // container that does not run, or has no address there, is an error, so the route
 // serves no request until the agent's container of the session runs.
 func (e *dockerEnclosure) AgentAddrs(ctx context.Context) ([]netip.Addr, error) {
-	format := fmt.Sprintf("{{if .State.Running}}{{with index .NetworkSettings.Networks %q}}{{.IPAddress}} {{.GlobalIPv6Address}}{{end}}{{end}}", e.inside())
+	// The endpoint is read as JSON: from Docker 29 on, a template prints an unset
+	// address field as "invalid IP", and JSON prints it as "".
+	format := fmt.Sprintf("{{if .State.Running}}{{json (index .NetworkSettings.Networks %q)}}{{end}}", e.inside())
 	out, err := e.docker(ctx, "inspect", "--type", "container", "--format", format, e.agent())
 	if err != nil {
 		return nil, err
 	}
+	return endpointAddrs(out)
+}
+
+// endpointAddrs returns the IPv4 and IPv6 addresses in out, the JSON of a container's
+// endpoint on a network that docker inspect prints. An empty field is no address; an
+// empty out, or null for a container not on the network, has none, which is an error.
+func endpointAddrs(out []byte) ([]netip.Addr, error) {
+	var endpoint struct {
+		IPAddress         string
+		GlobalIPv6Address string
+	}
+	if s := strings.TrimSpace(string(out)); s != "" {
+		if err := json.Unmarshal([]byte(s), &endpoint); err != nil {
+			return nil, fmt.Errorf("wall docker: the agent's endpoint on the inside network: %w", err)
+		}
+	}
 	var addrs []netip.Addr
-	for _, f := range strings.Fields(string(out)) {
+	for _, f := range []string{endpoint.IPAddress, endpoint.GlobalIPv6Address} {
+		if f == "" {
+			continue
+		}
 		a, err := netip.ParseAddr(f)
 		if err != nil {
 			return nil, fmt.Errorf("wall docker: the agent's address %s on the inside network: %w", accesskey.ShownValue(f, false), err)

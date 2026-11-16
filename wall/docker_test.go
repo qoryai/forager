@@ -1371,20 +1371,35 @@ func TestTheRelayWritesThePeerLineWhenTold(t *testing.T) {
 	}
 }
 
+// endpointIPv4 and endpointIPv6 are what docker inspect of Docker Engine 29.8 prints
+// for {{json (index .NetworkSettings.Networks NAME)}} of a running container, on a
+// network without IPv6 and on one with it. Docker 29 prints the unset
+// GlobalIPv6Address of endpointIPv4 as "invalid IP" in a template, and as "" in JSON.
+const (
+	endpointIPv4 = `{"IPAMConfig":null,"Links":null,"Aliases":null,"DriverOpts":null,"GwPriority":0,"NetworkID":"2b321507678f16dd0dbd68b0a9adb7c5501b0c61738df5597cca84f65108cdb6","EndpointID":"b19ebdd6a595b0df2ac7266f322cb393c3322720dde6d6f51d07ff7fdfb60201","Gateway":"10.89.0.1","IPAddress":"10.89.0.2","MacAddress":"7e:79:8c:41:6b:ac","IPPrefixLen":24,"IPv6Gateway":"","GlobalIPv6Address":"","GlobalIPv6PrefixLen":0,"DNSNames":["qory-run-agent","9879f8c2ce26"]}` + "\n"
+	endpointIPv6 = `{"IPAMConfig":null,"Links":null,"Aliases":null,"DriverOpts":null,"GwPriority":0,"NetworkID":"cb87d4ec8a4cc8378e9aeaf166bf40712bfddbfc29c9fc35c944b7a915638bc9","EndpointID":"10d7b888b4b084881cb129ba53ff1d34a7850ec0f53fac617f6babe31c475b7f","Gateway":"10.89.0.1","IPAddress":"10.89.0.2","MacAddress":"6e:3a:0c:77:c7:64","IPPrefixLen":24,"IPv6Gateway":"fd8a:1b2c:3d4e:5f60::1","GlobalIPv6Address":"fd8a:1b2c:3d4e:5f60::2","GlobalIPv6PrefixLen":64,"DNSNames":["qory-run-agent","7dfaae39045e"]}` + "\n"
+)
+
 // TestTheAgentsAddressesComeFromTheEngine pins AgentAddrs: the inspect of the agent's
-// container reads its addresses on the inside network, IPv4 and IPv6; a container that
-// does not run or has no address there, an unreadable address and a failed inspect are
-// errors.
+// container reads its endpoint on the inside network as JSON, with its IPv4 and IPv6
+// addresses; a container that does not run (no output) or is not on the network
+// (null), an endpoint with no address, an unreadable address or endpoint, and a failed
+// inspect are errors.
 func TestTheAgentsAddressesComeFromTheEngine(t *testing.T) {
 	for _, c := range []struct {
 		out, fail string
 		want      []netip.Addr
 	}{
-		{out: "10.89.0.2 \n", want: []netip.Addr{netip.MustParseAddr("10.89.0.2")}},
-		{out: "10.89.0.2 fd8a:1b2c:3d4e:5f60::2\n", want: []netip.Addr{netip.MustParseAddr("10.89.0.2"), netip.MustParseAddr("fd8a:1b2c:3d4e:5f60::2")}},
+		{out: endpointIPv4, want: []netip.Addr{netip.MustParseAddr("10.89.0.2")}},
+		{out: endpointIPv6, want: []netip.Addr{netip.MustParseAddr("10.89.0.2"), netip.MustParseAddr("fd8a:1b2c:3d4e:5f60::2")}},
+		{out: `{"IPAddress":"::ffff:10.89.0.2","GlobalIPv6Address":""}`, want: []netip.Addr{netip.MustParseAddr("10.89.0.2")}},
 		{out: "\n"},
-		{out: "not-an-address \n"},
-		{out: "10.89.0.2 \n", fail: "NetworkSettings"},
+		{out: "null\n"},
+		{out: `{"IPAddress":"","GlobalIPv6Address":""}`},
+		{out: `{"IPAddress":"not-an-address","GlobalIPv6Address":""}`},
+		{out: `{"IPAddress":"10.89.0.2","GlobalIPv6Address":"invalid IP"}`},
+		{out: "10.89.0.2 \n"},
+		{out: endpointIPv4, fail: "NetworkSettings"},
 	} {
 		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, agentAddrs: c.out, fail: c.fail}
 		d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, sys: rec}
@@ -1398,8 +1413,8 @@ func TestTheAgentsAddressesComeFromTheEngine(t *testing.T) {
 			t.Errorf("%q, failing %q: %v %v, want %v", c.out, c.fail, got, err, c.want)
 		}
 		i := slices.IndexFunc(rec.lines, func(l string) bool { return strings.Contains(l, "NetworkSettings") })
-		if i < 0 || !strings.HasSuffix(rec.lines[i], "-agent") || !strings.Contains(rec.lines[i], "-in") {
-			t.Errorf("the inspect is not of the agent's container on the inside network: %q", rec.lines)
+		if i < 0 || !strings.HasSuffix(rec.lines[i], "-agent") || !strings.Contains(rec.lines[i], "-in") || !strings.Contains(rec.lines[i], "{{json (index .NetworkSettings.Networks") {
+			t.Errorf("the inspect does not read the JSON of the agent's container on the inside network: %q", rec.lines)
 		}
 	}
 }
