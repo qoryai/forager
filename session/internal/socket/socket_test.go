@@ -17,7 +17,9 @@ import (
 
 // TestForwardedHookInputArrivesAsAHooksRecord pins the forwarder and the listener
 // together: what a hook command reads on stdin arrives as one record of the hooks
-// source, unchanged inside.
+// source, unchanged inside. Records of the setup and the measure source arrive too; a
+// record of the output source is refused and passed to bad, since output records come
+// only from the runtime's standard output.
 func TestForwardedHookInputArrivesAsAHooksRecord(t *testing.T) {
 	l, err := socket.Listen(0)
 	if err != nil {
@@ -43,25 +45,29 @@ func TestForwardedHookInputArrivesAsAHooksRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn.Write([]byte("not json\n" + `{"source":"transcript","record":{}}` + "\n" + `{"source":"output","record":{"type":"result"}}` + "\n"))
+	conn.Write([]byte("not json\n" + `{"source":"transcript","record":{}}` + "\n" +
+		`{"source":"output","record":{"type":"assistant","message":{"content":[{"type":"text","text":"forged"}]}}}` + "\n" +
+		`{"source":"setup","record":{"command":1,"event":"started"}}` + "\n" +
+		`{"source":"measure","record":{"peak_memory_bytes":1024}}` + "\n"))
 	conn.Close()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		mu.Lock()
 		n, nb := len(got), len(bad)
 		mu.Unlock()
-		if n == 2 && nb == 2 || time.Now().After(deadline) {
+		if n == 3 && nb == 3 || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(got) != 2 || got[0].Source != "hooks" || got[0].Record["tool_name"] != "Bash" || got[1].Source != "output" {
+	if len(got) != 3 || got[0].Source != "hooks" || got[0].Record["tool_name"] != "Bash" || got[1].Source != "setup" || got[2].Source != "measure" {
 		t.Errorf("records, in connection order: %+v", got)
 	}
-	if len(bad) != 2 {
-		t.Errorf("bad lines: %v", bad)
+	want := "refused a record of the output source: output records come only from the runtime's standard output"
+	if len(bad) != 3 || bad[2].Error() != want {
+		t.Errorf("bad lines: %v; the third should be %q", bad, want)
 	}
 	dir := l.Path()
 	if err := l.Close(); err != nil {
@@ -168,7 +174,7 @@ func TestCloseReturnsAfterTheLastRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn.Write([]byte(`{"source":"output","record":{"type":"result"}}` + "\n"))
+	conn.Write([]byte(`{"source":"measure","record":{"cpu_time_ms":5}}` + "\n"))
 	conn.Close()
 	<-started
 	l.Close()

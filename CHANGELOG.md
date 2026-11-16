@@ -2510,6 +2510,17 @@ release may change what an existing document does, and says so under Upgrading.
   container of the walled run <id> failed, so this run does not start: <the error>",
   and, for `session.RunsBinding`, "… so the run counts as still going: …".
 
+#### Security
+
+- The run socket, `QORY_RUN_SOCKET`, refuses a record of the `output` source: the
+  session skips it, writes no event for it and reports "socket: refused a record of the
+  output source: output records come only from the runtime's standard output". Output
+  records come from the runtime's standard output only, which the session reads on the
+  host. Before, any process in the agent's container could send output records over the
+  socket and add runtime events the runtime never printed, such as
+  `dev.qory.runtime.text` and `dev.qory.runtime.tool_result`. The sources `hooks`,
+  `setup` and `measure` are accepted as before.
+
 ### e2e and CI
 
 #### Added
