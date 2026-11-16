@@ -145,6 +145,7 @@ func Exec(args []string, stderr io.Writer) int {
 	}
 	var key string
 	if len(opts.after.words) > 0 {
+		opts.after.kept = startingProcesses()
 		// The key reaches the session before the program starts, while no process of
 		// the agent's runs in the container: the socket's first record is Exec's.
 		if key, err = sendAfterKey(addr); err != nil {

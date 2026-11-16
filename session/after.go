@@ -62,6 +62,9 @@ type afterLaunch struct {
 	words   []string
 	timeout time.Duration
 	docker  bool
+	// kept are the processes that ran as Exec started, which the stop leaves: Exec
+	// lists them, the session does not pass them.
+	kept []procID
 }
 
 // args are Exec's options for a: none when a has no words.
@@ -150,12 +153,12 @@ func runAfterStep(addr, key string, a afterLaunch, stderr io.Writer) {
 		fmt.Fprintln(stderr, "exec: the run socket does not reach the container, so the session records no after step; After runs, its output on stderr.")
 	}
 	code, reason := setupRunnerFailed, ""
-	if err := stopProcesses(a.docker, stopOthersWait); err != nil {
+	if err := stopProcesses(a.docker, stopOthersWait, a.kept); err != nil {
 		failed(fmt.Appendf(nil, "Stop the container's other processes before After: %v. After did not run.\n", err))
 	} else {
 		code, reason = runAfter(a, line, failed)
 		// What After left running is stopped too: no process of it outlives the step.
-		stopProcesses(a.docker, stopOthersWait)
+		stopProcesses(a.docker, stopOthersWait, a.kept)
 	}
 	if sender == nil {
 		return

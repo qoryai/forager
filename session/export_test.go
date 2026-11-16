@@ -23,7 +23,7 @@ func SetAfterKeyHook(made func(key string)) { afterKeyMade = made }
 // SetAfterStop sets what [Exec] calls to stop the container's other processes before
 // and after SessionSpec.After, in place of stopping them.
 func SetAfterStop(stop func(docker bool) error) {
-	stopProcesses = func(docker bool, _ time.Duration) error { return stop(docker) }
+	stopProcesses = func(docker bool, _ time.Duration, _ []procID) error { return stop(docker) }
 }
 
 // SetUserHome sets the home of the user the session runs as, where the session reads
