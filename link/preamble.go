@@ -1,9 +1,12 @@
 package link
 
 import (
+	"bytes"
 	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"io"
+	"net/netip"
 	"time"
 )
 
@@ -65,4 +68,42 @@ func ReadRelayPreamble(r io.Reader, secret string) (ok bool, err error) {
 		return false, err
 	}
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
+}
+
+// RelayPeerPreamble opens the line the wall's relay writes right after
+// [RelayPreamble]'s line when it is told to, [RelayPeerLine]: the address the
+// connection came from inside the enclosure.
+const RelayPeerPreamble = "QORY-PEER"
+
+// RelayPeerLine is the line that contains, for the run's forwarder, the address a
+// connection the relay copies came from: [RelayPeerPreamble], a space, the address's 16
+// bytes in lower-case hex, an IPv4 address in its IPv4-mapped IPv6 form, and a newline.
+// Every such line has the same length, so it is read with one bounded read.
+func RelayPeerLine(addr netip.Addr) string {
+	b := addr.As16()
+	return RelayPeerPreamble + " " + hex.EncodeToString(b[:]) + "\n"
+}
+
+// errPeerLine is what [ReadRelayPeer] returns for bytes that are not a peer line.
+var errPeerLine = errors.New("link: the relay's peer line is malformed")
+
+// ReadRelayPeer reads [RelayPeerLine] from r and returns its address, an IPv4 address
+// unmapped. It reads exactly the line's length and no further. It returns the read's
+// error when r ends or its deadline passes first, and an error for bytes that are not
+// such a line.
+func ReadRelayPeer(r io.Reader) (netip.Addr, error) {
+	got := make([]byte, len(RelayPeerLine(netip.IPv6Unspecified())))
+	if _, err := io.ReadFull(r, got); err != nil {
+		return netip.Addr{}, err
+	}
+	rest, ok := bytes.CutPrefix(got, []byte(RelayPeerPreamble+" "))
+	hexed, ok2 := bytes.CutSuffix(rest, []byte("\n"))
+	var b [16]byte
+	if !ok || !ok2 {
+		return netip.Addr{}, errPeerLine
+	}
+	if n, err := hex.Decode(b[:], hexed); err != nil || n != len(b) {
+		return netip.Addr{}, errPeerLine
+	}
+	return netip.AddrFrom16(b).Unmap(), nil
 }

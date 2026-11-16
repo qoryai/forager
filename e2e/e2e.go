@@ -87,6 +87,10 @@ const (
 	// modeAfterJoin is the program of a session with no runtime that joins after the
 	// last session.
 	modeAfterJoin = "after-join"
+	// modeSetupRoute is the program a setup command starts in the setup container that
+	// sends requests to the route to link.QoryHost with the session's proxy password
+	// once the agent wrote it into the workspace, [setupRoute].
+	modeSetupRoute = "setup-route"
 )
 
 // HoldArgs are the arguments that make the helper keep the setup container running.
@@ -182,8 +186,9 @@ const hostOnly = "QORY_WALLTEST_HOST_ONLY"
 // forwarder, the setup runner, the run's setup command, the probe, the start of a Docker
 // daemon inside the agent's container, the probe in a container the agent started, the search for
 // neighbours in one, a recorder, the probe of a sealed credential, the hold of the setup
-// container, the service a setup command starts in it or the setup command that reaches
-// that service. It returns at once otherwise.
+// container, the service a setup command starts in it, the setup command that reaches
+// that service, or the setup's program that sends requests to the route to the caller.
+// It returns at once otherwise.
 func Main() {
 	if len(os.Args) < 2 {
 		return
@@ -239,6 +244,8 @@ func Main() {
 		os.Exit(reach(os.Args[2:]))
 	case modeAfterJoin:
 		os.Exit(afterJoin())
+	case modeSetupRoute:
+		os.Exit(setupRoute())
 	case modeService:
 		err := http.ListenAndServe(":"+setupServicePort, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			io.WriteString(w, setupServiceLine)
@@ -666,6 +673,8 @@ func Run(t *testing.T, o Options) {
 	setupRemovedAfterSession(t, o, origin, outside)
 	afterJoinFreshHome(t, o, origin, outside)
 	runAPIThroughTheWall(t, o, origin, outside)
+	qoryHostThroughTheWall(t, o, origin, outside)
+	qoryHostFromTheSetup(t, o, origin, outside)
 	transcriptSent(t, o, origin, outside)
 	transcriptPlanted(t, o, origin, outside)
 	terminal(t, o, origin, outside)
@@ -1543,6 +1552,8 @@ type variant struct {
 	// runAPICheck, when set, is the check that the run sets with
 	// (*session.Run).SetRunAPICheck after the open.
 	runAPICheck func(ctx context.Context, req session.RunAPIRequest) (*session.RunAPIRefusal, error)
+	// qoryRoute, when set, is the run's route to link.QoryHost, OpenSpec.QoryRoute.
+	qoryRoute http.Handler
 	// mode is the helper's mode the runtime runs in; empty for the probe.
 	mode string
 	// stdin, when set, is the session's standard input in place of an empty one, and
@@ -1691,6 +1702,7 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 		RunID:          v.runID,
 		ForagerVersion: "walltest",
 		Report:         report,
+		QoryRoute:      v.qoryRoute,
 	},
 		SessionSpec: session.SessionSpec{
 			Runtime:           rt,

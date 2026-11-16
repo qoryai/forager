@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -28,6 +29,13 @@ const RelayTokenEnv = "QORY_RELAY_TOKEN"
 // address in those subnets, so only the enclosure's network reaches its ports and gets
 // its connections opened with the preamble.
 const RelayInsideEnv = "QORY_RELAY_INSIDE"
+
+// RelayPeerEnv is the variable of the relay's environment that, set to 1, has the relay
+// write [link.RelayPeerLine] with the address each connection came from right after the
+// proxy's preamble. The run's forwarder reads it for a run with a route to its caller,
+// so it serves that route only to the agent's container, by its address on the
+// enclosure's network. The relay refuses to start with it set and no token.
+const RelayPeerEnv = "QORY_RELAY_PEER"
 
 // RelayReady is the line the relay prints once every port listens. An adapter waits
 // for it before it starts the agent.
@@ -62,6 +70,10 @@ func Relay(ctx context.Context, forwards []string, ready io.Writer) error {
 	if token := os.Getenv(RelayTokenEnv); token != "" {
 		preamble = link.RelayLine(token)
 	}
+	peer := os.Getenv(RelayPeerEnv) == "1"
+	if peer && preamble == "" {
+		return fmt.Errorf("relay: %s needs %s: the peer line follows the proxy's preamble", RelayPeerEnv, RelayTokenEnv)
+	}
 	var lc net.ListenConfig
 	var wg sync.WaitGroup
 	var listeners []net.Listener
@@ -85,7 +97,7 @@ func Relay(ctx context.Context, forwards []string, ready io.Writer) error {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				serve(ctx, ln, target, preamble, subnets)
+				serve(ctx, ln, target, preamble, peer, subnets)
 			}()
 		}
 	}
@@ -138,6 +150,15 @@ func inSubnets(c net.Conn, subnets []*net.IPNet) bool {
 	return false
 }
 
+// remoteAddr is the address a connection came from, an IPv4 address unmapped; the
+// zero address for a connection that is not TCP, which [inSubnets] closes first.
+func remoteAddr(c net.Conn) netip.Addr {
+	if a, ok := c.RemoteAddr().(*net.TCPAddr); ok {
+		return a.AddrPort().Addr().Unmap()
+	}
+	return netip.Addr{}
+}
+
 // parseForward reads port=host:port.
 func parseForward(f string) (int, string, error) {
 	p, target, ok := strings.Cut(f, "=")
@@ -155,9 +176,10 @@ func parseForward(f string) (int, string, error) {
 const dialWait = 10 * time.Second
 
 // serve accepts until the listener closes and copies each connection from an address in
-// the subnets to the target, after the preamble when there is one. A connection from any
-// other address is closed before anything is dialled.
-func serve(ctx context.Context, ln net.Listener, target, preamble string, subnets []*net.IPNet) {
+// the subnets to the target, after the preamble when there is one and, with peer, the
+// line with the connection's address, [link.RelayPeerLine]. A connection from any other
+// address is closed before anything is dialled.
+func serve(ctx context.Context, ln net.Listener, target, preamble string, peer bool, subnets []*net.IPNet) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	for {
@@ -180,6 +202,10 @@ func serve(ctx context.Context, ln net.Listener, target, preamble string, subnet
 			client.Close()
 			continue
 		}
+		opening := preamble
+		if peer {
+			opening += link.RelayPeerLine(remoteAddr(client))
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -191,7 +217,7 @@ func serve(ctx context.Context, ln net.Listener, target, preamble string, subnet
 			}
 			stop := context.AfterFunc(ctx, func() { client.Close(); upstream.Close() })
 			defer stop()
-			if _, err := io.WriteString(upstream, preamble); err != nil {
+			if _, err := io.WriteString(upstream, opening); err != nil {
 				client.Close()
 				upstream.Close()
 				return

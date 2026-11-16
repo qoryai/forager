@@ -105,6 +105,15 @@ func (r *Run) openWall(ctx context.Context) error {
 		return err
 	}
 	r.enclosure = enclosure
+	// Behind a wall the route serves a request only from the agent's container, by its
+	// address on the enclosure's network, which the relay writes on each connection.
+	if r.route != nil {
+		a, ok := enclosure.(wall.AgentAddresser)
+		if !ok {
+			return fmt.Errorf("Use a wall that reports the agent's address for a run with a route to its caller.\nThe %s wall does not, so the relay writes no address that separates the agent's container from the setup container.", r.open.Wall.Name())
+		}
+		r.route.agent = a.AgentAddrs
+	}
 	bind := enclosure.ProxyAddr()
 	r.relayToken = r.answer.ProxySecret
 	var fwd *forwarder
@@ -112,19 +121,19 @@ func (r *Run) openWall(ctx context.Context) error {
 		// Once [Run.SetRunAPICheck] sets the check, the forwarder reads each request, so
 		// it takes the relay's preamble off and writes the same preamble again toward the
 		// proxy; until then the preamble goes on as it arrives.
-		fwd, err = listenForwarding(bind, forwarding{dial: dialTCP(r.disc.Proxy.Address), checkRelay: r.relayToken})
+		fwd, err = listenForwarding(bind, forwarding{dial: dialTCP(r.disc.Proxy.Address), checkRelay: r.relayToken, route: r.route})
 	} else {
 		if r.relayToken, err = newForwarderSecret(); err != nil {
 			return err
 		}
-		fwd, err = listenForwarding(bind, forwarding{dial: r.link.DialProxy, hold: gatewayHold, hop: r.relayToken})
+		fwd, err = listenForwarding(bind, forwarding{dial: r.link.DialProxy, hold: gatewayHold, hop: r.relayToken, route: r.route})
 	}
 	if err != nil {
 		return err
 	}
 	r.wallFwd = fwd
 	if s, ok := enclosure.(relayStarter); ok {
-		return s.StartRelay(ctx, wall.Launch{Proxy: fwd.Addr(), ProxyToken: r.relayToken})
+		return s.StartRelay(ctx, wall.Launch{Proxy: fwd.Addr(), ProxyToken: r.relayToken, ProxyPeer: r.route != nil})
 	}
 	return nil
 }
@@ -383,7 +392,7 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 	r.setupUp = container
 	err = container.StartSetup(ctx, wall.Launch{
 		Dir: shown.Dir, Env: env, CA: r.authority, Mounts: shown.Mounts,
-		Limits: spec.Limits, Proxy: r.wallFwd.Addr(), ProxyToken: r.relayToken,
+		Limits: spec.Limits, Proxy: r.wallFwd.Addr(), ProxyToken: r.relayToken, ProxyPeer: r.route != nil,
 	})
 	if err != nil {
 		return fail(accesskey.ShownError(err))
