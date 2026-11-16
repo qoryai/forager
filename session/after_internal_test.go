@@ -221,8 +221,16 @@ func TestAfterDoesNotRunWithoutTheSocket(t *testing.T) {
 		t.Skip("no touch in PATH")
 	}
 	t.Setenv(EnvSocket, filepath.Join(dir, "no-socket"))
+	// The helper runs in a process of its own: on Linux it closes every descriptor above
+	// 2 of the process it runs in, which the test's other tests need.
+	cmd := exec.Command(os.Args[0], "exec", "--after-only", "--after-timeout", "1000", "--after-word", touch, "--after-word", ran)
 	var stderr strings.Builder
-	code := Exec([]string{"--after-only", "--after-timeout", "1000", "--after-word", touch, "--after-word", ran}, &stderr)
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	code := -1
+	if exit := (*exec.ExitError)(nil); errors.As(err, &exit) {
+		code = exit.ExitCode()
+	}
 	if _, err := os.Stat(ran); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("After ran (%v); want it not run", err)
 	}
