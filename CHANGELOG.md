@@ -1982,6 +1982,657 @@ release may change what an existing document does, and says so under Upgrading.
   ends the step `failed` with `-1`. The launch's socket refuses a record of the `after`
   source. Join refuses After behind a wall that is no `wall.AfterWrapper` with an
   `Unwrap`, without an `AfterTimeout`, or without a wall.
+- `OpenSpec.QoryRoute`, an `http.Handler` that serves a session's plain HTTP requests
+  to `http://host.qory.invalid/`, walled or not, on one machine or behind a separate
+  gateway. The launch of each session with a runtime gets `QORY_HOST_URL`
+  (`session.EnvQoryHost`); a session with no runtime and `Run.Setup` do not, and the
+  route is closed outside such a launch. The handler gets the method, the path, the
+  query, `Content-Type`, the body and `Qory-Session` (`link.QorySessionHeader`), with 30
+  seconds to answer. The forwarder answers `400` `bad_request`, `413`
+  `payload_too_large` (over 1 MiB), `429` `rate_limited` (over 10 a second, or 4 calls
+  of the handler that have not returned), `503` `session_not_running`, `504` `timeout`
+  and `502` `bad_answer` itself. Each request is one `dev.qory.run.egress` with
+  `channel: qory_host`. Behind a wall, with a route set, the forwarder reads one plain
+  request per connection: plain-HTTP keep-alive ends after each request. New names in
+  `link`: `QoryHost`, `QoryHostURL`, `EnvQoryHost`, `QorySessionHeader`,
+  `MaxQoryHostBody`, `QoryHostChannel`, `QoryHostRule` and `ProxyUser`.
+- `wall.Launch.ProxyPassword`: behind a wall with a route, the session gives `Wrap` a
+  password of the session's launch alone, and the Docker wall writes it into the proxy
+  URL inside, `http://qory:<password>@qory-proxy:3128`. The run's forwarder serves the
+  route only to a request with that password, and a container of an earlier session
+  gets `503`. A wall written outside Forager must write the password into the proxy
+  variables of `Wrap`'s launch for the route to work behind it.
+- `wall.Launch.ProxyPeer`, `wall.AgentAddresser`, `wall.RelayPeerEnv`,
+  `link.RelayPeerLine` and `link.ReadRelayPeer`: behind a wall with a route, the
+  relay writes the address each connection comes from after its preamble, and the
+  run's forwarder serves the route only from the address of the session's agent
+  container, which the Docker wall reads with `docker inspect`. The setup container,
+  which shares the relay, never reaches the handler, also with the session's password.
+  A run with a route behind a wall whose enclosure is no `wall.AgentAddresser` does
+  not open.
+- `(*session.Run).SetRunAPICheck`, `session.RunAPIRequest` and `session.RunAPIRefusal`:
+  a check of each POST that a walled program sends to the run API, before anything of it
+  reaches the gateway. Call `SetRunAPICheck` after `Open` and before `Setup` and the
+  first `Join`; it returns an error once a connection with the wall relay's preamble
+  reached the run's forwarder, or `Setup` or a `Join` passed its checks, and for a run
+  with no wall or no control plane. Close the run when it returns an error: the run
+  would otherwise carry POSTs to the run API unchecked. A `Close` during the call waits
+  for it.
+  The run's forwarder reads the POST whole and calls the check. On `nil, nil` it sends
+  the POST on as the program sent it, with `Connection: close` added to the head. A
+  refusal with a code and a status from 400 to 499 other than 407 goes to the program in
+  the gateway's JSON error shape with `findings`. An error, a panic, any other refusal,
+  or 90 seconds without a return gets a `503` `push_check_unavailable`. The check's
+  context ends after 90 seconds or when the run closes; return when it ends. The
+  forwarder reads and checks one POST of the run at a time, and a POST that waits 90
+  seconds for its turn gets the `503`. A body over the gateway's limit gets its `413`
+  before the body is read. A POST with `Expect: 100-continue` gets two `100 Continue`
+  replies, the forwarder's and the route's.
+- With the check set, the forwarder passes one request per connection through the wall,
+  with no plain-HTTP keep-alive or pipelining: clients open a connection for each
+  request. A head must arrive within 10 seconds and have at most 16 KiB, 100 lines and 8
+  KiB a line, or it gets a `431`; a head that net/http does not read gets a `400`. A
+  plain request that the forwarder does not check goes on as HTTP/1.1, an HTTP/1.0 one
+  among them. A POST to the run API's host with a `Transfer-Encoding`, several
+  `Content-Length` values or a head that net/http could read another way gets a `400`.
+  Without a call of `SetRunAPICheck`, the forwarder passes what the wall's relay sends
+  as it is, byte for byte.
+- `session.ErrRunAPIHold`: return it, or an error that wraps it, from the check of
+  `SetRunAPICheck` for a `POST /verdict` to hold the verdict. The program gets a `202`
+  with `{"version":1,"artifact":{"type":"verdict","name":"main","version":null}}`, the body
+  of Qory Apiary's `201` for a stored verdict with `null` for the artifact's version,
+  and nothing reaches the gateway. A hold of another path, or one returned after the
+  check's context ended, gets the `503` `push_check_unavailable`. The check gets the
+  verdicts of a program that sends each after the reply to the one before in the order
+  sent.
+- The helper's exec, `session.Exec`, measures the enclosure when the runtime exits. It
+  reads `/sys/fs/cgroup/memory.peak` and the `usage_usec` line of
+  `/sys/fs/cgroup/cpu.stat`, only when `/sys/fs/cgroup/memory.max` exists, and sends
+  them to the session's socket as a record of the source `measure`. The session puts
+  the last such record its socket read for the runtime's launch on the session's
+  `dev.qory.session.exited`, behind a wall alone.
+- `QORY_RUN_API` in the agent's environment and in a setup container, with a wall and
+  without, for a run with a control plane, and `(*session.Run).RunAPI`, which returns a
+  client for host work and the base URL. `RunAPI` works from `Open` to `Close`, while a
+  `Join` runs too, on one machine and behind a separate gateway. The session has no key
+  for it: the gateway signs each request. Behind a wall, a caller's value of the name is
+  `variable_reserved`.
+- `SessionSpec.WorkspaceReadOnly`, which binds the workspace read-only in the agent's
+  container for that session, so a write into it inside fails with `Read-only file
+  system`. Under nested Docker this is unverified: the enclosure's root, which the
+  agent reaches through the inner Docker daemon, may remount the workspace writable.
+  The setup container of `Run.Setup` still binds the working folder writable, and the
+  workspace keeps the checks of a writable place. A writable mount that holds the
+  workspace is `mount_mode_conflict`. `Join` and `AgentEnv` return an error before the
+  join request, and write nothing, for the field in a run with no wall and for the
+  field beside `SessionSpec.Setup`, which runs in the agent's container.
+- A settings file, or another file Claude Code's runtime reads from the machine, in the
+  folder of the run's setup container is refused, as one in the workspace is.
+- The session sets `line` on each runtime event it maps from the runtime's standard
+  output, cuts `text` and `content` at 64 KiB with `truncated`, and sets `summary` on a
+  tool event. It masks each event before it cuts it, so a cut never splits a secret
+  before the masker sees it. `runtimes.Summaries` is the optional interface of a runtime
+  that has summaries, which a descriptor's runtime implements from `tools.summary`, and
+  `runtimes.Record.Line` the line of a record of the output source.
+- `runtimes.Launch.LeftOut`, the names of the variables a runtime left out of a file it
+  copied whose values reach the program's environment, such as the `env` of Claude
+  Code's `--settings`; the session reports a forge token's or a model key's name of
+  them. `runtimes.Attach.DeniedVariables` also has the names of `forge_tokens` and
+  `model_keys` of `denied-variables.json`, so a runtime leaves them out of such a copy.
+- `session.OpenSpec.Masker`, the run's masker, which the caller makes with `mask.New()`,
+  fills with `mask.Masker.AddSecret` and wraps its writers with `mask.NewWriter` on, so
+  the caller's output and the run's are masked with one set of values: secret values the
+  caller knows and the run does not, such as the values of qory's `--env` and
+  `wall.env`, the run code, the run key and the query values of a harness URL. The run
+  adds the server's variable values of 8 characters or more, the run answer's and each
+  reload's from that reload on, and each forwarder's password. From the open to the
+  close, the masker replaces each value with `***` (`mask.Secret`), as it is,
+  percent-encoded and JSON-escaped, in the `dev.qory.run.log` chunks of the runtime's
+  output, of the host steps and of the setup steps, in `output.log`, in the events
+  mapped from output and hook records, in every string of `dev.qory.session.started`, in
+  step names, in the `environment_ref` of `dev.qory.run.built`, in every string of
+  `dev.qory.run.started` but its labels, in `Report` lines, in the copy of the runtime's
+  output to `SessionSpec.Stdout` and `Stderr`, and in the text of the errors that
+  `session.Open`, `Join`, `Close`, `Setup`, `FetchImage`, `StartStep`, `Step.Log` and
+  `Step.Exit` return, where `errors.Is` still reaches what the error wraps and
+  `errors.As` gives a refusal's masked copy with its code. These are not masked: the run
+  request's labels and about, `dev.qory.run.started`'s labels, which stay as the gateway
+  registered them, the members of `dev.qory.run.policy_applied`, `dev.qory.run.built`'s
+  other members, `dev.qory.run.exited`'s reason, `dev.qory.run.refused`'s names, the
+  errors the run's other methods return, such as `HostProxy` and `AgentEnv`, a value
+  split across two calls of `Step.Log`, and the files written for the runtime, such as
+  the setup script. `AddSecret` returns an error, which contains no value, for a value
+  of more than `mask.MaxSecretSize` (4096) bytes and for a new value once the masker has
+  `mask.MaxSecrets` (1024) different values; a server's value it refuses is a `Report`
+  line with its name. With no `Masker`, the run makes one with `mask.New()`, and `Close`
+  overwrites its copies; `Close` leaves a masker the caller passes as it is. A
+  `mask.Masker` is safe for an add while other goroutines mask with it, finds that
+  overlap are replaced as one, `Writer.Flush` masks the bytes it kept back, and `Clear`
+  leaves a masker that replaces nothing; a `mask.Writer` drops the bytes it kept back
+  before a `Clear`. A stream that `mask.Masker.Scan` masks in pieces is masked as in one
+  call, byte for byte. Before, the run's masker replaced the forwarders' passwords
+  alone, and `Report` lines were unmasked apart from the launch line of a run with a run
+  key and the engine proxy's errors.
+- `mask.Shapes()`: a masker from `mask.New()`, the run's among them, replaces text in
+  the shape of a known key with a bare `***`, prefix included, whether or not anyone
+  added the key's value: `sk-ant-`, `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`,
+  `github_pat_`, `AKIA` and `ASIA`, each followed by its key's alphabet, and `bearer` in
+  any case, 1 to 16 spaces or tabs and a token of 16 or more characters. The `***`
+  covers at most 256 characters of a key's token and 4096 of a bearer token
+  (`mask.Shape.Max`); a shape is looked for as written, not percent-encoded or
+  JSON-escaped. A stream a `mask.Writer` masks in writes is masked as one `Replace` of the
+  whole stream, byte for byte, shapes included. The zero `mask.Masker` and
+  `mask.Proxy`'s replace no shape.
+- `Run.StackProxy`, a forwarder for the fetch of the harness definition. It is
+  refused after the run's first `Join` and ends at it. When the run has a certificate
+  authority, as a run with a harness credential has, its `CABundle` is the authority's
+  bundle and its `Env` has the CA variables, as `HostProxy`'s. On a walled run whose
+  bundle could not be written, `CABundle` is empty and `Env` has no CA variable. A join's
+  `dev.qory.run.policy_applied` lists no harness credential.
+- `session.SessionSpec.InputsDir`, the run's inputs directory, an absolute path: in a
+  run with a run key, `dev.qory.session.started` has `<inputs>` in place of each
+  occurrence of it in `command` and `args`. `Join` refuses a relative path with
+  `set the inputs directory to an absolute path: "pool/in" is relative`.
+- `session.OpenSpec.HarnessHidden`: in a run whose harness belongs to an
+  organisation other than the run's, set it from `harness_hidden` in the run's
+  documents, and the session replaces the text of each file of the session's
+  `HarnessHome` with `[harness text: <path>]` in every `dev.qory.run.log` chunk and
+  every event mapped from the runtime's output and hooks. Text counts as a file's at 3
+  consecutive lines or 200 characters, also inside a JSON string. `mask.Harness` does
+  the matching, in a string and in a stream. A file with a zero byte is not masked and
+  is a `Report` line; a home that cannot be read, or that is over
+  `session.HarnessMaxFiles`, `session.HarnessMaxFileSize` or `session.HarnessMaxSize`,
+  fails the join. A run with a hidden harness fails at the join when its harness home
+  contains a link. False, the default, changes nothing.
+- `session.RemoteGateway.TLS`, a `server.RemoteTLS`: how the session trusts the
+  certificate of the run key's gateway, on the run's link and on a resend's. With
+  `CAFile`, the session checks the chain against the authorities of that PEM file in
+  place of the system's roots, so a gateway at a name such as `node-1.internal` can
+  have a certificate of a private authority. With `CertificateSHA256`, the session
+  accepts only a certificate with that public key. With the zero value, the session
+  checks the chain against the system's roots, as before. `session.Open`, and
+  `session.Resend` when it sends events, refuse a CA file that Forager cannot read or
+  that has no PEM certificate with "set the gateway's CA file to a PEM file of its
+  certificate authorities that Forager can read: " and the read error or "<path>
+  contains no PEM certificate", and a pin of another form with "set the gateway's
+  certificate pin to the SHA-256 of its public key: 44 characters of standard base64
+  ending in =", before any connection. `server.RemoteTLS.Check` runs the same check.
+- `(*session.Run).FetchImage`: the engine pulls the run's image by reference as an
+  `image` step, through the gateway's proxy when `OpenSpec.EngineProxy` is set, so a
+  machine whose only route is the gateway runs it. Where fmt calls `Format`,
+  `log/slog` `LogValue` and `encoding/json` `MarshalJSON`, an `EngineProxy` shows its
+  address alone. fmt prints the password with the address under `%p` of a value, under
+  `%w`, and for a value in a struct field that is not exported. A walled run refuses a
+  mount of `wall.Docker.CertsDir`, where the engine reads the certificates it trusts
+  for a registry. The run's masker replaces the engine proxy's password, as every
+  forwarder's, with `qory-proxy-password` as it is, as the base64 of `qory:<password>`,
+  and where a URL prints it escaped: in a proxy URL's userinfo, as `url.QueryEscape`
+  and `url.PathEscape` give it, and percent-encoded, since a password may have `@`,
+  `/`, `:` or `%`.
+- `(*session.Run).EngineProxy(hosts)`: in a run with no wall, the machine's container
+  engine sends its requests, such as a build's pulls and push, through the run's proxy
+  at `OpenSpec.EngineProxy`, so a build runs on a machine whose only route out is the
+  gateway. It opens only while a host step is open, and stays open after the step
+  exits. For a run with a certificate authority, it writes the run's certificate in
+  `/etc/docker/certs.d/<host>/` for each of `hosts`. The returned `close` ends it and
+  removes the certificates; `Join` ends it before its join request, and an accepted
+  `Close` ends it. It returns an error that starts with the fix for a walled run,
+  without `OpenSpec.EngineProxy`, with no host step open and while the run's engine
+  proxy is open.
+- `(*session.Run).Setup`: runs setup commands in a separate container of the run's
+  image, on the wall's internal network, one `setup` step each; the container runs until
+  the run closes. `SetupSpec.ForagerFiles` and `SetupSpec.Written` are checked against
+  the working folder as a join's, and with `SetupSpec.Limits` the setup container gets
+  the limit flags the agent's container gets. Before any step, `Setup` refuses a
+  `SetupSpec.Env` value for one of the run's placeholders with `placeholder_conflict`,
+  a `QORY_` name other than `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` or a reserved
+  name with `variable_reserved`, and a name of `denied-variables.json`, such as
+  `LD_PRELOAD`.
+- `session.Result.SessionDir` and `session.SessionsDir`: the session's directory in
+  the run directory. `(*sink.File).StartSession` and `EndSession` write the bytes of the
+  log events in between to a session's `output.log` as well.
+- `(*session.Run).StartStep(kind, name)` starts a step of the run's host work, `fetch`,
+  `compose`, `build`, `push`, `machine` or `copy`, and returns a `*session.Step`: `Log`
+  writes its lines as `dev.qory.run.log` with `stream: stderr`, its `step` and no
+  `session`, after the run's masker, to the record and `output.log`, and
+  `Exit(state, exitCode)` writes its `dev.qory.run.step_exited` with the `duration_ms`
+  Forager measures. `Close` ends a step still open `cancelled` with `-1`. Each call
+  returns an error that starts with the fix, and writes nothing, while a `Join` runs,
+  after `Close`, while another host step is open, for a state outside the three and
+  after the step exited; `Join` returns one while a host step is open. The exception is
+  a session with no runtime (`SessionSpec.Runtime` nil) during a `copy` step: it joins,
+  its steps start and end inside the `copy` step, and the caller exits the `copy` step
+  after `Join` returns. A session with a runtime gets "exit step 1 before the join:
+  only a session with no runtime joins during a copy step". `HostProxy` and
+  `EngineProxy` return an error that starts with the fix during a `copy` step, because
+  that join closes them.
+- `(*session.Run).Built(session.Built)` writes the run's `dev.qory.run.built`, with
+  `Image`, `Size`, `Commit` and `EnvironmentRef` as its members, once per run. It
+  returns an error that starts with the fix, and writes nothing, for a member that is
+  not of its form, an `Image` that contains `qak_` or `qrk_`, while another call of the
+  run runs, while a host step is open, after `Close` and on a second call.
+- `(*session.Run).HostProxy` starts a forwarder on loopback with a password for
+  programs on the host, such as a fetch or a compose before a session joins, for every
+  run, walled or not. `session.HostProxy` has `ProxyURL`,
+  `http://qory:<password>@127.0.0.1:<port>`, `Env`, the proxy variables set to it and
+  the variables of `CAEnv` set to `CABundle`, and `CABundle`, the path of
+  `ca-bundle.pem` in the run directory, empty for a run with no certificate authority.
+  Requests through it reach the run's proxy, under the run's policy and credentials,
+  with the run's proxy secret on one machine and the run key behind a separate gateway.
+  It ends at `HostProxy.Close`, before each join request and at `Close`; from then on
+  its port takes no connection. The password is in no event, run file or report line,
+  and `qory-proxy-password` replaces it in the runtime's output and records.
+- `session.Open` opens a run at the gateway: the run request, without the session's
+  passes, `dev.qory.run.started` with `opened_by` `run` and no runtime members,
+  `dev.qory.run.policy_applied` with empty `variables`, and heartbeats until
+  `dev.qory.run.exited`. `(*session.Run).System` and `Repositories` are the server's
+  `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` from the run answer.
+- `(*session.Run).Join` runs one session: the join request with the session's passes
+  and `SessionSpec.ModelCredential`, the session's number from the answer,
+  `dev.qory.session.started` with the runtime members, `terminal` and `harness`, the
+  session's `dev.qory.run.policy_applied`, and `dev.qory.session.exited`. It returns once
+  the gateway accepted the batch with `dev.qory.session.exited`, so the next join's
+  request follows it. A join the gateway refuses, or that the session refuses after its
+  request, writes `dev.qory.session.exited` `failed`, `-1`, `duration_ms` 0 and the code.
+- `SessionSpec.Harness`, the harness's sources, each a `source` and a full `commit`;
+  `dev.qory.session.started` has them as `harness`, a source that contains `qak_` or
+  `qrk_` as the value's phrase. A commit that is not 40 or 64 lower-case hexadecimal
+  characters returns "set the commit of the harness source N to a full commit id, 40 or
+  64 hexadecimal characters in lower case".
+- `(*session.Run).Close` writes `dev.qory.run.exited` once with the `session.Outcome`
+  you pass. A run no join started, closed `failed` with no reason, is `failed` with
+  `no_session` and `-1`.
+- One masker per run: output and records of every session have
+  `qory-proxy-password` in place of each forwarder password of the run.
+- `(*sink.Server).Flush`, which posts the events written so far and returns once the
+  gateway accepted them, the deliveries stopped or the context ended.
+- `runtimes.Attach.ModelVariables`, which the session sets in a run with a start key:
+  the variables of the runtime's `model.keys` and its model endpoint variable, from its
+  descriptor. The `claude-settings` installer drops each of these names, matched
+  exactly, from the `env` object of the `--settings` file when it copies the file into
+  the run's `settings.json`, walled or not: Claude Code applies that object over its
+  environment, so a value there could replace the start key's variable or endpoint.
+  Without a start key `ModelVariables` is empty; the installer still drops the endpoint
+  variable when the runtime's `denies` lists it, as Claude Code's does
+  (`DeniedVariables`).
+- A run without a wall gets its credentials' placeholders, set after the environment it
+  inherits, so a placeholder wins over an inherited value, which is then no
+  `placeholder_conflict`. The variables the machine's credentials are read from, the run
+  answer's `reserved`, are left out of what it inherits. When the gateway gives it an
+  authority, the session writes `ca-bundle.pem` into the run directory, the machine's
+  authorities and then the run's certificate, and points the names of
+  `session.Spec.CAEnv`, or `wall.DefaultCAEnv` when it is nil, at it.
+  `wall.BundleFiles` lists the files the machine's authorities are read from.
+- Claude Code's `approve-key.sh` runs behind a wall alone: without a wall, an
+  interactive Claude Code shows its approval prompt for the placeholder of
+  `ANTHROPIC_API_KEY`, once, and the approval stays in your configuration.
+- `session.Exec`, the helper's `exec`: `--unset NAME …`, then `--` and the program and
+  its arguments. It unsets the names and executes the program, found in `PATH`; a name
+  outside a variable's grammar exits 2, a program it does not find, or finds only
+  through `.` or an empty entry of `PATH`, 127 and one it cannot execute 126. A walled
+  run's launch starts through it when the run has names to unset, in front of the
+  preparation and the runtime's approval script, and `dev.qory.run.started` reports the
+  launch without it.
+- `session.Spec.ImagesAllow`, the machine's `images.allow`: the prefixes of the
+  references a policy may name its image by. A run in an image by reference starts
+  under the default's runtime, with no nested Docker, its workspace at `/workspace`
+  and the paths the session puts inside written there.
+- `session.Spec.Preparation`, a run's preparation: the program and then its arguments,
+  which the session runs inside the wall before the runtime, after the runtime's
+  preparation, with the runtime's environment and through the run's proxy, from
+  `preparation.sh` in the run directory. The runtime starts once it exits 0; one that
+  exits otherwise is the run's exit status. A spec with a preparation and no `Wall` is
+  refused.
+- `session.Spec.Written`, the places of this machine the caller records as writable by a
+  walled run: the workspaces and the writable mounts of the walled runs it starts.
+- `runtimes.Attach.Readable`, which a runtime asks of a file of this machine, by its
+  absolute path, before `Prepare` reads it, and which the session sets: it returns where
+  the path resolves through every link, the file `Prepare` may read, and refuses a file
+  a walled run could have written and a path with a `..` name.
+- `runtimes.Attach.ReadableDir`, which a runtime asks of a directory of this machine
+  before `Prepare` passes it to the program, and which the session sets: it refuses
+  what `Readable` refuses, and a directory that is or contains, as given or resolved,
+  by whole names and regardless of case, a place a walled run could have written.
+  `Readable` and `ReadableDir` refuse a path for such a place with a
+  `*runtimes.WrittenError`, whose `How` is `lies in`, `is reached through` or
+  `contains`, and whose `Place` is the place; its text is as before.
+- `session.RunsBinding(ctx, d, p)`, the walled runs still going on this machine whose
+  writable binds overlap p, an absolute path, by the registry's rule, each a
+  `session.WalledRun` of its run id and the absolute path of its entry. A bind overlaps
+  p when it is p, holds p or lies inside p, or when a name on the way to either is
+  looked up in the other, compared as written and as resolved through links, a `..` in
+  p after a link resolved from the link's target. An entry is asked after only when one
+  of its writable binds overlaps p, or one cannot be resolved now: the entry of such a
+  run that is over is removed, and an engine that cannot be asked is
+  `engine_unreachable`, naming the run and its entry, as is an entry whose lock is free
+  that cannot be read, with `EntryUnreadable` set on the refusal, in a sentence that
+  counts the run as still going, and a relative p is an error. The engine of an entry
+  is asked through d, the caller's `*wall.Docker`, by
+  `(*wall.Docker).RunContainersExist`, with the recorded command and selection;
+  `wall.RunContainersExist` is that method of a Docker with no field set, which a nil d
+  asks through. A run's check against the registry asks through its wall when it is a
+  `*wall.Docker`.
+- `(*session.Run).AgentEnv(spec)`, the environment a session of `spec` gets from the
+  server's variables, `Variables.Run`, `Variables.Machine`, `LaunchDefaults` and
+  `Env`, `NAME=value`, sorted by name, so a caller can give the setup container the
+  agent's environment: pass it as `SetupSpec.Env`. It resolves the variables as `Join`
+  does, with the deny lists and the placeholders, without the runtime's preparation,
+  and writes nothing and sends no request. It leaves out the names Forager, the proxy,
+  the wall and `LaunchFixed` set, the placeholders, and a name of
+  `denied-variables.json` that `Env` has, such as `PATH`. A spec that `Join` refuses
+  before its join request or as it resolves the variables, such as one with
+  `variable_reserved` or `placeholder_conflict`, gets the same refusal. The result has
+  `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` when the server sets them, and `Setup`
+  accepts both.
+- `(*session.Run).Image`, the image of the run answer with its `Docker`, so a caller can
+  close a read-only run in an image with nested Docker before its first join. It is the
+  zero `session.Image` in a run with no wall or when the run answer has no image.
+- `session.Closed.WallKept`, true when removing a container of the run's wall failed at
+  some point of the run: the agent's container at a session's end, the setup container
+  in `RemoveSetup`, or a container at the close. Any error of the wall's `Unwrap` or
+  `RemoveSetup` sets it, and so does any error of the close that is not marked
+  `wall.ErrNoContainerKept`. A process may have kept writing the run's binds after its
+  session ended, so do not trust what is in them. It stays true when a later removal
+  succeeded. A close whose every failure matches `wall.ErrNoContainerKept`, as the
+  Docker wall's failures on a network or the wall's private directory do, leaves it
+  false.
+  The run still reports the failure and keeps its entry among the walled runs still
+  going, and `(*wall.Docker).Reap` removes the network.
+- `(*session.Run).ContainerKept`, true once removing the agent's container of a session
+  or the setup container in `RemoveSetup` failed, and, with a wall whose enclosure has
+  no `Unwrap`, from the end of the first session until `Close`. During a session it
+  does not count the container of the session that runs. Run host work on the run's
+  binds, such as a push, before `Close` only after `Join` returned and `RemoveSetup`
+  returned nil, and only while `ContainerKept` is false; otherwise wait for `Close` and
+  read `session.Closed.WallKept`. After `Close` it equals `session.Closed.WallKept`.
+  `RemoveSetup`'s error for an agent's container that could not be removed matches
+  `wall.ErrContainerKept`, with its text as it was.
+
+#### Fixed
+
+- `dev.qory.session.started` and the image step's `dev.qory.run.step_started` have the
+  image's reference without its user information, as `request.json` has it:
+  `user:pw@registry.example/agent@sha256:…` is recorded as
+  `registry.example/agent@sha256:…`. The manifest check reads that reference too, so its
+  errors and its `image_missing`, `image_access_denied`, `image_rate_limited` and
+  `image_registry_unreachable` refusals have no user information, and it sends its
+  request to the registry in the reference. Before, the record had the reference whole, with the
+  registry's credentials in it, and the check read the user information as a Docker Hub
+  repository and sent it in the path of a request to `registry-1.docker.io`. The wall
+  still pulls the reference whole.
+- `approve-key.sh` writes to the file Claude Code 2.1.316 reads. With an empty `.config.json`
+  beside a `.claude.json`, it writes the approval to `.claude.json`, and with an empty
+  `.config.json` that has no write bit, it writes to `.claude.json` too. Before, the script
+  wrote to the empty file, and Claude Code 2.1.316 then read that file in place of
+  `.claude.json`, without its onboarding and trust.
+- A join that fails after `dev.qory.session.started` with no refusal code, such as an
+  image pull or a wall's start that fails, writes the error's text as a
+  `dev.qory.run.log` of the session, with `stream: stderr` and its `session`, before
+  its `dev.qory.session.exited`, which has no reason. Before, the record had no text of
+  the error.
+- In a run with no wall, `output.log`, every `dev.qory.run.log` chunk and every event
+  mapped from an output or hook record contain `qory-proxy-password` in place of
+  the forwarder's password, and the base64 of `qory:qory-proxy-password` in place of
+  the base64 of `qory:<password>`. Before, a runtime that printed its environment or
+  its proxy URL left the password in `output.log`, `session.jsonl`, the gateway's
+  `events.jsonl` and the server's record.
+- Without a wall, a launch that passed `--settings` more than once started, and Claude
+  Code read its last settings file, which the `claude-settings` installer had not
+  copied: the run had no Forager hooks, and that file's `env` was not filtered. A launch
+  that ended in a bare `--settings` got `--settings <path>` appended, so Claude Code
+  read `./--settings`. An unwalled launch that passes `--settings` more than once now
+  does not start either, with "runtime claude: Pass one --settings file. This launch
+  passes --settings more than once, and Claude Code reads only the last one, so the run
+  does not start." In an unwalled launch whose last argument is a bare `--settings`,
+  that flag is now given the path of the run's `settings.json`, as behind a wall.
+- The `claude-settings` installer copied the `env` object of the `--settings` file
+  with the names the session leaves out of the runtime's process environment: the
+  runtime's `denies`, such as `CLAUDE_CONFIG_DIR`, and, behind a wall, its model
+  `overrides`, such as `ANTHROPIC_MODEL`. Claude Code applies that object over its
+  environment, so a value there reached it. The session now passes these names from
+  the descriptor as `runtimes.Attach.DeniedVariables`, and the installer drops each of
+  them from the copy, matched regardless of case, walled or not and with or without a
+  start key.
+- The `claude-settings` installer copied the top-level `apiKeyHelper`,
+  `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh` and `modelOverrides` of
+  the `--settings` file into the run's `settings.json`, so in a run with a start key
+  Claude Code could send another key or cloud credential than the start key: it ranks
+  `apiKeyHelper` above `CLAUDE_CODE_OAUTH_TOKEN`. In a run with a start key the copy
+  now leaves out these five members, walled or not. Without a start key it keeps them.
+- The session wrote `preparation.sh`, and Claude Code's runtime `settings.json`,
+  `approve-key.sh` and the copies of a walled launch's `--mcp-config`, `--agents` and
+  system-prompt files, in place in the run directory, so a link at one of those paths
+  made the write reach the file the link points at. Each is now written to a new file
+  beside it, with O_EXCL and its mode from creation, synced, renamed over the path, and
+  the directory synced: a link there is replaced, not followed, and a failed write
+  leaves no new file. `ca-bundle.pem` already went through a new file and a rename; the
+  sync, and its mode set from creation, are new for it. Each file's mode is 0644 less
+  the umask, as before; `ca-bundle.pem` was 0644 under any umask and now loses the
+  umask's bits too. A copy now has its file's permission bits within 0644, less the
+  umask, so a file only its owner reads gives a copy only its owner reads; before, a
+  copy was 0644 less the umask. These errors of the writes change:
+  - A directory at such a path fails the write with `rename <dir>/.<name>-<n>
+    <dir>/<name>: file exists` (EEXIST) where it failed with `open <dir>/<name>: is a
+    directory` (EISDIR).
+  - A missing run directory fails it with `open <dir>/.<name>-<n>: no such file or
+    directory`, which names the new file, where it named `<dir>/<name>`. For
+    `ca-bundle.pem` the error starts `open` where it started `createtemp`.
+  - The sync of the run directory after the rename can fail the write, with the file
+    already in place. Its ENOTSUP and EINVAL are ignored.
+
+- The run directory's lock and the lock of the registry of walled runs were opened
+  through a symbolic link at their path, and the open made the file the link points at
+  when it did not exist. Both are now opened with O_NOFOLLOW, and a link there fails
+  with the fix first: "Remove the symbolic link at /runs/<id>/lock. The session does
+  not open the run directory's lock through a link."
+
+- More of the session's messages and `run.started`'s members printed or sent a value as
+  written, and now print or send a phrase in place of one that contains `qak_` or `qrk_`
+  in any case. In `run.started`, `runtime`, `host`, `wall` and `container_runtime` are
+  the name's phrase; `dir`, `command`, each argument, `runtime_version` and each word
+  of `preparation` the value's; a label's key the name's; and `about` as
+  `server.ShownAbout` gives it. The paths in a mount's refusal,
+  `mount_contains_forager_files`, `mount_mode_conflict`, `mount_through_link` and the
+  checks of other walled runs, print the name's phrase in the names and the value's
+  phrase in the detail. The value's phrase is printed for the paths and errors of the
+  registry of walled runs, the written places, the variables' settings,
+  the images, `exec`, the descriptors, the socket, the runtimes, the catalog and the
+  Claude settings, and the reports of removing the wall, the socket and closing the
+  sinks. A `variable_reserved` refusal's detail and names print the name's phrase, its
+  names sorted.
+
+- `run.policy_applied`'s `harness_hosts` sent a host as written, and now sends the
+  value's phrase in place of one that contains `qak_` or `qrk_` in any case. These
+  errors print the value's phrase in place of one that quotes a path with a prefix,
+  and still wrap the error: the resend's, the run directory's files and lock, the
+  preparation script, the socket, the walk of the registry of walled runs, a wall's
+  binds and its wrap, `sink.File` and `sink.Delivered`, a hook's forward to the socket,
+  and `claude.Settings`' writes of the settings file and the approval script.
+  `run.started` sends `args` as
+  `[]` for a run with no arguments, where it sent `null`, which its schema refuses.
+  `run.started` sends `about` whenever the caller passed one that is not empty, as
+  `{}` when `server.ShownAbout` leaves out every member.
+
+- The `claude-settings` installer read the settings file the launch passes with
+  `--settings` through links, wherever it lay, and copied it into the run directory,
+  where the enclosure reads it: a walled run could put a link to any JSON file of this
+  machine in its workspace, in place of the settings a later run is passed, and hand
+  that file to the agent. The session now refuses a settings file whose path, as given
+  or through links, is or lies inside, or is reached through, a place of
+  `Spec.Written` or, behind a wall, a writable bind of the run's, the workspace among
+  them; one whose path has a `..` name; one whose last part is a link; and one that is
+  not a regular file or is larger than 1 MiB. The path is made absolute once and that
+  path is checked and opened. The open does not follow a link as the path's last part,
+  and the file opened must be the one the path resolved to when it was checked. The run
+  then stops before the runtime starts, with "runtime claude: ", the fix, and the
+  reason, such as "Pass the path of the file that <path> links to. This launch passes
+  --settings <path>, and that file is a link, so the run does not start." Settings
+  passed as a document are not checked, as before. The places also hold the writable
+  binds of the other walled runs in the registry, with or without a wall for this run,
+  and are worked out only when a settings file is to be read.
+- The `claude-settings` installer copied and checked only the first `--settings` of a
+  launch, and Claude Code reads only the last: a walled launch that passed two started
+  without Forager's hooks and with a file the session had not checked. A walled launch
+  that passes `--settings` more than once, in either form and anywhere in its
+  arguments, now does not start, with "runtime claude: Pass one --settings file. This
+  launch passes --settings more than once, and Claude Code reads only the last one, so
+  the run does not start." In a walled launch whose last argument is a bare
+  `--settings`, the session gives that flag the path of the run's settings, so the
+  launch passes one `--settings`. `runtimes.Attach.Walled` is set for a walled run.
+- The `claude-settings` installer passed a walled launch's `--mcp-config`, `--agents`,
+  `--plugin-dir`, `--plugin-dir-no-mcp` and `--add-dir` to Claude Code unchecked, so
+  Claude Code could load servers, agents, plugins or settings that an agent of a walled
+  run had written, and start the programs they name. In a walled launch, a path value
+  of these flags that starts with `~`, is relative or has a `..` part now does not
+  start, with "runtime claude: Replace ~/ref with an absolute path. This launch passes
+  --add-dir ~/ref, and inside the wall ~ is the home of the wall's user, which Forager
+  cannot check, so the run does not start." and the texts for the other two. An `--mcp-config` or
+  `--agents` file is checked as the `--settings` file is and passed as a copy in the run
+  directory, `mcp-config-<n>.json` or `agents-<n>.json`; a value Claude Code takes as
+  JSON passes unchanged. A text shows a value of `--mcp-config`, `--agents` or
+  `--settings` that contains `{` or `[`, or starts with white space or a format
+  character such as U+FEFF, as `(an --mcp-config value)`, `(an --agents value)` or `(a
+  --settings value)`, and the reason after "failed:" as `it is no file`, `it cannot be
+  read` or `it is no JSON object`, because such a value may be JSON with a token in it;
+  for `--settings` in an unwalled launch too. A `--plugin-dir` or `--plugin-dir-no-mcp` directory that lies
+  in, is reached through or contains a place a walled run can write, that holds a link
+  leading into one or a file with more than one name, or that has more than 10,000
+  entries, does not start; a `.zip` is checked as a file. An `--add-dir` directory is
+  checked the same way, with only `<dir>/.claude` and `<dir>/CLAUDE.md` read. Each text
+  starts with the fix, and the wall docs, § "No file read from a place an agent can
+  write", have each text. An unwalled launch starts as before.
+- Claude Code loads plugin directories from `CLAUDE_CODE_PLUGIN_DIRS` and adds
+  directories from `CLAUDE_RELAUNCH_SESSION_ADD_DIRS`, so a value set for a run went
+  past the checks of `--plugin-dir` and `--add-dir`. The Claude descriptor's `denies`
+  now lists both, and `contracts/forager/v1/runtimes.json` with it: a value of the
+  server's, the run's or the machine's no longer reaches the run, and a walled run has
+  them unset.
+- `CLAUDE_CODE_PLUGIN_SEED_DIR`, `CLAUDE_CODE_PLUGIN_CACHE_DIR` and
+  `CLAUDE_CODE_MANAGED_SETTINGS_PATH` lead Claude Code's plugin and settings loaders to
+  a directory or a file no check covers; the Claude descriptor now denies them too.
+- A walled run bound a mount or a workspace through a link that an agent of an earlier
+  walled run, already ended, had left in a place it could write: the engine followed
+  the link, so the run could bind any directory of this machine, writable. A place whose
+  path goes through a link inside a place of `Spec.Written` and does not resolve into
+  it is now no run, `mount_through_link`, with the place, the link and the written place
+  as its names, as for a link inside a writable place of the run's.
+- `catalog.Lookup` read a descriptor in `dir` through a link, of any size. It now reads
+  one only when its last part is no link, it is a regular file and it holds at most
+  1 MiB, and refuses one otherwise with "Make the runtime descriptor <path> a readable regular file of at most 1 MiB, or remove it. It could not be read: " and the reason.
+- A `--settings` file whose content is `null` stopped the session with a panic. It now
+  does not start, with "runtime claude: Make the file /a/settings.json a JSON object.
+  The check of --settings /a/settings.json failed: it is null", as other settings that
+  are no JSON object.
+- A walled launch's `--add-dir` passed with a regular file, though Claude Code adds
+  only a directory. It now does not start, with "runtime claude: Pass an --add-dir path
+  to a directory. This launch passes --add-dir /home/notes.md, and that file is not a
+  directory, so the run does not start." A FIFO or other file that is not a regular
+  one, and a link to such a file or to a regular file, now get the same text. Before,
+  they were refused with "that file is not a regular file" or "that file is a link".
+
+- `(*session.Run).HostProxy` returns the join's error when a session's wall could not
+  be removed and may still run: `Open a new run. The wall of session <n> could not be
+  removed and may still run, so this run takes no more sessions.` Before, it started a
+  forwarder, so a push could run beside the agent's container.
+- A step's name and lines keep the server's values of `QORY_RUN_SYSTEM` and
+  `QORY_RUN_REPOSITORIES`: the run's masker leaves both out by name, at the open and at
+  a reload, because neither is a secret. Before, `github.com` read `***` in the name of
+  a fetch or a push step. Another server variable with the same value still masks it.
+
+#### Changed
+
+- Behind a separate gateway, every forwarder of the session holds a connection it took
+  while the gateway cannot be reached: it keeps the agent's connection open, writes
+  nothing to it, and dials the gateway again for up to 120 seconds, waiting 250 ms after
+  the first failed dial and twice as long after each one after it, up to 2 seconds. A
+  gateway that restarts within the 120 seconds serves the connection; after them the
+  forwarder closes it. If the agent closed its connection during the hold, the
+  forwarder sends nothing of it, so a plain request or a `POST` to the run API on a
+  closed connection never runs. Before, the forwarder dialed once, for up to 10 seconds,
+  and closed the connection when that dial failed. On one machine nothing changes.
+- Behind a separate gateway, `Join` sends the join request again, unchanged, after a
+  try that gets no answer or a `503` with no code, for up to 120 seconds, with waits of
+  1, 2, 4 and 8 seconds, then 8 seconds each, and flushes the run's events before each
+  try after the first. Each flush posts a batch the gateway did not accept again at
+  once, so the events and the join reach a gateway back within the 120 seconds within
+  one wait. `Close` waits up to 180 seconds for the gateway to accept the run's last
+  events, and returns as soon as it accepts them or the batch gets a `410`. Both cover
+  a separate gateway that restarts in up to 120 seconds. Before, a join was tried once
+  and the close waited 15 seconds. When the flush at the end of the previous join ended
+  before the gateway accepted that session's events, `Join` sends its request only
+  once the gateway accepted them, within the same 120 seconds, and fails with no
+  request sent after them. On one machine a join is tried once, as before.
+- A `Flush` of a sink tries a batch the server or the gateway did not accept again at
+  once, without the rest of the wait between two tries. Before, the batch waited up to
+  60 seconds for its next try.
+- On one machine, the walled run's forwarder closes a connection that does not open
+  with the relay's preamble and the run's proxy secret within 10 seconds, as it does
+  behind a separate gateway, and writes the same preamble on toward the proxy. Before,
+  it passed every connection on as it arrived.
+- Every walled launch starts through the helper's exec, `SessionSpec.Exec`. Before, a
+  launch with no names to unset started without it. The arguments of the exec mode and
+  of `wall.Nest` stay as they were, so a caller changes nothing. Without a wall nothing
+  changes.
+- The helper's exec stays the runtime's parent and waits for it, in place of executing
+  it. It closes every file descriptor above 2 but the Go runtime's poller, is not
+  dumpable while it waits, so no process of the agent's reads its `/proc` files or
+  traces it, and runs as the runtime does: with nested Docker, `wall.Nest` executes it after it becomes the
+  agent's user. It starts the runtime in a separate process group, which is the
+  terminal's foreground group on a terminal, so the terminal sends a Ctrl-C or a resize
+  to the runtime alone, as before, and the helper's exec passes neither on again. It
+  passes HUP, INT, QUIT, ABRT, USR1, USR2, ALRM, TERM, CONT, TSTP,
+  TTIN, TTOU and WINCH on to the runtime, and exits with the runtime's exit status.
+  When a signal ended the runtime, it ends by the same signal after it sends the
+  measure, so docker-init exits 128 and the signal's number, and a session sees the
+  same exit as before.
+- A variable the runtime's preparation sets is in the launch's environment once: the
+  harness's computed value of the name is left out. Before, both were in it, and the
+  preparation's, the later one, applied.
+- `runtimetest.Conforms` lets a runtime's Prepare add variables to a launch without a
+  forwarder; the command and arguments stay as given.
+- Each session that starts has a directory in the run directory, `sessions/<n>/`, with
+  `<n>` its number: its `output.log`, the bytes of its `dev.qory.run.log` chunks, its
+  `preparation.sh` and the files its runtime writes, such as Claude Code's
+  `settings.json`. The run's `output.log` keeps every chunk of the run in sequence
+  order. Behind a wall the enclosure binds only that session's directory, read-only,
+  where it bound the run directory: the agent reads no record and no file of another
+  session. A join that writes no `dev.qory.session.started` leaves no directory there.
+  Before, every session of a run wrote these files at one path in the run directory.
+- `session.Resend` sends no `dev.qory.session.exited` the session wrote in its record
+  alone after the gateway ended the run.
+
+- A walled Claude Code launch checks and copies the files of `--system-prompt-file`,
+  `--append-system-prompt-file` and `--append-subagent-system-prompt-file`, as it does
+  `--settings`, and does not start with `--project-config-root`.
+- A walled run needs `session.Spec.Exec`, the command that makes the caller's binary
+  run `session.Exec` inside the enclosure, `{wall.HelperPath, "exec"}` for a binary that
+  runs it in its `exec` mode; a `Wall` without one is refused before the run starts.
+- Behind a wall, the runtime's declared and reserved variables that nothing sets are
+  unset inside, where they went in empty, which a program may read as set; and so is
+  every name the runtime denies or the node's `Variables.Deny` removes, by its exact
+  name, that nothing sets, so an image's `ENV` cannot set one, with one exception: with
+  nested Docker, `DOCKER_CONFIG` is never unset, and a non-empty value, the image's
+  included, takes the place of the wall's docker configuration, as the contract's
+  §The wall says. A name Forager, the wall or the preparation sets is never unset.
+- A bind in the registry of walled runs whose `writable` field is missing or null is
+  taken as writable, by a run's check against other runs, by the places a walled run
+  could have written and by `session.RunsBinding`.
+- The `engine_unreachable` sentence of a walled run now reads "The check for a
+  container of the walled run <id> failed, so this run does not start: <the error>",
+  and, for `session.RunsBinding`, "… so the run counts as still going: …".
+
+#### Security
+
+- The run socket, `QORY_RUN_SOCKET`, refuses a record of the `output` source: the
+  session skips it, writes no event for it and reports "socket: refused a record of the
+  output source: output records come only from the runtime's standard output". So a
+  process in the agent's container cannot send output records through the socket.
+  Before, it could, and so add runtime events the runtime never printed, such as
+  `dev.qory.runtime.text` and `dev.qory.runtime.tool_result`. The sources `hooks`,
+  `setup` and `measure` are accepted as before. A known limit stays: a tool command runs
+  as the same user as the runtime, so it can write a line to the runtime's standard
+  output through `/proc/<pid>/fd/1`, and the session reads that line as output. Only the
+  helper process is out of its reach, because the helper makes itself not dumpable.
 
 ### e2e and CI
 
