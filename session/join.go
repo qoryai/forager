@@ -134,6 +134,11 @@ func (r *Run) join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// AgentEnv starts no program, so the installed runtime is checked here and not in
+	// checkSession.
+	if s.install, err = checkInstall(s.SessionSpec, spec.Runtime, r.open.Wall != nil); err != nil {
+		return nil, err
+	}
 	// The session may reach the run's forwarder from here on.
 	r.shutCheck(errCheckAfterJoin, false)
 	// The run's host proxies and its engine proxy end before the join request and the
@@ -527,8 +532,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		return fail(err)
 	}
 	markSetup(plan.sources, r.setupUp != nil)
+	// The installed runtime's folder, bound read-only, is checked against the walled
+	// runs still going with the places: no walled agent of another run may change it.
+	installBinds, err := runtimeBinds(spec)
+	if err != nil {
+		return fail(err)
+	}
 	if r.listed != nil {
-		if err := r.listed.update(slices.Concat(plan.sources, r.wallOwn, r.setupBinds)); err != nil {
+		if err := r.listed.update(slices.Concat(plan.sources, installBinds, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
 		}
 		defer func() {
@@ -551,6 +562,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		if shown, inside, err = plan.atWorkspace(); err != nil {
 			return fail(err)
 		}
+	}
+	// Behind a wall the installed runtime's folder is at /qory/runtime/<runtime>, so
+	// the program, and any path into the folder Forager puts inside, is written there.
+	// No place of the run is, holds or lies inside the folder (checkMounts), so the
+	// two rewrites never meet.
+	if spec.Wall != nil && spec.install != nil {
+		workspace := inside
+		inside = func(s string) string { return workspace(spec.install.rewrite(s)) }
 	}
 	// Without a wall the session inherits the starting process's environment, which may
 	// contain the variables the machine's credentials are read from: their values stay
@@ -601,7 +620,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// there. It lies outside every place the enclosure binds.
 	var transcriptDir, transcriptUnder string
 	if spec.Wall != nil {
-		if transcriptDir, transcriptUnder, err = makeTranscriptDir(rt, dir, n, spec.Dir, slices.Concat(plan.sources, r.wallOwn, r.setupBinds)); err != nil {
+		if transcriptDir, transcriptUnder, err = makeTranscriptDir(rt, dir, n, spec.Dir, slices.Concat(plan.sources, installBinds, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
 		}
 	}
@@ -619,6 +638,13 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	written := sync.OnceValues(func() ([]string, error) {
 		return writtenPlaces(spec, r.id, plan, slices.Concat(r.wallOwn, r.setupBinds))
 	})
+	// The program of a walled agent's making is no runtime's: the installed folder
+	// lies in no place a walled run can write, and holds none.
+	if spec.install != nil {
+		if _, err := readableDir(written)(spec.install.dir); err != nil {
+			return fail(fmt.Errorf("install the runtime in a folder no walled run can write: SessionSpec.RuntimeInstall.Dir %s: %w", pathShown(spec.install.dir), err))
+		}
+	}
 	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
 	denied, err := deniedVariables(rt, spec.Wall != nil)
 	if err != nil {
@@ -926,7 +952,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			return fail(err)
 		}
 		r.listed.askID(runCtx, spec.Wall)
-		if err := r.listed.update(slices.Concat(again.sources, binds, r.wallOwn, r.setupBinds)); err != nil {
+		if err := r.listed.update(slices.Concat(again.sources, binds, installBinds, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
 		}
 		inner, innerArgs := withExec(spec.Exec, unset, command, args)
@@ -937,6 +963,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: shown.Mounts, Limits: spec.Limits,
 			ProxyToken: r.relayToken,
 			Transcript: wall.Transcript{Path: transcriptDir, Under: transcriptUnder},
+			Runtime:    runtimeFolder(spec, rt),
 		})
 		if err != nil {
 			return fail(accesskey.ShownError(err))
@@ -1151,8 +1178,8 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 		"session": n, "runtime": accesskey.ShownName(rt.Name(), false), "command": accesskey.ShownValue(command, false), "args": shownValues(args),
 		"dir": accesskey.ShownValue(dir, false), "interactive": interactive,
 	}
-	if v := rt.Version(); v != "" {
-		started["runtime_version"] = accesskey.ShownValue(v, false)
+	if spec.install != nil {
+		started["runtime_version"] = accesskey.ShownValue(spec.install.version, false)
 	}
 	// rt is a bare runtime for a nil Runtime and for a bare one the caller set. A session
 	// whose runtime the caller set has no bare.

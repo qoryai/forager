@@ -165,7 +165,7 @@ func TestALocalRunShowsTheValuesOfThisMachine(t *testing.T) {
 	}
 	started := sessionStarted(t, evs)
 	args := fmt.Sprint(started["args"])
-	if started["dir"] != sp.Dir || started["command"] != os.Args[0] || !strings.Contains(args, "Read "+inputs+"/issue.md and "+home+"/CLAUDE.md.") ||
+	if started["dir"] != sp.Dir || started["command"] != installedProgram || !strings.Contains(args, "Read "+inputs+"/issue.md and "+home+"/CLAUDE.md.") ||
 		!strings.Contains(args, "--add-dir "+inputs) || !strings.Contains(args, filepath.Join(res.SessionDir, "settings.json")) || started["harness"] == nil {
 		t.Errorf("session.started %v", started)
 	}

@@ -28,9 +28,6 @@ import (
 type Runtime interface {
 	// Name is the runtime's name as events report it: claude, codex.
 	Name() string
-	// Version is the version of the program the adapter expects, reported in
-	// session.started and not checked against what is installed. Empty when the adapter expects none.
-	Version() string
 	// Prepare makes a launch one the session can follow: it installs the forwarder as
 	// the program's hook, writes what that takes into the session's directory, and returns
 	// the launch to start in place of the one given, command and arguments. A program
@@ -304,9 +301,6 @@ type bare string
 // Name is the name it was given.
 func (b bare) Name() string { return string(b) }
 
-// Version is empty: a bare runtime expects no version.
-func (bare) Version() string { return "" }
-
 // Prepare returns the launch as it is.
 func (bare) Prepare(a Attach) (Launch, error) { return a.Launch, nil }
 
@@ -364,9 +358,6 @@ type described struct {
 
 // Name is the descriptor's runtime.
 func (r *described) Name() string { return r.d.Runtime }
-
-// Version is the descriptor's runtime_version.
-func (r *described) Version() string { return r.d.RuntimeVersion }
 
 // ReadsOutput reports whether the descriptor has an output source.
 func (r *described) ReadsOutput() bool { return r.d.Sources.Output != nil }

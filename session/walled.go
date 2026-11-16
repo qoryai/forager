@@ -761,9 +761,12 @@ func engineUnreachable(runID, file, so string, err error) *Refusal {
 	}
 }
 
-// wallKind reports whether a bind is one a wall binds of its own: Forager's helper
-// or another directory of Forager's.
-func wallKind(b bindSource) bool { return b.Kind == kindHelper || b.Kind == kindDir }
+// wallKind reports whether a bind is one a wall binds besides the places a run
+// lists: Forager's helper, another directory of Forager's, or a runtime's installed
+// folder.
+func wallKind(b bindSource) bool {
+	return b.Kind == kindHelper || b.Kind == kindDir || b.Kind == kindRuntime
+}
 
 // inside reports whether a bind lies inside dir, or is dir when orIs is set, by its
 // resolved path, or whether a name on the way to it is looked up in dir or below it,
@@ -781,7 +784,8 @@ func inside(b bindSource, dir splitPath, orIs bool) (string, bool) {
 // shared is the error of one bind of this run's against one bind of another run's
 // still going, or nil when they do not conflict.
 //
-//   - A wall's own bind, Forager's helper or a directory of Forager's, that is or
+//   - A wall's bind, Forager's helper, a directory of Forager's or a runtime's
+//     installed folder, that is or
 //     lies inside a writable bind of the other run's, or is reached through one, is a
 //     plain error; one of the other run's that a writable bind of this run's is, holds
 //     or reaches is refused, and so is a bind of this run's that is, lies inside or is
@@ -817,8 +821,11 @@ func shared(own bindSource, otherID string, other bindSource) error {
 		return nil
 	case wallKind(other):
 		what := "Forager's directory "
-		if other.Kind == kindHelper {
+		switch other.Kind {
+		case kindHelper:
 			what = "Forager's helper "
+		case kindRuntime:
+			what = "the runtime's installed folder "
 		}
 		if entry, ok := inside(other, own.at, true); ok && own.Writable {
 			if entry != "" {

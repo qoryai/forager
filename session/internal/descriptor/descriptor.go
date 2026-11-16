@@ -45,16 +45,15 @@ import (
 
 // Descriptor is one runtime's descriptor.
 type Descriptor struct {
-	Version        int       `yaml:"version" json:"version"`
-	Runtime        string    `yaml:"runtime" json:"runtime"`
-	Title          string    `yaml:"title" json:"title,omitempty"`
-	RuntimeVersion string    `yaml:"runtime_version" json:"runtime_version"`
-	Sources        Sources   `yaml:"sources" json:"sources"`
-	Stop           *Stop     `yaml:"stop" json:"stop,omitempty"`
-	Headless       *Headless `yaml:"headless" json:"headless,omitempty"`
-	Secrets        *Secrets  `yaml:"secrets" json:"secrets,omitempty"`
-	Model          *Model    `yaml:"model" json:"model,omitempty"`
-	Tools          *Tools    `yaml:"tools" json:"tools,omitempty"`
+	Version  int       `yaml:"version" json:"version"`
+	Runtime  string    `yaml:"runtime" json:"runtime"`
+	Title    string    `yaml:"title" json:"title,omitempty"`
+	Sources  Sources   `yaml:"sources" json:"sources"`
+	Stop     *Stop     `yaml:"stop" json:"stop,omitempty"`
+	Headless *Headless `yaml:"headless" json:"headless,omitempty"`
+	Secrets  *Secrets  `yaml:"secrets" json:"secrets,omitempty"`
+	Model    *Model    `yaml:"model" json:"model,omitempty"`
+	Tools    *Tools    `yaml:"tools" json:"tools,omitempty"`
 	// Fixed is the variables the session sets for the runtime in every launch, by name,
 	// walled or not: no other source's value of one applies. Nil when the descriptor
 	// sets none.

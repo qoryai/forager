@@ -1,7 +1,6 @@
 # A sum needs over: the object whose members it adds.
 version: 1
 runtime: example
-runtime_version: "1.0.0"
 sources:
   output: {format: jsonl}
 rules:

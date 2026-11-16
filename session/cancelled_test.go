@@ -23,7 +23,7 @@ func shellSpec(t *testing.T, script string) runSpec {
 	t.Helper()
 	sp := spec(t)
 	sp.Forwarder = nil
-	sp.Command, sp.Args = "sh", []string{"-c", script}
+	sp.Command, sp.Args = installedShell, []string{"-c", script}
 	return sp
 }
 
@@ -86,7 +86,7 @@ func TestTheContextsEndWhileTheRuntimeRunsIsACancel(t *testing.T) {
 			root := t.TempDir()
 			sp := walledSpec(t, &openWall{})
 			sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
-			sp.Command, sp.Args = "sh", []string{"-c", script}
+			sp.Command, sp.Args = installedShell, []string{"-c", script}
 			return sp
 		},
 	} {

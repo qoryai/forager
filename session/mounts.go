@@ -210,6 +210,11 @@ func foragerFiles(spec runSpec) []foragerFile {
 		foragerFile{filepath.Join(os.TempDir(), link.ToolDirPrefix+"*"), "where the tools' sockets are made"},
 		foragerFile{socket.Dirs(), "where the runs' record sockets are made"},
 		foragerFile{wall.TempDirs(), "where the Docker wall's environment files are made"})
+	// The runtime's installed folder is bound read-only on its own: a place that is,
+	// contains or lies inside it would bind it again, writable or at another path.
+	if spec.install != nil {
+		out = append(out, foragerFile{spec.install.dir, "the runtime's installed folder"})
+	}
 	if f, ok := spec.Wall.(wall.Filer); ok {
 		for _, p := range f.Files() {
 			out = append(out, foragerFile{p, "one of the " + accesskey.ShownName(spec.Wall.Name(), false) + " wall's files"})
@@ -395,9 +400,10 @@ func mode(writable bool) string {
 
 // The kinds of a walled run's binds besides the places the run lists.
 const (
-	kindRun    = "run"
-	kindHelper = "helper"
-	kindDir    = "directory"
+	kindRun     = "run"
+	kindHelper  = "helper"
+	kindDir     = "directory"
+	kindRuntime = "runtime"
 )
 
 // bindSource is one bind of a walled run's: the path as the run passed it, the path
@@ -412,8 +418,9 @@ type bindSource struct {
 	Lookups  []string `json:"lookups"`
 	Writable bool     `json:"writable"`
 	// Kind is empty for a place the run lists, run for the run directory, helper for
-	// Forager's helper and directory for another directory of Forager's a wall
-	// binds.
+	// Forager's helper, directory for another directory of Forager's a wall binds,
+	// and runtime for the folder a runtime was installed in, which the enclosure
+	// binds read-only.
 	Kind string `json:"kind,omitempty"`
 	// Pattern says Path is a pattern of the directories a session makes there later, each
 	// its own: it stands for them until the run lists the one it made.
@@ -979,6 +986,19 @@ func firstWallBinds(w wall.Wall) ([]bindSource, error) {
 	}
 	binds = append(binds, wall.Bind{Path: socket.Dirs(), Pattern: true})
 	return bindSources(binds)
+}
+
+// runtimeBinds is the bind of a walled session's installed runtime folder, read-only,
+// as a bind source: none for a session with no runtime or no wall.
+func runtimeBinds(spec runSpec) ([]bindSource, error) {
+	if spec.Wall == nil || spec.install == nil {
+		return nil, nil
+	}
+	src, err := source(spec.install.resolved, "the runtime's installed folder "+pathShown(spec.install.dir), kindRuntime, false)
+	if err != nil {
+		return nil, err
+	}
+	return []bindSource{src}, nil
 }
 
 // wallBinds are the binds an enclosure makes of its own, as bind sources: none when

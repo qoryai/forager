@@ -1,7 +1,6 @@
 # A runtime name is a lower-case letter and then up to 63 more characters; this one has 65.
 version: 1
 runtime: abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-runtime_version: "1"
 sources:
   output:
     format: jsonl

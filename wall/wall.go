@@ -198,6 +198,21 @@ type Launch struct {
 	// Transcript is the session's transcript directory, which the enclosure binds
 	// writable; the zero value binds none.
 	Transcript Transcript
+	// Runtime is the folder a runtime was installed in, which the enclosure binds
+	// read-only; the zero value binds none.
+	Runtime RuntimeFolder
+}
+
+// RuntimeFolder is a folder of this machine that holds a runtime's installed program.
+// An enclosure binds it read-only at /qory/runtime/<Name> for [Docker], and Command
+// names the program at that path. The session checks that no mount is, contains or
+// lies inside it, and that no walled run can write it.
+type RuntimeFolder struct {
+	// Path is the folder on this machine, absolute and clean; empty binds none.
+	Path string
+	// Name is the runtime's name, such as claude: a lowercase letter, then up to 63
+	// lowercase letters, digits or -.
+	Name string
 }
 
 // Transcript is a directory of this machine that the session makes for one session,

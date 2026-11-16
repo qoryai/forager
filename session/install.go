@@ -1,0 +1,145 @@
+package session
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/wall"
+)
+
+var (
+	// versionShape is a RuntimeInstall.Version the session accepts.
+	versionShape = regexp.MustCompile(`^[0-9A-Za-z.+-]{1,64}$`)
+	// runtimeNameShape is a runtime's name the session binds a folder for: the
+	// descriptor schema's pattern of runtime.
+	runtimeNameShape = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
+)
+
+// installed is a RuntimeInstall the session checked: Dir as the caller gave it,
+// resolved, the folder it leads to, and inside, where an enclosure sees it.
+type installed struct {
+	dir, resolved, inside, version string
+}
+
+// rewrite writes the folder, as given and as resolved, as the enclosure sees it, at
+// whole components, in s.
+func (i *installed) rewrite(s string) string {
+	s = translate(s, i.dir, i.inside)
+	if i.resolved != i.dir {
+		s = translate(s, i.resolved, i.inside)
+	}
+	return s
+}
+
+// checkInstall checks a session's RuntimeInstall against its runtime and its program,
+// as [RuntimeInstall] says, and returns it checked; nil for a session with no
+// runtime. rt is the runtime the caller set, nil for none; walled says the run has a
+// wall.
+func checkInstall(spec SessionSpec, rt runtimes.Runtime, walled bool) (*installed, error) {
+	in := spec.RuntimeInstall
+	if rt == nil {
+		if in != nil {
+			return nil, errors.New("leave SessionSpec.RuntimeInstall unset for a session with no runtime: only a runtime's session starts an installed program")
+		}
+		return nil, nil
+	}
+	name := rt.Name()
+	if in == nil {
+		return nil, fmt.Errorf("set SessionSpec.RuntimeInstall for a session of the runtime %s: the session starts a runtime only from the folder it was installed in", accesskey.ShownName(name, false))
+	}
+	if !runtimeNameShape.MatchString(name) {
+		return nil, fmt.Errorf("name the runtime with a lowercase letter and up to 63 lowercase letters, digits or -: %s is the name of the folder it is seen at behind a wall", accesskey.ShownName(name, true))
+	}
+	if !versionShape.MatchString(in.Version) {
+		return nil, fmt.Errorf("set SessionSpec.RuntimeInstall.Version to the installed version, 1 to 64 letters, digits, ., + or -: %s is not one", accesskey.ShownValue(in.Version, true))
+	}
+	dir := in.Dir
+	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || strings.ContainsRune(dir, 0) {
+		return nil, fmt.Errorf("set SessionSpec.RuntimeInstall.Dir to an absolute, clean path: %s is not one", accesskey.ShownValue(dir, true))
+	}
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return nil, fmt.Errorf("install the runtime in %s, or set SessionSpec.RuntimeInstall.Dir to its folder: %w", accesskey.ShownValue(dir, true), accesskey.ShownError(err))
+	}
+	if err := enterable(resolved, dir); err != nil {
+		return nil, err
+	}
+	program, field := spec.Command, "SessionSpec.Command"
+	if walled && spec.Command == wall.HelperPath {
+		// Behind a wall the caller may start the runtime through Forager's helper:
+		// the program is the argument after the first --.
+		i := slices.Index(spec.Args, "--")
+		if i < 0 || i+1 == len(spec.Args) {
+			return nil, fmt.Errorf("put the runtime's program inside SessionSpec.RuntimeInstall.Dir %s after -- in SessionSpec.Args: the session starts %s only in front of it", accesskey.ShownValue(dir, true), wall.HelperPath)
+		}
+		program, field = spec.Args[i+1], "the argument after -- in SessionSpec.Args"
+	}
+	command := filepath.Clean(program)
+	rel, err := filepath.Rel(dir, command)
+	if !filepath.IsAbs(program) || err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil, fmt.Errorf("set %s to a program inside SessionSpec.RuntimeInstall.Dir %s: %s is not inside it", field, accesskey.ShownValue(dir, true), accesskey.ShownValue(program, true))
+	}
+	// Each name below the folder is the file it is: a link there could lead,
+	// inside an enclosure, to a file of the image's at the path it names.
+	at := resolved
+	names := strings.Split(rel, string(filepath.Separator))
+	for i, n := range names {
+		at = filepath.Join(at, n)
+		shown := filepath.Join(dir, filepath.Join(names[:i+1]...))
+		info, err := os.Lstat(at)
+		if err != nil {
+			return nil, fmt.Errorf("install the runtime's program at %s, or set %s to it: %w", accesskey.ShownValue(program, true), field, accesskey.ShownError(err))
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return nil, fmt.Errorf("replace the symbolic link %s with the file or folder it leads to: the session starts no runtime through a link inside SessionSpec.RuntimeInstall.Dir", accesskey.ShownValue(shown, true))
+		}
+		if i < len(names)-1 {
+			if err := enterable(at, shown); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("set %s to the runtime's program, a regular file: %s is not one", field, accesskey.ShownValue(program, true))
+		}
+		if info.Mode().Perm()&0o005 != 0o005 {
+			return nil, fmt.Errorf("let others read and execute %s (chmod o+rx): behind a wall the runtime runs as a user that may not own it", accesskey.ShownValue(program, true))
+		}
+	}
+	return &installed{dir: dir, resolved: resolved, inside: path.Join(wall.RuntimeDir, name), version: in.Version}, nil
+}
+
+// enterable checks that the folder at p, shown as shown, is a folder others can read
+// and enter.
+func enterable(p, shown string) error {
+	info, err := os.Stat(p)
+	if err != nil {
+		return fmt.Errorf("install the runtime in %s, or set SessionSpec.RuntimeInstall.Dir to its folder: %w", accesskey.ShownValue(shown, true), accesskey.ShownError(err))
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("set SessionSpec.RuntimeInstall.Dir to the runtime's folder: %s is not a folder", accesskey.ShownValue(shown, true))
+	}
+	if info.Mode().Perm()&0o005 != 0o005 {
+		return fmt.Errorf("let others read and enter %s (chmod o+rx): behind a wall the runtime runs as a user that may not own it", accesskey.ShownValue(shown, true))
+	}
+	return nil
+}
+
+// runtimeFolder is the installed runtime's folder as a walled launch binds it: the
+// folder Dir leads to, at /qory/runtime/<runtime>; the zero value for a session with
+// no runtime.
+func runtimeFolder(spec runSpec, rt runtimes.Runtime) wall.RuntimeFolder {
+	if spec.install == nil {
+		return wall.RuntimeFolder{}
+	}
+	return wall.RuntimeFolder{Path: spec.install.resolved, Name: rt.Name()}
+}
