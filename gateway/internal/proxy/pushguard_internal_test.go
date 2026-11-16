@@ -179,24 +179,26 @@ func TestTheBranchGuardRefusesAnyOtherPush(t *testing.T) {
 		header map[string]string
 		text   string
 	}
-	only := "qory: push only " + pushRef + " to git.example/example-org/app.git/git-receive-pack: the gateway refuses a push that creates, updates or deletes "
+	only := func(ref string) string {
+		return "qory: push only " + pushRef + ".\nThe push of " + ref + " to git.example/example-org/app.git/git-receive-pack was not sent"
+	}
 	unread := "qory: send the push's ref commands as git does"
-	capability := "qory: push with git over HTTPS, without --push-option: the gateway refuses the capability "
-	capabilities := "qory: push with git over HTTPS, without --push-option: the gateway refuses the capabilities "
-	goesOn := "qory: push with git over HTTPS: the gateway refuses a push to git.example/example-org/app.git/git-receive-pack whose body goes on after its ref commands with anything but a pack\n"
+	capability := "qory: push with git over HTTPS, without --push-option.\nThe push to git.example/example-org/app.git/git-receive-pack has the capability "
+	capabilities := "qory: push with git over HTTPS, without --push-option.\nThe push to git.example/example-org/app.git/git-receive-pack has the capabilities "
+	goesOn := "qory: push with git over HTTPS, with nothing but a pack after the ref commands.\nThe push to git.example/example-org/app.git/git-receive-pack has other data after them, so it was not sent.\n"
 	for name, c := range map[string]c{
-		"another branch":              {guardedPush, command(oldID, newID, "refs/heads/main", true) + flush + pack, nil, only + `"refs/heads/main"`},
-		"a created ref":               {guardedPush, command(zeroID, newID, "refs/heads/other", true) + flush + pack, nil, only + `"refs/heads/other"`},
-		"a deleted ref":               {guardedPush, command(oldID, zeroID, "refs/heads/main", true) + flush, nil, only + `"refs/heads/main"`},
-		"a tag":                       {guardedPush, command(zeroID, newID, "refs/tags/v1", true) + flush + pack, nil, only + `"refs/tags/v1"`},
-		"its ref, then another":       {guardedPush, command(oldID, newID, pushRef, true) + command(oldID, newID, "refs/heads/main", false) + flush + pack, nil, only + `"refs/heads/main"`},
-		"no push_ref":                 {"https://read.example/example-org/app.git/git-receive-pack", command(oldID, newID, pushRef, true) + flush + pack, nil, "qory: push through qory's push step: the run's credential for read.example allows no push\n"},
-		"a path no credential covers": {"https://git.example/other-org/app.git/git-receive-pack", command(oldID, newID, pushRef, true) + flush + pack, nil, "qory: push through qory's push step: the run's credential for git.example allows no push\n"},
-		"push options":                {guardedPush, pkt(zeroID+" "+newID+" "+pushRef+"\x00report-status push-options") + flush + pkt("merge_request.create") + pkt("merge_request.target=main") + flush + pack, nil, capability + `"push-options" in a push to git.example`},
-		"another capability":          {guardedPush, pkt(oldID+" "+newID+" "+pushRef+"\x00report-status x-unknown=1") + flush + pack, nil, capability + `"x-unknown=1"`},
+		"another branch":              {guardedPush, command(oldID, newID, "refs/heads/main", true) + flush + pack, nil, only(`"refs/heads/main"`)},
+		"a created ref":               {guardedPush, command(zeroID, newID, "refs/heads/other", true) + flush + pack, nil, only(`"refs/heads/other"`)},
+		"a deleted ref":               {guardedPush, command(oldID, zeroID, "refs/heads/main", true) + flush, nil, only(`"refs/heads/main"`)},
+		"a tag":                       {guardedPush, command(zeroID, newID, "refs/tags/v1", true) + flush + pack, nil, only(`"refs/tags/v1"`)},
+		"its ref, then another":       {guardedPush, command(oldID, newID, pushRef, true) + command(oldID, newID, "refs/heads/main", false) + flush + pack, nil, only(`"refs/heads/main"`)},
+		"no push_ref":                 {"https://read.example/example-org/app.git/git-receive-pack", command(oldID, newID, pushRef, true) + flush + pack, nil, "qory: push through qory's push step, with a credential that allows a push.\nThe run's credential for read.example allows no push, so the push was not sent.\n"},
+		"a path no credential covers": {"https://git.example/other-org/app.git/git-receive-pack", command(oldID, newID, pushRef, true) + flush + pack, nil, "qory: push through qory's push step, with a credential that allows a push.\nThe run's credential for git.example allows no push, so the push was not sent.\n"},
+		"push options":                {guardedPush, pkt(zeroID+" "+newID+" "+pushRef+"\x00report-status push-options") + flush + pkt("merge_request.create") + pkt("merge_request.target=main") + flush + pack, nil, capability + `"push-options", so it was not sent`},
+		"another capability":          {guardedPush, pkt(oldID+" "+newID+" "+pushRef+"\x00report-status x-unknown=1") + flush + pack, nil, capability + `"x-unknown=1", so it was not sent`},
 		"push options after a tab":    {guardedPush, pkt(zeroID+" "+newID+" "+pushRef+"\x00agent=x\tpush-options") + flush + pkt("merge_request.create") + flush + pack, nil, capabilities + `"agent=x\tpush-options", which have a control character`},
 		"a control character":         {guardedPush, pkt(oldID+" "+newID+" "+pushRef+"\x00report-status\vquiet") + flush + pack, nil, capabilities + `"report-status\vquiet"`},
-		"push-cert as a capability":   {guardedPush, pkt(oldID+" "+newID+" "+pushRef+"\x00report-status push-cert=1700000000-abc") + flush + pack, nil, capability + `"push-cert=1700000000-abc"`},
+		"push-cert as a capability":   {guardedPush, pkt(oldID+" "+newID+" "+pushRef+"\x00report-status push-cert=1700000000-abc") + flush + pack, nil, capability + `"push-cert=1700000000-abc", so it was not sent`},
 		"lines after the flush":       {guardedPush, command(oldID, newID, pushRef, true) + flush + pkt("merge_request.create") + flush + pack, nil, goesOn},
 		"git's probe, then more":      {guardedPush, flush + command(zeroID, newID, "refs/heads/main", true) + flush + pack, nil, goesOn},
 		"a delete, then bytes":        {guardedPush, command(oldID, zeroID, pushRef, true) + flush + "x", nil, goesOn},
@@ -274,7 +276,7 @@ func TestTheBranchGuardReadsCommandsInAnyPieces(t *testing.T) {
 			t.Errorf("%s: git's probe read %q, %v; want the flush", name, read, err)
 		}
 		for _, more := range []string{flush + "x", command(oldID, newID, pushRef, true) + flush + "PAC", command(oldID, newID, pushRef, true) + flush + "0004"} {
-			if _, err := readCommands(split(strings.NewReader(more)), pushRef); !errors.As(err, &refused) || !strings.Contains(refused.text, "anything but a pack") {
+			if _, err := readCommands(split(strings.NewReader(more)), pushRef); !errors.As(err, &refused) || !strings.Contains(refused.text, "has other data after them") {
 				t.Errorf("%s: %q gave %v; want the refusal of what follows the flush", name, more, err)
 			}
 		}

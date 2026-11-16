@@ -65,10 +65,10 @@ func guardPush(w http.ResponseWriter, r *http.Request, host, clean string, c *Cr
 	}
 	where := host + accesskey.ShownValue(clean, false)
 	if _, ok := pushPath(r); !ok || r.Method != http.MethodPost || !pushContentType(r.Header.Get("Content-Type")) || !identity(r.Header.Values("Content-Encoding")) {
-		return &pushRefusal{fmt.Sprintf("qory: push with git over HTTPS: the gateway refuses any other request to %s that names receive-pack\n", where)}
+		return &pushRefusal{fmt.Sprintf("qory: push with git over HTTPS, through qory's push step.\nThe request to %s names receive-pack in a form git does not send, so it was not sent.\n", where)}
 	}
 	if c == nil || c.PushRef == "" {
-		return &pushRefusal{fmt.Sprintf("qory: push through qory's push step: the run's credential for %s allows no push\n", host)}
+		return &pushRefusal{fmt.Sprintf("qory: push through qory's push step, with a credential that allows a push.\nThe run's credential for %s allows no push, so the push was not sent.\n", host)}
 	}
 	rc := http.NewResponseController(w)
 	// A connection whose deadline cannot be set is read with no limit in time, as
@@ -82,7 +82,7 @@ func guardPush(w http.ResponseWriter, r *http.Request, host, clean string, c *Cr
 	case errors.As(err, &refused):
 		return &pushRefusal{strings.ReplaceAll(refused.text, "@WHERE@", where)}
 	case err != nil:
-		return &pushRefusal{fmt.Sprintf("qory: send the push's ref commands within %d KiB and %s: the gateway refuses the push to %s\n", MaxPushCommands>>10, PushCommandsWait, where)}
+		return &pushRefusal{fmt.Sprintf("qory: send the push's ref commands within %d KiB and %s.\nThe push to %s was not sent.\n", MaxPushCommands>>10, PushCommandsWait, where)}
 	}
 	r.Body = &replayed{Reader: io.MultiReader(bytes.NewReader(read), r.Body), Closer: r.Body}
 	return nil
@@ -133,7 +133,7 @@ func readCommands(body io.Reader, ref string) ([]byte, error) {
 					return afterFlush(body, buf, s.commands)
 				}
 				if s.refused == nil {
-					s.refused = &pushRefusal{"qory: send the push's ref commands as git does: the gateway cannot read them, so it refuses the push to @WHERE@\n"}
+					s.refused = &pushRefusal{"qory: send the push's ref commands as git does.\nThe gateway could not read them, so the push to @WHERE@ was not sent.\n"}
 				}
 				return nil, s.refused
 			}
@@ -183,7 +183,7 @@ func afterFlush(body io.Reader, buf []byte, commands int) ([]byte, error) {
 	case commands > 0 && rest >= len(packSignature) && string(tail[:len(packSignature)]) == packSignature:
 		return buf, nil
 	}
-	return nil, &pushRefusal{"qory: push with git over HTTPS: the gateway refuses a push to @WHERE@ whose body goes on after its ref commands with anything but a pack\n"}
+	return nil, &pushRefusal{"qory: push with git over HTTPS, with nothing but a pack after the ref commands.\nThe push to @WHERE@ has other data after them, so it was not sent.\n"}
 }
 
 // flushEnd is the offset in buf just past the first flush, which buf contains: buf
@@ -233,7 +233,7 @@ func (s *commandLines) end() bool {
 			return objectID(hex)
 		}
 		if strings.HasPrefix(line, "push-cert") {
-			s.refused = &pushRefusal{"qory: push without --signed: the gateway refuses a signed push to @WHERE@, whose ref commands it does not read\n"}
+			s.refused = &pushRefusal{"qory: push without --signed.\nThe push to @WHERE@ is signed and its ref commands are not read, so it was not sent.\n"}
 			return false
 		}
 		var capabilities string
@@ -241,12 +241,12 @@ func (s *commandLines) end() bool {
 		// git splits capabilities at any whitespace, the list below at spaces only: a
 		// tab or another control character would hide a capability from the list.
 		if strings.ContainsFunc(capabilities, unicode.IsControl) {
-			s.refused = &pushRefusal{fmt.Sprintf("qory: push with git over HTTPS, without --push-option: the gateway refuses the capabilities %s, which have a control character, in a push to @WHERE@\n", shownRef(capabilities))}
+			s.refused = &pushRefusal{fmt.Sprintf("qory: push with git over HTTPS, without --push-option.\nThe push to @WHERE@ has the capabilities %s, which have a control character, so it was not sent.\n", shownRef(capabilities))}
 			return false
 		}
 		for _, c := range strings.Split(capabilities, " ") {
 			if name, _, _ := strings.Cut(c, "="); c != "" && !slices.Contains(pushCapabilities, name) {
-				s.refused = &pushRefusal{fmt.Sprintf("qory: push with git over HTTPS, without --push-option: the gateway refuses the capability %s in a push to @WHERE@\n", shownRef(c))}
+				s.refused = &pushRefusal{fmt.Sprintf("qory: push with git over HTTPS, without --push-option.\nThe push to @WHERE@ has the capability %s, so it was not sent.\n", shownRef(c))}
 				return false
 			}
 		}
@@ -257,7 +257,7 @@ func (s *commandLines) end() bool {
 	}
 	s.commands++
 	if fields[2] != s.ref {
-		s.refused = &pushRefusal{fmt.Sprintf("qory: push only %s to @WHERE@: the gateway refuses a push that creates, updates or deletes %s\n", s.ref, shownRef(fields[2]))}
+		s.refused = &pushRefusal{fmt.Sprintf("qory: push only %s.\nThe push of %s to @WHERE@ was not sent: it creates, updates or deletes that ref.\n", s.ref, shownRef(fields[2]))}
 		return false
 	}
 	return true
