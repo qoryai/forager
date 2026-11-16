@@ -33,7 +33,7 @@
       "additionalProperties": false,
       "properties": {
         "output": {
-          "description": "Structured output on the runtime's standard output, when the session runs on pipes.",
+          "description": "Structured output on the runtime's standard output, when the session runs on pipes. Output records come from the runtime's standard output only: the local socket refuses a record of the output source.",
           "type": "object",
           "additionalProperties": false,
           "required": [

@@ -208,6 +208,23 @@ func fakeRuntime() int {
 			}
 		}
 	}
+	// FAKE_SOCKET is records to send on the socket before the result, one JSON object
+	// of the record schema a line, as any process in the agent's container could.
+	if lines := os.Getenv("FAKE_SOCKET"); lines != "" {
+		var recs []runtimes.Record
+		for _, line := range strings.Split(strings.TrimSpace(lines), "\n") {
+			var rec runtimes.Record
+			if err := json.Unmarshal([]byte(line), &rec); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 94
+			}
+			recs = append(recs, rec)
+		}
+		if err := socket.Send(context.Background(), os.Getenv(session.EnvSocket), recs); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 95
+		}
+	}
 	fmt.Println(`{"type":"result","subtype":"success","session_id":"fake","is_error":false,"num_turns":1,"duration_ms":5,"total_cost_usd":0.01,"result":"done"}`)
 	// FAKE_MEASURE is records of the measure source to send, one JSON object a line, as
 	// a process of the launch other than the helper's exec could.
