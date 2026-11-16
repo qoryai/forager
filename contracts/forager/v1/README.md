@@ -6177,7 +6177,11 @@ wall has no setup commands inside.
 The setup's records come from inside the enclosure, as the runtime's hook records do:
 code in the working folder can write records of the `setup` source to the socket, and
 so forge a setup step's lines or its exit status, as it can forge the events of the
-runtime's hooks. It cannot forge the runtime's output records, which the socket refuses.
+runtime's hooks. It cannot send records of the `output` source through the socket,
+which refuses them. It can still write a line to the runtime's standard output, which
+the session reads as output: a tool command runs as the same user as the runtime, so it
+can open `/proc/<pid>/fd/1` of the runtime's process. Only the helper's `/proc` files
+are out of its reach, because the helper makes itself not dumpable.
 
 **Nested Docker.** *Experimental.* Under the nested runtime the enclosure has a root,
 and whether that root reaches the mounts the run lists as the machine's root is
