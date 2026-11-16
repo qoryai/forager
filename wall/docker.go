@@ -1290,11 +1290,12 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 // to gain, with the launch's mounts at their paths or their Targets, the launch's socket
 // directory at /qory/hooks, the workspace as its working directory, the helper, with l.CA
 // the bundle, and the launch's limits. The proxy variables name the relay with no
-// password, so the route to the caller, which serves a password and the agent's address
-// only, answers it 503. The environment, through a file, is l.Env, the proxy variables, the
-// socket's and, with l.CA, the variables that point at the bundle. With nested Docker the
-// container runs under the same runtime, with no root, no daemon and no store volume. The
-// entrypoint is l.Command. It starts the relay and runs the run's first use of the
+// password, so a request to the route to the caller gets 403 from the gateway's proxy,
+// and one with the agent's password 503, since that session ended: the route serves a
+// password and the agent's address only. The environment, through a file, is l.Env, the
+// proxy variables, the socket's and, with l.CA, the variables that point at the bundle.
+// With nested Docker the container runs under the same runtime, with no root, no daemon,
+// no store volume and no IPv6 sysctl, as Wrap sets none. The entrypoint is l.Command. It starts the relay and runs the run's first use of the
 // enclosure when neither ran, as Wrap does.
 func (e *dockerEnclosure) WrapAfter(ctx context.Context, l Launch) (Launch, error) {
 	mounts, dir, err := e.mounts(l)
@@ -1335,7 +1336,12 @@ func (e *dockerEnclosure) WrapAfter(ctx context.Context, l Launch) (Launch, erro
 		run = append(run, "--runtime", e.req.Runtime)
 	}
 	run = append(run, e.hardening()...)
-	run = append(run, "--no-healthcheck", "--sysctl", "net.ipv6.conf.default.disable_ipv6=1")
+	run = append(run, "--no-healthcheck")
+	if !e.req.Docker {
+		// Wrap leaves this flag out for nested Docker, whose runtime sets the
+		// container's sysctls; After's container follows that rule.
+		run = append(run, "--sysctl", "net.ipv6.conf.default.disable_ipv6=1")
+	}
 	run = append(run, limits...)
 	run = append(run, "--env-file", envFile, "--workdir", l.Dir, "--mount", helper)
 	for _, m := range mounts {

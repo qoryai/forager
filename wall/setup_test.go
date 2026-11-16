@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -631,4 +632,39 @@ func TestDockerAfterCommandLines(t *testing.T) {
 		t.Errorf("After's container was removed %d times, want once:\n%s", n, lines)
 	}
 	golden(t, "after", "docker "+strings.ReplaceAll(run, temp, "PRIVATEDIR")+"\n\n"+lines+"\n\nafter environment:\n"+string(env))
+}
+
+// TestDockerAfterSysctlFollowsTheAgents pins that After's container sets the IPv6
+// sysctl exactly when the agent's container does: not with nested Docker, whose runtime
+// sets the container's sysctls.
+func TestDockerAfterSysctlFollowsTheAgents(t *testing.T) {
+	const sysctl = "--sysctl net.ipv6.conf.default.disable_ipv6=1"
+	for _, nested := range []bool{false, true} {
+		t.Run(fmt.Sprintf("nested Docker %v", nested), func(t *testing.T) {
+			rec := &recorder{t: t, gateway: "172.30.0.1", local_: true, uid: 1000}
+			d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, NestArgs: []string{"run", "nest"}, sys: rec}
+			enc, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1", Runtime: "sysbox-runc", Docker: nested})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := enc.(*dockerEnclosure)
+			agent := launch()
+			agent.Proxy = "172.30.0.1:50123"
+			wrapped, err := e.Wrap(context.Background(), agent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := e.WrapAfter(context.Background(), Launch{
+				Command: "/opt/qory/qory-linux", Args: []string{"exec", "--after-only"}, Dir: "/work",
+				Proxy: agent.Proxy, Socket: "/tmp/qory-run-2/sock", Mounts: []Mount{{Path: "/work"}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			agentSets, afterSets := strings.Contains(words(wrapped.Args), sysctl), strings.Contains(words(after.Args), sysctl)
+			if agentSets == nested || afterSets != agentSets {
+				t.Errorf("with nested Docker %v the agent's container sets the sysctl %v and After's %v; want both set unless nested", nested, agentSets, afterSets)
+			}
+		})
+	}
 }
