@@ -555,7 +555,7 @@ func TestRecordedRunValidates(t *testing.T) {
 					if stepped[n] != "started" {
 						t.Errorf("%s: line %d: a run.log of step %d, whose state is %q, not started", dir, i+1, n, stepped[n])
 					}
-					if _, ok := m["data"].(map[string]any)["session"]; ok && kinds[n] != "image" && kinds[n] != "wall" && kinds[n] != "setup" {
+					if _, ok := m["data"].(map[string]any)["session"]; ok && kinds[n] != "image" && kinds[n] != "wall" && kinds[n] != "setup" && kinds[n] != "after" {
 						t.Errorf("%s: line %d: a run.log of a session in %s step %d", dir, i+1, kinds[n], n)
 					}
 				}
@@ -658,7 +658,7 @@ func (o *openSteps) breaks(m map[string]any) string {
 	case "dev.qory.run.step_started":
 		kind, _ := m["data"].(map[string]any)["kind"].(string)
 		o.steps[n] = kind
-		inCopy := kind == "join" || kind == "image" || kind == "wall" || kind == "setup"
+		inCopy := kind == "join" || kind == "image" || kind == "wall" || kind == "setup" || kind == "after"
 		for _, other := range numbers {
 			if o.steps[other] != "copy" || !inCopy {
 				return fmt.Sprintf("%s step %d starts inside %s step %d", kind, n, o.steps[other], other)
@@ -1302,15 +1302,18 @@ func TestEveryTypeHasASchemaAndTheReadmeNamesIt(t *testing.T) {
 	}
 }
 
-// TestAMeasureRecordValidates pins the record the helper's exec sends to the session's
+// TestAMeasureRecordValidates pins the records the helper's exec sends to the session's
 // socket as the runtime exits: the source measure with peak_memory_bytes and
-// cpu_time_ms, either, or neither.
+// cpu_time_ms, either, or neither, and the after source's records.
 func TestAMeasureRecordValidates(t *testing.T) {
 	s := compile(t, "record.schema.json")["record.schema.json"]
 	for _, rec := range []map[string]any{
 		{"source": "measure", "record": map[string]any{"peak_memory_bytes": 734003200, "cpu_time_ms": 4210}},
 		{"source": "measure", "record": map[string]any{"cpu_time_ms": 0}},
 		{"source": "measure", "record": map[string]any{}},
+		{"source": "after", "record": map[string]any{"event": "started"}},
+		{"source": "after", "record": map[string]any{"event": "line", "stream": "stdout", "bytes": "Y29tbWl0dGVkCg=="}},
+		{"source": "after", "record": map[string]any{"event": "exited", "exit_code": 143, "reason": "timeout"}},
 	} {
 		b, _ := json.Marshal(rec)
 		doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(b))

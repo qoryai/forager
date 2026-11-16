@@ -400,6 +400,35 @@ type SessionSpec struct {
 	// dev.qory.session.exited. dev.qory.session.started reports the launch without it.
 	// The run's Wall needs one.
 	Exec []string
+	// After is a command, its program and arguments, that Exec runs inside the wall
+	// once the runtime exits, such as a commit of what the agent left in the workspace.
+	// Before it starts, Exec stops every other process of the agent's container: each
+	// process of the agent's user but Exec and the container's init, and with nested
+	// Docker each inner container, through the inner daemon's API. After runs in Dir, as
+	// the runtime's user, with no input, in a process group of its own, with the
+	// runtime's environment but GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_EXEC_PATH,
+	// GIT_CONFIG*, GIT_SSH*, GIT_ASKPASS, BASH_ENV, ENV, LD_PRELOAD, LD_LIBRARY_PATH and
+	// QORY_RUN_SOCKET, and with variables that keep git from reading the system's and
+	// the user's configuration and from running a hook, an fsmonitor, a credential
+	// helper or a signing program. PATH keeps only absolute directories the agent's user
+	// cannot write. It is the session's after step, of kind event.StepAfter and name
+	// after: its lines are the command's output, and its exit status the command's. At
+	// AfterTimeout Exec sends SIGTERM to the command's process group and SIGKILL 5 s
+	// later: the step ends cancelled with reason timeout. When the kernel kills a process
+	// of the container for lack of memory while After runs, the step ends failed with
+	// reason out_of_memory. When Exec cannot stop the other processes within 2 s, After
+	// does not start and the step ends failed with 125. The step ends before the
+	// session's dev.qory.session.exited, whose state and exit status stay the
+	// runtime's; Result.After is the step's outcome. A runtime stopped at the Timeout
+	// still gets After: the session holds the launch until the after step ends, at most
+	// AfterTimeout, 5 s and StopGrace past its start. A stop from outside, the context's
+	// end or the run's close, gives After no more time than StopGrace: its step then
+	// ends cancelled with -1. A runtime that does not exit within StopGrace of a stop
+	// signal gets no After. Empty means none. After needs the run's Wall, Exec and an
+	// AfterTimeout above zero, and its words no NUL.
+	After []string
+	// AfterTimeout is how long After may run: above zero with After, unused without.
+	AfterTimeout time.Duration
 	// Timeout is how long the runtime may run, the session's setup commands included; zero
 	// means no limit. At the limit the runtime is stopped the way the context ending
 	// stops it, and dev.qory.session.exited contains the reason. qory passes the time
@@ -601,6 +630,30 @@ type Result struct {
 	// session_lost when it heard nothing from the session for three heartbeat
 	// intervals, and batch_refused when it refused a batch from the run's session.
 	ClosedReason string
+	// After is the outcome of the session's after step, SessionSpec.After's: nil when
+	// the spec has no After, and when no record of the step's start reached the session,
+	// such as for a runtime that did not exit within StopGrace of a stop signal, or an
+	// Exec that a process of the agent's ended first. A caller that sets After treats nil
+	// as an After that did not run.
+	After *AfterResult
+}
+
+// AfterResult is the outcome of a session's after step.
+type AfterResult struct {
+	// Step is the step's number in the run.
+	Step int
+	// State is the state of the step's dev.qory.run.step_exited: succeeded when the
+	// command exited 0, cancelled at AfterTimeout or at a stop from outside, and failed
+	// otherwise.
+	State string
+	// ExitCode is the command's exit status, 128 and the signal's number for a command a
+	// signal ended, 125 when Exec could not stop the container's other processes or run
+	// the command, and -1 when the step ended with no status, at a stop from outside or
+	// a lost record.
+	ExitCode int
+	// Reason is event.ReasonTimeout at AfterTimeout, event.ReasonOutOfMemory for a
+	// container short of memory, and empty otherwise.
+	Reason string
 }
 
 // Closed is what the close of a run came to.

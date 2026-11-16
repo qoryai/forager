@@ -16,6 +16,12 @@ func SetCgroupRoot(root string) { cgroupRoot = root }
 // has reaped it; nil for nothing.
 func SetExecHooks(before, after func()) { beforeStart, afterWait = before, after }
 
+// SetAfterStop sets what [Exec] calls to stop the container's other processes before
+// and after SessionSpec.After, in place of stopping them.
+func SetAfterStop(stop func(docker bool) error) {
+	stopProcesses = func(docker bool, _ time.Duration) error { return stop(docker) }
+}
+
 // SetUserHome sets the home of the user the session runs as, where the session reads
 // the transcript of a runtime with resume whose launch has no HOME, and returns the
 // home it replaced.

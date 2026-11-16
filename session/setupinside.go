@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"math"
 	"os"
 	"os/exec"
 	"os/signal"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -49,6 +51,27 @@ type setupRecord struct {
 	// runner is true on a line the setup runner writes when it cannot start or wait for
 	// the command.
 	runner bool
+	// reason is why After's command did not end by itself, on an exit of the after
+	// source: timeout, out_of_memory, or empty.
+	reason string
+}
+
+// readAfterRecord reads m, the record member of a record of the after source: a setup
+// record of command 1, whose exit may have reason timeout or out_of_memory.
+func readAfterRecord(m map[string]any) (setupRecord, error) {
+	with := maps.Clone(m)
+	with["command"] = float64(1)
+	rec, err := readSetupRecord(with)
+	if err != nil {
+		return rec, errors.New(strings.Replace(err.Error(), "not a setup record", "not an after record", 1))
+	}
+	if reason, ok := m["reason"]; ok && rec.event == setupExited {
+		rec.reason, _ = reason.(string)
+		if rec.reason != afterReasonTimeout && rec.reason != afterReasonOutOfMemo {
+			return rec, errors.New("not an after record: an exit's reason is timeout or out_of_memory")
+		}
+	}
+	return rec, nil
 }
 
 // readSetupRecord reads m, the record member of a record of the setup source. A
@@ -100,6 +123,14 @@ type setupSteps struct {
 	r        *Run
 	session  int
 	commands []SetupCommand
+	// kind is the kind of the steps: event.StepSetup, or event.StepAfter for the one
+	// step of SessionSpec.After, whose records are of the after source.
+	kind string
+	// onStart, when set, is called as the after step starts, before its
+	// dev.qory.run.step_started.
+	onStart func()
+	// outcome is the after step's, once it ended.
+	outcome *AfterResult
 	// terminal writes a setup line, masked, to the user's terminal.
 	terminal func(stream string, b []byte)
 	// neutral writes a line the setup runner writes when it cannot start or wait for
@@ -133,7 +164,23 @@ type setupSteps struct {
 // and neutral writes each line the setup runner writes when it cannot start or wait
 // for the command; harness, when not nil, masks the text of a hidden harness in them.
 func (r *Run) newSetupSteps(n int, commands []SetupCommand, terminal func(stream string, b []byte), neutral func(string) string, harness *mask.Harness) *setupSteps {
-	return &setupSteps{r: r, session: n, commands: commands, terminal: terminal, neutral: neutral, harness: harness, base: r.steps, next: 1, ended: len(commands) == 0}
+	return &setupSteps{r: r, session: n, commands: commands, kind: event.StepSetup, terminal: terminal, neutral: neutral, harness: harness, base: r.steps, next: 1, ended: len(commands) == 0}
+}
+
+// newAfterSteps returns the after step of session n, for a session whose spec has
+// After when after is true, as newSetupSteps returns its setup steps. onStart is called
+// as the step starts. The command's exit status ends the step succeeded on 0 and failed
+// otherwise, cancelled with reason timeout, and failed with reason out_of_memory.
+func (r *Run) newAfterSteps(n int, after bool, terminal func(stream string, b []byte), neutral func(string) string, harness *mask.Harness, onStart func()) *setupSteps {
+	s := &setupSteps{r: r, session: n, commands: []SetupCommand{{Name: afterName}}, kind: event.StepAfter, onStart: onStart, terminal: terminal, neutral: neutral, harness: harness, next: 1, ended: !after}
+	return s
+}
+
+// result is the after step's outcome, nil when it did not start.
+func (s *setupSteps) result() *AfterResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.outcome
 }
 
 // setupStream is one stream of a setup step whose lines go through the harness writer:
@@ -161,8 +208,8 @@ func (s *setupSteps) streamOf(stream string) *setupStream {
 }
 
 // endStep writes what the harness writers of the open step keep back, then ends the
-// step with state and code.
-func (s *setupSteps) endStep(state string, code int) {
+// step with state, code and reason.
+func (s *setupSteps) endStep(state string, code int, reason string) {
 	for _, stream := range []string{"stdout", "stderr"} {
 		if l, ok := s.lines[stream]; ok {
 			l.harness.Flush()
@@ -170,7 +217,10 @@ func (s *setupSteps) endStep(state string, code int) {
 		}
 	}
 	s.lines = nil
-	s.open.end(state, code)
+	if s.kind == event.StepAfter {
+		s.outcome = &AfterResult{Step: s.open.n, State: state, ExitCode: code, Reason: reason}
+	}
+	s.open.endWith(state, code, reason)
 	s.open = nil
 }
 
@@ -229,10 +279,18 @@ func (s *setupSteps) handle(rec runtimes.Record) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ended {
-		s.r.open.Report("a setup record arrived after the setup ended and is not recorded")
+		if s.kind == event.StepAfter {
+			s.r.open.Report("an after record arrived after the after step ended and is not recorded")
+		} else {
+			s.r.open.Report("a setup record arrived after the setup ended and is not recorded")
+		}
 		return
 	}
-	got, err := readSetupRecord(rec.Record)
+	read := readSetupRecord
+	if s.kind == event.StepAfter {
+		read = readAfterRecord
+	}
+	got, err := read(rec.Record)
 	if err != nil {
 		s.r.open.Report("socket: " + err.Error())
 		return
@@ -241,7 +299,10 @@ func (s *setupSteps) handle(rec runtimes.Record) {
 	switch {
 	case !s.ready || got.command > len(s.commands):
 	case got.event == setupStarted && s.open == nil && got.command == s.next:
-		s.open = s.r.startStep(event.StepSetup, s.commands[got.command-1].Name)
+		if s.onStart != nil {
+			s.onStart()
+		}
+		s.open = s.r.startStep(s.kind, s.commands[got.command-1].Name)
 		return
 	case got.event == setupLine && running:
 		// The record has the line once, through the sink, and the terminal has it once,
@@ -272,14 +333,22 @@ func (s *setupSteps) handle(rec runtimes.Record) {
 	case got.event == setupExited && running:
 		state := event.StateSucceeded
 		switch {
-		case got.code != 0 && s.stopping():
+		case got.reason == afterReasonTimeout:
+			state = event.StateCancelled
+		case got.reason == afterReasonOutOfMemo:
+			state = event.StateFailed
+		case got.code != 0 && s.kind == event.StepSetup && s.stopping():
 			state = event.StateCancelled
 		case got.code != 0:
 			state = event.StateFailed
 		}
-		s.endStep(state, got.code)
+		s.endStep(state, got.code, got.reason)
 		s.next++
 		s.ended = got.code != 0 || s.next > len(s.commands)
+		return
+	}
+	if s.kind == event.StepAfter {
+		s.r.open.Report("an after record arrived out of order and is not recorded")
 		return
 	}
 	s.r.open.Report(fmt.Sprintf("a setup record for step %d arrived out of order and is not recorded", s.base+got.command))
@@ -296,7 +365,7 @@ func (s *setupSteps) finish(stopped bool) {
 		if stopped {
 			state = event.StateCancelled
 		}
-		s.endStep(state, -1)
+		s.endStep(state, -1, "")
 	}
 	s.ended = true
 }

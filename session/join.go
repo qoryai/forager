@@ -201,6 +201,9 @@ func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) 
 	if err := checkExec(s); err != nil {
 		return runSpec{}, nil, err
 	}
+	if err := checkAfter(s); err != nil {
+		return runSpec{}, nil, err
+	}
 	rt := spec.Runtime
 	if rt == nil {
 		// A session with no runtime has no start key, so it names none.
@@ -813,6 +816,10 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	var terminalMu sync.Mutex
 	stdout, stderr := &terminalWriter{mu: &terminalMu, w: spec.Stdout}, &terminalWriter{mu: &terminalMu, w: spec.Stderr}
 	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup, setupTerminal(interactive, stdout, stderr), neutral, hidden)
+	// The after step's start marks the runtime's exit: afterStart, set before the
+	// launch, decides how the runtime ended and holds the launch while After runs.
+	var afterStart func()
+	afterSteps := r.newAfterSteps(n, len(spec.After) > 0, setupTerminal(interactive, stdout, stderr), neutral, hidden, func() { afterStart() })
 	// The mapper is reached from the socket's goroutine and the output's: it sets
 	// parent_agent_id on a subagent's start, which it may keep back for a while, and
 	// writes every event of the session's runtime in order. Each event is masked first,
@@ -841,6 +848,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		switch rec.Source {
 		case runtimes.SourceSetup:
 			setupSteps.handle(rec)
+			return
+		case runtimes.SourceAfter:
+			afterSteps.handle(rec)
 			return
 		case runtimes.SourceMeasure:
 			if spec.Wall != nil {
@@ -929,7 +939,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		if err := r.listed.update(slices.Concat(again.sources, binds, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
 		}
-		inner, innerArgs := withExec(spec.Exec, unset, command, args)
+		after := afterLaunch{words: insideAll(spec.After, inside), timeout: spec.AfterTimeout, docker: r.img.Docker}
+		inner, innerArgs := withExec(spec.Exec, unset, after, command, args)
 		launch, err = enclosure.Wrap(runCtx, wall.Launch{
 			Command: inner, Args: innerArgs, Dir: shown.Dir, Interactive: interactive,
 			Env:   wrapEnv,
@@ -985,10 +996,15 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// stop's cause, from the runtime's start until its exit is decided.
 	stoppable, stopRuntime := context.WithCancelCause(runCtx)
 	defer stopRuntime(nil)
-	limited, cancelLimit := context.WithCancel(stoppable)
+	limited, cancelLimitCause := context.WithCancelCause(stoppable)
+	cancelLimit := func() { cancelLimitCause(nil) }
+	// The limit's timer stops as the after step starts: After has a limit of its own.
+	stopLimit := func() {}
 	if spec.Timeout > 0 {
-		limited, cancelLimit = context.WithTimeoutCause(stoppable, spec.Timeout, errTimeout)
+		limit := time.AfterFunc(spec.Timeout, func() { cancelLimitCause(errTimeout) })
+		stopLimit = func() { limit.Stop() }
 	}
+	defer stopLimit()
 	r.stops.arm(stopRuntime)
 	// Whether the session was cancelled, and whether it timed out, is decided the moment
 	// the runtime's exit is observed. Cancelled: the caller's context had ended by then,
@@ -998,13 +1014,48 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// exited by itself before that signal, whatever its status, is decided by its exit.
 	// What ends the context later changes nothing. A stop in the gateway's answer to a
 	// batch is decided after the exit, below.
+	// With After, the start of the after step is the moment of the runtime's exit.
 	var cancelled, timedOut bool
-	proc.exited = func() {
+	decide := sync.OnceFunc(func() {
 		cause := context.Cause(limited)
 		cancelled = ctx.Err() != nil && !errors.Is(cause, errTimeout) && !errors.Is(cause, errRunClosed) && !errors.Is(cause, errModelKeyLimit)
 		timedOut = errors.Is(cause, errTimeout) && proc.stopped.Load()
+	})
+	proc.exited = func() {
+		decide()
 		if exitObserved != nil {
 			exitObserved()
+		}
+	}
+	// With After, the launch is held past the stop's grace once the after step starts,
+	// unless the stop came from outside, until AfterTimeout, the 5 s of SIGKILL's wait
+	// and the grace have passed; then the session stops the launch.
+	afterStart = func() {}
+	if len(spec.After) > 0 {
+		proc.hold = newLaunchHold(runCtx)
+		defer proc.hold.end()
+		var backstop *time.Timer
+		var backstopMu sync.Mutex
+		defer func() {
+			backstopMu.Lock()
+			if backstop != nil {
+				backstop.Stop()
+			}
+			backstopMu.Unlock()
+		}()
+		afterStart = func() {
+			decide()
+			stopLimit()
+			if runCtx.Err() != nil {
+				return
+			}
+			proc.hold.engage()
+			backstopMu.Lock()
+			backstop = time.AfterFunc(spec.AfterTimeout+afterKillWait+proc.grace, func() {
+				proc.hold.end()
+				cancelLimitCause(errAfterLimit)
+			})
+			backstopMu.Unlock()
 		}
 	}
 	// The setup's records are recorded once the launch starts; a command that exits
@@ -1015,6 +1066,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		cause := context.Cause(limited)
 		return errors.Is(cause, errTimeout) || errors.Is(cause, errModelKeyLimit) || ctx.Err() != nil || errors.Is(context.Cause(runCtx), errRunClosed)
 	})
+	afterSteps.start(func() bool { return false })
 	var exit exitStatus
 	if interactive {
 		exit, err = proc.runPTY(limited)
@@ -1035,6 +1087,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	}
 	// A setup step still open when the launch ended has no exit status.
 	setupSteps.finish(closed || timedOut || cancelled)
+	// An after step still open has no exit status: cancelled when the session stopped
+	// the launch, failed otherwise.
+	afterSteps.finish(closed || cancelled || proc.stopped.Load())
 	if err != nil && !closed {
 		r.stops.end()
 		r.write(event.SessionExited, map[string]any{"session": n, "state": event.StateFailed, "exit_code": -1, "duration_ms": time.Since(start).Milliseconds()})
@@ -1092,7 +1147,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		// record.
 		r.lastExit = -1
 	}
-	res := &Result{RunID: r.id, Dir: dir, SessionDir: sessionDir, Session: n, ExitCode: exit.code, Signal: exit.signal, State: state, Reason: reason, TimedOut: timedOut && !closed, Cancelled: cancelled, RunClosed: closed}
+	res := &Result{RunID: r.id, Dir: dir, SessionDir: sessionDir, Session: n, ExitCode: exit.code, Signal: exit.signal, State: state, Reason: reason, TimedOut: timedOut && !closed, Cancelled: cancelled, RunClosed: closed, After: afterSteps.result()}
 	switch {
 	case closed:
 		// The gateway wrote the session's dev.qory.session.exited in its stream when it

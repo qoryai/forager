@@ -588,6 +588,8 @@ func TestAStepsErrorsStartWithTheFix(t *testing.T) {
 	}
 	_, err = r.StartStep(event.StepSetup, "make setup")
 	refused("a setup step", err, "start a host step of kind fetch, compose, build, push, machine or copy, not \"setup\"")
+	_, err = r.StartStep(event.StepAfter, "after")
+	refused("an after step", err, "start a host step of kind fetch, compose, build, push, machine or copy, not \"after\"")
 	_, err = r.StartStep(event.StepJoin, "join")
 	refused("a join step", err, "start a host step of kind fetch, compose, build, push, machine or copy, not \"join\"")
 	_, err = r.StartStep("checkout", "checkout the work")

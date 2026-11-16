@@ -19,7 +19,8 @@ func TestParseExecRefusesANameWithANULOrAnEqualsSign(t *testing.T) {
 			t.Errorf("%q was taken as a name", name)
 		}
 	}
-	names, argv, err := parseExec([]string{"--unset", "A", "--unset", "_B1", "--", "p", "--unset", "C"})
+	opts, argv, err := parseExec([]string{"--unset", "A", "--unset", "_B1", "--", "p", "--unset", "C"})
+	names := opts.names
 	if err != nil || len(names) != 2 || names[1] != "_B1" || len(argv) != 3 || argv[1] != "--unset" {
 		t.Errorf("parseExec: %q, %q, %v", names, argv, err)
 	}

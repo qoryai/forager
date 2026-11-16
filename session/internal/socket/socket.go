@@ -103,7 +103,7 @@ func (l *Listener) Serve(handle func(descriptor.Record), bad func(error)) {
 const Patience = 5 * time.Second
 
 // sources are the sources of a record the listener reads.
-var sources = []string{descriptor.SourceHooks, descriptor.SourceOutput, descriptor.SourceSetup, descriptor.SourceMeasure}
+var sources = []string{descriptor.SourceHooks, descriptor.SourceOutput, descriptor.SourceSetup, descriptor.SourceMeasure, descriptor.SourceAfter}
 
 // read decodes one connection's lines until end of file.
 func read(r io.Reader, handle func(descriptor.Record), bad func(error)) {

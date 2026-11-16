@@ -238,6 +238,8 @@ func Main() {
 		os.Exit(reach(os.Args[2:]))
 	case modeAfterJoin:
 		os.Exit(afterJoin())
+	case modeLeaveJob:
+		os.Exit(leaveJob())
 	case modeService:
 		err := http.ListenAndServe(":"+setupServicePort, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			io.WriteString(w, setupServiceLine)
@@ -613,6 +615,7 @@ func Run(t *testing.T, o Options) {
 	setupRemoved(t, o, origin, outside)
 	setupRemovedAfterSession(t, o, origin, outside)
 	afterJoinFreshHome(t, o, origin, outside)
+	afterStep(t, o, origin, outside)
 	runAPIThroughTheWall(t, o, origin, outside)
 	transcriptSent(t, o, origin, outside)
 	transcriptPlanted(t, o, origin, outside)
@@ -1497,6 +1500,9 @@ type variant struct {
 	// stdout gets the session's standard output too.
 	stdin  io.Reader
 	stdout io.Writer
+	// after and afterTimeout are the session's SessionSpec.After and AfterTimeout.
+	after        []string
+	afterTimeout time.Duration
 	// home, with Docker, defines the machine's image as Options.HomeImage in place of
 	// Options.Image.
 	home bool
@@ -1654,6 +1660,8 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 			Exec:              o.Exec,
 			SetupRunner:       []string{o.Probe, modeSetupCommand},
 			WorkspaceReadOnly: v.readOnly,
+			After:             v.after,
+			AfterTimeout:      v.afterTimeout,
 		},
 		fetch: v.fetch, setup: v.setup, onSetup: v.onSetup, removeSetup: v.removeSetup, opened: v.opened,
 		runAPICheck: v.runAPICheck,

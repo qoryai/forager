@@ -60,6 +60,64 @@ type process struct {
 	// stopped is set once the stop signal reached the process, at the end of the
 	// context it runs under, before its exit was observed.
 	stopped atomic.Bool
+	// hold, for a session with SessionSpec.After, keeps the process from SIGKILL past
+	// the grace while the after step runs; nil for a session with no After.
+	hold *launchHold
+}
+
+// launchHold keeps a launch from SIGKILL past its stop's grace while the session's
+// after step runs inside it, until the step's backstop or a stop from outside.
+type launchHold struct {
+	// outside ends at a stop from outside the session: the join's context or the run's
+	// close.
+	outside context.Context
+	mu      sync.Mutex
+	held    bool
+	release chan struct{}
+	once    sync.Once
+}
+
+// newLaunchHold returns a hold that is not engaged, which outside ends.
+func newLaunchHold(outside context.Context) *launchHold {
+	return &launchHold{outside: outside, release: make(chan struct{})}
+}
+
+// engage holds the launch from now on, until end.
+func (h *launchHold) engage() {
+	h.mu.Lock()
+	h.held = true
+	h.mu.Unlock()
+}
+
+// end lets the launch be killed; a second call changes nothing.
+func (h *launchHold) end() { h.once.Do(func() { close(h.release) }) }
+
+// wait returns once the launch, whose stop's grace has passed, may be killed: at once
+// when the hold is not engaged or the stop came from outside, otherwise at end, or
+// grace after a stop from outside. It reports false when done, the launch's exit,
+// comes first.
+func (h *launchHold) wait(done <-chan struct{}, grace time.Duration) bool {
+	h.mu.Lock()
+	held := h.held
+	h.mu.Unlock()
+	if !held || h.outside.Err() != nil {
+		return true
+	}
+	select {
+	case <-h.release:
+		return true
+	case <-done:
+		return false
+	case <-h.outside.Done():
+	}
+	t := time.NewTimer(grace)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-done:
+		return false
+	}
 }
 
 // The size a pseudo-terminal gets when Forager's own input is not a terminal, or
@@ -100,8 +158,14 @@ const DefaultStopSignal = "SIGTERM"
 func CheckStopSignal(name string) error { return runtimes.CheckStopSignal(name) }
 
 // newCmd builds the command with the context ending it: the stop signal, then SIGKILL
-// after the grace. A stop signal that reaches the process sets stopped.
+// after the grace. A stop signal that reaches the process sets stopped. With a hold,
+// [process.wait] ends it instead.
 func (p *process) newCmd(ctx context.Context) *exec.Cmd {
+	if p.hold != nil {
+		cmd := exec.Command(p.command, p.args...)
+		cmd.Env, cmd.Dir, cmd.WaitDelay = p.env, p.dir, p.grace
+		return cmd
+	}
 	cmd := exec.CommandContext(ctx, p.command, p.args...)
 	cmd.Env = p.env
 	cmd.Dir = p.dir
@@ -114,6 +178,39 @@ func (p *process) newCmd(ctx context.Context) *exec.Cmd {
 	}
 	cmd.WaitDelay = p.grace
 	return cmd
+}
+
+// wait waits for the started cmd. With a hold, the end of ctx sends the stop signal,
+// which sets stopped when it reaches the process, and SIGKILL follows after the grace
+// once the hold lets it.
+func (p *process) wait(ctx context.Context, cmd *exec.Cmd) error {
+	if p.hold == nil {
+		return cmd.Wait()
+	}
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+		}
+		if cmd.Process.Signal(p.stop) == nil {
+			p.stopped.Store(true)
+		}
+		t := time.NewTimer(p.grace)
+		defer t.Stop()
+		select {
+		case <-done:
+			return
+		case <-t.C:
+		}
+		if p.hold.wait(done, p.grace) {
+			cmd.Process.Kill()
+		}
+	}()
+	err := cmd.Wait()
+	close(done)
+	return err
 }
 
 // observed tells exited, when there is one, that the runtime's exit was observed.
@@ -194,7 +291,7 @@ func (p *process) runPipes(ctx context.Context) (exitStatus, error) {
 	if err := cmd.Start(); err != nil {
 		return exitStatus{}, fmt.Errorf("%w: %v", ErrNotStarted, accesskey.ShownError(err))
 	}
-	err := cmd.Wait()
+	err := p.wait(ctx, cmd)
 	p.observed()
 	out.Flush()
 	errs.Flush()
@@ -242,7 +339,7 @@ func (p *process) runPTY(ctx context.Context) (exitStatus, error) {
 		defer close(done)
 		io.Copy(out, ptmx)
 	}()
-	err = cmd.Wait()
+	err = p.wait(ctx, cmd)
 	p.observed()
 	select {
 	case <-done:

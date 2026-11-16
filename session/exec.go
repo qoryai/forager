@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/session/internal/descriptor"
@@ -37,13 +39,14 @@ func checkExec(spec runSpec) error {
 }
 
 // withExec is the launch of command and args started through the helper's exec, which
-// unsets the names first, then starts the launch and measures the enclosure when it
-// exits. The session calls it only behind a wall.
-func withExec(helper, unset []string, command string, args []string) (string, []string) {
+// unsets the names first, then starts the launch, measures the enclosure when it exits,
+// and runs after's command when it has one. The session calls it only behind a wall.
+func withExec(helper, unset []string, after afterLaunch, command string, args []string) (string, []string) {
 	words := slices.Clone(helper[1:])
 	for _, name := range unset {
 		words = append(words, "--unset", name)
 	}
+	words = append(words, after.args()...)
 	return helper[0], append(append(words, "--", command), args...)
 }
 
@@ -82,8 +85,20 @@ func withExec(helper, unset []string, command string, args []string) (string, []
 // and a host's cgroup seen without a cgroup namespace. A value it cannot read is left
 // out of the record, and a record with no value is not sent.
 //
-// Its arguments are --unset NAME, any number of times, then -- and the program and
-// its arguments, which no option of its reaches. A NAME is a variable's name: letters,
+// With --after-word, Exec then runs SessionSpec.After, as its documentation says, and
+// reports it to the socket as records of the after source: that it started, each line
+// of its output, and its exit status with the reason, timeout or out_of_memory, when
+// it did not end by itself. Exec stops the container's other processes only when it is
+// the container's first program: the child of pid 1, an engine's init program such as
+// Docker's docker-init, in a pid namespace other than the machine's. Otherwise After
+// does not start and its exit status is 125. When the first
+// record cannot be sent, After still runs, its output to stderr. Signals that reach
+// Exec while After runs change nothing.
+//
+// Its arguments are --unset NAME, any number of times, then --after-timeout MS,
+// --after-word WORD once for each word of After, and --after-docker when the
+// enclosure runs nested Docker, or none of them, then -- and the program and its
+// arguments, which no option of its reaches. A NAME is a variable's name: letters,
 // digits and underscores, starting with a letter or an underscore. When a signal ended
 // the program, Exec ends by the same signal once it has sent the measure, so its
 // parent sees the end it saw when Exec executed the program in its place: docker-init
@@ -94,7 +109,8 @@ func withExec(helper, unset []string, command string, args []string) (string, []
 // program it does not find, or finds only through . or an empty entry of PATH, and
 // 126 for one it cannot execute, its reason written to stderr.
 func Exec(args []string, stderr io.Writer) int {
-	names, argv, err := parseExec(args)
+	opts, argv, err := parseExec(args)
+	names := opts.names
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -119,7 +135,8 @@ func Exec(args []string, stderr io.Writer) int {
 		return 127
 	}
 	closeInherited()
-	code, sig, err := startAndWait(path, argv)
+	notify := passedOn()
+	code, sig, err := startAndWait(path, argv, notify)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		fmt.Fprintf(stderr, "exec: %s: not found: %v\n", program, accesskey.ShownError(err))
@@ -132,6 +149,12 @@ func Exec(args []string, stderr io.Writer) int {
 		// A session that is gone, or a socket that does not reach the enclosure, loses
 		// the measure and nothing else.
 		sendMeasure(addr, cgroupRoot)
+	}
+	if len(opts.after.words) > 0 {
+		// Exec keeps ignoring the signals, while After gets their default actions: a
+		// signal Exec catches, unlike one it ignores, has its default action in a child.
+		signal.Notify(make(chan os.Signal, 1), notify...)
+		runAfterStep(addr, opts.after, stderr)
 	}
 	if sig != 0 && endsByDefault(sig) {
 		raise(sig)
@@ -167,11 +190,8 @@ var forwarded = []os.Signal{
 	syscall.SIGTERM, syscall.SIGCONT, syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU, syscall.SIGWINCH,
 }
 
-// startAndWait starts the program at path with argv and the process's environment and
-// standard streams, passes on each of [forwarded] until it exits, and returns its exit
-// status: its code, or 128 and the number of the signal that ended it, with that
-// signal. The error is that of the start: the program did not run.
-func startAndWait(path string, argv []string) (int, syscall.Signal, error) {
+// passedOn are the signals of [forwarded] the process did not start with ignored.
+func passedOn() []os.Signal {
 	var notify []os.Signal
 	for _, sig := range forwarded {
 		// Go keeps HUP and INT ignored when the process started with them ignored, and
@@ -180,6 +200,15 @@ func startAndWait(path string, argv []string) (int, syscall.Signal, error) {
 			notify = append(notify, sig)
 		}
 	}
+	return notify
+}
+
+// startAndWait starts the program at path with argv and the process's environment and
+// standard streams, passes on each of notify, the signals [passedOn] returns, until it
+// exits, and returns its exit status: its code, or 128 and the number of the signal
+// that ended it, with that signal. The error is that of the start: the program did not
+// run.
+func startAndWait(path string, argv []string, notify []os.Signal) (int, syscall.Signal, error) {
 	sigs := make(chan os.Signal, 32)
 	signal.Notify(sigs, notify...)
 	// The program runs in a separate process group, as a shell's job does and as
@@ -300,30 +329,61 @@ func readMeasure(root string) map[string]any {
 	return m
 }
 
-// parseExec reads [Exec]'s arguments: the names to unset, and the program and its
-// arguments after --. A name outside a variable's grammar is refused without being
-// quoted, since what is not a name may hold a value.
-func parseExec(args []string) ([]string, []string, error) {
-	var names []string
+// execOptions are [Exec]'s options: the names to unset and SessionSpec.After.
+type execOptions struct {
+	names []string
+	after afterLaunch
+}
+
+// parseExec reads [Exec]'s arguments: its options, and the program and its arguments
+// after --. A name outside a variable's grammar is refused without being quoted, since
+// what is not a name may hold a value.
+func parseExec(args []string) (execOptions, []string, error) {
+	var opts execOptions
+	usage := errors.New("exec: want --unset NAME ... [--after-timeout MS --after-word WORD ... [--after-docker]] -- program [args]")
+	timeout := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--unset":
 			if i+1 == len(args) {
-				return nil, nil, errors.New("exec: --unset needs a name")
+				return opts, nil, errors.New("exec: --unset needs a name")
 			}
 			i++
 			if !variableShape.MatchString(args[i]) {
-				return nil, nil, errors.New("exec: an --unset is not a variable's name: letters, digits and underscores, starting with a letter or an underscore, of at most 128")
+				return opts, nil, errors.New("exec: an --unset is not a variable's name: letters, digits and underscores, starting with a letter or an underscore, of at most 128")
 			}
-			names = append(names, args[i])
+			opts.names = append(opts.names, args[i])
+		case "--after-timeout":
+			if i+1 == len(args) {
+				return opts, nil, errors.New("exec: --after-timeout needs milliseconds")
+			}
+			i++
+			ms, err := strconv.ParseInt(args[i], 10, 64)
+			if err != nil || ms <= 0 || ms > math.MaxInt64/int64(time.Millisecond) {
+				return opts, nil, errors.New("exec: --after-timeout is a whole number of milliseconds above 0")
+			}
+			opts.after.timeout, timeout = time.Duration(ms)*time.Millisecond, true
+		case "--after-word":
+			if i+1 == len(args) {
+				return opts, nil, errors.New("exec: --after-word needs a word")
+			}
+			i++
+			opts.after.words = append(opts.after.words, args[i])
+		case "--after-docker":
+			opts.after.docker = true
 		case "--":
-			if i+1 == len(args) || args[i+1] == "" {
-				return nil, nil, errors.New("exec: want --unset NAME ... -- program [args]: the program is missing")
+			switch {
+			case i+1 == len(args) || args[i+1] == "":
+				return opts, nil, errors.New("exec: want --unset NAME ... -- program [args]: the program is missing")
+			case timeout != (len(opts.after.words) > 0), opts.after.docker && !timeout:
+				return opts, nil, errors.New("exec: --after-timeout and --after-word go together, and --after-docker needs them")
+			case timeout && opts.after.words[0] == "":
+				return opts, nil, errors.New("exec: the first --after-word, After's program, is empty")
 			}
-			return names, args[i+1:], nil
+			return opts, args[i+1:], nil
 		default:
-			return nil, nil, errors.New("exec: want --unset NAME ... -- program [args]")
+			return opts, nil, usage
 		}
 	}
-	return nil, nil, errors.New("exec: want --unset NAME ... -- program [args]: -- is missing")
+	return opts, nil, errors.New("exec: want --unset NAME ... -- program [args]: -- is missing")
 }
