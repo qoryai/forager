@@ -150,6 +150,8 @@ type Run struct {
 	// setupUp is the run's setup container from the call of StartSetup until
 	// [Run.RemoveSetup] removes it, nil otherwise.
 	setupUp setupContainer
+	// route is the run's route to OpenSpec.QoryRoute, nil for a run with none.
+	route *qoryRoute
 }
 
 // Open opens a run at its gateway and returns it once dev.qory.run.started and the
@@ -243,6 +245,9 @@ func open(ctx context.Context, spec OpenSpec, masker *mask.Masker, made bool) (*
 	spec.Report = func(line string) { report(masker.Replace(line)) }
 	r := &Run{open: spec, local: local, remote: remote, id: runID, dir: filepath.Join(spec.RunsDir, runID), lastExit: -1, masker: masker, madeMasker: made, passwords: &mask.Masker{}}
 	r.closing, r.markClosed = context.WithCancelCause(context.Background())
+	if spec.QoryRoute != nil {
+		r.route = newQoryRoute(spec.QoryRoute, r.closing, r.writeRouteEgress, spec.Report)
+	}
 	if err := r.start(ctx); err != nil {
 		r.markClosed(nil)
 		return r, err
@@ -757,6 +762,19 @@ func (r *Run) write(typ string, data any) {
 	r.emitMu.Lock()
 	defer r.emitMu.Unlock()
 	r.record(typ, data)
+}
+
+// writeRouteEgress writes data, a decision of the route to link.QoryHost, as a
+// dev.qory.run.egress, with the mode of the policy in force.
+func (r *Run) writeRouteEgress(data map[string]any) {
+	r.emitMu.Lock()
+	defer r.emitMu.Unlock()
+	mode, _ := r.members["mode"].(string)
+	if mode == "" {
+		mode = "enforce"
+	}
+	data["mode"] = mode
+	r.record(event.RunEgress, data)
 }
 
 // own writes an event to the session's record alone.

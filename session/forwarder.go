@@ -72,8 +72,11 @@ const (
 //
 // Behind a wall, a connection that shows the relay's preamble after [forwarder.setCheck]
 // set the run's check of its run API is read one request at a time, as without a wall,
-// and a POST to the run API goes on only once the check returns nil, nil. A connection
-// that shows it without the check passes on as it is, after the same preamble.
+// and a POST to the run API goes on only once the check returns nil, nil. With the run's
+// route to OpenSpec.QoryRoute, every connection is read one request at a time too,
+// walled or not, and a plain request to link.QoryHost goes to the route's handler, never
+// to the proxy. A connection that shows the preamble with neither passes on as it is,
+// after the same preamble.
 //
 // The secrets are held in memory alone: never in a file or a report, and in an
 // environment only as that password, in the unwalled agent's proxy URL.
@@ -142,6 +145,13 @@ type forwarding struct {
 	// same preamble toward the proxy again, so without the check the proxy gets the bytes
 	// the relay sent, and with it the forwarder reads the request after the preamble.
 	checkRelay string
+	// route, when set, is the run's route to OpenSpec.QoryRoute: the forwarder serves
+	// every plain request to link.QoryHost with it, and nothing of such a request
+	// reaches the proxy. Without a password it reads one request per connection, as with
+	// the check. session is the session this forwarder serves alone, without a wall,
+	// and 0 for the run's wall forwarder, which serves whichever session runs.
+	route   *qoryRoute
+	session int
 }
 
 // listenForwarder listens on addr, host:port, and forwards to target, the gateway's
@@ -366,7 +376,7 @@ func (f *forwarder) serve(c net.Conn) {
 	// the agent sends after it.
 	var checked []byte
 	var from *bufio.Reader
-	if way.password == "" && way.check != nil {
+	if way.password == "" && (way.check != nil || way.route != nil) {
 		c.SetReadDeadline(time.Now().Add(f.headWait()))
 		head, rest, err := readHead(c, nil)
 		if errors.Is(err, errHeadLimits) {
@@ -386,7 +396,10 @@ func (f *forwarder) serve(c net.Conn) {
 		switch {
 		case connectHead(head):
 			src = io.MultiReader(bytes.NewReader(closingHead(head)), rest)
-		case forRunAPIPost(head):
+		case way.route != nil && forQoryHost(head):
+			way.route.serve(c, head, rest, way.session)
+			return
+		case way.check != nil && forRunAPIPost(head):
 			if checked, from = way.check.pass(f.ctx, c, head, rest), rest; checked == nil {
 				return
 			}
@@ -419,6 +432,9 @@ func (f *forwarder) serve(c net.Conn) {
 			// The tunnel goes on as it is; a proxy that refuses it closes the connection
 			// rather than reading a second request.
 			src = io.MultiReader(bytes.NewReader(closingHead(head)), rest)
+		} else if way.route != nil && forQoryHost(head) {
+			way.route.serve(c, head, rest, way.session)
+			return
 		} else if plain = plainRequest(head, rest); plain == nil {
 			return
 		}
@@ -456,7 +472,7 @@ func (f *forwarder) serve(c net.Conn) {
 		})
 		return
 	}
-	pipe(c, up, src, up, way.password != "" || way.check != nil)
+	pipe(c, up, src, up, way.password != "" || way.check != nil || way.route != nil)
 }
 
 // dialUp opens the connection to the proxy with way's dial, each try for [dialWait] at

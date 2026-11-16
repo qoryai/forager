@@ -667,11 +667,15 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// replaces it, and a run with no control plane has none. Behind a wall the value is
 	// variable_reserved, when the variables are resolved.
 	if spec.Wall == nil {
-		spec.Env = withoutNames(spec.Env, []string{EnvRunAPI})
+		spec.Env = withoutNames(spec.Env, []string{EnvRunAPI, EnvQoryHost})
 	}
 	ownEnv := []string{EnvRunID + "=" + r.id}
 	if r.answer.RunAPI != "" {
 		ownEnv = append(ownEnv, EnvRunAPI+"="+r.answer.RunAPI)
+	}
+	// The route's URL is the launch's alone: the run's setup never gets it.
+	if r.route != nil {
+		ownEnv = append(ownEnv, EnvQoryHost+"="+link.QoryHostURL)
 	}
 	if spec.HarnessHome != "" {
 		ownEnv = append(ownEnv, EnvHarnessHome+"="+inside(spec.HarnessHome))
@@ -790,10 +794,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// inside TLS, bound, opened with the run key.
 	fwd := r.wallFwd
 	if spec.Wall == nil {
+		// The session's forwarder serves the run's route for this session alone.
 		if r.remote == nil {
-			fwd, err = listenForwarder(link.Loopback, r.disc.Proxy.Address, r.answer.ProxySecret, password)
+			fwd, err = listenForwarding(link.Loopback, forwarding{dial: dialTCP(r.disc.Proxy.Address), secret: r.answer.ProxySecret, password: password, route: r.route, session: n})
 		} else {
-			fwd, err = listenForwarding(link.Loopback, forwarding{dial: r.link.DialProxy, hold: gatewayHold, password: password})
+			fwd, err = listenForwarding(link.Loopback, forwarding{dial: r.link.DialProxy, hold: gatewayHold, password: password, route: r.route, session: n})
 		}
 		if err != nil {
 			return fail(err)
@@ -1016,11 +1021,16 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		return errors.Is(cause, errTimeout) || errors.Is(cause, errModelKeyLimit) || ctx.Err() != nil || errors.Is(context.Cause(runCtx), errRunClosed)
 	})
 	var exit exitStatus
+	// The route to OpenSpec.QoryRoute is open to this session while its launch runs,
+	// and closes before anything of the session's end is written.
+	closeRoute := r.route.open(n)
+	defer closeRoute()
 	if interactive {
 		exit, err = proc.runPTY(limited)
 	} else {
 		exit, err = proc.runPipes(limited)
 	}
+	closeRoute()
 	// A run closed from outside has nothing further posted, whatever the runtime's
 	// status.
 	closed := errors.Is(context.Cause(runCtx), errRunClosed)

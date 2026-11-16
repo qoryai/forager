@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -180,6 +181,45 @@ type OpenSpec struct {
 	// QORY_RUN_REPOSITORIES', and the forwarders' passwords, and which [Run.Close]
 	// overwrites.
 	Masker *mask.Masker
+	// QoryRoute, when not nil, serves the plain HTTP requests that a session's programs
+	// send to http://host.qory.invalid/ (link.QoryHostURL), any method and any path,
+	// while the session's launch runs: the runtime, and the setup commands of
+	// SessionSpec.Setup, which run in the launch. Each session's launch gets
+	// QORY_HOST_URL (link.EnvQoryHost); [Run.Setup] does not, and the route is closed
+	// during it, before the first session, between sessions and after the last. The
+	// session's forwarder serves the route in this process, walled or not, with a
+	// gateway on this machine or a separate one: nothing of a request reaches the
+	// gateway, and the route sets no credential and reaches nothing of the machine but
+	// the handler.
+	//
+	// The handler gets the method, the path, the query, Content-Type, the body, read
+	// whole first, and Qory-Session (link.QorySessionHeader), the number of the session
+	// that runs. The forwarder takes every other header off, Proxy-Authorization among
+	// them. The request's context ends after 30 seconds, at the session's end or at the
+	// run's close. The program gets the answer's status, 200 to 599 but 407, its
+	// Content-Type and its body after the handler returns, with Connection: close.
+	//
+	// The forwarder answers itself, with a JSON body {"error":<code>,"message":<text>},
+	// and does not call the handler, for a request not sent over HTTP/1.1 to
+	// http://host.qory.invalid/ with one Host header of that host and its body with at
+	// most one Content-Length and no Transfer-Encoding (400 bad_request); while no
+	// session runs (503 session_not_running); for a request over 10 of the run in a
+	// second, or over 4 in flight (429 rate_limited); and for a body over 1 MiB (413
+	// payload_too_large). It answers 504 timeout when the handler does not return
+	// within 30 seconds, 503 session_not_running when the session ends first, and 502
+	// bad_answer for an answer over 1 MiB, a status outside the range, or a handler
+	// that panics, which is a Report line too. Each request is one dev.qory.run.egress
+	// with channel qory_host and rule wall:qory-host. If this process ends during a
+	// request, the program's connection closes with no answer.
+	//
+	// Behind a wall, with QoryRoute set, the run's forwarder reads one request per
+	// connection, as it does once [Run.SetRunAPICheck] sets a check: plain-HTTP
+	// keep-alive ends after each request, and the program opens a new connection for
+	// the next one. A CONNECT tunnel does not change. Every request to the host that no
+	// session's forwarder serves, a CONNECT to it, one through a [HostProxy], the stack
+	// proxy or the engine proxy, and any request in a run with no QoryRoute, gets the
+	// gateway's 403 with rule wall:qory-host.
+	QoryRoute http.Handler
 }
 
 // EngineProxy is the proxy setting the machine's container engine reads when it
