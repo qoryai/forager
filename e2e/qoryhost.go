@@ -200,7 +200,7 @@ func setupRoute() int {
 // agent wrote into the workspace. Both get the gateway's 403, since the forwarder serves
 // the route only from the agent container's address, and the handler gets neither.
 func qoryHostFromTheSetup(t *testing.T, o Options, h hosts, outside string) {
-	const name = "the setup container gets 403 from the route, also with the session's password"
+	const name = "the setup container gets 403 from the route even with the session's password"
 	if !o.Setup {
 		t.Run(name, func(t *testing.T) { t.Skip("the adapter starts no setup container") })
 		return
