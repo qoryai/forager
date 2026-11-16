@@ -329,7 +329,8 @@ values. An entry is one of two kinds:
   record has the request `denied` with the rule `wall:push-ref`. Through such an item a push to another branch fails with:
 
   ```text
-  qory: push only refs/heads/qory/wi_01 to git.example/example-org/app.git/git-receive-pack: the gateway refuses a push that creates, updates or deletes "refs/heads/main"
+  qory: push only refs/heads/qory/wi_01.
+  The push of "refs/heads/main" to git.example/example-org/app.git/git-receive-pack was not sent: it creates, updates or deletes that ref.
   ```
 
   git itself prints only `The requested URL returned error: 403`. An adapter's output

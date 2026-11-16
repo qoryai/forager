@@ -2068,8 +2068,14 @@ release may change what an existing document does, and says so under Upgrading.
   (`socket.ListenAfter`, `ServeFirst`): a process After starts cannot write the step. A
   runtime stopped at `Timeout`, a pause and a stop from the context all get After; after
   the context's end the removal, the start and After get `StopGrace` together, and a
-  closed run starts none, nor does a launch that exits `125`, docker's status for a
-  container it could not run. A failure to remove the agent's container or to start
+  closed run starts none, nor does a launch whose helper never said it started the
+  program, such as a docker run that failed, which leaves `Result.After` nil. The
+  helper's exec sends the new `launch` source's record `{"event": "started"}` just
+  before it starts the program, so a runtime that exits `125` by itself still gets After.
+  The session removes the setup container first, when the run has one, as
+  `Run.RemoveSetup` does, with its wall step before the after step; the run is then as
+  one after `RemoveSetup`, and a removal that fails ends After `failed` and leaves
+  `ContainerKept()` true. A failure to remove the agent's container or to start
   After's ends the step `failed` with `-1`; a removal that the context's end cuts is
   tried again as the session ends. With After, `Join` may take `AfterTimeout` plus 66
   seconds more than its 15 seconds. The launch's socket refuses a record of the

@@ -1538,7 +1538,7 @@ request asks the gateway for, for this session.
   `XDG_*` variable, and with settings that keep git from running a hook, an fsmonitor,
   a credential helper or a signing program, and from reaching a remote other than over
   HTTPS. Its `PATH` has no directory the agent's user owns or may write, and its
-  program is refused when that user could have changed it. A write into the workspace
+  program does not run, exit status 126, when that user could have changed it. A write into the workspace
   by that user, while After runs, cannot change which program After's command finds in
   the `PATH`, since no directory that user may write is on it. It does not change which
   programs git starts from the workspace's `.git/config`: a filter, `textconv` or merge
@@ -1554,12 +1554,19 @@ request asks the gateway for, for this session.
   `Timeout`, and a pause, still get After. When the caller's context ends, After still
   runs, and the removal, the start and After together get no more than `StopGrace`; its
   step then ends `cancelled` with `-1`. A closed run starts no After, nor does a launch
-  that exits `125`, docker's status for a container it could not run. A removal of the
+  whose helper never said it started the program, such as a docker run that failed
+  (`Result.After` is nil); a runtime that exits `125` by itself still gets After. A removal of the
   agent's container that the context's end cuts is tried again as the session ends.
   With After, `Join` may take `AfterTimeout` plus 66 seconds more than its 15 seconds:
   the removal and the start together get 60 seconds, then 5 seconds between SIGTERM and
-  SIGKILL and 1 second of output. The setup
-  container, when it still runs, is not removed: it does not reach After's socket.
+  SIGKILL and 1 second of output. The session
+  removes the setup container first, when the run has one, as `RemoveSetup` does and with
+  its wall step "remove the setup container", which comes before the after step: it
+  shares the workspace and the inside network with After's container. The run is then as
+  one after `RemoveSetup`: a later `RemoveSetup` returns nil, `ContainerKept()` is false
+  and a later join finds no setup container. A removal that fails sets `ContainerKept()`,
+  ends the wall step `failed`, and After does not run: its step ends `failed` with `-1`
+  and a line. `RemoveSetup` then tries the removal again.
   After needs a `Wall` and `Exec`. See
   [the contract](../contracts/forager/v1/README.md#the-wall).
 - `Gateway` is the gateway the run speaks to, `session.LocalGateway(l)` with the local

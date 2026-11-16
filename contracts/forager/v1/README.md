@@ -834,13 +834,14 @@ another control character. After the flush the body ends, or a pack
 another form, and commands longer than 64 KiB (65536 bytes) or slower than 10 seconds
 are refused. A request body of a flush alone, git's probe before a large push, names
 no ref and passes; a flush followed by more bytes is refused. A push that passes goes
-on as it came. A refused push gets a `403` with a one-line text body before anything reaches
+on as it came. A refused push gets a `403` with a two-line text body before anything reaches
 the host, and its `dev.qory.run.egress` is `denied` with the `path_rule`
 `wall:push-ref`; it has no `dev.qory.run.target_write`. Such texts are
-`qory: push only refs/heads/qory/wi_01 to git.example/example-org/app.git/git-receive-pack:
-the gateway refuses a push that creates, updates or deletes "refs/heads/main"` and
-`qory: push through qory's push step: the run's credential for git.example allows no
-push`. git shows the status alone: `The requested URL returned error: 403`. A push through a tunnel the proxy does
+`qory: push only refs/heads/qory/wi_01.` with the line `The push of "refs/heads/main" to
+git.example/example-org/app.git/git-receive-pack was not sent: it creates, updates or
+deletes that ref.` and `qory: push through qory's push step, with a credential that
+allows a push.` with the line `The run's credential for git.example allows no push, so
+the push was not sent.`. git shows the status alone: `The requested URL returned error: 403`. A push through a tunnel the proxy does
 not terminate is not read; a host of a credential is always terminated. The guard
 covers git's push over HTTP alone: a host's API that changes a ref, such as a merge, is
 left out by the item's `paths` (§The policy, The path grammar).
@@ -5806,8 +5807,8 @@ they arrive, so two hook calls in a row keep their order. There is no answer and
 framing beyond the newline. The forwarder the session installs as a hook is one such
 client; a harness that reports something itself writes the same shape with
 `source: hooks`. A record of the `hooks` source reaches a receiver only through the
-descriptor's rules. The launch's socket accepts records of the `hooks`, `setup` and
-`measure` sources and refuses a record of the `output` source: the session skips it and writes no
+descriptor's rules. The launch's socket accepts records of the `hooks`, `setup`,
+`measure` and `launch` sources and refuses a record of the `output` source: the session skips it and writes no
 event for it. Output records come from the runtime's standard output only, which the
 session reads on the host, while any process in the agent's container can write to the
 socket. The setup runner is another client: it writes records
@@ -5817,7 +5818,11 @@ setup commands inside the wall (§The wall, Setup inside the wall). Its `record`
 `stdout` or `stderr`, and `bytes`, the line in standard base64, a long line in parts of
 4096 bytes, and `runner: true` on a line the runner writes when it cannot start or
 wait for the command; or `exited`, with `exit_code`, 0 to 255. The helper's exec is a
-third client: once the runtime exits it writes a record of the `measure` source
+third client: just before it starts the runtime's program it writes one record of the
+`launch` source, `{"event": "started"}`, which tells the session the program started in
+the enclosure, so a session with `SessionSpec.After` runs After for a launch that failed
+after it and not for one that failed before it, such as a docker run that exited `125`
+with no container; once the runtime exits it writes a record of the `measure` source
 (§The events, The measure of the enclosure), and for a session with
 `SessionSpec.After`, in After's container, records of the `after` source, as the setup
 runner's without `command` and `started`, whose `exited` may have `reason`, `timeout`
@@ -6465,10 +6470,12 @@ gateway's proxy, which denies the route's host, and one with the agent's passwor
 `503`, since that session ended; the handler is called for neither. Forager does not
 narrow the run's proxy for After: the proxy applies the credentials the run's
 configuration holds, and its push guard as it is. A setup
-container that still runs is not removed: it shares the inside network, not After's
-socket, and a write it makes into the workspace gives the agent no more than it could
-write before the runtime exited, since the caller checks the result on the host and
-After's program comes from the image.
+container shares the workspace and the inside network with After's container, and could
+change the workspace or `.git` between After's checks and its commit, so the session
+removes it first, as `(*session.Run).RemoveSetup` does: the wall step "remove the setup
+container" comes before the after step, and the run is then as one after `RemoveSetup`.
+When that removal fails, After does not run: the wall step ends `failed`, the after step
+ends `failed` with `-1` and a line, and `ContainerKept()` is true.
 
 After runs in the working directory, as the runtime's user, with no input, in a new
 process group, with the container's environment less `GIT_DIR`, `GIT_WORK_TREE`,
@@ -6502,7 +6509,7 @@ owns, which it may make writable again, and one its group or other users may wri
 but a directory with the sticky bit such as `/tmp`, is left out, and so is one the
 agent's user may write. A directory on a read-only mount counts as unchanged.
 `/usr/bin:/bin` is the `PATH` when none is left. The program After runs, found in that
-`PATH` or given as a path, with every link followed, is refused under the same rule:
+`PATH` or given as a path, with every link followed, does not run under the same rule:
 the step ends `failed` with `126` and the reason as its line. The workspace is on no
 such `PATH`, so a write into it by the agent's user, also while After runs, cannot
 change which program After's command finds there. It does not change which programs git
@@ -6539,8 +6546,9 @@ reason `timeout`. When the caller's context ends before or while After runs, Aft
 runs on, and the step, the agent's removal and After's start included, gets no more than
 the stop grace from that moment; the step then ends `cancelled` with `-1` and no reason.
 A run closed from outside starts no After, or cuts it at once, and neither does a
-launch that exits `125`, docker's status for a container it could not run, since the
-workspace is unchanged; `(*session.Result).After` is nil when it started none. A
+launch whose helper sent no record of the `launch` source, such as a docker run that
+failed, since the workspace is unchanged; `(*session.Result).After` is nil when it
+started none. A runtime that exits `125` by itself sent that record and gets After. A
 removal of the agent's container that the context's end or the run's close cuts is
 tried again as the session ends, and counts as failed only if that removal fails. A run without a wall has no
 After.
