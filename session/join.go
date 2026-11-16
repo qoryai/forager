@@ -859,23 +859,25 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// is drained counts, and only behind a wall: without one there is no enclosure.
 	var measureMu sync.Mutex
 	var measure map[string]any
-	records := func(rec runtimes.Record) {
+	// records returns an error for a setup record that is not recorded; Serve counts it
+	// against the cap on a connection's bad lines.
+	records := func(rec runtimes.Record) error {
 		switch rec.Source {
 		case runtimes.SourceSetup:
-			setupSteps.handle(rec)
-			return
+			return setupSteps.handle(rec)
 		case runtimes.SourceMeasure:
 			if spec.Wall != nil {
 				measureMu.Lock()
 				measure = measured(rec.Record)
 				measureMu.Unlock()
 			}
-			return
+			return nil
 		}
 		if tr != nil {
 			tr.record(rec)
 		}
 		mapper.Handle(rec)
+		return nil
 	}
 	go sock.Serve(records, func(err error) { r.open.Report("socket: " + accesskey.ShownError(err).Error()) })
 	closeSocket := sync.OnceFunc(func() { sock.Close() })

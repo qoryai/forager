@@ -6261,7 +6261,8 @@ command and sends records of the `setup` source to `QORY_RUN_SOCKET` (§The loca
 socket): that it started, each line of its output, and its exit status. The session
 writes the command's `setup` step from them (§The events, Steps): it takes a record in
 order alone, and reports one out of order, or one after the setup ended, and records
-nothing of it. The session writes each line of a step, masked as the step's line is,
+nothing of it; these reports count against the run socket's cap of 10 bad lines per
+connection. The session writes each line of a step, masked as the step's line is,
 to the user's terminal too, where the runtime's output goes: on pipes to standard
 output or standard error as its stream is, and on a pseudo-terminal to standard
 output, each line break as `\r\n`. A runner that cannot reach the socket exits `125` and runs nothing; the

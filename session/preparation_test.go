@@ -451,15 +451,15 @@ func TestSetupRecordsOutOfOrderAreNotRecorded(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	want := []string{
-		"a setup record for step 3 arrived out of order and is not recorded",
-		"a setup record for step 5 arrived out of order and is not recorded",
-		"a setup record for step 4 arrived out of order and is not recorded",
-		"a setup record for step 11 arrived out of order and is not recorded",
+		"socket: a setup record for step 3 arrived out of order and is not recorded",
+		"socket: a setup record for step 5 arrived out of order and is not recorded",
+		"socket: a setup record for step 4 arrived out of order and is not recorded",
+		"socket: a setup record for step 11 arrived out of order and is not recorded",
 		"socket: not a setup record: its command is not a number from 1",
 		"socket: not a setup record: a line has stream stdout or stderr and its bytes in base64",
-		"a setup record for step 3 arrived out of order and is not recorded",
-		"a setup record for step 3 arrived out of order and is not recorded",
-		"a setup record arrived after the setup ended and is not recorded",
+		"socket: a setup record for step 3 arrived out of order and is not recorded",
+		"socket: a setup record for step 3 arrived out of order and is not recorded",
+		"socket: a setup record arrived after the setup ended and is not recorded",
 	}
 	var got []string
 	for _, l := range reports {
@@ -469,6 +469,95 @@ func TestSetupRecordsOutOfOrderAreNotRecorded(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("the reports %q, want %q", got, want)
+	}
+}
+
+// TestBadSetupRecordsOfOneConnectionAreCapped pins that a connection that writes many
+// setup records the session does not record gives at most socket.MaxBadLines reports and
+// one more with the count of the rest, as a connection of lines that are not records
+// does, for each of the three ways a setup record is not recorded: it is not a setup
+// record, it is out of order, or it comes after the setup ended.
+func TestBadSetupRecordsOfOneConnectionAreCapped(t *testing.T) {
+	const extra = 25
+	lines := func(line string) string {
+		return strings.TrimSpace(strings.Repeat(line+"\n", socket.MaxBadLines+extra))
+	}
+	for name, c := range map[string]struct {
+		line string
+		// fromRuntime sends the records from the runtime, which starts after the setup
+		// ended; otherwise the setup command sends them while its step is open.
+		fromRuntime bool
+		want        func(string) bool
+	}{
+		"not a setup record": {
+			line: `{"command": "one", "event": "started"}`,
+			want: func(l string) bool {
+				return l == "socket: not a setup record: its command is not a number from 1"
+			},
+		},
+		"out of order": {
+			line: `{"command": 2, "event": "started"}`,
+			want: func(l string) bool {
+				return strings.HasPrefix(l, "socket: a setup record for step ") && strings.HasSuffix(l, " arrived out of order and is not recorded")
+			},
+		},
+		"after the setup ended": {
+			line:        `{"command": 1, "event": "started"}`,
+			fromRuntime: true,
+			want: func(l string) bool {
+				return l == "socket: a setup record arrived after the setup ended and is not recorded"
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			forged := lines(c.line)
+			var sp runSpec
+			setup := session.SetupCommand{Name: "install", Args: []string{os.Args[0]}}
+			if c.fromRuntime {
+				sp = preparedSpec(t, `FAKE_SETUP_RECORDS='`+forged+`' "$0"`)
+				sp.Args = append(sp.Args, os.Args[0])
+				setup.Args = []string{"true"}
+			} else {
+				sp = preparedSpec(t, "exit 0", "FAKE_SETUP_RECORDS="+forged)
+			}
+			var reports []string
+			var mu sync.Mutex
+			sp.Report = func(l string) {
+				mu.Lock()
+				defer mu.Unlock()
+				reports = append(reports, l)
+			}
+			sp.SessionSpec.Setup = []session.SetupCommand{setup}
+			res, err := run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			all := steps(t, events(t, res))
+			var kinds []string
+			for _, s := range all {
+				kinds = append(kinds, fmt.Sprint(s.started["kind"], " ", s.started["name"], " ", s.exited["state"]))
+			}
+			if want := []string{"join join session 1 succeeded", "wall start the wall succeeded", "setup install succeeded"}; !slices.Equal(kinds, want) {
+				t.Errorf("the steps %q, want %q", kinds, want)
+			}
+			summary := fmt.Sprintf("socket: skipped %d more lines on one connection that were not recorded", extra)
+			var got []string
+			mu.Lock()
+			defer mu.Unlock()
+			for _, l := range reports {
+				if strings.Contains(l, "setup record") || strings.Contains(l, "skipped") {
+					got = append(got, l)
+				}
+			}
+			if len(got) != socket.MaxBadLines+1 || got[socket.MaxBadLines] != summary {
+				t.Fatalf("the reports %q, want %d of this kind and then %q", got, socket.MaxBadLines, summary)
+			}
+			for _, l := range got[:socket.MaxBadLines] {
+				if !c.want(l) {
+					t.Errorf("report %q", l)
+				}
+			}
+		})
 	}
 }
 

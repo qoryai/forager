@@ -90,8 +90,11 @@ func (l *Listener) Path() string { return l.path }
 // calls made one after the other reach handle in that order; a client that connects and
 // then stalls is cut off after [Patience] so it cannot hold the ones behind it. A line
 // that is not a record, or a record of the output source, is passed to bad with the
-// error and skipped; bad may be nil. Serve returns when the listener is closed.
-func (l *Listener) Serve(handle func(descriptor.Record), bad func(error)) {
+// error and skipped; bad may be nil. When handle returns an error, the record is not
+// recorded, and the error goes to bad as a bad line does. One connection passes at most
+// [MaxBadLines] errors to bad, then skips the rest without a call and passes one error
+// at its end with the count skipped. Serve returns when the listener is closed.
+func (l *Listener) Serve(handle func(descriptor.Record) error, bad func(error)) {
 	l.served.Store(true)
 	defer close(l.done)
 	for {
@@ -115,12 +118,35 @@ var sources = []string{descriptor.SourceHooks, descriptor.SourceSetup, descripto
 // errOutput is the error of a record of the output source read on the socket.
 var errOutput = errors.New("refused a record of the output source: output records come only from the runtime's standard output")
 
+// MaxBadLines is how many lines of one connection that are not records, are records of
+// the output source, or are records that handle returns an error for, [Listener.Serve]
+// passes to bad. Each one becomes a report to the control plane, and any process in the
+// agent's container can write millions of them within [Patience]. 10 shows a client's
+// first mistakes, which say what is wrong, and the lines after them are only counted.
+const MaxBadLines = 10
+
 // read decodes one connection's lines until end of file. A record of the output source
 // is passed to bad as errOutput, and every other line that is not a record of
-// [sources] as "not a record".
-func read(r io.Reader, handle func(descriptor.Record), bad func(error)) {
+// [sources] as "not a record". An error from handle counts as a bad line and is passed
+// to bad as it is. After [MaxBadLines] such lines it skips the rest without calling
+// bad and, at the end of the connection, passes one error with the count skipped. A
+// scanner error at the end is passed to bad too, apart from that count.
+func read(r io.Reader, handle func(descriptor.Record) error, bad func(error)) {
 	s := bufio.NewScanner(r)
 	s.Buffer(nil, 16<<20)
+	var badLines, skipped int
+	// report passes err to bad, or counts it as skipped after MaxBadLines.
+	report := func(err error) {
+		if bad == nil {
+			return
+		}
+		if badLines >= MaxBadLines {
+			skipped++
+			return
+		}
+		badLines++
+		bad(err)
+	}
 	for s.Scan() {
 		line := s.Bytes()
 		if len(line) == 0 {
@@ -129,21 +155,26 @@ func read(r io.Reader, handle func(descriptor.Record), bad func(error)) {
 		var rec descriptor.Record
 		err := json.Unmarshal(line, &rec)
 		if err == nil && rec.Source == descriptor.SourceOutput {
-			if bad != nil {
-				bad(errOutput)
-			}
+			report(errOutput)
 			continue
 		}
 		if err != nil || !slices.Contains(sources, rec.Source) || rec.Record == nil {
-			if bad != nil {
-				if err == nil {
-					err = fmt.Errorf("not a record: %.80s", accesskey.ShownValue(string(line), false))
-				}
-				bad(accesskey.ShownError(err))
+			if err == nil {
+				err = fmt.Errorf("not a record: %.80s", accesskey.ShownValue(string(line), false))
 			}
+			report(accesskey.ShownError(err))
 			continue
 		}
-		handle(rec)
+		if err := handle(rec); err != nil {
+			report(err)
+		}
+	}
+	if skipped > 0 {
+		noun, verb := "lines", "were"
+		if skipped == 1 {
+			noun, verb = "line", "was"
+		}
+		bad(fmt.Errorf("skipped %d more %s on one connection that %s not recorded", skipped, noun, verb))
 	}
 	if err := s.Err(); err != nil && bad != nil {
 		bad(err)

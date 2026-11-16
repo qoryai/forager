@@ -2581,6 +2581,16 @@ release may change what an existing document does, and says so under Upgrading.
   as the same user as the runtime, so it can write a line to the runtime's standard
   output through `/proc/<pid>/fd/1`, and the session reads that line as output. Only the
   helper process is out of its reach, because the helper makes itself not dumpable.
+- The session reports at most 10 lines per connection to the run socket that it does
+  not record: lines that are not records, records of the `output` source, and records
+  of the `setup` source that are not in order, come after the setup ended, or are not
+  setup records. It reports no further such line of that connection, and at its end
+  reports one line with the count, such as "socket: skipped 2481 more lines on one
+  connection that were not recorded". Before, every such line was one report, so a
+  process in the agent's container could send millions of reports with one connection.
+  Records after the 10th such line are still handled, and the count starts again for
+  each connection. The reports of out-of-order setup records and of setup records after
+  the setup ended now start with "socket: ".
 
 ### e2e and CI
 
