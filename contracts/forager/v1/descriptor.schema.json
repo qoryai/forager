@@ -268,7 +268,7 @@
       "items": {"$ref": "#/$defs/exact_host"}
     },
     "install_required": {
-      "description": "True when the session starts the runtime only from a folder the caller installed it in, SessionSpec.RuntimeInstall: Join refuses a session of the runtime without one. Absent or false, a session may also start the runtime as the caller names it, such as from the run's image, with no installed folder. runtimes.json lists it for every descriptor the contract ships.",
+      "description": "True when the session starts the runtime only from a folder the caller installed it in, SessionSpec.RuntimeInstall: Join returns an error for a session of the runtime without one. Absent or false, a session may also start the runtime as the caller names it, such as from the run's image, with no installed folder. runtimes.json lists it for every descriptor the contract ships.",
       "type": "boolean"
     },
     "resume": {

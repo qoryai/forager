@@ -5601,11 +5601,11 @@ policy can still block them. No Forager code applies this list to a run's policy
 **Install required**, optional: `install_required`, `true` when the session starts the
 runtime only from a folder the caller installed it in,
 `session.SessionSpec.RuntimeInstall` (§The runtime, The installed program). `Run.Join`
-then refuses a session of the runtime without one: `set SessionSpec.RuntimeInstall for a
-session of the runtime claude: the session starts a runtime only from the folder it was
-installed in`. Absent or `false`, a session of the runtime may pass no folder and starts
-the command as the caller names it, such as from the run's image. `runtimes.json` lists
-it for every runtime.
+then returns an error for a session of the runtime without one: `set
+SessionSpec.RuntimeInstall for a session of the runtime claude: the session starts a
+runtime only from the folder it was installed in`. Absent or `false`, a session of the
+runtime may pass no folder and starts the command as the caller names it, such as from
+the run's image. `runtimes.json` lists it for every runtime.
 
 **Resume**, optional: where the runtime writes the transcript of its session, and how
 the session starts the runtime again from it. `path_from` is the member of a hook's

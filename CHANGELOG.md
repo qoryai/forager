@@ -438,10 +438,10 @@ release may change what an existing document does, and says so under Upgrading.
   the list to a run's policy. The Claude Code descriptor lists `api.anthropic.com`.
 - `install_required` in a runtime descriptor: `true` when the session starts the
   runtime only from a folder the caller installed it in, `SessionSpec.RuntimeInstall`.
-  `Run.Join` refuses a session of such a runtime without one. `runtimes.json` lists
-  `install_required` for every runtime, `false` when the descriptor has none. The
-  Claude Code descriptor sets it; a runtime without it, such as Codex, still starts
-  from the image when the caller passes no folder.
+  `Run.Join` returns an error for a session of such a runtime without one.
+  `runtimes.json` lists `install_required` for every runtime, `false` when the
+  descriptor has none. The Claude Code descriptor sets it; a runtime without it, such
+  as Codex, still starts from the image when the caller passes no folder.
 - `parent_agent_id` in `dev.qory.runtime.subagent_started`: the subagent that started
   this one, when the runtime reports it. Claude Code 2.1.292 and later reports it in a
   session on pipes with `--output-format stream-json --verbose`. A descriptor sets where
@@ -1944,9 +1944,9 @@ release may change what an existing document does, and says so under Upgrading.
   until the run ends. `Join` returns an error that starts with the fix, before the join
   request, for a session of a runtime that requires it and no `RuntimeInstall`, for a
   `RuntimeInstall` on a session with no runtime, and for a folder, a program or a
-  version it refuses, as `docs/go.md` lists under The spec. A version starts with a
-  letter or a digit. Before, the session started `Command` as given, behind a wall from
-  the image.
+  version that fails a check, as `docs/go.md` lists under The spec. A version starts
+  with a letter or a digit. Before, the session started `Command` as given, behind a
+  wall from the image.
 - Stop calling `Version` of a `runtimes.Runtime`, and remove it from a runtime written
   in Go: the interface no longer has it. Read the version you installed from your
   `SessionSpec.RuntimeInstall.Version`.

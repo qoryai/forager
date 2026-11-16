@@ -63,9 +63,10 @@ type Descriptor struct {
 	// server to allow for a run. No code of this module applies them to a run's policy.
 	// Nil when the descriptor has none.
 	EgressHosts []string `yaml:"egress_hosts" json:"egress_hosts,omitempty"`
-	// InstallRequired says the session starts the runtime only from a folder the caller
-	// installed it in: a session of it without SessionSpec.RuntimeInstall is refused.
-	// False starts it also as the caller names it, such as from the run's image.
+	// InstallRequired is true when the session starts the runtime only from a folder
+	// the caller installed it in: Join returns an error for a session of it without
+	// SessionSpec.RuntimeInstall. False starts it also as the caller names it, such as
+	// from the run's image.
 	InstallRequired bool `yaml:"install_required" json:"install_required,omitempty"`
 	// Resume is where the runtime writes the transcript of its session, and how the
 	// session starts the runtime again from it. Nil when the runtime has no resume.

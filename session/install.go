@@ -184,7 +184,7 @@ func unchangeable(info fs.FileInfo, shown string) error {
 
 // runtimeFolder is the installed runtime's folder as a walled launch binds it: the
 // folder Dir leads to, at /qory/runtime/<runtime>; the zero value for a session with
-// no runtime.
+// no RuntimeInstall, also one of a runtime such as Codex that starts from the image.
 func runtimeFolder(spec runSpec, rt runtimes.Runtime) wall.RuntimeFolder {
 	if spec.install == nil {
 		return wall.RuntimeFolder{}

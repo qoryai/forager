@@ -630,11 +630,11 @@ func codexWithoutInstall(t *testing.T) runtimes.Runtime {
 	return rt
 }
 
-// TestOnlyARuntimeThatRequiresAnInstallNeedsOne pins install_required: Join refuses a
-// Claude Code session with no RuntimeInstall, and a Codex session with none, bare or
-// described, starts its program as the caller names it, with no runtime folder for the
-// wall, the same launch and the same mounts as a session with no runtime, and no
-// runtime_version.
+// TestOnlyARuntimeThatRequiresAnInstallNeedsOne pins install_required: Join returns an
+// error for a Claude Code session with no RuntimeInstall, and a Codex session with
+// none, bare or described, starts its program as the caller names it, with no
+// runtime folder for the wall, the same launch and the same mounts as a session with
+// no runtime, and no runtime_version.
 func TestOnlyARuntimeThatRequiresAnInstallNeedsOne(t *testing.T) {
 	sp := spec(t, "FAKE_EXIT=0")
 	sp.RuntimeInstall = nil

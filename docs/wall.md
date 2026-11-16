@@ -760,8 +760,8 @@ So the wall needs no separate image.
 
 ### The runtime's folder
 
-Claude Code does not come from the image. The caller installs the runtime's program on
-the node and passes the folder and the version as `SessionSpec.RuntimeInstall` (see
+Claude Code does not come from the image: the caller installs Claude Code on the node
+and passes the folder and the version as `SessionSpec.RuntimeInstall` (see
 [the spec](go.md#the-spec)). A runtime whose descriptor sets `install_required`, such as
 Claude Code, needs the folder; a session of another runtime, such as Codex, may pass
 none and then starts the program from the image, with nothing bound at
