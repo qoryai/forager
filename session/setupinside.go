@@ -95,7 +95,7 @@ func readSetupRecord(m map[string]any) (setupRecord, error) {
 // step one after another, and no other step starts while the session runs, so command
 // k is step base+k. A step ends succeeded on exit status 0, cancelled on another once
 // the session stops the launch, and failed otherwise. A record out of order, or one
-// after the setup ended, is reported and not recorded.
+// after the setup ended, is not recorded: handle returns an error for it.
 type setupSteps struct {
 	r        *Run
 	session  int
