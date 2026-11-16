@@ -308,6 +308,66 @@ func afterStep(t *testing.T, o Options, h hosts, outside string) {
 			t.Errorf("the handler got %q from After's container", calls)
 		}
 	})
+	t.Run("the password the agent planted gets 403 or 503 from the route in After's container", func(t *testing.T) {
+		if !o.Hooks {
+			t.Skip("the adapter does not bind the hook socket into the enclosure on this machine, so the after step's records do not reach the session")
+		}
+		var mu sync.Mutex
+		var got []string
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			got = append(got, r.Method+" "+r.URL.Path)
+			mu.Unlock()
+			io.WriteString(w, "reached")
+		})
+		after := []string{wall.HelperPath, modeAfterRoute}
+		r, err := runIn(t, o, variant{mode: modePlantPassword, qoryRoute: handler, after: after, afterTimeout: time.Minute}, false, h, outside)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if a := r.res.After; a == nil || a.State != event.StateSucceeded {
+			t.Fatalf("Result.After %+v; want succeeded\nstderr:\n%s", a, r.errs)
+		}
+		// Without the password the gateway's proxy denies the route's host, 403. With the
+		// agent's, the route answers that its session ended, 503.
+		if b, err := os.ReadFile(filepath.Join(r.dir, afterRouteFile)); err != nil || string(b) != "403 503" {
+			t.Errorf("After's requests without and with the agent's password got %q, %v; want \"403 503\"", b, err)
+		}
+		mu.Lock()
+		calls := slices.Clone(got)
+		mu.Unlock()
+		if len(calls) != 0 {
+			t.Errorf("the handler got %q from After's container", calls)
+		}
+	})
+	t.Run("After's command cannot read or take the helper's descriptors", func(t *testing.T) {
+		if !o.Hooks {
+			t.Skip("the adapter does not bind the hook socket into the enclosure on this machine, so the after step's records do not reach the session")
+		}
+		r, err := runIn(t, o, variant{mode: modeLeaveJob, after: []string{wall.HelperPath, modeAfterInspect}, afterTimeout: time.Minute}, false, h, outside)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(filepath.Join(r.dir, afterInspectFile))
+		if err != nil {
+			t.Fatalf("the probe wrote no %s: %v\nstderr:\n%s", afterInspectFile, err, r.errs)
+		}
+		// The helper makes itself not dumpable, so /proc denies its environment and
+		// descriptors to every other process of the container. ptrace and pidfd_getfd
+		// may also be denied by the host's ptrace_scope setting, so only the first two are pinned.
+		got := string(b)
+		for _, name := range []string{"list the helper's descriptors", "read the helper's environment"} {
+			if !strings.Contains(got, name+": denied\n") || strings.Contains(got, name+": allowed\n") {
+				t.Errorf("the probe's output has no %q denied alone:\n%s", name, got)
+			}
+		}
+		if strings.Contains(got, "no helper found") {
+			t.Errorf("the probe found no helper:\n%s", got)
+		}
+		if a := r.res.After; a == nil || a.ExitCode != 3 {
+			t.Errorf("Result.After %+v; want the command's 3, not the forged success", a)
+		}
+	})
 	t.Run("what the agent writes with the enclosure's root is not in After's container", func(t *testing.T) {
 		if !o.Hooks {
 			t.Skip("the adapter does not bind the hook socket into the enclosure on this machine, so the after step's records do not reach the session")
