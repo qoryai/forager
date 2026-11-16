@@ -236,6 +236,11 @@ const HostForm = "wall:host-form"
 // terminates. A refusal of the proxy's, in either mode, before anything is sent.
 const PlainRequest = "wall:plain-request"
 
+// QoryHostRule is the rule of every denial of the host link.QoryHost, in either mode
+// and whatever the lists say: a session's forwarder serves that host's route, so no
+// request to it is the proxy's to send.
+const QoryHostRule = link.QoryHostRule
+
 // guardError is the guard's refusal at dial time, of a name that resolved to an
 // address the guard does not dial. never is true for a link-local or cloud metadata
 // address, which no name opens.
@@ -914,6 +919,13 @@ func (p *Proxy) decide(method, host string, port int) Decision {
 		return d
 	}
 	d.Host = host
+	// The route's host never resolves, and no list opens it: a session's forwarder
+	// serves the requests to it, so whatever reaches the proxy, a CONNECT, a request of
+	// a host proxy or of a run with no route, is denied, in either mode.
+	if host == link.QoryHost {
+		d.Rule, d.Outcome = QoryHostRule, Refused
+		return d
+	}
 	rule, ok := policy.Match(r.allow, host)
 	first, lifted := policy.Exact(r.first, host)
 	if lifted {
@@ -1433,6 +1445,10 @@ func deny(w http.ResponseWriter, d Decision) {
 		fmt.Fprintf(w, "qory: send requests to this host as https:// through CONNECT.\n"+
 			"qory: %s %s%s denied by the gateway: the gateway sets this host's credential, and masks it in answers, only on https:// requests through CONNECT\n",
 			accesskey.ShownValue(d.RequestMethod, false), d.Host, accesskey.ShownValue(d.Path, false))
+		return
+	}
+	if d.Rule == QoryHostRule {
+		fmt.Fprintf(w, "qory: send requests for %s as plain http:// requests to QORY_HOST_URL from a session of a run with a route: the gateway's proxy sends none of them\n", link.QoryHost)
 		return
 	}
 	if d.Rule == GuardRule {

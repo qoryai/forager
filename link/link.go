@@ -63,6 +63,36 @@ const EnvRunAPI = "QORY_RUN_API"
 // host steps and in an unwalled run.
 func RunAPIURL(runID string) string { return "http://" + RunAPIHost + "/v1/runs/" + runID }
 
+// QoryHost is the host of the route to the handler that the process that opened the
+// run gives it, OpenSpec.QoryRoute. A session's forwarder serves each plain http://
+// request to it; the gateway's proxy denies the host to every request that reaches it,
+// with [QoryHostRule], in either mode. The name never resolves, and [NoProxy] does not
+// list it.
+const QoryHost = "host.qory.invalid"
+
+// EnvQoryHost is the variable that contains [QoryHostURL] in a session's launch, in a
+// run with a route, walled or not. The run's setup does not get it.
+const EnvQoryHost = "QORY_HOST_URL"
+
+// QoryHostURL is the base URL of the route, the same with and without a wall.
+const QoryHostURL = "http://" + QoryHost
+
+// QorySessionHeader is the header the route sets on each request it hands to the
+// handler: the number of the session that runs, whose programs sent the request.
+const QorySessionHeader = "Qory-Session"
+
+// MaxQoryHostBody is the largest body, in bytes, of a request to the route and of the
+// handler's answer.
+const MaxQoryHostBody int64 = 1 << 20
+
+// QoryHostChannel and QoryHostRule are the channel and the rule of every
+// dev.qory.run.egress of the route: the session writes one per request its forwarder
+// read, and the gateway's proxy writes its denial of the host with the rule.
+const (
+	QoryHostChannel = "qory_host"
+	QoryHostRule    = "wall:qory-host"
+)
+
 // MaxRunAPIArtifacts and MaxRunAPIVerdict are the largest bodies, in bytes, of the run
 // API's POST artifacts and POST verdict: Qory Apiary's sizes, which the gateway's route
 // and a walled run's forwarder read whole.
