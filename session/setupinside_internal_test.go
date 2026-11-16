@@ -28,7 +28,7 @@ func runnerRecords(t *testing.T, args ...string) (int, string, []string) {
 	}
 	var mu sync.Mutex
 	var got []string
-	go l.Serve(func(rec descriptor.Record) {
+	go l.Serve(func(rec descriptor.Record) error {
 		mu.Lock()
 		defer mu.Unlock()
 		m := rec.Record
@@ -41,6 +41,7 @@ func runnerRecords(t *testing.T, args ...string) (int, string, []string) {
 			line += fmt.Sprint(" ", c)
 		}
 		got = append(got, line)
+		return nil
 	}, func(err error) { t.Errorf("socket: %v", err) })
 	t.Setenv(EnvSocket, l.Path())
 	var stderr bytes.Buffer

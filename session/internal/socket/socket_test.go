@@ -3,10 +3,12 @@ package socket_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,7 +35,7 @@ func TestForwardedHookInputArrivesAsAHooksRecord(t *testing.T) {
 	var bad []error
 	done := make(chan struct{})
 	go func() {
-		l.Serve(func(r descriptor.Record) { mu.Lock(); got = append(got, r); mu.Unlock() }, func(err error) { mu.Lock(); bad = append(bad, err); mu.Unlock() })
+		l.Serve(func(r descriptor.Record) error { mu.Lock(); got = append(got, r); mu.Unlock(); return nil }, func(err error) { mu.Lock(); bad = append(bad, err); mu.Unlock() })
 		close(done)
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -104,7 +106,7 @@ func TestTheVariableIsAnAddress(t *testing.T) {
 	}
 	var mu sync.Mutex
 	n := 0
-	go l.Serve(func(descriptor.Record) { mu.Lock(); n++; mu.Unlock() }, nil)
+	go l.Serve(func(descriptor.Record) error { mu.Lock(); n++; mu.Unlock(); return nil }, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := socket.Forward(ctx, "unix:"+l.Path(), strings.NewReader(`{"a":1}`)); err != nil {
@@ -141,7 +143,7 @@ func drain(t *testing.T, grace time.Duration) time.Duration {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go l.Serve(func(descriptor.Record) {}, nil)
+	go l.Serve(func(descriptor.Record) error { return nil }, nil)
 	start := time.Now()
 	if err := l.Close(); err != nil {
 		t.Fatal(err)
@@ -179,10 +181,11 @@ func TestCloseReturnsAfterTheLastRecord(t *testing.T) {
 	}
 	started := make(chan struct{})
 	var handled atomic.Bool
-	go l.Serve(func(descriptor.Record) {
+	go l.Serve(func(descriptor.Record) error {
 		close(started)
 		time.Sleep(socket.Patience + time.Second)
 		handled.Store(true)
+		return nil
 	}, nil)
 	conn, err := net.Dial("unix", l.Path())
 	if err != nil {
@@ -209,10 +212,11 @@ func TestServeFirstReadsTheFirstConnectionAlone(t *testing.T) {
 	var got []string
 	done := make(chan struct{})
 	go func() {
-		l.ServeFirst(func(r descriptor.Record) {
+		l.ServeFirst(func(r descriptor.Record) error {
 			mu.Lock()
 			got = append(got, r.Record["n"].(string))
 			mu.Unlock()
+			return nil
 		}, nil, time.Minute)
 		close(done)
 	}()
@@ -264,7 +268,7 @@ func TestEachListenerReadsItsSources(t *testing.T) {
 			var got []string
 			var refused int
 			done := make(chan struct{})
-			handle := func(r descriptor.Record) { mu.Lock(); got = append(got, r.Source); mu.Unlock() }
+			handle := func(r descriptor.Record) error { mu.Lock(); got = append(got, r.Source); mu.Unlock(); return nil }
 			bad := func(error) { mu.Lock(); refused++; mu.Unlock() }
 			go func() {
 				if c.first {
@@ -289,5 +293,269 @@ func TestEachListenerReadsItsSources(t *testing.T) {
 				t.Errorf("read %q, refused %d; want %q read and 1 refused", got, refused, c.accepted)
 			}
 		})
+	}
+}
+
+// capServer is a listener that collects the records and the bad-line errors it reads.
+type capServer struct {
+	t   *testing.T
+	l   *socket.Listener
+	mu  sync.Mutex
+	got []descriptor.Record
+	bad []error
+	// reject, when set, is the error handle returns for a record.
+	reject func(descriptor.Record) error
+	done   chan struct{}
+}
+
+func newCapServer(t *testing.T) *capServer { return serveCap(t, true) }
+
+// serveCap starts a capServer; with collect false, Serve gets a nil bad function.
+func serveCap(t *testing.T, collect bool) *capServer {
+	t.Helper()
+	l, err := socket.Listen(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &capServer{t: t, l: l, done: make(chan struct{})}
+	var bad func(error)
+	if collect {
+		bad = func(err error) { s.mu.Lock(); s.bad = append(s.bad, err); s.mu.Unlock() }
+	}
+	go func() {
+		l.Serve(func(r descriptor.Record) error {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			s.got = append(s.got, r)
+			if s.reject != nil {
+				return s.reject(r)
+			}
+			return nil
+		}, bad)
+		close(s.done)
+	}()
+	t.Cleanup(func() { l.Close(); <-s.done })
+	return s
+}
+
+// connection writes data over one connection and closes it. The listener reads one
+// connection at a time, so after Close a following connection's lines come after these.
+func (s *capServer) connection(data string) {
+	s.t.Helper()
+	conn, err := net.Dial("unix", s.l.Path())
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	conn.Write([]byte(data))
+	conn.Close()
+}
+
+// wait blocks until the listener has handed on n records and nb errors, and returns
+// copies of both.
+func (s *capServer) wait(n, nb int) ([]descriptor.Record, []string) {
+	s.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		ok := len(s.got) >= n && len(s.bad) >= nb
+		s.mu.Unlock()
+		if ok {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Let a late extra call show up before the counts are checked.
+	time.Sleep(50 * time.Millisecond)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var errs []string
+	for _, err := range s.bad {
+		errs = append(errs, err.Error())
+	}
+	return append([]descriptor.Record(nil), s.got...), errs
+}
+
+func lines(n int, line string) string { return strings.Repeat(line+"\n", n) }
+
+const (
+	goodLine   = `{"source":"hooks","record":{"n":1}}`
+	outputLine = `{"source":"output","record":{"type":"assistant"}}`
+	// otherLine is valid JSON of an unknown source, which read reports as "not a record".
+	otherLine = `{"source":"transcript","record":{}}`
+	setupLine = `{"source":"setup","record":{"command":1,"event":"started"}}`
+)
+
+// TestBadLinesOfOneConnectionAreCapped pins that one connection passes at most
+// MaxBadLines bad lines to the bad function, then one summary with the count of the
+// rest, and that records still reach handle after the cap.
+func TestBadLinesOfOneConnectionAreCapped(t *testing.T) {
+	max := socket.MaxBadLines
+	summary := func(n int) string {
+		noun, verb := " more lines", "were"
+		if n == 1 {
+			noun, verb = " more line", "was"
+		}
+		return "skipped " + strconv.Itoa(n) + noun + " on one connection that " + verb + " not recorded"
+	}
+	t.Run("under the cap", func(t *testing.T) {
+		s := newCapServer(t)
+		s.connection(lines(max-1, otherLine))
+		_, bad := s.wait(0, max-1)
+		if len(bad) != max-1 {
+			t.Fatalf("errors: %q; want %d, no summary", bad, max-1)
+		}
+		for _, b := range bad {
+			if !strings.HasPrefix(b, "not a record: ") {
+				t.Errorf("error %q", b)
+			}
+		}
+	})
+	t.Run("exactly at the cap", func(t *testing.T) {
+		s := newCapServer(t)
+		s.connection(lines(max, "junk"))
+		_, bad := s.wait(0, max)
+		if len(bad) != max {
+			t.Fatalf("errors: %q; want %d, no summary", bad, max)
+		}
+	})
+	t.Run("over the cap", func(t *testing.T) {
+		s := newCapServer(t)
+		s.connection(lines(max+2481, "junk") + goodLine + "\n")
+		got, bad := s.wait(1, max+1)
+		if len(bad) != max+1 {
+			t.Fatalf("%d errors, want %d: the first %d and one summary", len(bad), max+1, max)
+		}
+		if want := summary(2481); bad[max] != want {
+			t.Errorf("summary %q, want %q", bad[max], want)
+		}
+		if len(got) != 1 || got[0].Source != "hooks" {
+			t.Errorf("records after the cap: %+v, want the one good record", got)
+		}
+	})
+	t.Run("one line over the cap", func(t *testing.T) {
+		s := newCapServer(t)
+		s.connection(lines(max+1, "junk"))
+		_, bad := s.wait(0, max+1)
+		if len(bad) != max+1 || bad[max] != summary(1) {
+			t.Fatalf("errors: %q; want %d and the summary %q", bad, max+1, summary(1))
+		}
+	})
+	t.Run("with no bad function, records still arrive", func(t *testing.T) {
+		s := serveCap(t, false)
+		s.connection(lines(max+5, "junk") + goodLine + "\n")
+		got, _ := s.wait(1, 0)
+		if len(got) != 1 || got[0].Source != "hooks" {
+			t.Errorf("records: %+v, want the one good record", got)
+		}
+	})
+	t.Run("the cap starts again for the next connection", func(t *testing.T) {
+		s := newCapServer(t)
+		s.connection(lines(max+3, "junk"))
+		s.connection(lines(max+5, "junk"))
+		_, bad := s.wait(0, 2*max+2)
+		want := 2*max + 2
+		if len(bad) != want {
+			t.Fatalf("%d errors, want %d", len(bad), want)
+		}
+		if bad[max] != summary(3) || bad[2*max+1] != summary(5) {
+			t.Errorf("summaries %q and %q, want 3 and 5 skipped", bad[max], bad[2*max+1])
+		}
+	})
+	t.Run("output records count against the cap", func(t *testing.T) {
+		s := newCapServer(t)
+		s.connection(lines(max-2, "junk") + lines(5, outputLine) + lines(2, "junk"))
+		_, bad := s.wait(0, max+1)
+		if len(bad) != max+1 {
+			t.Fatalf("%d errors, want %d", len(bad), max+1)
+		}
+		if want := summary(5); bad[max] != want {
+			t.Errorf("summary %q, want %q", bad[max], want)
+		}
+		if !strings.HasPrefix(bad[max-2], "refused a record of the output source") {
+			t.Errorf("error %d: %q, want the output refusal", max-2, bad[max-2])
+		}
+	})
+	t.Run("an error from handle counts against the cap", func(t *testing.T) {
+		s := newCapServer(t)
+		s.reject = func(r descriptor.Record) error {
+			if r.Source == descriptor.SourceSetup {
+				return errors.New("a setup record is not recorded")
+			}
+			return nil
+		}
+		// 4 not records, then 9 setup records that handle rejects, then a good record.
+		s.connection(lines(4, otherLine) + lines(9, setupLine) + goodLine + "\n")
+		got, bad := s.wait(10, max+1)
+		if len(bad) != max+1 {
+			t.Fatalf("%d errors, want %d: %q", len(bad), max+1, bad)
+		}
+		if !strings.HasPrefix(bad[3], "not a record: ") || bad[4] != "a setup record is not recorded" {
+			t.Errorf("errors %q", bad[:5])
+		}
+		if want := summary(3); bad[max] != want {
+			t.Errorf("summary %q, want %q", bad[max], want)
+		}
+		if len(got) != 10 || got[9].Source != "hooks" {
+			t.Errorf("%d records, the last %+v; want the 9 setup records and the good one", len(got), got[len(got)-1])
+		}
+		// The next connection starts the count again.
+		s.connection(lines(1, setupLine))
+		_, bad = s.wait(11, max+2)
+		if len(bad) != max+2 || bad[max+1] != "a setup record is not recorded" {
+			t.Errorf("after the next connection: %q", bad[max:])
+		}
+	})
+	t.Run("a scanner error is reported apart from the count", func(t *testing.T) {
+		s := newCapServer(t)
+		// A line over the 16 MiB limit ends the scan with an error after the cap.
+		s.connection(lines(max+4, "junk") + strings.Repeat("x", 17<<20))
+		_, bad := s.wait(0, max+2)
+		if len(bad) != max+2 {
+			t.Fatalf("%d errors, want %d: %q", len(bad), max+2, bad)
+		}
+		if bad[max] != summary(4) || !strings.Contains(bad[max+1], "too long") {
+			t.Errorf("summary %q and scanner error %q", bad[max], bad[max+1])
+		}
+	})
+}
+
+// TestServeFirstCountsAnErrorOfHandleAgainstTheCap pins that After's first connection has
+// the cap of any connection: of 25 records that handle refuses, bad gets MaxBadLines errors
+// and one summary.
+func TestServeFirstCountsAnErrorOfHandleAgainstTheCap(t *testing.T) {
+	l, err := socket.ListenAfter(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var bad []string
+	done := make(chan struct{})
+	go func() {
+		l.ServeFirst(func(descriptor.Record) error { return errors.New("refused") }, func(err error) {
+			mu.Lock()
+			bad = append(bad, err.Error())
+			mu.Unlock()
+		}, time.Minute)
+		close(done)
+	}()
+	conn, err := socket.Dial(context.Background(), l.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recs []descriptor.Record
+	for range 25 {
+		recs = append(recs, descriptor.Record{Source: descriptor.SourceAfter, Record: map[string]any{"a": 1}})
+	}
+	if err := conn.Send(recs); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	<-done
+	l.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	want := socket.MaxBadLines + 1
+	if len(bad) != want || bad[want-1] != "skipped 15 more lines on one connection that were not recorded" {
+		t.Errorf("bad got %d errors, last %q; want %d, ending in the summary of 15", len(bad), bad[len(bad)-1], want)
 	}
 }
