@@ -666,9 +666,10 @@ func otherOpen(joins map[int]join, n int) bool {
 
 // sessionEgress is why the link refuses a dev.qory.run.egress in a session's batch,
 // empty when it takes it: the gateway writes every other decision, so it takes only a
-// decision of the route to link.QoryHost, which the session's forwarder serves. All four
-// must hold: channel qory_host, rule wall:qory-host, host host.qory.invalid and port 80.
-// The text names the first field that differs and the value it has.
+// decision of the route to link.QoryHost, which the session's forwarder serves. Each
+// must hold: channel qory_host, rule wall:qory-host, host host.qory.invalid, port 80
+// and method HTTP, and no credential, tool or path_rule, which only the gateway's
+// decisions have. The text contains the first field that differs and the value it has.
 func sessionEgress(data map[string]any) string {
 	for _, f := range []struct {
 		name string
@@ -678,9 +679,15 @@ func sessionEgress(data map[string]any) string {
 		{"rule", link.QoryHostRule},
 		{"host", link.QoryHost},
 		{"port", float64(80)},
+		{"method", "HTTP"},
 	} {
 		if got, ok := data[f.name]; !ok || got != f.want {
 			return fmt.Sprintf("a run.egress from the session whose %s is %s, not %v: the session writes only decisions of the route to %s", f.name, shownField(got, ok), f.want, link.QoryHost)
+		}
+	}
+	for _, name := range []string{"credential", "tool", "path_rule"} {
+		if got, ok := data[name]; ok {
+			return fmt.Sprintf("a run.egress from the session whose %s is %s, not absent: the session writes only decisions of the route to %s", name, shownField(got, ok), link.QoryHost)
 		}
 	}
 	return ""

@@ -26,8 +26,9 @@ func routeEgress(runID string, change map[string]any) map[string]any {
 
 // TestTheLinkTakesASessionsEgressOfTheRouteAlone pins the one dev.qory.run.egress the
 // gateway takes from a session: channel qory_host, rule wall:qory-host, host
-// host.qory.invalid and port 80, all four. Another value in any of them is refused, the
-// run ends failed, batch_refused, and the report names the field and the value.
+// host.qory.invalid, port 80 and method HTTP, with no credential, tool or path_rule.
+// Another value in any of them is refused, the run ends failed, batch_refused, and the
+// report contains the field and the value.
 func TestTheLinkTakesASessionsEgressOfTheRouteAlone(t *testing.T) {
 	h := start(t, gateway.Config{})
 	for _, c := range []struct {
@@ -40,6 +41,10 @@ func TestTheLinkTakesASessionsEgressOfTheRouteAlone(t *testing.T) {
 		{"another rule", map[string]any{"rule": "api.example"}, `whose rule is "api.example", not wall:qory-host`},
 		{"another host", map[string]any{"host": "api.example"}, `whose host is "api.example", not host.qory.invalid`},
 		{"another port", map[string]any{"port": 443}, `whose port is 443, not 80`},
+		{"another method", map[string]any{"method": "HTTPS"}, `whose method is "HTTPS", not HTTP`},
+		{"a credential", map[string]any{"credential": "model"}, `whose credential is "model", not absent`},
+		{"a tool", map[string]any{"tool": "search"}, `whose tool is "search", not absent`},
+		{"a path rule", map[string]any{"path_rule": "/tests"}, `whose path_rule is "/tests", not absent`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			a := h.open(server.LinkRunRequest{})
