@@ -26,6 +26,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
@@ -213,6 +214,13 @@ func formed(e Egress) error {
 			}
 			if form, ok := Host(entry); !ok || form != entry {
 				return fmt.Errorf("egress.%s holds %s, which is neither a host name nor an IPv4 address in canonical form", list.name, entry)
+			}
+		}
+	}
+	for _, host := range slices.Sorted(maps.Keys(e.Paths)) {
+		for _, p := range e.Paths[host] {
+			if !ValidPath(p) {
+				return fmt.Errorf("egress.paths of %s holds %s: write { and } only as a whole segment {}, and * only at the end", host, accesskey.ShownValue(p, true))
 			}
 		}
 	}
@@ -602,30 +610,174 @@ func (m Mode) Validate() error {
 }
 
 // MatchPath returns the first of patterns that matches path, and whether one did. A
-// pattern is a path matched whole, or up to a final * matched as a prefix. The
-// comparison is exact, case included: on a host that ignores case this denies a
-// spelling the host would have taken, never the reverse.
+// pattern is a path matched whole, or up to a final * matched as a prefix. A segment
+// written exactly {} matches one segment of path that is not empty, anywhere in the
+// pattern, the last segment included: /repos/o/r/pulls/{} matches /repos/o/r/pulls/12,
+// and neither /repos/o/r/pulls/12/merge nor /repos/o/r/pulls/. In a pattern with both,
+// such as /a/{}/b*, the {} segments are matched first, then the prefix. The comparison
+// is exact, case included: on a host that ignores case this denies a spelling the host
+// would have taken, never the reverse. A pattern [ValidPath] refuses matches nothing.
 func MatchPath(patterns []string, path string) (string, bool) {
 	for _, p := range patterns {
-		if prefix, ok := strings.CutSuffix(p, "*"); ok {
-			if strings.HasPrefix(path, prefix) {
-				return p, true
-			}
-		} else if p == path {
+		if matchPath(p, path) {
 			return p, true
 		}
 	}
 	return "", false
 }
 
-// CoversPath reports whether a path pattern covers another: the same pattern, or a
-// prefix pattern whose prefix the other starts with.
+// OneSegment is the segment of a path pattern that matches one segment of a path that
+// is not empty.
+const OneSegment = "{}"
+
+// ValidPath reports whether p is a pattern of the path grammar: a / first, no ?, # or
+// whitespace, a * only at the end, and a { or a } only in a segment written exactly
+// {}. The schemas hold the same grammar; a { anywhere else is refused, so no pattern
+// reads one as a literal.
+func ValidPath(p string) bool {
+	body, _ := strings.CutSuffix(p, "*")
+	if !strings.HasPrefix(body, "/") || strings.ContainsAny(body, "*?#") || strings.IndexFunc(body, unicode.IsSpace) >= 0 {
+		return false
+	}
+	for _, seg := range strings.Split(body, "/") {
+		if seg != OneSegment && strings.ContainsAny(seg, "{}") {
+			return false
+		}
+	}
+	return true
+}
+
+// pathPattern is a pattern split into its segments, with whether it ends in *: the
+// last segment is then a prefix of the path's segment at its place, and of whatever
+// follows it.
+type pathPattern struct {
+	segs []string
+	star bool
+}
+
+func splitPattern(p string) pathPattern {
+	body, star := strings.CutSuffix(p, "*")
+	return pathPattern{segs: strings.Split(body, "/"), star: star}
+}
+
+// matchPath reports whether the pattern p matches path.
+func matchPath(p, path string) bool {
+	if strings.ContainsAny(p, "{}") && !ValidPath(p) {
+		return false
+	}
+	if !strings.Contains(p, OneSegment) {
+		if prefix, ok := strings.CutSuffix(p, "*"); ok {
+			return strings.HasPrefix(path, prefix)
+		}
+		return p == path
+	}
+	pat := splitPattern(p)
+	segs := strings.Split(path, "/")
+	for i, want := range pat.segs {
+		last := i == len(pat.segs)-1
+		if i >= len(segs) {
+			return false
+		}
+		got := segs[i]
+		switch {
+		case last && pat.star && want == OneSegment:
+			return got != ""
+		case last && pat.star:
+			return strings.HasPrefix(strings.Join(segs[i:], "/"), want)
+		case want == OneSegment:
+			if got == "" {
+				return false
+			}
+		case want != got:
+			return false
+		}
+	}
+	return len(segs) == len(pat.segs)
+}
+
+// CoversPath reports whether a path pattern covers another: every path the other
+// matches, entry matches too. Without {} that is the same pattern, or a prefix pattern
+// whose prefix the other starts with. With {} it is decided segment by segment, and a
+// case it cannot decide is not covered: a narrowing that cannot be shown inside its
+// entry is refused.
 func CoversPath(entry, other string) bool {
+	if strings.ContainsAny(entry+other, "{}") && (!ValidPath(entry) || !ValidPath(other)) {
+		return false
+	}
 	if entry == other {
 		return true
 	}
-	prefix, ok := strings.CutSuffix(entry, "*")
-	return ok && strings.HasPrefix(strings.TrimSuffix(other, "*"), prefix)
+	if !strings.Contains(entry, OneSegment) && !strings.Contains(other, OneSegment) {
+		prefix, ok := strings.CutSuffix(entry, "*")
+		return ok && strings.HasPrefix(strings.TrimSuffix(other, "*"), prefix)
+	}
+	e, o := splitPattern(entry), splitPattern(other)
+	for i, want := range e.segs {
+		elast := i == len(e.segs)-1
+		if i >= len(o.segs) {
+			return false
+		}
+		have := o.segs[i]
+		// The other's last segment with its * matches any longer path, so only an
+		// entry that ends here with its * as well can cover it.
+		ostarred := i == len(o.segs)-1 && o.star
+		switch {
+		case elast && e.star && want == OneSegment:
+			return have != ""
+		case elast && e.star:
+			return want == "" || have != OneSegment && strings.HasPrefix(have, want)
+		case ostarred:
+			return false
+		case want == OneSegment:
+			if have == "" {
+				return false
+			}
+		case want != have:
+			return false
+		}
+	}
+	return len(o.segs) == len(e.segs) && !o.star
+}
+
+// OverlapPaths reports whether one request path can match both patterns. A case it
+// cannot decide counts as an overlap: two credentials whose paths may overlap are
+// refused.
+func OverlapPaths(a, b string) bool {
+	if strings.ContainsAny(a+b, "{}") && (!ValidPath(a) || !ValidPath(b)) {
+		return true
+	}
+	if !strings.Contains(a, OneSegment) && !strings.Contains(b, OneSegment) {
+		return CoversPath(a, b) || CoversPath(b, a)
+	}
+	x, y := splitPattern(a), splitPattern(b)
+	for i := 0; ; i++ {
+		xend, yend := i >= len(x.segs), i >= len(y.segs)
+		if xend || yend {
+			return xend && yend
+		}
+		s, t := x.segs[i], y.segs[i]
+		xstar := i == len(x.segs)-1 && x.star
+		ystar := i == len(y.segs)-1 && y.star
+		switch {
+		case xstar && ystar:
+			return s == OneSegment || t == OneSegment || strings.HasPrefix(s, t) || strings.HasPrefix(t, s)
+		case xstar:
+			return s == OneSegment && t != "" || s != OneSegment && (t == OneSegment || strings.HasPrefix(t, s))
+		case ystar:
+			return t == OneSegment && s != "" || t != OneSegment && (s == OneSegment || strings.HasPrefix(s, t))
+		case s == OneSegment && t == OneSegment:
+		case s == OneSegment:
+			if t == "" {
+				return false
+			}
+		case t == OneSegment:
+			if s == "" {
+				return false
+			}
+		case s != t:
+			return false
+		}
+	}
 }
 
 // CleanPath is the path of a request as a path rule reads it, and whether it can be

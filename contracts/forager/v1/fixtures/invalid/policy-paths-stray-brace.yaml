@@ -1,0 +1,9 @@
+# A { or } in a path stands only as a whole segment {}.
+version: 1
+egress:
+  mode: enforce
+  allow:
+    - api.git.example
+  paths:
+    api.git.example:
+      - /repos/example-org/app/pulls/{n}

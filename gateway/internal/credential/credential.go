@@ -500,13 +500,24 @@ func (h *Held) check(mode policy.Mode, allow []string) error {
 	return nil
 }
 
+// checkPaths refuses a path of a credential's that is not in the policy's path grammar,
+// a { or a } outside a segment {} among them.
+func checkPaths(name string, paths []string) error {
+	for _, p := range paths {
+		if !policy.ValidPath(p) {
+			return fmt.Errorf("credential %s: write the path %s from /, with { and } only as a whole segment {}, and * only at the end", accesskey.ShownName(name, false), accesskey.ShownValue(p, true))
+		}
+	}
+	return nil
+}
+
 // overlap returns a path of a and a path of b that one request path can match both of,
-// such as /example-org/* and /example-org/harness.git/*, and whether there are any. A
-// path is a prefix ending in * or an exact path, the policy's path grammar.
+// such as /example-org/* and /example-org/harness.git/*, and whether there are any, as
+// [policy.OverlapPaths] decides it in the policy's path grammar.
 func overlap(a, b []string) (string, string, bool) {
 	for _, x := range a {
 		for _, y := range b {
-			if policy.CoversPath(x, y) || policy.CoversPath(y, x) {
+			if policy.OverlapPaths(x, y) {
 				return x, y, true
 			}
 		}
@@ -623,6 +634,9 @@ func (d Definition) Check() error {
 		}
 	}
 	if len(d.Adapter) > 0 {
+		if err := checkPaths(d.Name, d.Paths); err != nil {
+			return err
+		}
 		if d.Scheme != "" || d.Username != "" || d.Header != "" {
 			return fmt.Errorf("credential %s: an adapter says how its token is used; the scheme is not the definition's to give", accesskey.ShownName(d.Name, false))
 		}
@@ -633,6 +647,9 @@ func (d Definition) Check() error {
 	}
 	if len(d.Hosts) == 0 {
 		return fmt.Errorf("credential %s: a token from env or file needs the hosts it is for", accesskey.ShownName(d.Name, false))
+	}
+	if err := checkPaths(d.Name, d.Paths); err != nil {
+		return err
 	}
 	return apply{Hosts: d.Hosts, Scheme: d.Scheme, Username: d.Username, Header: d.Header}.check()
 }
