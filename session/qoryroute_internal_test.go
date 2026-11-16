@@ -454,6 +454,51 @@ func TestTheRouteServesTheAgentsAddressAlone(t *testing.T) {
 	mu.Unlock()
 }
 
+// TestAFailedAgentLookupIsReported pins the Report line of a failed call for the agent's
+// addresses: the line starts with the fix, has the session's number, no text of the
+// error, which can contain an address, and the wait for a call that timed out; at most
+// one line goes out a second, and a call whose forwarder closed is not reported.
+func TestAFailedAgentLookupIsReported(t *testing.T) {
+	var lines []string
+	q := newQoryRoute(&routeHandler{}, context.Background(), (&routeRecords{}).record, func(l string) { lines = append(lines, l) })
+	now := time.Unix(1000, 0)
+	q.now = func() time.Time { return now }
+	lookupErr := errors.New("wall docker: the agent's address 10.89.0.2 on the inside network")
+	q.agent = func(context.Context) ([]netip.Addr, error) { return nil, lookupErr }
+	q.open(3, routePassword)
+	peer := netip.MustParseAddr("10.89.0.2")
+	for range 3 {
+		if q.fromAgent(context.Background(), 3, peer) {
+			t.Fatal("a failed call let the request through")
+		}
+	}
+	if len(lines) != 1 {
+		t.Fatalf("3 failed calls within a second gave %d lines: %q", len(lines), lines)
+	}
+	want := "Check that the agent's container of session 3 runs: the wall did not return its address, so the request to " + link.QoryHost + " went to the gateway's proxy, which denies that host."
+	if lines[0] != want {
+		t.Errorf("the line %q, want %q", lines[0], want)
+	}
+	now = now.Add(qoryHostRecordEvery)
+	lookupErr = fmt.Errorf("docker inspect: %w", context.DeadlineExceeded)
+	q.fromAgent(context.Background(), 3, peer)
+	if len(lines) != 2 || !strings.Contains(lines[1], "did not return its address within "+qoryHostAgentWait.String()+",") {
+		t.Errorf("a call that timed out a second later gave %q", lines)
+	}
+	for _, l := range lines {
+		if strings.Contains(l, "10.89.0.2") || strings.Contains(l, "docker") {
+			t.Errorf("the line has the error's text: %q", l)
+		}
+	}
+	now = now.Add(qoryHostRecordEvery)
+	closed, cancel := context.WithCancel(context.Background())
+	cancel()
+	q.fromAgent(closed, 3, peer)
+	if len(lines) != 2 {
+		t.Errorf("a call after the forwarder closed was reported: %q", lines[2:])
+	}
+}
+
 // TestARequestWithoutASessionsPasswordGoesToTheProxy pins the walled forwarder's
 // gate on the route: a request to the route's host with no Proxy-Authorization, as the
 // setup container sends it, with another password, or with two, goes to the proxy,

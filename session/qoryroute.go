@@ -81,7 +81,7 @@ type qoryRoute struct {
 	// record writes a decision of the route, a dev.qory.run.egress, which it completes
 	// with the policy's mode.
 	record func(data map[string]any)
-	// report gets a line for a handler that panicked.
+	// report gets a line for a handler that panicked, and for a failed call of agent.
 	report func(string)
 	// done ends when the run closes.
 	done context.Context
@@ -114,6 +114,8 @@ type qoryRoute struct {
 	at       time.Time
 	// recorded is when a refusal of each status, 400, 429 and 503, was last recorded.
 	recorded map[int]time.Time
+	// lookupReported is when a failed call of agent was last reported.
+	lookupReported time.Time
 }
 
 // newQoryRoute is the route to handler of a run that closes with done.
@@ -192,7 +194,7 @@ func (q *qoryRoute) sessionOf(ctx context.Context, logins []string, peer netip.A
 // fromAgent reports whether peer is an address of the agent's container of session n,
 // which [qoryRoute.agent] returns: once per session, kept until the session ends. A
 // route with no agent, an invalid peer and a failed call are false, and a failed call
-// is made again for the next request.
+// is made again for the next request and reported, [qoryRoute.reportLookup].
 func (q *qoryRoute) fromAgent(ctx context.Context, n int, peer netip.Addr) bool {
 	if q.agent == nil || !peer.IsValid() {
 		return false
@@ -203,10 +205,13 @@ func (q *qoryRoute) fromAgent(ctx context.Context, n int, peer netip.Addr) bool 
 	addrs, ok := q.addrs[n]
 	q.mu.Unlock()
 	if !ok {
-		ctx, cancel := context.WithTimeout(ctx, qoryHostAgentWait)
-		got, err := q.agent(ctx)
+		lookupCtx, cancel := context.WithTimeout(ctx, qoryHostAgentWait)
+		got, err := q.agent(lookupCtx)
 		cancel()
 		if err != nil {
+			if ctx.Err() == nil {
+				q.reportLookup(n, err)
+			}
 			return false
 		}
 		q.mu.Lock()
@@ -220,6 +225,29 @@ func (q *qoryRoute) fromAgent(ctx context.Context, n int, peer netip.Addr) bool 
 		addrs = got
 	}
 	return slices.Contains(addrs, peer.Unmap())
+}
+
+// reportLookup writes a Report line for a failed call of [qoryRoute.agent] for session
+// n, at most one in [qoryHostRecordEvery], as [qoryRoute.recordRefusal] limits its
+// records. The line has no text of err, which can contain an address of the enclosure.
+func (q *qoryRoute) reportLookup(n int, err error) {
+	if q.report == nil {
+		return
+	}
+	q.mu.Lock()
+	now := q.clock()
+	last := q.lookupReported
+	if !last.IsZero() && now.Sub(last) < qoryHostRecordEvery && !now.Before(last) {
+		q.mu.Unlock()
+		return
+	}
+	q.lookupReported = now
+	q.mu.Unlock()
+	within := ""
+	if errors.Is(err, context.DeadlineExceeded) {
+		within = fmt.Sprintf(" within %s", qoryHostAgentWait)
+	}
+	q.report(fmt.Sprintf("Check that the agent's container of session %d runs: the wall did not return its address%s, so the request to %s went to the gateway's proxy, which denies that host.", n, within, link.QoryHost))
 }
 
 // clock is the time the rate limit and the records' limit read.
