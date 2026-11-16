@@ -1365,9 +1365,11 @@ request asks the gateway for, for this session.
   lists the folder among the walled runs still going, read-only, until it ends, so a
   walled run that starts meanwhile and binds it writable is `mount_shared_with_run`.
   Behind a `Wall`, a mount or a workspace that is, contains or lies inside `Dir` is
-  `mount_contains_forager_files`, and on Linux `session.Exec` exits 125 when a mount
-  lies at or below `/qory/runtime/<runtime>` beside the folder's bind, as an image's
-  symbolic link on a mount's target can make it. See
+  `mount_contains_forager_files`. On Linux `session.Exec` exits 125 when `/qory` or
+  `/qory/runtime` is a symbolic link, when a mount lies at or below
+  `/qory/runtime/<runtime>` beside the folder's bind and a shiftfs mount on that bind,
+  or when the program lies below `/qory/runtime/<runtime>` and no mount lies there, as
+  an image's symbolic link can make it. See
   [the contract](../contracts/forager/v1/README.md#the-runtime).
 - `Declared` is the egress the harness declared. The record reports it as
   `harness_hosts`, a host that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`,

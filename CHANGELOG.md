@@ -2516,11 +2516,14 @@ release may change what an existing document does, and says so under Upgrading.
   walled run that starts meanwhile and binds the folder, or a folder that contains it,
   writable is `mount_shared_with_run`. Such an entry is removed as soon as its session
   is gone, since no container outlives it.
-- On Linux `session.Exec` reads `/proc/self/mountinfo` before it starts the program,
-  and exits 125 with a line that starts with the fix when the table cannot be read, or
-  when a mount lies at `/qory`, at `/qory/runtime`, or at or below
-  `/qory/runtime/<runtime>` beside the bind of the runtime's installed folder. An
-  image's symbolic link on a mount's target can lead the mount there.
+- On Linux `session.Exec` exits 125, before it starts the program, with a line that
+  starts with the fix, when `/qory` or `/qory/runtime` is a symbolic link, or when it
+  cannot read `/proc/self/mountinfo`. It exits 125 too when a mount lies at `/qory`, at
+  `/qory/runtime`, or at or below `/qory/runtime/<runtime>` beside the bind of the
+  runtime's installed folder and a shiftfs mount on that bind, which Sysbox in shiftfs
+  mode adds. And it exits 125 when the program lies below `/qory/runtime/<runtime>`
+  and no mount lies there. An image's symbolic link on a mount's target can lead the
+  mount there, and one at `/qory` leads the folder's bind away.
 - In a run with a run key, `dev.qory.session.started` shows the runtime's installed
   folder as `/qory/runtime/<runtime>` without a wall too, so its `command` is
   `/qory/runtime/claude/bin/claude`, not the path on the machine.

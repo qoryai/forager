@@ -5301,9 +5301,13 @@ enclosure binds the folder `Dir` leads to read-only at `/qory/runtime/<runtime>`
 the command, in each argument and in each variable value it prepares. In a walled run
 the folder is one of Forager's files (§The wall), so no mount and no workspace is,
 contains or lies inside it. An image's symbolic link can lead a mount the run lists
-to another path inside, so on Linux the helper's exec reads `/proc/self/mountinfo`
-before it starts the program, and exits 125 when a mount lies at `/qory`, at
-`/qory/runtime`, or at or below `/qory/runtime/<runtime>` beside the folder's bind.
+to another path inside, and one at `/qory` or `/qory/runtime` leads the folder's bind
+away. So on Linux, before it starts the program, the helper's exec exits 125 when
+`/qory` or `/qory/runtime` is a symbolic link. It reads `/proc/self/mountinfo` and
+exits 125 too when a mount lies at `/qory`, at `/qory/runtime`, or at or below
+`/qory/runtime/<runtime>` beside the folder's bind and a shiftfs mount on that bind,
+which Sysbox in shiftfs mode adds, and when the program lies below
+`/qory/runtime/<runtime>` and no mount lies there.
 `dev.qory.session.started` reports `Version` as `runtime_version`, and without a wall
 in a run with a run key shows the program at `/qory/runtime/<runtime>` too; Forager
 does not run the program to check it. The caller keeps the folder unchanged until the

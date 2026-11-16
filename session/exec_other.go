@@ -10,7 +10,7 @@ import (
 )
 
 // runtimeMounts checks nothing outside Linux, where no enclosure runs.
-func runtimeMounts() error { return nil }
+func runtimeMounts(string) error { return nil }
 
 // closeInherited closes nothing outside Linux, where no enclosure runs.
 func closeInherited() {}

@@ -13,14 +13,18 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// runtimeMounts checks the process's mounts by [checkRuntimeMounts]; a table that
-// cannot be read is an error too.
-func runtimeMounts() error {
+// runtimeMounts checks /qory and /qory/runtime by [checkRuntimeLinks], then the
+// process's mounts by [checkRuntimeMounts] for program, the path of the program Exec
+// starts; a table that cannot be read is an error too.
+func runtimeMounts(program string) error {
+	if err := checkRuntimeLinks("/"); err != nil {
+		return err
+	}
 	b, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
 		return fmt.Errorf("mount /proc in the enclosure: the check of the mounts over the runtime's installed folder cannot read /proc/self/mountinfo: %w", err)
 	}
-	return checkRuntimeMounts(string(b))
+	return checkRuntimeMounts(string(b), program)
 }
 
 // closeInherited closes every file descriptor above 2 of the process, apart from the

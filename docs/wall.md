@@ -788,10 +788,14 @@ is `/qory/runtime/claude/bin/claude` inside. Claude Code's descriptor sets
 - The wall keeps the helper, the bundle and the runtime's folder under `/qory`, so
   `wall.Docker` refuses a mount whose path inside, its `Target` or else its `Path`, is,
   contains or lies under `/qory`.
-- An image's symbolic link on a mount's target can still lead the mount there. On
-  Linux `session.Exec` reads `/proc/self/mountinfo` before it starts the program and
-  exits 125 when a mount lies at `/qory`, at `/qory/runtime`, or at or below
-  `/qory/runtime/<runtime>` beside the folder's bind.
+- An image's symbolic link on a mount's target can still lead the mount there, and
+  one at `/qory` or `/qory/runtime` leads the folder's bind away. On Linux
+  `session.Exec` exits 125 before it starts the program when `/qory` or
+  `/qory/runtime` is a symbolic link. It reads `/proc/self/mountinfo` and exits 125
+  too when a mount lies at `/qory`, at `/qory/runtime`, or at or below
+  `/qory/runtime/<runtime>` beside the folder's bind and a shiftfs mount on that bind,
+  which Sysbox in shiftfs mode adds. And it exits 125 when the program lies below
+  `/qory/runtime/<runtime>` and no mount lies there.
 
 ### The measure of the enclosure
 
