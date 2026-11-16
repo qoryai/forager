@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -560,4 +561,74 @@ func TestTheSetupContainerGetsTheLaunchsLimits(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDockerAfterCommandLines pins After's container, from the agent's removal to Close:
+// docker run --rm on the internal network alone, under the run's container runtime and as
+// the wall's user with no capability, with the workspace's mount and the new socket's
+// directory alone, the helper and the bundle, no hook socket of the agent's, no nested
+// Docker volume, and the helper's command as its entrypoint; its environment file has the
+// relay's proxy variables with no password, the socket's path and the bundle's variables
+// and none of the launch's. UnwrapAfter removes it by name, and Close does not run that
+// again.
+func TestDockerAfterCommandLines(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", local_: true, uid: 1000}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, NestArgs: []string{"run", "nest"}, sys: rec}
+	enc, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1", Runtime: "sysbox-runc", Docker: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := enc.(*dockerEnclosure)
+	ctx := context.Background()
+	agent := launch()
+	agent.Proxy = "172.30.0.1:50123"
+	agent.CA = []byte("not-a-real-ca")
+	if _, err := e.Wrap(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Unwrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	after := Launch{
+		Command: "/opt/qory/qory-linux", Args: []string{"exec", "--after-only", "--after-timeout", "1000", "--after-word", "git"},
+		Env: []string{"CA_VAR=/qory/ca.pem"}, Dir: "/work", CA: agent.CA, Proxy: agent.Proxy, ProxyToken: "not-a-real-token",
+		Socket: "/tmp/qory-run-2/sock", Mounts: []Mount{{Path: "/work"}},
+	}
+	got, err := e.WrapAfter(ctx, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	temp := e.temp
+	env, err := os.ReadFile(filepath.Join(temp, "after-env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Command != "docker" || got.Dir != "/work" || !slices.Contains(got.Args, "--rm") || slices.Contains(got.Args, "--interactive") {
+		t.Errorf("the launch %+v", got)
+	}
+	run := words(got.Args)
+	for _, want := range []string{"--network qory-" + runID + "-in", "--runtime sysbox-runc", "--cap-drop ALL", "--security-opt no-new-privileges", "--entrypoint /opt/qory/qory-linux example.com/agent:1 exec --after-only"} {
+		if !strings.Contains(run, want) {
+			t.Errorf("the docker run %q has no %q", run, want)
+		}
+	}
+	for _, not := range []string{"/qory/hooks/sock", "--user 0:0", "--volume", "type=volume", "/tmp/qory-run-1", "/home/dev"} {
+		if strings.Contains(run, not) {
+			t.Errorf("the docker run %q has %q", run, not)
+		}
+	}
+	if !strings.Contains(string(env), "QORY_RUN_SOCKET=/qory/hooks/sock\n") || strings.Contains(string(env), "ANTHROPIC") || strings.Contains(string(env)+run, "not-a-real-token") {
+		t.Errorf("the environment file %q", env)
+	}
+	if err := e.UnwrapAfter(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.ReplaceAll(strings.Join(rec.lines, "\n"), temp, "PRIVATEDIR")
+	if n := strings.Count(lines, "rm --force --volumes qory-"+runID+"-after\n"); n != 1 {
+		t.Errorf("After's container was removed %d times, want once:\n%s", n, lines)
+	}
+	golden(t, "after", "docker "+strings.ReplaceAll(run, temp, "PRIVATEDIR")+"\n\n"+lines+"\n\nafter environment:\n"+string(env))
 }

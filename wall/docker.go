@@ -481,6 +481,7 @@ func (e *dockerEnclosure) relay() string   { return e.base + "-relay" }
 func (e *dockerEnclosure) agent() string   { return e.base + "-agent" }
 func (e *dockerEnclosure) image() string   { return e.base + "-image" }
 func (e *dockerEnclosure) setup() string   { return e.base + "-setup" }
+func (e *dockerEnclosure) after() string   { return e.base + "-after" }
 func (e *dockerEnclosure) label() string   { return "dev.qory.run=" + e.req.RunID }
 
 // docker runs one docker command; a failure contains what the command printed. The
@@ -1281,6 +1282,84 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 		cli = withSelection(cli, e.env)
 	}
 	return Launch{Command: e.command(), Args: run, Env: cli, Dir: dir}, nil
+}
+
+// WrapAfter is the launch that starts After's container with docker run --rm, as the
+// agent's container starts without nested Docker: on the inside network, from the run's
+// image under the run's container runtime, as the wall's user with no capability and none
+// to gain, with the launch's mounts at their paths or their Targets, the launch's socket
+// directory at /qory/hooks, the workspace as its working directory, the helper, with l.CA
+// the bundle, and the launch's limits. The proxy variables name the relay with no
+// password, so the route to the caller, which serves a password and the agent's address
+// only, answers it 503. The environment, through a file, is l.Env, the proxy variables, the
+// socket's and, with l.CA, the variables that point at the bundle. With nested Docker the
+// container runs under the same runtime, with no root, no daemon and no store volume. The
+// entrypoint is l.Command. It starts the relay and runs the run's first use of the
+// enclosure when neither ran, as Wrap does.
+func (e *dockerEnclosure) WrapAfter(ctx context.Context, l Launch) (Launch, error) {
+	mounts, dir, err := e.mounts(l)
+	if err != nil {
+		return Launch{}, err
+	}
+	helper, err := mount(e.d.Helper, HelperPath, true)
+	if err != nil {
+		return Launch{}, err
+	}
+	limits, err := limits(l.Limits)
+	if err != nil {
+		return Launch{}, err
+	}
+	env := append([]string(nil), l.Env...)
+	env = append(env, link.ProxyEnv(relayURL(""))...)
+	if l.Socket != "" {
+		env = append(env, link.EnvRunSocket+"="+path.Join(hooksDir, filepath.Base(l.Socket)))
+	}
+	if len(l.CA) > 0 {
+		for _, n := range e.d.SetsWithAuthority() {
+			env = append(env, n+"="+BundlePath)
+		}
+	}
+	envFile, err := e.envFile("after-env", env)
+	if err != nil {
+		return Launch{}, err
+	}
+	if err := e.StartRelay(ctx, l); err != nil {
+		return Launch{}, err
+	}
+	bundle, err := e.firstUse(ctx, l.CA)
+	if err != nil {
+		return Launch{}, err
+	}
+	run := []string{"run", "--rm", "--name", e.after(), "--label", e.label(), "--network", e.inside()}
+	if e.req.Runtime != "" {
+		run = append(run, "--runtime", e.req.Runtime)
+	}
+	run = append(run, e.hardening()...)
+	run = append(run, "--no-healthcheck", "--sysctl", "net.ipv6.conf.default.disable_ipv6=1")
+	run = append(run, limits...)
+	run = append(run, "--env-file", envFile, "--workdir", l.Dir, "--mount", helper)
+	for _, m := range mounts {
+		run = append(run, "--mount", m)
+	}
+	if bundle != "" {
+		run = append(run, "--mount", bundle)
+	}
+	run = append(run, e.neverPull()...)
+	run = append(run, "--entrypoint", l.Command, e.req.Image)
+	run = append(run, l.Args...)
+	if rm := []string{"rm", "--force", "--volumes", e.after()}; !slices.ContainsFunc(e.made, func(c []string) bool { return slices.Equal(c, rm) }) {
+		e.made = append(e.made, rm)
+	}
+	cli := accesskey.WithoutVariables(os.Environ())
+	if e.env != nil {
+		cli = withSelection(cli, e.env)
+	}
+	return Launch{Command: e.command(), Args: run, Env: cli, Dir: dir}, nil
+}
+
+// UnwrapAfter removes After's container, within closeWait, as Unwrap removes the agent's.
+func (e *dockerEnclosure) UnwrapAfter(ctx context.Context) error {
+	return e.removeContainer(ctx, e.after(), noSuchContainer)
 }
 
 // AgentAddrs returns the addresses of the agent's container on the inside network,
