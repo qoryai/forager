@@ -22,9 +22,10 @@
 // keeps for itself, and its [Model] the API formats the runtime sends, where a composer
 // writes a run's model id, effort value and model endpoint, and the variables it reads
 // a model key from. Its Fixed is the variables the session sets for the runtime in
-// every launch, over every other source, and its EgressHosts the hosts the runtime
-// needs to reach. [Runtimes] renders the four, for every descriptor the contract ships,
-// as runtimes.json, the file a server vendors.
+// every launch, over every other source, its EgressHosts the hosts the runtime needs
+// to reach, and its InstallRequired whether a session of it needs the caller's
+// installed folder. [Runtimes] renders the five, for every descriptor the contract
+// ships, as runtimes.json, the file a server vendors.
 package descriptor
 
 import (
@@ -45,16 +46,15 @@ import (
 
 // Descriptor is one runtime's descriptor.
 type Descriptor struct {
-	Version        int       `yaml:"version" json:"version"`
-	Runtime        string    `yaml:"runtime" json:"runtime"`
-	Title          string    `yaml:"title" json:"title,omitempty"`
-	RuntimeVersion string    `yaml:"runtime_version" json:"runtime_version"`
-	Sources        Sources   `yaml:"sources" json:"sources"`
-	Stop           *Stop     `yaml:"stop" json:"stop,omitempty"`
-	Headless       *Headless `yaml:"headless" json:"headless,omitempty"`
-	Secrets        *Secrets  `yaml:"secrets" json:"secrets,omitempty"`
-	Model          *Model    `yaml:"model" json:"model,omitempty"`
-	Tools          *Tools    `yaml:"tools" json:"tools,omitempty"`
+	Version  int       `yaml:"version" json:"version"`
+	Runtime  string    `yaml:"runtime" json:"runtime"`
+	Title    string    `yaml:"title" json:"title,omitempty"`
+	Sources  Sources   `yaml:"sources" json:"sources"`
+	Stop     *Stop     `yaml:"stop" json:"stop,omitempty"`
+	Headless *Headless `yaml:"headless" json:"headless,omitempty"`
+	Secrets  *Secrets  `yaml:"secrets" json:"secrets,omitempty"`
+	Model    *Model    `yaml:"model" json:"model,omitempty"`
+	Tools    *Tools    `yaml:"tools" json:"tools,omitempty"`
 	// Fixed is the variables the session sets for the runtime in every launch, by name,
 	// walled or not: no other source's value of one applies. Nil when the descriptor
 	// sets none.
@@ -63,6 +63,11 @@ type Descriptor struct {
 	// server to allow for a run. No code of this module applies them to a run's policy.
 	// Nil when the descriptor has none.
 	EgressHosts []string `yaml:"egress_hosts" json:"egress_hosts,omitempty"`
+	// InstallRequired is true when the session starts the runtime only from a folder
+	// the caller installed it in: Join returns an error for a session of it without
+	// SessionSpec.RuntimeInstall. False starts it also as the caller names it, such as
+	// from the run's image.
+	InstallRequired bool `yaml:"install_required" json:"install_required,omitempty"`
 	// Resume is where the runtime writes the transcript of its session, and how the
 	// session starts the runtime again from it. Nil when the runtime has no resume.
 	Resume *Resume `yaml:"resume" json:"resume,omitempty"`

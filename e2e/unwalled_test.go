@@ -158,6 +158,12 @@ func TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The agent is this binary, installed as the runtime's program.
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	install := Install(t, exe)
 	out := filepath.Join(t.TempDir(), "agent.json")
 	var stdout, stderr bytes.Buffer
 	res, err := runOne(context.Background(), runSpec{OpenSpec: session.OpenSpec{
@@ -168,8 +174,9 @@ func TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy(t *testing.T) {
 		Report:         func(l string) { t.Log("report:", l) },
 	},
 		SessionSpec: session.SessionSpec{
-			Runtime: rt,
-			Command: os.Args[0],
+			Runtime:        rt,
+			RuntimeInstall: &session.RuntimeInstall{Dir: install, Version: InstallVersion},
+			Command:        filepath.Join(install, "bin", "claude"),
 			Env: []string{envAgent + "=" + out, envAgentURL + "=https://" + o.host + "/v1/models",
 				"ANTHROPIC_API_KEY=inherited-fake-key", "PATH=" + os.Getenv("PATH")},
 			Dir:    t.TempDir(),

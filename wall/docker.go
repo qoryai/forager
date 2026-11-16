@@ -44,6 +44,9 @@ const (
 	// BundlePath is where the enclosure finds the authorities it trusts when the run has
 	// one of its own: the image's bundle and the run's certificate, in one file.
 	BundlePath = "/qory/ca-bundle.pem"
+	// RuntimeDir holds the installed runtimes' folders, read-only:
+	// /qory/runtime/<runtime>, [Launch.Runtime].
+	RuntimeDir = "/qory/runtime"
 	// relayAlias is the name the agent reaches the relay by, and relayPort the port the
 	// relay forwards to the proxy.
 	relayAlias = "qory-proxy"
@@ -247,6 +250,9 @@ var (
 	envShape     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 	cpusShape    = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
 	bytesShape   = regexp.MustCompile(`^[0-9]+[bkmgBKMG]?$`)
+	// folderShape is a runtime's name, the name of its folder in [RuntimeDir]: the
+	// descriptor schema's pattern of runtime.
+	folderShape = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
 )
 
 // Name is docker, or the command's name when another was given.
@@ -1156,20 +1162,25 @@ func (e *dockerEnclosure) firstUse(ctx context.Context, ca []byte) (string, erro
 // Wrap returns the docker run that starts the launch in the agent's container: on the
 // internal network only, the launch's mounts at the paths they have on this machine or
 // at their Targets, the workspace as the working directory inside one of them, the
-// helper read-only, the socket's directory, and the launch's environment through a
-// file, so no value is on a command line. The proxy variables name the relay, with
-// l.ProxyPassword in the URL when it is set. It starts the relay first when it has not
-// started, [dockerEnclosure.StartRelay], and runs the run's first use of the enclosure
-// when no container of the run's image ran it. With a transcript directory it creates
-// the agent's container, makes the bind's parents in it, [dockerEnclosure.copyDirs],
-// and returns the docker start that attaches to it in place of the docker run. The
-// session calls it once for each session.
+// helper read-only, the installed runtime's folder read-only at
+// /qory/runtime/<runtime> when the launch has one, the socket's directory, and the
+// launch's environment through a file, so no value is on a command line. The proxy
+// variables name the relay, with l.ProxyPassword in the URL when it is set. It starts
+// the relay first when it has not started, [dockerEnclosure.StartRelay], and runs the
+// run's first use of the enclosure when no container of the run's image ran it. With a
+// transcript directory it creates the agent's container, makes the bind's parents in
+// it, [dockerEnclosure.copyDirs], and returns the docker start that attaches to it in
+// place of the docker run. The session calls it once for each session.
 func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	mounts, dir, err := e.mounts(l)
 	if err != nil {
 		return Launch{}, err
 	}
 	helper, err := mount(e.d.Helper, HelperPath, true)
+	if err != nil {
+		return Launch{}, err
+	}
+	runtimeMount, err := runtimeMount(l.Runtime)
 	if err != nil {
 		return Launch{}, err
 	}
@@ -1242,6 +1253,9 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	}
 	if bundle != "" {
 		run = append(run, "--mount", bundle)
+	}
+	if runtimeMount != "" {
+		run = append(run, "--mount", runtimeMount)
 	}
 	if transcript != "" {
 		run = append(run, "--mount", transcript)
@@ -1681,7 +1695,8 @@ func firstFile(stream []byte) ([]byte, int64, error) {
 // inside; a mount whose path inside, its Path or its Target, holds it, by whole
 // components, shows it, and a launch none of whose mounts does is refused: the adapter
 // binds nothing of the caller's the launch does not list. A Target that is not
-// absolute, or that is, holds or lies under the adapter's /qory, is refused.
+// absolute is refused, and so is a mount whose place inside, its Target or else its
+// Path, is, holds or lies under the adapter's /qory.
 func (e *dockerEnclosure) mounts(l Launch) ([]string, string, error) {
 	if !filepath.IsAbs(l.Dir) {
 		return nil, "", fmt.Errorf("wall docker: the workspace %s is not an absolute path", accesskey.ShownValue(l.Dir, true))
@@ -1700,10 +1715,12 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, string, error) {
 			if !filepath.IsAbs(m.Target) {
 				return nil, "", fmt.Errorf("wall docker: the mount %s is shown at %s, which is not an absolute path", accesskey.ShownValue(m.Path, true), accesskey.ShownValue(m.Target, true))
 			}
-			if under(qoryDir, m.Target) || under(m.Target, qoryDir) {
-				return nil, "", fmt.Errorf("wall docker: the mount %s is shown at %s, which overlaps %s, the wall's", accesskey.ShownValue(m.Path, true), accesskey.ShownValue(m.Target, true), qoryDir)
-			}
 			dst = filepath.Clean(m.Target)
+		}
+		// A mount with no Target is shown at its Path, so the place inside is checked,
+		// whichever it is.
+		if inside := filepath.Clean(dst); under(qoryDir, inside) || under(inside, qoryDir) {
+			return nil, "", fmt.Errorf("wall docker: the mount %s is shown at %s, which overlaps %s, the wall's", accesskey.ShownValue(m.Path, true), accesskey.ShownValue(dst, true), qoryDir)
 		}
 		binds = append(binds, bind{m.Path, dst, m.ReadOnly})
 		if rel, err := filepath.Rel(dst, l.Dir); host == "" && err == nil && under(dst, l.Dir) {
@@ -1763,6 +1780,9 @@ func (e *dockerEnclosure) transcriptMount(ctx context.Context, l Launch) (string
 	}
 	if l.Socket != "" {
 		sources = append(sources, filepath.Dir(l.Socket))
+	}
+	if l.Runtime.Path != "" {
+		sources = append(sources, l.Runtime.Path)
 	}
 	for _, p := range sources {
 		if under(p, tr.Path) || under(tr.Path, p) {
@@ -2155,6 +2175,22 @@ func limits(l Limits) ([]string, error) {
 type bind struct {
 	src, dst string
 	readonly bool
+}
+
+// runtimeMount is the --mount of the launch's installed runtime folder, read-only at
+// /qory/runtime/<Name>; empty for a launch with none. A Path that is not absolute and
+// clean, and a Name that is not a runtime's, are refused.
+func runtimeMount(r RuntimeFolder) (string, error) {
+	if r.Path == "" && r.Name == "" {
+		return "", nil
+	}
+	if !filepath.IsAbs(r.Path) || filepath.Clean(r.Path) != r.Path {
+		return "", fmt.Errorf("wall docker: the runtime folder %s is not an absolute, clean path", accesskey.ShownValue(r.Path, true))
+	}
+	if !folderShape.MatchString(r.Name) {
+		return "", fmt.Errorf("wall docker: the runtime %s has no name a folder in %s can have", accesskey.ShownName(r.Name, true), RuntimeDir)
+	}
+	return mount(r.Path, path.Join(RuntimeDir, r.Name), true)
 }
 
 // mount is one --mount value. The value is comma-separated fields, so a path holding a

@@ -13,7 +13,6 @@ import (
 // rule after it for any message, and a parent member.
 const eachDoc = `version: 1
 runtime: amp
-runtime_version: "1"
 sources: {output: {format: jsonl}}
 parent:
   source: output
@@ -145,7 +144,6 @@ func TestParentAndEachAreChecked(t *testing.T) {
 // of the main agent, and a rule with each for thinking blocks.
 const blocksDoc = `version: 1
 runtime: amp
-runtime_version: "1"
 sources: {output: {format: jsonl}}
 rules:
   - source: output
@@ -209,7 +207,6 @@ func TestTheFirstRuleThatMatchesTheRecordDecides(t *testing.T) {
 // hooks with the same each for thinking blocks.
 const pickDoc = `version: 1
 runtime: amp
-runtime_version: "1"
 sources: {output: {format: jsonl}}
 rules:
   - source: output

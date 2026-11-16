@@ -668,3 +668,37 @@ func TestDockerAfterSysctlFollowsTheAgents(t *testing.T) {
 		})
 	}
 }
+
+// TestDockerAfterBindsNoRuntimeFolder pins that After's container does not bind the
+// launch's installed runtime folder, which the agent's container does at
+// /qory/runtime/<runtime>: After runs the caller's command, not the runtime.
+func TestDockerAfterBindsNoRuntimeFolder(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", local_: true, uid: 1000}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, NestArgs: []string{"run", "nest"}, sys: rec}
+	enc, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := enc.(*dockerEnclosure)
+	agent := launch()
+	agent.Proxy = "172.30.0.1:50123"
+	agent.Runtime = RuntimeFolder{Path: "/opt/runtimes/claude/2.1.320", Name: "claude"}
+	wrapped, err := e.Wrap(context.Background(), agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(words(wrapped.Args), "dst="+RuntimeDir+"/claude,readonly") {
+		t.Fatalf("the agent's container has no runtime folder: %s", words(wrapped.Args))
+	}
+	after, err := e.WrapAfter(context.Background(), Launch{
+		Command: "/opt/qory/qory-linux", Args: []string{"exec", "--after-only"}, Dir: "/work",
+		Proxy: agent.Proxy, Socket: "/tmp/qory-run-2/sock", Mounts: []Mount{{Path: "/work"}},
+		Runtime: agent.Runtime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run := words(after.Args); strings.Contains(run, RuntimeDir) || strings.Contains(run, "/opt/runtimes") {
+		t.Errorf("After's container binds the runtime folder: %s", run)
+	}
+}

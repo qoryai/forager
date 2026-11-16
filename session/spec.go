@@ -304,6 +304,23 @@ type SessionSpec struct {
 	// key: the program gets no model key's variable, placeholder or endpoint. Only a nil
 	// Runtime sets bare in dev.qory.session.started.
 	Runtime runtimes.Runtime
+	// RuntimeInstall is the folder the caller installed the runtime's program in, and
+	// the version it installed. A session of a Runtime that is
+	// [runtimes.InstallRequired] and reports true, such as Claude Code, requires it, and
+	// a session with no Runtime leaves it nil: [Run.Join] returns an error for either
+	// mistake. A session of
+	// another Runtime, such as Codex, may leave it nil: the session starts Command as
+	// the caller names it, from the Image behind a Wall, binds no folder and reports no
+	// runtime_version. A RuntimeInstall that is set has every check of
+	// [RuntimeInstall], for any Runtime. The program is a file inside
+	// Dir: Command, or, behind a Wall, the argument after the first -- in Args when
+	// Command is [wall.HelperPath], Forager's helper, which the caller starts the
+	// program through; the words before that -- are the caller's and are not checked.
+	// Behind a Wall the enclosure sees Dir read-only at
+	// /qory/runtime/<runtime>, the Runtime's name, and the session writes Dir as that
+	// path in Command, in each argument and in each variable value it prepares.
+	// dev.qory.session.started reports Version as runtime_version.
+	RuntimeInstall *RuntimeInstall
 	// Command, Args and Dir are what to start; an empty Dir is the working directory.
 	Command string
 	Args    []string
@@ -466,7 +483,8 @@ type SessionSpec struct {
 	// container: the run's image under the run's container runtime, as the wall's user
 	// with no capability and no nested Docker, on the wall's network with the run's proxy,
 	// with the mount that holds Dir and a socket in a directory that no other container
-	// binds, and none of the run's variables. Its proxy URL has no password, so it has
+	// binds, and none of the run's variables, and no installed runtime folder, so a path into
+	// it in After stays as written. Its proxy URL has no password, so it has
 	// no route to the caller: a request to the route gets 403 from the gateway's proxy,
 	// and one with the agent's password 503, since that session ended. The session does
 	// not narrow the run's proxy for After: it applies the credentials the run's
@@ -536,6 +554,27 @@ type SessionSpec struct {
 	// transcriptPoll is how often the session reads the runtime's transcript; zero
 	// means [transcriptPoll]. A test sets it.
 	transcriptPoll time.Duration
+}
+
+// RuntimeInstall is a runtime's program as the caller installed it on this machine.
+// [Run.Join] returns an error, before the join request, for a Dir that is not
+// absolute and clean, missing, not a folder, or a folder others cannot read and
+// enter, and behind a Wall for one that is, contains or lies inside /qory; for a
+// program, as [SessionSpec.RuntimeInstall] says which, whose path is not clean, that
+// is not inside Dir, that is reached through a symbolic link below Dir, that is not a
+// regular file others can read and execute, or that has a second hard link; for Dir,
+// a folder on the way to the program or the program when its group or others may
+// write it, or its owner is neither root nor the user of this process; and for an
+// empty Version, one over 64 bytes, or one that does not start with a letter or a
+// digit or has a character outside [0-9A-Za-z.+-]. Dir may itself be a symbolic link:
+// the session uses the folder it leads to. The folders above Dir are not checked:
+// the caller installs Dir under folders only root or this process's user can write,
+// and keeps the folder unchanged until the run ends.
+type RuntimeInstall struct {
+	// Dir is the folder, an absolute path of this machine: /opt/runtimes/claude/2.1.320.
+	Dir string
+	// Version is the runtime's version as its publisher numbers it: 2.1.320.
+	Version string
 }
 
 // HarnessSource is one harness source a session's compose used: Source as it is
@@ -771,6 +810,9 @@ type Closed struct {
 type runSpec struct {
 	OpenSpec
 	SessionSpec
+	// install is SessionSpec.RuntimeInstall as Join checked it; nil for a session
+	// with no runtime.
+	install *installed
 }
 
 // openDefaults fills what the open's spec left empty.

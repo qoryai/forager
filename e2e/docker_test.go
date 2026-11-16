@@ -183,6 +183,7 @@ func conform(t *testing.T, image, rt string, docker bool) {
 		Forwarder:     []string{wall.HelperPath, "forward"},
 		Exec:          append([]string{wall.HelperPath}, e2e.ExecArgs...),
 		Probe:         wall.HelperPath,
+		Install:       e2e.Install(t, helper),
 		// A socket crosses a bind mount on a Linux host and not a virtual machine's file
 		// share.
 		Hooks: runtime.GOOS == "linux",

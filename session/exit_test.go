@@ -41,7 +41,7 @@ func remoteSpec(t *testing.T, exit int) (runSpec, *linktest.Fake, func() []strin
 	t.Helper()
 	sp, _ := specGateway(t)
 	sp.Forwarder = nil
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", fmt.Sprintf("exit %d", exit)}
+	sp.Command, sp.Args = installedShell, []string{"-c", fmt.Sprintf("exit %d", exit)}
 	g := startRemote(t)
 	g.SetInterval(30)
 	sp.Gateway = remoteGateway(g, g.RunKey(t, event.NewRunID()))

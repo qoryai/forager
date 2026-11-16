@@ -50,6 +50,9 @@ fails. Tools, path rules and images need a wall.
   machine, except in an image a run's policy names by reference, where the checkout is
   at `/workspace` ([Images](#images)). The workspace is the working directory inside. The run's record is mounted
   read-only, from a runs directory outside every mount.
+- The runtime, such as Claude Code, does not come from the image. The node installs it,
+  and the wall mounts its folder read-only at `/qory/runtime/<runtime>`. See
+  [the runtime's folder](#the-runtimes-folder).
 - In a git worktree the repository's data lies in the main checkout; git inside the
   container works only with that directory mounted.
 - Nothing else of the node is visible inside.
@@ -77,7 +80,7 @@ In `qory`, turn it on with a `wall` section, or with
 ```yaml
 wall:
   adapter: docker
-  image: example.com/agent:1            # yours: the runtime and your toolchain
+  image: example.com/agent:1            # yours: your toolchain; the runtime is the node's
   env: [ANTHROPIC_API_KEY]              # names; nothing else of your environment goes in
 ```
 
@@ -88,14 +91,16 @@ You need:
 - the `docker` command, with an engine behind it; for [nested Docker](#nested-docker),
   Docker Engine 28 or later;
 - [`qory`](https://github.com/qoryai/qory) 0.7.0 or later;
-- an image of yours that contains the runtime and your toolchain. The wall builds none.
+- an image of yours that contains your toolchain. The wall builds none. The image does
+  not need the runtime: the wall mounts the folder the runtime is installed in on the
+  node, read-only ([the runtime's folder](#the-runtimes-folder)).
 
-A minimal image for Claude Code:
+A minimal image:
 
 ```dockerfile
-FROM node:22-slim
+FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
- && rm -rf /var/lib/apt/lists/* && npm install -g @anthropic-ai/claude-code
+ && rm -rf /var/lib/apt/lists/*
 # The container runs as the node's user, who has no home in the image.
 ENV HOME=/tmp
 ```
@@ -231,7 +236,7 @@ run, err := session.Open(ctx, session.OpenSpec{
 	RunsDir: runs,                                // the run directories, outside every mount
 	Image:   "base",                              // the default: a name of Images, or a reference
 	Images: []session.Image{                      // the machine's; a policy's image selects one by name
-		{Name: "base", Ref: "example.com/agent:1"},   // yours: the runtime and the toolchain
+		{Name: "base", Ref: "example.com/agent:1"},   // yours: the toolchain
 		{Name: "with-docker", Ref: "example.com/agent:1-docker", Runtime: "sysbox-runc", Docker: true},
 	},
 	Labels:  map[string]string{"issue": "77"},    // the caller's names for the run, in run.started and the run's registration
@@ -247,7 +252,11 @@ if err != nil {
 }
 res, err := run.Join(ctx, session.SessionSpec{
 	Runtime: rt,
-	Command: "claude",                            // a path inside the image
+	RuntimeInstall: &session.RuntimeInstall{      // the folder on this machine, read-only inside
+		Dir:     "/opt/runtimes/claude/2.1.320",
+		Version: "2.1.320",
+	},
+	Command: "/opt/runtimes/claude/2.1.320/bin/claude", // /qory/runtime/claude/bin/claude inside
 	Args:    []string{"-p", "Reply pong."},
 	Env:     []string{"ANTHROPIC_API_KEY=" + key}, // under a wall, nothing else goes in
 	Dir:     checkout,                            // the workspace and working directory
@@ -349,6 +358,9 @@ are the run's, and lie in Forager's files. Forager's files are:
   workspace, lies inside the workspace, so a walled run passes one outside it.
 - The session's registry of walled runs, `$XDG_STATE_HOME/qory-forager/walled`, else
   `~/.local/state/qory-forager/walled`.
+- The runtime's installed folder, `SessionSpec.RuntimeInstall.Dir`, which the enclosure
+  binds read-only at `/qory/runtime/<runtime>` and nowhere else
+  ([the runtime's folder](#the-runtimes-folder)).
 
 Both sides are resolved through symbolic links, a part that does not exist yet through
 its nearest parent that does, and a link whose target does not exist yet through that
@@ -505,11 +517,12 @@ up in its parent, so two binds of one root are allowed.
   0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is still going: a walled agent of that run
   can change it".
 
-  A run whose helper, or another directory of Forager's it binds, lies inside a writable
-  bind of another run's, or is reached through one, fails with a plain error: "Forager's
-  helper /work/bin/qory lies inside the writable bind /work of the walled run
-  0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is still going: a walled agent of that run
-  can change it", or "Forager's directory …" for a directory.
+  A run whose helper, another directory of Forager's it binds, or the runtime's installed
+  folder lies inside a writable bind of another run's, or is reached through one, fails
+  with a plain error: "Forager's helper /work/bin/qory lies inside the writable bind
+  /work of the walled run 0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is still going: a
+  walled agent of that run can change it", "Forager's directory …" for a directory, or
+  "the runtime's installed folder …" for the runtime's folder.
 
   The check of the run directory and of Forager's directories comes at the open, before
   the gateway is contacted, and the check of a session's places at its join. The run
@@ -750,6 +763,48 @@ The helper is the caller's binary:
   inside, then becomes the agent's user and executes `session.Exec`.
 
 So the wall needs no separate image.
+
+### The runtime's folder
+
+Claude Code does not come from the image: the caller installs Claude Code on the node
+and passes the folder and the version as `SessionSpec.RuntimeInstall` (see
+[the spec](go.md#the-spec)). A runtime whose descriptor sets `install_required`, such as
+Claude Code, needs the folder; a session of another runtime, such as Codex, may pass
+none and then starts the program from the image, with nothing bound at
+`/qory/runtime`. The enclosure binds the folder `Dir` leads to read-only at
+`/qory/runtime/<runtime>`, such as `/qory/runtime/claude`, so the agent cannot change
+the program it runs. The session writes `Dir` as that path in `Command`, in each
+argument and in each variable value it prepares: `/opt/runtimes/claude/2.1.320/bin/claude`
+is `/qory/runtime/claude/bin/claude` inside. Claude Code's descriptor sets
+`DISABLE_AUTOUPDATER=1`, so Claude Code does not update itself in the read-only folder.
+
+- Let others read and enter the folder and read and execute the program
+  (`chmod o+rx`): behind a wall the runtime runs as a user that may not own them.
+  `Join` returns an error otherwise.
+- Give the folder, each folder down to the program, and the program to root or to the
+  user that runs Forager, with no write for the group or others (`chmod go-w`), and
+  give the program no second hard link. `Join` returns an error otherwise.
+- Install the folder under folders that only root or the user that runs Forager can
+  write. `Join` does not check the folders above `Dir`, so qory, or any other caller,
+  keeps them that way.
+- Behind a wall, keep `Dir` away from `/qory` on the node: a `Dir` that is, contains or
+  lies inside it is refused.
+- A `Dir` that is, contains or lies in a place a walled run can write fails the
+  session before the runtime starts: `SessionSpec.Written`, a writable bind of another
+  walled run still going, the workspace or a writable bind of this run's.
+- A mount, or the workspace, that is, contains or lies inside the folder is
+  `mount_contains_forager_files` ([Forager's files](#foragers-files)).
+- The wall keeps the helper, the bundle and the runtime's folder under `/qory`, so
+  `wall.Docker` refuses a mount whose path inside, its `Target` or else its `Path`, is,
+  contains or lies under `/qory`.
+- An image's symbolic link on a mount's target can still lead the mount there, and
+  one at `/qory` or `/qory/runtime` leads the folder's bind away. On Linux
+  `session.Exec` exits 125 before it starts the program when `/qory` or
+  `/qory/runtime` is a symbolic link. It reads `/proc/self/mountinfo` and exits 125
+  too when a mount lies at `/qory`, at `/qory/runtime`, or at or below
+  `/qory/runtime/<runtime>` beside the folder's bind and a shiftfs mount on that bind,
+  which Sysbox in shiftfs mode adds. And it exits 125 when the program lies below
+  `/qory/runtime/<runtime>` and no mount lies there.
 
 ### The measure of the enclosure
 

@@ -13,7 +13,7 @@ import (
 // when resume is empty.
 func describedResume(t *testing.T, resume string) runtimes.Runtime {
 	t.Helper()
-	d := "version: 1\nruntime: r\nruntime_version: \"1\"\nsources:\n  output: {format: jsonl}\n" + resume +
+	d := "version: 1\nruntime: r\nsources:\n  output: {format: jsonl}\n" + resume +
 		"rules:\n  - source: output\n    match: {type: start}\n    type: dev.qory.runtime.started\n    data: {session_id: session_id}\n"
 	rt, err := runtimes.Described("r.yaml", []byte(d), nil)
 	if err != nil {

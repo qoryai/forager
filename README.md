@@ -194,7 +194,11 @@ if err != nil {                                   // the run did not open
 }
 res, err := run.Join(ctx, session.SessionSpec{
 	Runtime:   rt,
-	Command:   "claude",
+	RuntimeInstall: &session.RuntimeInstall{      // where you installed the runtime
+		Dir:     "/opt/runtimes/claude/2.1.320",
+		Version: "2.1.320",
+	},
+	Command:   "/opt/runtimes/claude/2.1.320/bin/claude", // a file inside RuntimeInstall.Dir
 	Args:      []string{"-p", "Reply pong."},
 	Forwarder: []string{exe, "forward"},          // the hook command; it calls session.Forward
 })

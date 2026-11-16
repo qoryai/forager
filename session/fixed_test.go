@@ -9,12 +9,13 @@ import (
 	"github.com/qoryai/forager/session"
 )
 
-// nonessential and marketplace are the variables the Claude Code descriptor's fixed
-// sets to 1, and maxRetries the one it sets to 15.
+// nonessential, marketplace and autoUpdater are the variables the Claude Code
+// descriptor's fixed sets to 1, and maxRetries the one it sets to 15.
 const (
 	nonessential = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
 	marketplace  = "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL"
 	maxRetries   = "CLAUDE_CODE_MAX_RETRIES"
+	autoUpdater  = "DISABLE_AUTOUPDATER"
 )
 
 // TestEveryClaudeCodeLaunchSetsTheFixedVariables pins the Claude Code descriptor's

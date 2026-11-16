@@ -1,0 +1,14 @@
+# A descriptor pins no runtime version: the session starts the runtime the caller
+# installed, and the schema refuses runtime_version.
+version: 1
+runtime: amp
+runtime_version: "1.0.0"
+sources:
+  output:
+    format: jsonl
+rules:
+  - source: output
+    match: {type: result}
+    type: dev.qory.runtime.result
+    data:
+      session_id: session_id

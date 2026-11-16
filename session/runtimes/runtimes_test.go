@@ -14,7 +14,6 @@ import (
 // lines, takes no hooks, and leaves on SIGINT.
 const other = `version: 1
 runtime: other-agent
-runtime_version: "0.3"
 sources:
   output: {format: jsonl}
 stop: {signal: SIGINT, grace: 45s}
@@ -31,8 +30,8 @@ func TestARuntimeWrittenAsDataAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtimetest.Conforms(t, rt)
-	if rt.Name() != "other-agent" || rt.Version() != "0.3" || !rt.ReadsOutput() {
-		t.Errorf("%s %s %v", rt.Name(), rt.Version(), rt.ReadsOutput())
+	if rt.Name() != "other-agent" || !rt.ReadsOutput() {
+		t.Errorf("%s %v", rt.Name(), rt.ReadsOutput())
 	}
 	if s := rt.Stop(); s.Signal != "SIGINT" || s.Grace != 45*time.Second {
 		t.Errorf("stop %+v", s)
@@ -77,11 +76,14 @@ func TestADescriptorNamesAnInstallerAndNeverBringsOne(t *testing.T) {
 func TestABareRuntimeIsRunAndNotRead(t *testing.T) {
 	rt := runtimes.Bare("codex")
 	runtimetest.Conforms(t, rt)
-	if rt.Name() != "codex" || rt.Version() != "" || rt.ReadsOutput() || rt.Stop() != (runtimes.Stop{}) {
+	if rt.Name() != "codex" || rt.ReadsOutput() || rt.Stop() != (runtimes.Stop{}) {
 		t.Errorf("%+v", rt)
 	}
 	if rt.Headless([]string{"-p", "hi"}) {
 		t.Error("a bare runtime knows nothing of its arguments, so none is headless")
+	}
+	if _, ok := rt.(runtimes.InstallRequired); ok {
+		t.Error("a bare runtime requires an installed folder")
 	}
 }
 

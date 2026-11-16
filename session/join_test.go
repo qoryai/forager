@@ -434,13 +434,13 @@ func TestTheMaskerIsTheRuns(t *testing.T) {
 	first := sp.SessionSpec
 	envFile := filepath.Join(t.TempDir(), "env")
 	first.Forwarder = nil
-	first.Command, first.Args = "/bin/sh", []string{"-c", `env > "$0"`, envFile}
+	first.Command, first.Args = installedShell, []string{"-c", `env > "$0"`, envFile}
 	if _, err := r.Join(ctx, first); err != nil {
 		t.Fatal(err)
 	}
 	second := sp.SessionSpec
 	second.Forwarder = nil
-	second.Command, second.Args = "/bin/sh", []string{"-c", `grep -o 'http://qory:[^@]*@' "$0"`, envFile}
+	second.Command, second.Args = installedShell, []string{"-c", `grep -o 'http://qory:[^@]*@' "$0"`, envFile}
 	if _, err := r.Join(ctx, second); err != nil {
 		t.Fatal(err)
 	}

@@ -28,7 +28,17 @@
         "CLAUDE_RELAUNCH_SESSION_ADD_DIRS",
         "CLAUDE_CODE_PLUGIN_SEED_DIR",
         "CLAUDE_CODE_PLUGIN_CACHE_DIR",
-        "CLAUDE_CODE_MANAGED_SETTINGS_PATH"
+        "CLAUDE_CODE_MANAGED_SETTINGS_PATH",
+        "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+        "ANTHROPIC_GOOGLE_CLOUD_BASE_URL",
+        "CLAUDE_CODE_USE_GATEWAY",
+        "CLAUDE_CODE_USE_MANTLE",
+        "CLAUDE_CODE_CUSTOM_OAUTH_URL",
+        "CLAUDE_CODE_CLIENT_DATA_URL",
+        "CLAUDE_CODE_REMOTE",
+        "CLAUDE_CODE_API_BASE_URL",
+        "CLAUDE_CODE_REMOTE_SETTINGS_PATH",
+        "BUN_OPTIONS"
       ],
       "credential_files": [
         "~/.claude/.credentials.json"
@@ -112,11 +122,13 @@
       "fixed": {
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL": "1",
-        "CLAUDE_CODE_MAX_RETRIES": "15"
+        "CLAUDE_CODE_MAX_RETRIES": "15",
+        "DISABLE_AUTOUPDATER": "1"
       },
       "egress_hosts": [
         "api.anthropic.com"
-      ]
+      ],
+      "install_required": true
     }
   ]
 }

@@ -18,7 +18,7 @@ import (
 // letters, digits and dashes.
 func TestLookupIsTheMachinesDescriptorThenTheContractsThenBare(t *testing.T) {
 	rt, err := catalog.Lookup("claude", "")
-	if err != nil || rt.Version() == "" || !rt.ReadsOutput() {
+	if err != nil || rt.Name() != "claude" || !rt.ReadsOutput() {
 		t.Fatalf("the contract's: %+v %v", rt, err)
 	}
 	runtimetest.Conforms(t, rt)
@@ -29,12 +29,12 @@ func TestLookupIsTheMachinesDescriptorThenTheContractsThenBare(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	doc := "version: 1\nruntime: codex\nruntime_version: \"9\"\nsources:\n  output: {format: jsonl}\nstop: {signal: SIGHUP}\nrules:\n  - {source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}\n"
+	doc := "version: 1\nruntime: codex\nsources:\n  output: {format: jsonl}\nstop: {signal: SIGHUP}\nrules:\n  - {source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}\n"
 	if err := os.WriteFile(filepath.Join(dir, "codex.yaml"), []byte(doc), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	rt, err = catalog.Lookup("codex", dir)
-	if err != nil || rt.Version() != "9" || rt.Stop().Signal != "SIGHUP" {
+	if err != nil || !rt.ReadsOutput() || rt.Stop().Signal != "SIGHUP" {
 		t.Fatalf("the machine's: %+v %v", rt, err)
 	}
 	runtimetest.Conforms(t, rt)
@@ -67,7 +67,7 @@ func TestLookupIsTheMachinesDescriptorThenTheContractsThenBare(t *testing.T) {
 // refusal names the descriptor.
 func TestLookupReadsOnlyAPlainDescriptor(t *testing.T) {
 	dir, elsewhere := t.TempDir(), t.TempDir()
-	doc := "version: 1\nruntime: codex\nruntime_version: \"9\"\nsources:\n  output: {format: jsonl}\nrules:\n  - {source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}\n"
+	doc := "version: 1\nruntime: codex\nsources:\n  output: {format: jsonl}\nrules:\n  - {source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}\n"
 	target := filepath.Join(elsewhere, "codex.yaml")
 	if err := os.WriteFile(target, []byte(doc), 0o644); err != nil {
 		t.Fatal(err)

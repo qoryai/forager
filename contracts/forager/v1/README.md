@@ -1524,7 +1524,7 @@ and the runtime's `denies` and `overrides`, which `runtimes.json` lists.
 | `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY` | they choose the daemon the agent's Docker client reaches under nested Docker (a Docker daemon inside the wall, separate from the machine's), and how |
 | `DOCKER_CONFIG` | the wall sets it for nested Docker |
 | `PATH` | the enclosure resolves the launch's program through it, and which program runs is the node's choice (§Images) |
-| `NODE_OPTIONS`, `LD_PRELOAD`, `BASH_ENV` | they load code into node, into any dynamically linked program, or into bash before the launch's program starts |
+| `NODE_OPTIONS`, `BUN_OPTIONS`, `LD_PRELOAD`, `BASH_ENV` | they load code into node, into Bun, as in a runtime built with Bun such as Claude Code's native binary, into any dynamically linked program, or into bash before the launch's program starts |
 | `HOME` | the image sets it to a writable place (§Images), and the agent and its tools read their configuration under it |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, and every variable a runtime descriptor reads a model key from | a model key passed in is the agent's to read and send anywhere; the gateway holds it and the session sets the variable to its placeholder (§Credentials) |
 | `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITLAB_TOKEN`, `GL_TOKEN`, `BITBUCKET_TOKEN` | a forge token passed in is the agent's; a credential's placeholder takes the variable instead |
@@ -1750,7 +1750,7 @@ The types, one namespace. Forager's:
 |---|---|---|
 | `dev.qory.run.registered` | the server accepted the run's registration, or behind a separate gateway its attach: the gateway writes it as the first event of its record, sequence 1, before the runtime starts; in the record alone, never posted to the server, which has its values from the access key and the registration; absent when the run has no server | `workspace`, the one id discovery's `workspaces` lists, and `node_id`, discovery's; `instance_id`, the instance id the registration was signed with, as its `X-Qory-Instance-Id` contained it; `forager_version`, `events`, `contract_version`, `interval_seconds`, the registration's. Behind a separate gateway `workspace`, `node_id` and `instance_id` are the run key's, the other four the attach's, and `labels` and `about` the attach answer's, each absent when the starter's registration had none |
 | `dev.qory.run.started` | the run is open: the open wrote it, before the run's host work and before any session; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after `dev.qory.run.registered`, heartbeats aside | `opened_by`, `forager_version`, `host` apart from a run with a run key, behind a wall `wall`; `machine` when the caller passes it, and `setup` when the run has setup commands (§The events, Where the run and its setup ran); and `labels` when the caller passes any, and `about` when the caller passes one |
-| `dev.qory.session.started` | a session joined the run: its runtime is about to start; one per join that starts | `session`, `runtime`, `runtime_version`, `bare` when the session started with no runtime (§The events, A session with no runtime), `command`, `args`, `dir`, `interactive`, on a pseudo-terminal `terminal`, behind a wall `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `setup_commands` when the session has setup commands inside the wall (§The wall); and `harness` when the caller passes the harness sources the session's compose used, apart from a run with a run key |
+| `dev.qory.session.started` | a session joined the run: its runtime is about to start; one per join that starts | `session`, `runtime`, `runtime_version` when the session has `SessionSpec.RuntimeInstall`, the version the caller installed (§The runtime, The installed program), `bare` when the session started with no runtime (§The events, A session with no runtime), `command`, `args`, `dir`, `interactive`, on a pseudo-terminal `terminal`, behind a wall `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `setup_commands` when the session has setup commands inside the wall (§The wall); and `harness` when the caller passes the harness sources the session's compose used, apart from a run with a run key |
 | `dev.qory.run.policy_applied` | right after `dev.qory.run.started`, with an empty `variables`; right after each `dev.qory.session.started` and before the session's wall starts, also for a session whose wall then fails to start, with that session's `variables`, `credential_variables` and `harness_hosts`; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `allow_first`, `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated`, `stack_hosts` |
 | `dev.qory.run.step_started` | a step of the run's host work started, such as a fetch or a compose; after `dev.qory.run.started`, numbered from 1 in the order the steps start (Steps, below) | `step`, `name`, `kind` |
 | `dev.qory.run.step_exited` | a step ended; one per step, after its `dev.qory.run.step_started` and after every `dev.qory.run.log` of the step | `step`, `state`, `exit_code`, `duration_ms` |
@@ -5389,18 +5389,18 @@ The session starts a program, records it and stops it, and contains nothing spec
 one. What is
 particular to one is behind an interface, `runtimes.Runtime` in the Go module, as an
 enclosure is behind `wall.Wall`, and Claude Code is one implementation of it. A runtime
-defines seven things: its name and the version of the program it expects,
-reported in `dev.qory.session.started`; how a launch is prepared so the program reports
-to the session and runs with the run's placeholders, which may change the command and
-arguments, add variables and write into the run directory, and nothing else (a script it
-writes there may record an approval where the program reads it, then start the program);
-whether the program's standard output is records to read; what events, if any, one record
-is; how the program is stopped, a signal and a grace; whether the arguments it is
-started with mean it runs without an interface, so the session is on pipes whatever the
-caller has; and the secrets it declares, a descriptor's `secrets` (below), which a
-runtime in Go defines through the optional interface `runtimes.Secrets`, checked by type
-assertion: a runtime without it declares nothing. Behind a wall, the preparation
-receives the variables the enclosure gets the placeholder value in.
+defines seven things: its name, reported in `dev.qory.session.started`; how a launch is
+prepared so the program reports to the session and runs with the run's placeholders,
+which may change the command and arguments, add variables and write into the run
+directory, and nothing else (a script it writes there may record an approval where the
+program reads it, then start the program); whether the program's standard output is
+records to read; what events, if any, one record is; how the program is stopped, a
+signal and a grace; whether the arguments it is started with mean it runs without an
+interface, so the session is on pipes whatever the caller has; and the secrets it
+declares, a descriptor's `secrets` (below), which a runtime in Go defines through the
+optional interface `runtimes.Secrets`, checked by type assertion: a runtime without it
+declares nothing. Behind a wall, the preparation receives the variables the enclosure
+gets the placeholder value in.
 
 There are three ways to a runtime, and a name resolves to the first that applies:
 
@@ -5417,6 +5417,70 @@ There are three ways to a runtime, and a name resolves to the first that applies
 3. **An implementation in Go**, for a caller that embeds Forager and whose program
    needs what a descriptor cannot express. It is set in `session.SessionSpec.Runtime` like any
    other.
+
+**The installed program.** When the caller passes an installed folder, the session
+starts a runtime's program from that folder of the machine, never from the run's image.
+The caller installs the program on the machine and passes, with a session of the
+runtime, the folder it installed it in and the version it installed, `session.SessionSpec.RuntimeInstall`, such
+as `Dir` `/opt/runtimes/claude/2.1.320` and `Version` `2.1.320`. A session of a runtime
+whose descriptor sets `install_required`, such as Claude Code, needs it, and a session
+with no runtime passes none; `Run.Join` returns an error before the join request for
+either mistake. A session of another runtime, such as Codex, may pass none: the session
+then starts the command as the caller names it, from the run's image behind a wall, with
+no folder bound and no `runtime_version` in `dev.qory.session.started`. A
+`RuntimeInstall` the caller passes has every check below, for any runtime. The program
+is a file inside `Dir`: the command, or, behind a wall, the argument after the first
+`--` when the command is Forager's helper at `/qory/qory`, which the caller starts the
+program through, as `qory run agent-env … -- <program>`. Without a wall the command
+itself is the program. In the helper's form the session checks only the program after
+the first `--`; the caller decides the words before it. `Run.Join` returns an error that
+starts with the fix, before the join request, for:
+
+- a `Dir` that is not absolute and clean, does not exist, is not a folder, or is a
+  folder that others cannot read and enter. `Dir` may itself be a symbolic link: the
+  session uses the folder it leads to. Behind a wall, a `Dir` that is, contains or lies
+  inside `/qory` on the machine, as given or as it leads, is refused too: inside, one
+  path would stand for two;
+- a program path that is not clean, with a `.` or `..` name or a repeated or trailing
+  `/`; a program outside `Dir`; a program reached through a symbolic link below `Dir`;
+  and a program that is not a regular file that others can read and execute, or that
+  has a second hard link;
+- a `Dir`, a folder between `Dir` and the program, or the program, that its group or
+  others may write, or whose owner is neither root nor the user that runs Forager;
+- a `Version` that is empty, has more than 64 bytes, starts with a character other
+  than a letter or a digit, or has a character other than a letter, a digit, `.`, `+`
+  or `-`;
+- a runtime whose name is not a lowercase letter followed by up to 63 lowercase
+  letters, digits or `-`, the name of its folder in `/qory/runtime`, with or without
+  a wall.
+
+The session does not check the folders above `Dir`. The caller installs the runtime
+under folders that only root or the user that runs Forager can write, as qory does, so
+that no other user can replace `Dir` or a name on the way to it.
+
+No walled agent can change the program: a `Dir` that is, contains or lies in a place a
+walled run can write fails the session before the runtime starts. Those places are
+`SessionSpec.Written` and the writable binds of the other walled runs still going, and
+behind a wall also the workspace and the run's writable binds. A session without a
+wall lists the folder `Dir` leads to, read-only, among the walled runs still going
+until it ends, so a walled run that starts meanwhile and binds it writable is
+`mount_shared_with_run`. Behind a wall, the
+enclosure binds the folder `Dir` leads to read-only at `/qory/runtime/<runtime>`,
+`/qory/runtime/claude` for Claude Code, and the session writes `Dir` as that path in
+the command, in each argument and in each variable value it prepares. In a walled run
+the folder is one of Forager's files (§The wall), so no mount and no workspace is,
+contains or lies inside it. An image's symbolic link can lead a mount the run lists
+to another path inside, and one at `/qory` or `/qory/runtime` leads the folder's bind
+away. So on Linux, before it starts the program, the helper's exec exits 125 when
+`/qory` or `/qory/runtime` is a symbolic link. It reads `/proc/self/mountinfo` and
+exits 125 too when a mount lies at `/qory`, at `/qory/runtime`, or at or below
+`/qory/runtime/<runtime>` beside the folder's bind and a shiftfs mount on that bind,
+which Sysbox in shiftfs mode adds, and when the program lies below
+`/qory/runtime/<runtime>` and no mount lies there.
+`dev.qory.session.started` reports `Version` as `runtime_version`, and without a wall
+in a run with a run key shows the program at `/qory/runtime/<runtime>` too; Forager
+does not run the program to check it. The caller keeps the folder unchanged until the
+run ends.
 
 `session/runtimes/runtimetest` is what any of them is tested against: `Conforms`, that a
 runtime leaves alone what doesn't belong to it, and `Replays`, that its records produce
@@ -5594,6 +5658,15 @@ literal. `runtimes.json` lists them for a server to allow for a run, and a machi
 policy can still block them. No Forager code applies this list to a run's policy.
 `secrets.declares[].hosts` is a different list: the hosts a secret's value is set on.
 
+**Install required**, optional: `install_required`, `true` when the session starts the
+runtime only from a folder the caller installed it in,
+`session.SessionSpec.RuntimeInstall` (§The runtime, The installed program). `Run.Join`
+then returns an error for a session of the runtime without one: `set
+SessionSpec.RuntimeInstall for a session of the runtime claude: the session starts a
+runtime only from the folder it was installed in`. Absent or `false`, a session of the
+runtime may pass no folder and starts the command as the caller names it, such as from
+the run's image. `runtimes.json` lists it for every runtime.
+
 **Resume**, optional: where the runtime writes the transcript of its session, and how
 the session starts the runtime again from it. `path_from` is the member of a hook's
 input that contains the transcript's path, `transcript_path` for Claude Code. `path` is
@@ -5614,20 +5687,18 @@ per event the rules produce from them, in order. A descriptor without fixtures i
 accepted. The tests validate every record and every expected event against the schemas;
 `runtimetest.Replays` replays the records through the runtime and compares.
 
-`runtimes/claude/descriptor.yaml` is the Claude Code descriptor for version 2.1.316. Its
-rules were written against 2.1.273 as installed and its published hooks reference, and
-checked against 2.1.316 and that version's published reference. Its hooks are the canonical
-source in both modes; its standard output adds what only the output reports: the result
-line, the text and thinking blocks, each tool's result and each denied tool call (§The
-events). Its `tools.summary` lists `Bash: command`, `Read: file_path`,
-`Write: file_path`, `Edit: file_path`, `Glob: pattern`, `Grep: pattern`, `WebFetch: url`,
-`WebSearch: query`, `Skill: skill`, and both `Agent: description` and
-`Task: description`, because the 2.1.316 binary has both names for the tool that starts
-a subagent and the init line of a recorded 2.1.316 run lists `Task`.
-`runtime_version` is the version of the runtime the descriptor expects, the one
-`qory image check` compares with an image's program; Forager reports that version and
-does not check the installed one. Its `secrets` declare no
-secret, reserve no variable and have no `one_of` group: the run's model key is a model
+`runtimes/claude/descriptor.yaml` is the Claude Code descriptor. It pins no version: the
+session starts the Claude Code the caller installed and reports that version (§The
+runtime, The installed program). Its rules were written against 2.1.273 as installed and
+its published hooks reference, and checked against 2.1.316 and that version's published
+reference. Its hooks are the canonical source in both modes; its standard output adds
+what only the output reports: the result line, the text and thinking blocks, each tool's
+result and each denied tool call (§The events). Its `tools.summary` lists
+`Bash: command`, `Read: file_path`, `Write: file_path`, `Edit: file_path`,
+`Glob: pattern`, `Grep: pattern`, `WebFetch: url`, `WebSearch: query`, `Skill: skill`,
+and both `Agent: description` and `Task: description`, because the 2.1.316 binary has
+both names for the tool that starts a subagent and the init line of a recorded 2.1.316
+run lists `Task`. Its `secrets` declare no secret, reserve no variable and have no `one_of` group: the run's model key is a model
 key from the server or the machine (§Credentials). Its `model` lists
 `anthropic-messages`; it places the model id as `--model`, the run's effort value as
 `--effort` and an agent's effort value in the `effort` frontmatter, each of the two
@@ -5642,8 +5713,10 @@ each for `anthropic-messages`; and its `overrides` are `ANTHROPIC_MODEL`,
 `CLAUDE_CODE_SUBAGENT_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`,
 `CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL`, `CLAUDE_CODE_AUTO_MODE_MODEL`,
 `CLAUDE_CODE_EFFORT_LEVEL`, `CLAUDE_CODE_SUBAGENT_EFFORT` and `CLAUDE_CODE_EXTRA_BODY`.
-Its `egress_hosts` lists `api.anthropic.com`.
-Its `fixed` sets two variables to `1` and `CLAUDE_CODE_MAX_RETRIES` to `15`. With
+Its `egress_hosts` lists `api.anthropic.com`, and its `install_required` is `true`.
+Its `fixed` sets three variables to `1` and `CLAUDE_CODE_MAX_RETRIES` to `15`. With
+`DISABLE_AUTOUPDATER`, Claude Code does not update itself, so the session runs the
+version the caller installed, from a folder that is read-only behind a wall. With
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, Claude Code 2.1.316 sends no log lines to
 Datadog, does not call `/api/claude_cli/bootstrap`, and makes no other request that its environment-variable
 reference lists as nonessential. With
@@ -5665,7 +5738,7 @@ Claude Code 2.1.316 applies the `env` of its settings sources in the order user,
 project, local, `--settings`, managed, each over the ones before, so the copy's value
 wins over a workspace's `.claude/settings.json` or `.claude/settings.local.json`. A
 managed settings file, which the image or the machine provides, can still set any of
-the three variables to another value.
+the four variables to another value.
 
 On a pseudo-terminal, Claude Code with `ANTHROPIC_API_KEY` set waits for a person to
 approve the key, unless the configuration it reads lists the key's last 20 characters,
@@ -5701,16 +5774,16 @@ directory, `preparation.sh`, which then starts the launch as the runtime prepare
 **`runtimes.json`** lists, for a server to vendor, every descriptor this contract ships,
 in name order: `version`, 1, and `runtimes`, each with its `name`, `title`, `reserves`,
 `denies`, `credential_files`, `fixed`, the descriptor's fixed variables by name,
-`egress_hosts`, the hosts the runtime needs to reach, `declares` with `id`, `title`,
-`name`, `hosts`, `auth`
-(`scheme`, and `header` for the `header` scheme, `username` for the `basic` scheme and
-`oauth` when it is set), `paths` when the declaration has some, `one_of` with `id`,
-`required` and `of`, and `model`, the descriptor's model section in the same shape,
-`keys` with each key's `auth` in the same shape, when it has one. Every list is
-present, empty when the descriptor has none, and so is `fixed`, an empty object; `model` is absent when the descriptor has
-none, and so are `keys` and `overrides` in a `model` that has none of them. `go generate ./contracts`
-writes it from the descriptors, and a test fails while the file differs from what that
-writes.
+`egress_hosts`, the hosts the runtime needs to reach, `install_required`, `true` or
+`false`, `declares` with `id`, `title`, `name`, `hosts`, `auth` (`scheme`, and `header`
+for the `header` scheme, `username` for the `basic` scheme and `oauth` when it is set),
+`paths` when the declaration has some, `one_of` with `id`, `required` and `of`, and
+`model`, the descriptor's model section in the same shape, `keys` with each key's `auth`
+in the same shape, when it has one. Every list is present, empty when the descriptor has
+none, and so is `fixed`, an empty object; `model` is absent when the descriptor has
+none, and so are `keys` and `overrides` in a `model` that has none of them.
+`go generate ./contracts` writes it from the descriptors, and a test fails while the
+file differs from what that writes.
 
 **`api-format.schema.json`** is the fixed list of the formats a model API uses for its
 requests and answers: `anthropic-messages`, Anthropic's Messages API;
@@ -5771,7 +5844,9 @@ credentials and tools, or names one by its reference pinned by digest, which the
 runs only when the reference starts with one of its allowed prefixes, `images.allow`. A
 policy defines no image, so a repository chooses what it runs under only among what the
 machine allows. A run whose policy selects none starts in the machine's default. Images
-need a wall: without one the runtime is a process on the machine.
+need a wall: without one the runtime is a process on the machine. An image needs no
+runtime's program: the wall binds the folder the caller installed it in, read-only
+(§The runtime, The installed program).
 
 | Definition | Meaning |
 |---|---|
@@ -6069,7 +6144,11 @@ Forager's files are:
   `/etc/docker/certs.d` by default, where a certificate an agent wrote would be one the
   engine trusts for a registry;
 - the runs directory, where the session makes the run directories;
-- the session's registry of walled runs (below).
+- the session's registry of walled runs (below);
+- the runtime's installed folder, `SessionSpec.RuntimeInstall.Dir`, which the enclosure
+  binds read-only at `/qory/runtime/<runtime>` and nowhere else (§The runtime, The
+  installed program): a place that is, contains or lies inside it would bind it again,
+  writable or at another path.
 
 An agent that can change a program Forager starts outside the wall, or read a file a
 credential is read from, has left the wall.
@@ -6083,18 +6162,21 @@ up in its parent, so two binds of one root are allowed:
 
 - the enclosure binds the outermost of the places the run lists, the mounts and the
   workspace, each once, and the session's directory, `sessions/<n>/` in the run
-  directory, read-only. For a runtime with `resume` it also binds the session's
-  transcript directory, `transcripts/<n>/` in the run directory, writable, at
-  `resume.prefix` below the home of the agent's user inside (§The events, A session's
-  transcript). The session makes that directory and checks that it is, contains and lies
-  inside no other bind; the wall fails the session when it overlaps a mount, or when its place
-  inside overlaps another bind's or `/qory`. The workspace is writable, or read-only for a session with
-  `SessionSpec.WorkspaceReadOnly`, and
-  is the working directory inside, through the bind that holds it, or bound at the same
-  path as on the machine when no mount holds it; a run whose policy names its image by
-  reference sees the bind that holds it at `/workspace` (§Images), and a wall binds a
-  mount at the path the session gives it inside, never one that overlaps `/qory`. The
-  session passes the wall every bind,
+  directory, read-only. For a session with `SessionSpec.RuntimeInstall` it binds the
+  folder `SessionSpec.RuntimeInstall.Dir` leads to, read-only, at
+  `/qory/runtime/<runtime>` (§The runtime, The installed program). For a runtime with
+  `resume` it also binds the session's transcript directory, `transcripts/<n>/` in the
+  run directory, writable, at `resume.prefix` below the home of the agent's user inside
+  (§The events, A session's transcript). The session makes that directory and checks
+  that it is, contains and lies inside no other bind; the wall fails the session when it
+  overlaps a mount, or when its place inside overlaps another bind's or `/qory`. The
+  workspace is writable, or read-only for a session with
+  `SessionSpec.WorkspaceReadOnly`, and is the working directory inside, through the bind
+  that holds it, or bound at the same path as on the machine when no mount holds it; a
+  run whose policy names its image by reference sees the bind that holds it at
+  `/workspace` (§Images), and a wall binds a mount at the path the session gives it
+  inside, its target or else its path on the machine, and refuses a mount whose path
+  inside is, contains or lies under `/qory`. The session passes the wall every bind,
   each path clean, and the working directory lies in one of them by its names, or the
   run fails; a wall binds nothing of the caller's the launch does not list;
 - a place inside another one, or the same, of the same mode is reached through the
@@ -6131,9 +6213,10 @@ up in its parent, so two binds of one root are allowed:
   to one of Forager's files is looked up in is `mount_contains_forager_files`;
 - the session keeps a registry of the walled runs still going on the machine, per user,
   with each run's binds: the places, the run directory and the wall's extra binds, for
-  `docker` its helper, the hook socket's directory, the session's transcript directory and
-  the private directory that contains the run's environment files and, with a CA, the bundle the enclosure binds. The wall's
-  are listed when the run starts, those it makes later as their patterns, which never
+  `docker` its helper, the hook socket's directory, the session's transcript directory,
+  the runtime's installed folder and the private directory that contains the run's
+  environment files and, with a CA, the bundle the enclosure binds. The wall's are
+  listed when the run starts, those it makes later as their patterns, which never
   conflict with another session's. A run is no run, `mount_shared_with_run`, when one of
   its binds lies inside a writable bind of another run's or is reached through one, when
   one of its writable binds holds a bind of another run's or a directory a name on the
@@ -6142,8 +6225,9 @@ up in its parent, so two binds of one root are allowed:
   of the same root never conflict otherwise, and neither do two read-only ones. Its
   names are the path of this run's, the other run's id and the other run's path. A place
   that lies inside a writable directory among another run's extra binds is refused too.
-  A run whose helper, or another directory of Forager's its wall binds, lies inside a
-  writable bind of another run's, or is reached through one, does not start. The session
+  A run whose helper, another directory of Forager's its wall binds, or the runtime's
+  installed folder lies inside a writable bind of another run's, or is reached through
+  one, does not start. The session
   checks and lists the run in one step, before it contacts the server, and the run
   leaves the registry when it ends, however it ends, unless its wall could not be
   removed. A run is still going while its session holds its entry, or, once its session

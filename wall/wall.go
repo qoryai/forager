@@ -162,7 +162,9 @@ type Enclosure interface {
 type AfterWrapper interface {
 	// WrapAfter returns the launch that starts l inside the enclosure, as [Enclosure.Wrap]
 	// does, on the pipes of whoever starts it and with no input. Only l.Command, l.Args,
-	// l.Env, l.Dir, l.Proxy, l.CA, l.Socket, l.Mounts and l.Limits are read. The container has
+	// l.Env, l.Dir, l.Proxy, l.CA, l.Socket, l.Mounts and l.Limits are read, and l.Runtime is not:
+	// After runs the caller's command, not the runtime, so the container binds no runtime
+	// folder. The container has
 	// no route to the caller (its proxy URL has no password: a request to the route gets
 	// 403 from the gateway's proxy, and one with the agent's password 503), no hook socket,
 	// no home, no transcript and no nested Docker daemon. With nested Docker it sets no
@@ -233,6 +235,21 @@ type Launch struct {
 	// Transcript is the session's transcript directory, which the enclosure binds
 	// writable; the zero value binds none.
 	Transcript Transcript
+	// Runtime is the folder a runtime was installed in, which the enclosure binds
+	// read-only; the zero value binds none.
+	Runtime RuntimeFolder
+}
+
+// RuntimeFolder is a folder of this machine that holds a runtime's installed program.
+// An enclosure binds it read-only at /qory/runtime/<Name> for [Docker], and Command
+// names the program at that path. The session checks that no mount is, contains or
+// lies inside it, and that no walled run can write it.
+type RuntimeFolder struct {
+	// Path is the folder on this machine, absolute and clean; empty binds none.
+	Path string
+	// Name is the runtime's name, such as claude: a lowercase letter, then up to 63
+	// lowercase letters, digits or -.
+	Name string
 }
 
 // AgentAddresser is an enclosure that reports where the agent's container of the

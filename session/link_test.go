@@ -24,7 +24,7 @@ import (
 // for what a test does to a live run.
 func sleeps(sp *runSpec, d time.Duration) {
 	sp.Forwarder = nil
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", fmt.Sprintf("sleep %.3f", d.Seconds())}
+	sp.Command, sp.Args = installedShell, []string{"-c", fmt.Sprintf("sleep %.3f", d.Seconds())}
 }
 
 // posted are the types of the events the gateway received.

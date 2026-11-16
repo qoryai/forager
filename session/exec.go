@@ -85,7 +85,8 @@ func withExec(helper, unset []string, command string, args []string) (string, []
 // out of the record, and a record with no value is not sent.
 //
 // With --after-only, Exec runs no program: it runs SessionSpec.After in the After
-// container the session starts, as [execAfter] says, and nothing else of the above.
+// container the session starts, as [execAfter] says, and nothing else of the above: it
+// checks no mount of /qory or /qory/runtime, and needs no runtime folder.
 //
 // Its arguments are --unset NAME, any number of times, then -- and the program and its
 // arguments, which no option of its reaches; or --after-only, --after-timeout MS and
@@ -101,6 +102,15 @@ func withExec(helper, unset []string, command string, args []string) (string, []
 // for one it cannot execute. With --after-only it returns 0 once After ran and its
 // exit was sent, and 125 when it cannot make itself not dumpable, connect to the
 // socket or send, its reason written to stderr.
+//
+// On Linux, before it starts the program, Exec returns 125, with a line on stderr that
+// starts with the fix, when /qory or /qory/runtime is a symbolic link, or when it
+// cannot read /proc/self/mountinfo. It returns 125 too when a mount lies at /qory, at
+// /qory/runtime, or at or below /qory/runtime/<runtime> beside the one bind of the
+// runtime's installed folder there and a shiftfs mount on that bind. And it returns
+// 125 when the program lies below /qory/runtime/<runtime> and no mount lies there. An
+// image's symbolic link can lead a listed mount over the folder, or the folder's bind
+// away from it.
 func Exec(args []string, stderr io.Writer) int {
 	opts, argv, err := parseExec(args)
 	names := opts.names
@@ -117,6 +127,12 @@ func Exec(args []string, stderr io.Writer) int {
 		os.Unsetenv(name)
 	}
 	path, err := exec.LookPath(argv[0])
+	// On Linux no mount but the runtime's installed folder may lie at or below
+	// /qory/runtime/<runtime>, so the program there is the one the caller installed.
+	if err := runtimeMounts(programPath(argv[0], path)); err != nil {
+		fmt.Fprintln(stderr, accesskey.ShownError(err))
+		return 125
+	}
 	// program is the program as its messages print it.
 	program := accesskey.ShownValue(argv[0], false)
 	switch {
@@ -150,6 +166,24 @@ func Exec(args []string, stderr io.Writer) int {
 		raise(sig)
 	}
 	return code
+}
+
+// programPath is the absolute, clean path of the program Exec starts for arg: found,
+// the path [exec.LookPath] returned, or arg when that is empty; "" for a name without
+// a /, which LookPath did not find in PATH.
+func programPath(arg, found string) string {
+	p := found
+	if p == "" {
+		p = arg
+	}
+	if !strings.Contains(p, "/") {
+		return ""
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return ""
+	}
+	return abs
 }
 
 // endsByDefault reports whether the default action of sig ends a process.
