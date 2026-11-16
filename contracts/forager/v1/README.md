@@ -5237,8 +5237,8 @@ not allow the host, the denial is the proxy's ordinary one.
 ## The route to the caller
 
 The route to the caller lets a program in a session send a request to the program that
-started the run, such as qory, and get its answer back: a script asks qory to start a
-test suite and reads the reply. The caller passes an `http.Handler` in
+started the run, such as qory, and get its answer back: a script sends a request to qory
+to start a test suite and reads the reply. The caller passes an `http.Handler` in
 `OpenSpec.QoryRoute` (docs/go.md); a run with none has no route. A session's program
 reaches the handler at one base URL, read from `QORY_HOST_URL`:
 
@@ -5260,8 +5260,8 @@ Nothing of a request reaches the gateway, and the route sets no credential and r
 nothing of the machine but the handler. If the process ends during a request, the
 program's connection closes with no answer.
 
-**Which program reaches it.** Without a wall, each session has a forwarder of its own,
-whose proxy URL has a password. Behind a wall, each session's launch gets a proxy URL
+**Which program reaches it.** Without a wall, each session has a forwarder that serves
+that session alone, whose proxy URL has a password. Behind a wall, each session's launch gets a proxy URL
 with a password of that session alone, `http://qory:<password>@qory-proxy:3128`. The
 wall's relay writes the address each connection comes from on the enclosure's network
 before the request, and the forwarder serves a request to the route only when its one

@@ -75,10 +75,10 @@ func ReadRelayPreamble(r io.Reader, secret string) (ok bool, err error) {
 // connection came from inside the enclosure.
 const RelayPeerPreamble = "QORY-PEER"
 
-// RelayPeerLine is the line that tells the run's forwarder where a connection the relay
-// copies came from: [RelayPeerPreamble], a space, the address's 16 bytes in lower-case
-// hex, an IPv4 address in its IPv4-mapped IPv6 form, and a newline. Every such line has
-// the same length, so it is read with one bounded read.
+// RelayPeerLine is the line that contains, for the run's forwarder, the address a
+// connection the relay copies came from: [RelayPeerPreamble], a space, the address's 16
+// bytes in lower-case hex, an IPv4 address in its IPv4-mapped IPv6 form, and a newline.
+// Every such line has the same length, so it is read with one bounded read.
 func RelayPeerLine(addr netip.Addr) string {
 	b := addr.As16()
 	return RelayPeerPreamble + " " + hex.EncodeToString(b[:]) + "\n"
