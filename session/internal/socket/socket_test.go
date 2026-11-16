@@ -276,7 +276,7 @@ const (
 func TestBadLinesOfOneConnectionAreCapped(t *testing.T) {
 	max := socket.MaxBadLines
 	summary := func(n int) string {
-		return strconv.Itoa(n) + " more lines on one connection that are not records were skipped"
+		return "skipped " + strconv.Itoa(n) + " more lines on one connection that are not records or are output records"
 	}
 	t.Run("under the cap", func(t *testing.T) {
 		s := newCapServer(t)

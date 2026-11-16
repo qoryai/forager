@@ -166,7 +166,7 @@ func read(r io.Reader, handle func(descriptor.Record), bad func(error)) {
 		handle(rec)
 	}
 	if skipped > 0 {
-		bad(fmt.Errorf("%d more lines on one connection that are not records were skipped", skipped))
+		bad(fmt.Errorf("skipped %d more lines on one connection that are not records or are output records", skipped))
 	}
 	if err := s.Err(); err != nil && bad != nil {
 		bad(err)

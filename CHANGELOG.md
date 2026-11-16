@@ -2581,12 +2581,12 @@ release may change what an existing document does, and says so under Upgrading.
   output through `/proc/<pid>/fd/1`, and the session reads that line as output. Only the
   helper process is out of its reach, because the helper makes itself not dumpable.
 - Report at most 10 lines per connection to the run socket that are not records, or are
-  records of the `output` source. The session skips the rest of that connection and
-  reports one line at its end, such as "socket: 2481 more lines on one connection that
-  are not records were skipped". Before, every such line was one report, so a process in
-  the agent's container could send millions of reports with one connection. Records
-  after the 10th bad line are still handled, and the count starts again for each
-  connection.
+  records of the `output` source. The session reports no further such line of that
+  connection, and at its end reports one line with the count, such as "socket: skipped
+  2481 more lines on one connection that are not records or are output records".
+  Before, every such line was one report, so a process in the agent's container could
+  send millions of reports with one connection. Records after the 10th bad line are
+  still handled, and the count starts again for each connection.
 
 ### e2e and CI
 
