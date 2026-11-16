@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -193,5 +194,100 @@ func TestCloseReturnsAfterTheLastRecord(t *testing.T) {
 	l.Close()
 	if !handled.Load() {
 		t.Error("Close returned while handle ran")
+	}
+}
+
+// TestServeFirstReadsTheFirstConnectionAlone pins After's socket: the records of the
+// first connection arrive, over many sends, and a later connection is closed unread,
+// also while the first is open.
+func TestServeFirstReadsTheFirstConnectionAlone(t *testing.T) {
+	l, err := socket.ListenAfter(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var got []string
+	done := make(chan struct{})
+	go func() {
+		l.ServeFirst(func(r descriptor.Record) {
+			mu.Lock()
+			got = append(got, r.Record["n"].(string))
+			mu.Unlock()
+		}, nil, time.Minute)
+		close(done)
+	}()
+	rec := func(n string) []descriptor.Record {
+		return []descriptor.Record{{Source: descriptor.SourceAfter, Record: map[string]any{"n": n}}}
+	}
+	ctx := context.Background()
+	first, err := socket.Dial(ctx, l.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Send(rec("1")); err != nil {
+		t.Fatal(err)
+	}
+	// A connection that comes second is closed unread, and its records change nothing.
+	if err := socket.Send(ctx, l.Path(), rec("forged")); err == nil {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err := first.Send(rec("2")); err != nil {
+		t.Fatal(err)
+	}
+	first.Close()
+	<-done
+	l.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"1", "2"}; !slices.Equal(got, want) {
+		t.Errorf("records %q, want %q", got, want)
+	}
+}
+
+// TestEachListenerReadsItsSources pins the sources of a listener: a launch's listener
+// refuses a record of the after source, and After's listener refuses every other.
+func TestEachListenerReadsItsSources(t *testing.T) {
+	for name, c := range map[string]struct {
+		listen          func(time.Duration) (*socket.Listener, error)
+		first           bool
+		accepted, other string
+	}{
+		"a launch's listener": {socket.Listen, false, descriptor.SourceSetup, descriptor.SourceAfter},
+		"After's listener":    {socket.ListenAfter, true, descriptor.SourceAfter, descriptor.SourceSetup},
+	} {
+		t.Run(name, func(t *testing.T) {
+			l, err := c.listen(0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var mu sync.Mutex
+			var got []string
+			var refused int
+			done := make(chan struct{})
+			handle := func(r descriptor.Record) { mu.Lock(); got = append(got, r.Source); mu.Unlock() }
+			bad := func(error) { mu.Lock(); refused++; mu.Unlock() }
+			go func() {
+				if c.first {
+					l.ServeFirst(handle, bad, time.Minute)
+				} else {
+					l.Serve(handle, bad)
+				}
+				close(done)
+			}()
+			conn, err := socket.Dial(context.Background(), l.Path())
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn.Send([]descriptor.Record{{Source: c.accepted, Record: map[string]any{"a": 1}}, {Source: c.other, Record: map[string]any{"a": 1}}})
+			conn.Close()
+			time.Sleep(100 * time.Millisecond)
+			l.Close()
+			<-done
+			mu.Lock()
+			defer mu.Unlock()
+			if !slices.Equal(got, []string{c.accepted}) || refused != 1 {
+				t.Errorf("read %q, refused %d; want %q read and 1 refused", got, refused, c.accepted)
+			}
+		})
 	}
 }

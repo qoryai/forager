@@ -9,12 +9,14 @@
 // reads as one record of the hooks source and writes it. [Send] writes records the
 // caller made, such as a setup command's records of the setup source.
 //
-// The listener reads records of the hooks, the setup, the measure and the after source,
+// The listener of a launch reads records of the hooks, the setup and the measure source,
 // and hands them to a function that does nothing else with them: a record of the hooks
 // source reaches a receiver only through a descriptor's rules, the session writes the
-// setup steps from the records of the setup source and the after step from those of
-// the after source, and puts the values of a record of the measure source on the
-// session's dev.qory.session.exited.
+// setup steps from the records of the setup source, and puts the values of a record of
+// the measure source on the session's dev.qory.session.exited. The listener of a
+// session's After ([ListenAfter]) reads records of the after source only, from the
+// first connection alone ([Listener.ServeFirst]): the session writes the after step from
+// them.
 //
 // The listener refuses a record of the output source. Output records come only from
 // the runtime's standard output, which the session reads on the host. Any process in
@@ -36,6 +38,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -54,6 +57,11 @@ type Listener struct {
 	served atomic.Bool
 	// grace is how long Close keeps accepting.
 	grace time.Duration
+	// sources are the sources of a record this listener reads.
+	sources []string
+	// mu guards first, the connection ServeFirst reads, which Close ends.
+	mu    sync.Mutex
+	first net.Conn
 }
 
 // dirPrefix begins the name of the private directory a run's socket is in.
@@ -67,6 +75,17 @@ func Dirs() string { return filepath.Join(os.TempDir(), dirPrefix+"*") }
 // 0700, and listens on a socket in it. Close removes both. grace is how long Close
 // keeps accepting; zero or less means [Grace].
 func Listen(grace time.Duration) (*Listener, error) {
+	return listen(grace, launchSources)
+}
+
+// ListenAfter is [Listen] for a session's After: the listener reads records of the
+// after source only, and a record of any other source is refused as one that is not a
+// record.
+func ListenAfter(grace time.Duration) (*Listener, error) {
+	return listen(grace, []string{descriptor.SourceAfter})
+}
+
+func listen(grace time.Duration, sources []string) (*Listener, error) {
 	if grace <= 0 {
 		grace = Grace
 	}
@@ -80,7 +99,7 @@ func Listen(grace time.Duration) (*Listener, error) {
 		os.RemoveAll(dir)
 		return nil, accesskey.ShownError(err)
 	}
-	return &Listener{dir: dir, path: path, ln: ln, done: make(chan struct{}), grace: grace}, nil
+	return &Listener{dir: dir, path: path, ln: ln, done: make(chan struct{}), grace: grace, sources: sources}, nil
 }
 
 // Path is the socket's path, the value of [link.EnvRunSocket].
@@ -101,17 +120,46 @@ func (l *Listener) Serve(handle func(descriptor.Record), bad func(error)) {
 			return
 		}
 		conn.SetReadDeadline(time.Now().Add(Patience))
-		read(conn, handle, bad)
+		read(conn, l.sources, handle, bad)
 		conn.Close()
 	}
+}
+
+// ServeFirst reads the first connection accepted and no other: it hands every record of
+// that connection to handle until the client closes it, or until wait has passed since
+// the accept, and returns. A later connection is closed unread. The client holds its
+// connection from before it starts any program that another process of its container
+// could use to connect first. bad is as in Serve.
+func (l *Listener) ServeFirst(handle func(descriptor.Record), bad func(error), wait time.Duration) {
+	l.served.Store(true)
+	defer close(l.done)
+	conn, err := l.ln.Accept()
+	if err != nil {
+		return
+	}
+	l.mu.Lock()
+	l.first = conn
+	l.mu.Unlock()
+	go func() {
+		for {
+			c, err := l.ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	conn.SetReadDeadline(time.Now().Add(wait))
+	read(conn, l.sources, handle, bad)
+	conn.Close()
 }
 
 // Patience is how long one connection may take to write its records and close.
 const Patience = 5 * time.Second
 
-// sources are the sources of a record the listener reads. The output source is not
+// launchSources are the sources of a record a launch's listener reads. The output source is not
 // among them: output records come only from the runtime's standard output.
-var sources = []string{descriptor.SourceHooks, descriptor.SourceSetup, descriptor.SourceMeasure, descriptor.SourceAfter}
+var launchSources = []string{descriptor.SourceHooks, descriptor.SourceSetup, descriptor.SourceMeasure}
 
 // errOutput is the error of a record of the output source read on the socket.
 var errOutput = errors.New("refused a record of the output source: output records come only from the runtime's standard output")
@@ -119,7 +167,7 @@ var errOutput = errors.New("refused a record of the output source: output record
 // read decodes one connection's lines until end of file. A record of the output source
 // is passed to bad as errOutput, and every other line that is not a record of
 // [sources] as "not a record".
-func read(r io.Reader, handle func(descriptor.Record), bad func(error)) {
+func read(r io.Reader, sources []string, handle func(descriptor.Record), bad func(error)) {
 	s := bufio.NewScanner(r)
 	s.Buffer(nil, 16<<20)
 	for s.Scan() {
@@ -164,6 +212,13 @@ const Grace = 200 * time.Millisecond
 func (l *Listener) Close() error {
 	l.ln.SetDeadline(time.Now().Add(l.grace))
 	wait := l.grace + Patience
+	l.mu.Lock()
+	if l.first != nil {
+		// The first connection of ServeFirst is read until its client closes it or the
+		// wait it was given ends: Close gives what the socket still holds the grace, no more.
+		wait = l.grace
+	}
+	l.mu.Unlock()
 	if wait < l.grace {
 		// A grace near the largest duration waits as long as a duration can.
 		wait = math.MaxInt64
@@ -173,6 +228,11 @@ func (l *Listener) Close() error {
 	case <-time.After(wait):
 	}
 	err := l.ln.Close()
+	l.mu.Lock()
+	if l.first != nil {
+		l.first.Close()
+	}
+	l.mu.Unlock()
 	if l.served.Load() {
 		<-l.done
 	}
@@ -265,3 +325,45 @@ func Send(ctx context.Context, addr string, recs []descriptor.Record) error {
 	_, err = conn.Write(b)
 	return accesskey.ShownError(err)
 }
+
+// Conn is a connection to the socket at an address that stays open for many sends: a
+// client that [Listener.ServeFirst] reads.
+type Conn struct {
+	conn net.Conn
+}
+
+// Dial connects to the socket at addr, the value of [link.EnvRunSocket], within
+// [Patience] or ctx. The descriptor is close-on-exec, so no program the process starts
+// has it.
+func Dial(ctx context.Context, addr string) (*Conn, error) {
+	netw, path, err := network(addr)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, Patience)
+	defer cancel()
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, netw, path)
+	if err != nil {
+		return nil, accesskey.ShownError(err)
+	}
+	return &Conn{conn: conn}, nil
+}
+
+// Send writes recs, one line each, to the connection within [Patience].
+func (c *Conn) Send(recs []descriptor.Record) error {
+	var b []byte
+	for _, rec := range recs {
+		line, err := json.Marshal(rec)
+		if err != nil {
+			return err
+		}
+		b = append(append(b, line...), '\n')
+	}
+	c.conn.SetWriteDeadline(time.Now().Add(Patience))
+	_, err := c.conn.Write(b)
+	return accesskey.ShownError(err)
+}
+
+// Close closes the connection.
+func (c *Conn) Close() error { return c.conn.Close() }
