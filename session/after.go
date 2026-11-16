@@ -137,40 +137,34 @@ var afterKeyMade func(string)
 
 // runAfterStep runs After for [Exec] once the program exited and the measure was sent,
 // and reports it to the socket at addr as records of the after source, each with key.
-// When the first record cannot be sent, After still runs, with its output to stderr:
-// what it leaves in the workspace counts, and the session sees no after step.
+// It stops the container's other processes before it sends the first record, started,
+// so no process the agent left can fill the socket's queue first. When started cannot
+// be sent, After does not run: the session would not record a push it made.
 func runAfterStep(addr, key string, a afterLaunch, stderr io.Writer) {
 	ctx := context.Background()
 	record := func(m map[string]any) descriptor.Record {
 		m["key"] = key
 		return descriptor.Record{Source: descriptor.SourceAfter, Record: m}
 	}
-	// Without the socket both streams go to stderr: the launch's stdout is the
-	// runtime's, whose lines the session reads as the runtime's records.
-	line := func(_ string, b []byte) { stderr.Write(b) }
-	failed := func(b []byte) { stderr.Write(b) }
-	var sender *setupSender
-	if addr != "" && socket.Send(ctx, addr, []descriptor.Record{record(map[string]any{"event": setupStarted})}) == nil {
-		sender = startSetupSender(ctx, addr)
-		line = func(stream string, b []byte) {
-			sender.send(record(map[string]any{"event": setupLine, "stream": stream, "bytes": encode(b)}))
-		}
-		failed = func(b []byte) {
-			sender.send(record(map[string]any{"event": setupLine, "stream": "stderr", "bytes": encode(b), "runner": true}))
-		}
-	} else {
-		fmt.Fprintln(stderr, "exec: the run socket does not reach the container, so the session records no after step; After runs, its output on stderr.")
+	stopErr := stopProcesses(a.docker, stopOthersWait, a.kept)
+	if err := socket.Send(ctx, addr, []descriptor.Record{record(map[string]any{"event": setupStarted})}); err != nil {
+		fmt.Fprintf(stderr, "exec: run the launch where the run socket reaches the container: the after step's first record could not be sent (%v), so After did not run.\n", err)
+		return
+	}
+	sender := startSetupSender(ctx, addr)
+	line := func(stream string, b []byte) {
+		sender.send(record(map[string]any{"event": setupLine, "stream": stream, "bytes": encode(b)}))
+	}
+	failed := func(b []byte) {
+		sender.send(record(map[string]any{"event": setupLine, "stream": "stderr", "bytes": encode(b), "runner": true}))
 	}
 	code, reason := setupRunnerFailed, ""
-	if err := stopProcesses(a.docker, stopOthersWait, a.kept); err != nil {
-		failed(fmt.Appendf(nil, "Stop the container's other processes before After: %v. After did not run.\n", err))
+	if stopErr != nil {
+		failed(fmt.Appendf(nil, "Stop the container's other processes before After: %v. After did not run.\n", stopErr))
 	} else {
 		code, reason = runAfter(a, line, failed)
 		// What After left running is stopped too: no process of it outlives the step.
 		stopProcesses(a.docker, stopOthersWait, a.kept)
-	}
-	if sender == nil {
-		return
 	}
 	exited := map[string]any{"event": setupExited, "exit_code": code}
 	if reason != "" {

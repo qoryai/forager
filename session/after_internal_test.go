@@ -2,14 +2,20 @@ package session
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/qoryai/forager/session/internal/descriptor"
+	"github.com/qoryai/forager/session/internal/socket"
 )
 
 // TestParseExecReadsAfter pins Exec's After options: --after-timeout and --after-word
@@ -200,5 +206,74 @@ func TestOOMKillsReadsMemoryEvents(t *testing.T) {
 	os.WriteFile(filepath.Join(root, "memory.events"), []byte("low 0\nhigh 0\nmax 3\noom 2\noom_kill 2\n"), 0o600)
 	if n, ok := oomKills(root); !ok || n != 2 {
 		t.Errorf("oomKills: %d, %v", n, ok)
+	}
+}
+
+// TestAfterStartsOnceTheOthersAreStopped pins the order of the after step's records:
+// the stop of the other processes comes before started, so no process the agent left
+// can fill the socket's queue first. A stop that fails still reaches the session as a
+// failed step with 125.
+func TestAfterStartsOnceTheOthersAreStopped(t *testing.T) {
+	sock, err := socket.Listen(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var got []descriptor.Record
+	go sock.Serve(func(rec descriptor.Record) {
+		mu.Lock()
+		got = append(got, rec)
+		mu.Unlock()
+	}, nil)
+	was := stopProcesses
+	defer func() { stopProcesses = was }()
+	seenAtStop := -1
+	stopProcesses = func(bool, time.Duration, []procID) error {
+		// A record sent before the stop has reached the handler by then.
+		time.Sleep(200 * time.Millisecond)
+		mu.Lock()
+		defer mu.Unlock()
+		if seenAtStop < 0 {
+			seenAtStop = len(got)
+		}
+		return errors.New("2 processes were still there")
+	}
+	var stderr strings.Builder
+	runAfterStep(sock.Path(), "k", afterLaunch{words: []string{"true"}, timeout: time.Second}, &stderr)
+	sock.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	if seenAtStop != 0 {
+		t.Errorf("the socket had %d records at the stop; want none", seenAtStop)
+	}
+	var events []string
+	for _, r := range got {
+		events = append(events, fmt.Sprint(r.Record["event"]))
+	}
+	if !slices.Equal(events, []string{setupStarted, setupLine, setupExited}) || got[2].Record["exit_code"] != float64(setupRunnerFailed) {
+		t.Errorf("the socket read %+v; want started, the stop's line and exited with 125", got)
+	}
+}
+
+// TestAfterDoesNotRunWhenStartedIsNotSent pins the after step's failure to start: when
+// its first record does not reach the socket, After does not run, so no push goes
+// unrecorded, and the reason goes to stderr.
+func TestAfterDoesNotRunWhenStartedIsNotSent(t *testing.T) {
+	was := stopProcesses
+	defer func() { stopProcesses = was }()
+	stopProcesses = func(bool, time.Duration, []procID) error { return nil }
+	dir := t.TempDir()
+	ran := filepath.Join(dir, "ran")
+	touch, err := exec.LookPath("touch")
+	if err != nil {
+		t.Skip("no touch in PATH")
+	}
+	var stderr strings.Builder
+	runAfterStep(filepath.Join(dir, "no-socket"), "k", afterLaunch{words: []string{touch, ran}, timeout: time.Second}, &stderr)
+	if _, err := os.Stat(ran); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("After ran (%v); want it not run", err)
+	}
+	if !strings.Contains(stderr.String(), "so After did not run") {
+		t.Errorf("stderr %q; want the reason After did not run", stderr.String())
 	}
 }

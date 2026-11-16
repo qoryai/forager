@@ -6324,9 +6324,13 @@ key is in no variable and no argument, since the container's init runs as the ag
 user and the agent can read its environment; the exec is not dumpable from its start,
 so no process of the agent's reads its memory, and exits `125` without starting the
 runtime when it cannot clear its dumpable flag. When the exec cannot send the key, the
-runtime does not start: the exec exits `125` with the reason on standard error. Where
-a later record does not reach the session, After still runs, its output on the
-launch's standard error, and the session writes no after step. The step's start marks
+runtime does not start: the exec exits `125` with the reason on standard error. Once
+the runtime exits, the exec stops the other processes first and then sends the step's
+first record, `started`, so no process the agent left can fill the socket's queue
+before it. When `started` does not reach the session, After does not run: the exec
+writes the reason on the launch's standard error, and the session writes no after
+step. When a later record does not reach the session, the exec writes the reason on
+standard error too. The step's start marks
 the runtime's exit: the session decides there whether the runtime timed out, stops the
 run's time limit, and holds the launch for at most `AfterTimeout`, 10 seconds and the
 stop grace: 2 seconds for each of the two stops, 5 seconds from `SIGTERM` to `SIGKILL`,

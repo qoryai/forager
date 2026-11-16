@@ -96,9 +96,10 @@ func withExec(helper, unset []string, after afterLaunch, command string, args []
 // out_of_memory, when it did not end by itself. Exec stops the container's other processes only when it is
 // the container's first program: the child of pid 1, an engine's init program such as
 // Docker's docker-init, in a pid namespace other than the machine's. Otherwise After
-// does not start and its exit status is 125. When the first
-// record cannot be sent, After still runs, its output to stderr. Signals that reach
-// Exec while After runs change nothing.
+// does not start and its exit status is 125. Exec sends the first record, that After
+// started, once it has stopped the other processes; when that record cannot be sent,
+// After does not run and Exec writes the reason to stderr. Signals that reach Exec
+// while After runs change nothing.
 //
 // Its arguments are --unset NAME, any number of times, then --after-timeout MS,
 // --after-word WORD once for each word of After, and --after-docker when the
