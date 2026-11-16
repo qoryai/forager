@@ -3,6 +3,7 @@ package socket_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -33,7 +34,7 @@ func TestForwardedHookInputArrivesAsAHooksRecord(t *testing.T) {
 	var bad []error
 	done := make(chan struct{})
 	go func() {
-		l.Serve(func(r descriptor.Record) { mu.Lock(); got = append(got, r); mu.Unlock() }, func(err error) { mu.Lock(); bad = append(bad, err); mu.Unlock() })
+		l.Serve(func(r descriptor.Record) error { mu.Lock(); got = append(got, r); mu.Unlock(); return nil }, func(err error) { mu.Lock(); bad = append(bad, err); mu.Unlock() })
 		close(done)
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -104,7 +105,7 @@ func TestTheVariableIsAnAddress(t *testing.T) {
 	}
 	var mu sync.Mutex
 	n := 0
-	go l.Serve(func(descriptor.Record) { mu.Lock(); n++; mu.Unlock() }, nil)
+	go l.Serve(func(descriptor.Record) error { mu.Lock(); n++; mu.Unlock(); return nil }, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := socket.Forward(ctx, "unix:"+l.Path(), strings.NewReader(`{"a":1}`)); err != nil {
@@ -141,7 +142,7 @@ func drain(t *testing.T, grace time.Duration) time.Duration {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go l.Serve(func(descriptor.Record) {}, nil)
+	go l.Serve(func(descriptor.Record) error { return nil }, nil)
 	start := time.Now()
 	if err := l.Close(); err != nil {
 		t.Fatal(err)
@@ -179,10 +180,11 @@ func TestCloseReturnsAfterTheLastRecord(t *testing.T) {
 	}
 	started := make(chan struct{})
 	var handled atomic.Bool
-	go l.Serve(func(descriptor.Record) {
+	go l.Serve(func(descriptor.Record) error {
 		close(started)
 		time.Sleep(socket.Patience + time.Second)
 		handled.Store(true)
+		return nil
 	}, nil)
 	conn, err := net.Dial("unix", l.Path())
 	if err != nil {
@@ -199,12 +201,14 @@ func TestCloseReturnsAfterTheLastRecord(t *testing.T) {
 
 // capServer is a listener that collects the records and the bad-line errors it reads.
 type capServer struct {
-	t    *testing.T
-	l    *socket.Listener
-	mu   sync.Mutex
-	got  []descriptor.Record
-	bad  []error
-	done chan struct{}
+	t   *testing.T
+	l   *socket.Listener
+	mu  sync.Mutex
+	got []descriptor.Record
+	bad []error
+	// reject, when set, is the error handle returns for a record.
+	reject func(descriptor.Record) error
+	done   chan struct{}
 }
 
 func newCapServer(t *testing.T) *capServer { return serveCap(t, true) }
@@ -222,7 +226,15 @@ func serveCap(t *testing.T, collect bool) *capServer {
 		bad = func(err error) { s.mu.Lock(); s.bad = append(s.bad, err); s.mu.Unlock() }
 	}
 	go func() {
-		l.Serve(func(r descriptor.Record) { s.mu.Lock(); s.got = append(s.got, r); s.mu.Unlock() }, bad)
+		l.Serve(func(r descriptor.Record) error {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			s.got = append(s.got, r)
+			if s.reject != nil {
+				return s.reject(r)
+			}
+			return nil
+		}, bad)
 		close(s.done)
 	}()
 	t.Cleanup(func() { l.Close(); <-s.done })
@@ -273,6 +285,7 @@ const (
 	outputLine = `{"source":"output","record":{"type":"assistant"}}`
 	// otherLine is valid JSON of an unknown source, which read reports as "not a record".
 	otherLine = `{"source":"transcript","record":{}}`
+	setupLine = `{"source":"setup","record":{"command":1,"event":"started"}}`
 )
 
 // TestBadLinesOfOneConnectionAreCapped pins that one connection passes at most
@@ -281,11 +294,11 @@ const (
 func TestBadLinesOfOneConnectionAreCapped(t *testing.T) {
 	max := socket.MaxBadLines
 	summary := func(n int) string {
-		noun := " more lines"
+		noun, verb := " more lines", "were"
 		if n == 1 {
-			noun = " more line"
+			noun, verb = " more line", "was"
 		}
-		return "skipped " + strconv.Itoa(n) + noun + " on one connection that are not records or are output records"
+		return "skipped " + strconv.Itoa(n) + noun + " on one connection that " + verb + " not recorded"
 	}
 	t.Run("under the cap", func(t *testing.T) {
 		s := newCapServer(t)
@@ -363,6 +376,36 @@ func TestBadLinesOfOneConnectionAreCapped(t *testing.T) {
 		}
 		if !strings.HasPrefix(bad[max-2], "refused a record of the output source") {
 			t.Errorf("error %d: %q, want the output refusal", max-2, bad[max-2])
+		}
+	})
+	t.Run("an error from handle counts against the cap", func(t *testing.T) {
+		s := newCapServer(t)
+		s.reject = func(r descriptor.Record) error {
+			if r.Source == descriptor.SourceSetup {
+				return errors.New("a setup record is not recorded")
+			}
+			return nil
+		}
+		// 4 not records, then 9 setup records that handle rejects, then a good record.
+		s.connection(lines(4, otherLine) + lines(9, setupLine) + goodLine + "\n")
+		got, bad := s.wait(10, max+1)
+		if len(bad) != max+1 {
+			t.Fatalf("%d errors, want %d: %q", len(bad), max+1, bad)
+		}
+		if !strings.HasPrefix(bad[3], "not a record: ") || bad[4] != "a setup record is not recorded" {
+			t.Errorf("errors %q", bad[:5])
+		}
+		if want := summary(3); bad[max] != want {
+			t.Errorf("summary %q, want %q", bad[max], want)
+		}
+		if len(got) != 10 || got[9].Source != "hooks" {
+			t.Errorf("%d records, the last %+v; want the 9 setup records and the good one", len(got), got[len(got)-1])
+		}
+		// The next connection starts the count again.
+		s.connection(lines(1, setupLine))
+		_, bad = s.wait(11, max+2)
+		if len(bad) != max+2 || bad[max+1] != "a setup record is not recorded" {
+			t.Errorf("after the next connection: %q", bad[max:])
 		}
 	})
 	t.Run("a scanner error is reported apart from the count", func(t *testing.T) {

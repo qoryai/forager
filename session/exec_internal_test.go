@@ -74,10 +74,11 @@ func TestSendMeasureSendsOneRecord(t *testing.T) {
 	}
 	var mu sync.Mutex
 	var got []descriptor.Record
-	go sock.Serve(func(rec descriptor.Record) {
+	go sock.Serve(func(rec descriptor.Record) error {
 		mu.Lock()
 		got = append(got, rec)
 		mu.Unlock()
+		return nil
 	}, nil)
 	root := t.TempDir()
 	for name, content := range map[string]string{"memory.max": "max\n", "memory.peak": "123\n"} {

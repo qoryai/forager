@@ -223,26 +223,24 @@ func (s *setupSteps) start(stopping func() bool) {
 }
 
 // handle writes the step event of rec, a record of the setup source, when rec comes in
-// order; it reports a record that is not a setup record, comes out of order, or comes
-// after the setup ended.
-func (s *setupSteps) handle(rec runtimes.Record) {
+// order. It returns an error, and writes no event, for a record that is not a setup
+// record, comes out of order, or comes after the setup ended; the caller reports it.
+func (s *setupSteps) handle(rec runtimes.Record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ended {
-		s.r.open.Report("a setup record arrived after the setup ended and is not recorded")
-		return
+		return errors.New("a setup record arrived after the setup ended and is not recorded")
 	}
 	got, err := readSetupRecord(rec.Record)
 	if err != nil {
-		s.r.open.Report("socket: " + err.Error())
-		return
+		return err
 	}
 	running := s.open != nil && got.command == s.next
 	switch {
 	case !s.ready || got.command > len(s.commands):
 	case got.event == setupStarted && s.open == nil && got.command == s.next:
 		s.open = s.r.startStep(event.StepSetup, s.commands[got.command-1].Name)
-		return
+		return nil
 	case got.event == setupLine && running:
 		// The record has the line once, through the sink, and the terminal has it once,
 		// masked the same way. A line about the runner's failure has the placeholders of
@@ -252,7 +250,7 @@ func (s *setupSteps) handle(rec runtimes.Record) {
 		masked := s.r.masker.Replace(string(got.bytes))
 		if s.harness != nil && !got.runner {
 			s.streamOf(got.stream).harness.Write([]byte(masked))
-			return
+			return nil
 		}
 		if s.harness != nil {
 			if l, ok := s.lines[got.stream]; ok {
@@ -268,7 +266,7 @@ func (s *setupSteps) handle(rec runtimes.Record) {
 		}
 		s.r.writeMasked(got.stream, s.session, s.open.n, []byte(recorded))
 		s.terminal(got.stream, []byte(masked))
-		return
+		return nil
 	case got.event == setupExited && running:
 		state := event.StateSucceeded
 		switch {
@@ -280,9 +278,9 @@ func (s *setupSteps) handle(rec runtimes.Record) {
 		s.endStep(state, got.code)
 		s.next++
 		s.ended = got.code != 0 || s.next > len(s.commands)
-		return
+		return nil
 	}
-	s.r.open.Report(fmt.Sprintf("a setup record for step %d arrived out of order and is not recorded", s.base+got.command))
+	return fmt.Errorf("a setup record for step %d arrived out of order and is not recorded", s.base+got.command)
 }
 
 // finish ends the setup when the session ends: a step still open ends with -1,
