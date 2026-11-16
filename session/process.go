@@ -182,7 +182,10 @@ func (p *process) newCmd(ctx context.Context) *exec.Cmd {
 
 // wait waits for the started cmd. With a hold, the end of ctx sends the stop signal,
 // which sets stopped when it reaches the process, and SIGKILL follows after the grace
-// once the hold lets it.
+// once the hold lets it: at once when the hold is not engaged or the stop came from
+// outside first, otherwise at the hold's end, or a second grace after a stop from
+// outside that comes while the hold is engaged. So After gets the stop's grace from
+// that stop, as the runtime got it from the first.
 func (p *process) wait(ctx context.Context, cmd *exec.Cmd) error {
 	if p.hold == nil {
 		return cmd.Wait()

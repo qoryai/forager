@@ -1011,7 +1011,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	defer stopRuntime(nil)
 	limited, cancelLimitCause := context.WithCancelCause(stoppable)
 	cancelLimit := func() { cancelLimitCause(nil) }
-	// The limit's timer stops as the after step starts: After has a limit of its own.
+	// The limit's timer stops as the after step starts: After's limit is AfterTimeout.
 	stopLimit := func() {}
 	if spec.Timeout > 0 {
 		limit := time.AfterFunc(spec.Timeout, func() { cancelLimitCause(errTimeout) })
@@ -1041,8 +1041,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		}
 	}
 	// With After, the launch is held past the stop's grace once the after step starts,
-	// unless the stop came from outside, until AfterTimeout, the 5 s of SIGKILL's wait
-	// and the grace have passed; then the session stops the launch.
+	// unless the stop came from outside, until afterBackstop has passed; then the
+	// session stops the launch.
 	afterStart = func() {}
 	if len(spec.After) > 0 {
 		proc.hold = newLaunchHold(runCtx)
@@ -1064,7 +1064,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			}
 			proc.hold.engage()
 			backstopMu.Lock()
-			backstop = time.AfterFunc(spec.AfterTimeout+afterKillWait+proc.grace, func() {
+			backstop = time.AfterFunc(afterBackstop(spec.AfterTimeout, proc.grace), func() {
 				proc.hold.end()
 				cancelLimitCause(errAfterLimit)
 			})

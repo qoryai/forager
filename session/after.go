@@ -31,6 +31,15 @@ const afterKillWait = 5 * time.Second
 // before After: when one is still there by then, After does not start.
 const stopOthersWait = 2 * time.Second
 
+// afterBackstop is how long the session holds a launch once its after step started,
+// for After's timeout and the stop's grace, grace: the stop of the other processes
+// before After and again after it, at most stopOthersWait each, timeout, the 5 s
+// between SIGTERM and SIGKILL, the second that Exec reads After's output after it
+// exits, and grace.
+func afterBackstop(timeout, grace time.Duration) time.Duration {
+	return 2*stopOthersWait + timeout + afterKillWait + setupOutputGrace + grace
+}
+
 // stopProcesses is [stopOthers], or a test's stand-in.
 var stopProcesses = stopOthers
 
@@ -173,7 +182,7 @@ func runAfterStep(addr, key string, a afterLaunch, stderr io.Writer) {
 	}
 }
 
-// runAfter runs the words of a with no input, in a process group of its own, with
+// runAfter runs the words of a with no input, in a new process group, with
 // [afterEnv]'s environment and [afterPath]'s PATH, hands line each line of its output
 // and failed the line it writes when it cannot start or wait for the command, and
 // returns its exit status as a shell reports it, with the reason: timeout when it ran

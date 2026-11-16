@@ -161,10 +161,11 @@ const innerWait = time.Second
 // removeInner removes, through the inner daemon's API, the swarm's services, the
 // swarm, each plugin and each container, running or not, and returns how many it
 // listed. It returns an error when a list or a removal fails, or when the daemon does
-// not answer one within innerWait or before deadline: what it could not list may be
+// not answer one within innerWait and before deadline: what it could not list may be
 // left.
 func removeInner(deadline time.Time) (int, error) {
-	ctx, cancel := context.WithDeadline(context.Background(), deadline.Add(innerWait))
+	// No call outlasts the stop's deadline, so the stop takes at most its wait.
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	client := &http.Client{Timeout: innerWait, Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
