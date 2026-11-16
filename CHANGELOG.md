@@ -1925,6 +1925,11 @@ release may change what an existing document does, and says so under Upgrading.
   scan the bytes kept back with `final` at the end of the stream. `kept` is how many
   of the bytes kept back a put written already stands for. Before, `Scan` took
   `(dst, b, final)` and returned `(out, rest)`.
+- Write output records to the runtime's standard output, not to the run socket,
+  `QORY_RUN_SOCKET`. A client that sends a line with `source: output` over the socket
+  now has the line refused: the session skips it, writes no event for it and reports
+  "socket: refused a record of the output source: output records come only from the
+  runtime's standard output". Before, the session read the line as output.
 
 #### Added
 
@@ -2554,6 +2559,19 @@ release may change what an existing document does, and says so under Upgrading.
 - The `engine_unreachable` sentence of a walled run now reads "The check for a
   container of the walled run <id> failed, so this run does not start: <the error>",
   and, for `session.RunsBinding`, "… so the run counts as still going: …".
+
+#### Security
+
+- The run socket, `QORY_RUN_SOCKET`, refuses a record of the `output` source: the
+  session skips it, writes no event for it and reports "socket: refused a record of the
+  output source: output records come only from the runtime's standard output". So a
+  process in the agent's container cannot send output records through the socket.
+  Before, it could, and so add runtime events the runtime never printed, such as
+  `dev.qory.runtime.text` and `dev.qory.runtime.tool_result`. The sources `hooks`,
+  `setup` and `measure` are accepted as before. A known limit stays: a tool command runs
+  as the same user as the runtime, so it can write a line to the runtime's standard
+  output through `/proc/<pid>/fd/1`, and the session reads that line as output. Only the
+  helper process is out of its reach, because the helper makes itself not dumpable.
 
 ### e2e and CI
 

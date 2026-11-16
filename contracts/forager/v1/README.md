@@ -5324,7 +5324,9 @@ and dashes, and an optional `title`, the name a person reads: `Claude Code`.
 
 **Sources**: how the session attaches. The terminal bytes always, with nothing to match
 in them and so no source. `output`: JSON lines on the runtime's standard output, when
-the session runs on pipes; a line that is not a JSON object is not a record. `hooks`:
+the session runs on pipes; a line that is not a JSON object is not a record. Output
+records come from the runtime's standard output only: the local socket refuses a record
+of the `output` source (§The local socket). `hooks`:
 the runtime's hook events, for each of which the session installs its forwarder as a
 command hook, the way `install` selects among the installers the binary has: a
 descriptor selects an installer and never contains one, so a program that takes hooks
@@ -5624,8 +5626,12 @@ and closes; the session reads until end of file, one connection at a time in the
 they arrive, so two hook calls in a row keep their order. There is no answer and no
 framing beyond the newline. The forwarder the session installs as a hook is one such
 client; a harness that reports something itself writes the same shape with
-`source: hooks`. A record of the `hooks` or the `output` source reaches a receiver only
-through the descriptor's rules. The setup runner is another client: it writes records
+`source: hooks`. A record of the `hooks` source reaches a receiver only through the
+descriptor's rules. The socket accepts records of the `hooks`, `setup`, `measure` and
+`after` sources and refuses a record of the `output` source: the session skips it and writes no
+event for it. Output records come from the runtime's standard output only, which the
+session reads on the host, while any process in the agent's container can write to the
+socket. The setup runner is another client: it writes records
 of the `setup` source, which the session writes as the setup steps of a session with
 setup commands inside the wall (§The wall, Setup inside the wall). Its `record` has
 `command`, the command's number from 1, and `event`: `started`; `line`, with `stream`,
@@ -6237,7 +6243,12 @@ wall has no setup commands inside.
 
 The setup's records come from inside the enclosure, as the runtime's hook records do:
 code in the working folder can write records of the `setup` source to the socket, and
-so forge a setup step's lines or its exit status, as it can forge the runtime's events.
+so forge a setup step's lines or its exit status, as it can forge the events of the
+runtime's hooks. It cannot send records of the `output` source through the socket,
+which refuses them. It can still write a line to the runtime's standard output, which
+the session reads as output: a tool command runs as the same user as the runtime, so it
+can open `/proc/<pid>/fd/1` of the runtime's process. Only the helper's `/proc` files
+are out of its reach, because the helper makes itself not dumpable.
 
 **After.** A walled session may have `SessionSpec.After`, a program and its arguments,
 such as a commit of what the agent left in the workspace, with `AfterTimeout`, how long

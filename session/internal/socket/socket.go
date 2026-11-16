@@ -9,11 +9,18 @@
 // reads as one record of the hooks source and writes it. [Send] writes records the
 // caller made, such as a setup command's records of the setup source.
 //
-// The listener hands records to a function and does nothing else with them: a record
-// of the hooks or the output source reaches a receiver only through a descriptor's
-// rules, the session writes the setup steps from the records of the setup source, and
-// puts the values of a record of the measure source on the session's
-// dev.qory.session.exited.
+// The listener reads records of the hooks, the setup, the measure and the after source,
+// and hands them to a function that does nothing else with them: a record of the hooks
+// source reaches a receiver only through a descriptor's rules, the session writes the
+// setup steps from the records of the setup source and the after step from those of
+// the after source, and puts the values of a record of the measure source on the
+// session's dev.qory.session.exited.
+//
+// The listener refuses a record of the output source. Output records come only from
+// the runtime's standard output, which the session reads on the host. Any process in
+// the agent's container can write to the socket, so an output record from the socket
+// would add runtime output, such as text or a tool result, that the runtime never
+// printed.
 package socket
 
 import (
@@ -83,8 +90,8 @@ func (l *Listener) Path() string { return l.path }
 // to handle. Connections are read one at a time in the order accepted, so two hook
 // calls made one after the other reach handle in that order; a client that connects and
 // then stalls is cut off after [Patience] so it cannot hold the ones behind it. A line
-// that is not a record is passed to bad with the error and skipped; bad may be nil.
-// Serve returns when the listener is closed.
+// that is not a record, or a record of the output source, is passed to bad with the
+// error and skipped; bad may be nil. Serve returns when the listener is closed.
 func (l *Listener) Serve(handle func(descriptor.Record), bad func(error)) {
 	l.served.Store(true)
 	defer close(l.done)
@@ -102,10 +109,16 @@ func (l *Listener) Serve(handle func(descriptor.Record), bad func(error)) {
 // Patience is how long one connection may take to write its records and close.
 const Patience = 5 * time.Second
 
-// sources are the sources of a record the listener reads.
-var sources = []string{descriptor.SourceHooks, descriptor.SourceOutput, descriptor.SourceSetup, descriptor.SourceMeasure, descriptor.SourceAfter}
+// sources are the sources of a record the listener reads. The output source is not
+// among them: output records come only from the runtime's standard output.
+var sources = []string{descriptor.SourceHooks, descriptor.SourceSetup, descriptor.SourceMeasure, descriptor.SourceAfter}
 
-// read decodes one connection's lines until end of file.
+// errOutput is the error of a record of the output source read on the socket.
+var errOutput = errors.New("refused a record of the output source: output records come only from the runtime's standard output")
+
+// read decodes one connection's lines until end of file. A record of the output source
+// is passed to bad as errOutput, and every other line that is not a record of
+// [sources] as "not a record".
 func read(r io.Reader, handle func(descriptor.Record), bad func(error)) {
 	s := bufio.NewScanner(r)
 	s.Buffer(nil, 16<<20)
@@ -115,7 +128,14 @@ func read(r io.Reader, handle func(descriptor.Record), bad func(error)) {
 			continue
 		}
 		var rec descriptor.Record
-		if err := json.Unmarshal(line, &rec); err != nil || !slices.Contains(sources, rec.Source) || rec.Record == nil {
+		err := json.Unmarshal(line, &rec)
+		if err == nil && rec.Source == descriptor.SourceOutput {
+			if bad != nil {
+				bad(errOutput)
+			}
+			continue
+		}
+		if err != nil || !slices.Contains(sources, rec.Source) || rec.Record == nil {
 			if bad != nil {
 				if err == nil {
 					err = fmt.Errorf("not a record: %.80s", accesskey.ShownValue(string(line), false))

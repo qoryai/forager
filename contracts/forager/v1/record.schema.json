@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/record.schema.json",
   "title": "Record",
-  "description": "One unit of runtime output as a descriptor reads it, one report of a setup command that runs inside the wall, one report of SessionSpec.After's command, or the measure of the enclosure as its runtime exits: the source it came from and the record itself. The shape of the lines a hook forwarder, a setup runner and the helper's exec write to the local socket, and of a descriptor fixture's records.jsonl.",
+  "description": "One unit of runtime output as a descriptor reads it, one report of a setup command that runs inside the wall, one report of SessionSpec.After's command, or the measure of the enclosure as its runtime exits: the source it came from and the record itself. The shape of the lines a hook forwarder, a setup runner and the helper's exec write to the local socket, and of a descriptor fixture's records.jsonl. The local socket accepts the sources hooks, setup, measure and after, and refuses output.",
   "type": "object",
   "additionalProperties": false,
   "if": {"properties": {"source": {"const": "measure"}}, "required": ["source"]},
@@ -22,7 +22,7 @@
   ],
   "properties": {
     "source": {
-      "description": "output for a JSON line the runtime printed on its standard output; hooks for the JSON a hook command received on its standard input; setup for a report of a setup command, which the session writes as the command's setup step and no descriptor's rule maps; measure for the enclosure's peak memory and CPU time, which the helper's exec reads inside the enclosure once the runtime exits, and which the session puts on the session's dev.qory.session.exited and no descriptor's rule maps; after for a report of SessionSpec.After's command, which the helper's exec runs once the runtime exits and the session writes as the session's after step, and no descriptor's rule maps.",
+      "description": "output for a JSON line the runtime printed on its standard output, which the session reads from that output only: the local socket refuses a record of this source; hooks for the JSON a hook command received on its standard input; setup for a report of a setup command, which the session writes as the command's setup step and no descriptor's rule maps; measure for the enclosure's peak memory and CPU time, which the helper's exec reads inside the enclosure once the runtime exits, and which the session puts on the session's dev.qory.session.exited and no descriptor's rule maps; after for a report of SessionSpec.After's command, which the helper's exec runs once the runtime exits and the session writes as the session's after step, and no descriptor's rule maps.",
       "type": "string",
       "enum": [
         "output",
