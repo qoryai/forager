@@ -579,23 +579,24 @@ var stopModelKeyLimit = []byte(`{"stop":{"reason":"` + event.ReasonModelKeyLimit
 // when it accepts it: the close's, with no reason or with timeout, interrupted,
 // no_session, image_missing, image_user_root, image_access_denied, image_rate_limited,
 // image_registry_unreachable, workflow_not_in_harness, read_needs_wall,
-// read_needs_setup_outside, read_needs_no_nested_docker or read_needs_setup_removed, the
-// last eleven only for a run with no join the gateway numbered, and the last ten only
-// failed with exit_code -1: image_missing and image_user_root the close after a fetch of
-// the run's image that its registry did not have or whose user is root,
-// image_access_denied, image_rate_limited and image_registry_unreachable the close after
-// a check of the run's image that its registry refused, rate-limited or did not reach,
-// workflow_not_in_harness the close of a run whose workflow is not in the harness,
-// read_needs_wall the close of a read run (the contract's §The events, How a run ends)
-// that has no wall, read_needs_setup_outside the close of a read run whose setup is set
-// to run inside the agent's container, read_needs_no_nested_docker the close of a read
-// run whose image runs nested Docker, and read_needs_setup_removed the close of a read
-// run whose setup container could not be removed. It accepts model_key_limit, the pause
-// after a limit refusal, paused, only for a run with a join whose last
-// dev.qory.session.exited has that reason. The gateway writes the event of every other
-// end itself. joined is true when the gateway numbered a join of the run, and last is
-// the reason of the last dev.qory.session.exited the run's stream numbered, empty for
-// none.
+// read_needs_setup_outside, read_needs_no_nested_docker, read_needs_setup_removed or
+// write_needs_wall, the last twelve only for a run with no join the gateway numbered,
+// and the last eleven only failed with exit_code -1: image_missing and image_user_root
+// the close after a fetch of the run's image that its registry did not have or whose
+// user is root, image_access_denied, image_rate_limited and image_registry_unreachable
+// the close after a check of the run's image that its registry refused, rate-limited or
+// did not reach, workflow_not_in_harness the close of a run whose workflow is not in
+// the harness, read_needs_wall the close of a read run (the contract's §The events, How
+// a run ends) that has no wall, read_needs_setup_outside the close of a read run whose
+// setup is set to run inside the agent's container, read_needs_no_nested_docker the
+// close of a read run whose image runs nested Docker, read_needs_setup_removed the
+// close of a read run whose setup container could not be removed, and write_needs_wall
+// the close of a run whose access is not read and that has no wall. It accepts
+// model_key_limit, the pause after a limit refusal, paused, only for a run with a join
+// whose last dev.qory.session.exited has that reason. The gateway writes the event of
+// every other end itself. joined is true when the gateway numbered a join of the run,
+// and last is the reason of the last dev.qory.session.exited the run's stream numbered,
+// empty for none.
 func closeRule(data map[string]any, joined bool, last string) string {
 	given, hasReason := data["reason"]
 	why, _ := given.(string)
@@ -617,7 +618,7 @@ func closeRule(data map[string]any, joined bool, last string) string {
 	case why == refusal.ImageMissing, why == refusal.ImageUserRoot, why == refusal.ImageAccessDenied,
 		why == refusal.ImageRateLimited, why == refusal.ImageRegistryUnreachable, why == event.ReasonWorkflowNotInHarness,
 		why == event.ReasonReadNeedsWall, why == event.ReasonReadNeedsSetupOutside, why == event.ReasonReadNeedsNoNestedDocker,
-		why == event.ReasonReadNeedsSetupRemoved:
+		why == event.ReasonReadNeedsSetupRemoved, why == event.ReasonWriteNeedsWall:
 		code, _ := data["exit_code"].(float64)
 		switch {
 		case joined:
