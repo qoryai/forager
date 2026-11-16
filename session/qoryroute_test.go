@@ -411,6 +411,47 @@ func TestARouteNeedsAWallThatReportsTheAgentsAddress(t *testing.T) {
 	}
 }
 
+// starterWall is an open wall whose enclosure starts its relay apart from Wrap: it keeps
+// the launch its StartRelay gets.
+type starterWall struct {
+	openWall
+	relay   wall.Launch
+	started int
+}
+
+func (w *starterWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *starterWall) StartRelay(_ context.Context, l wall.Launch) error {
+	w.relay, w.started = l, w.started+1
+	return nil
+}
+
+// TestTheRelayWritesThePeerOnlyForARunWithARoute pins what a wall whose relay starts
+// apart from Wrap gets at the run's open: ProxyPeer for a run with a route, so the relay
+// writes each connection's address and the forwarder can tell the agent's container from
+// the setup container, and no ProxyPeer for a run with none.
+func TestTheRelayWritesThePeerOnlyForARunWithARoute(t *testing.T) {
+	for _, routed := range []bool{true, false} {
+		sp, _ := specGateway(t)
+		w := &starterWall{}
+		sp.Wall, sp.Image = w, "example.com/agent:1"
+		if routed {
+			sp.QoryRoute = &recorder{}
+		}
+		r, err := session.Open(context.Background(), opened(sp))
+		if err != nil {
+			t.Fatalf("routed %v: %v", routed, err)
+		}
+		r.Close(context.Background(), session.Outcome{State: event.StateSucceeded})
+		if w.started != 1 || w.relay.ProxyPeer != routed {
+			t.Errorf("routed %v: the relay started %d times with ProxyPeer %v", routed, w.started, w.relay.ProxyPeer)
+		}
+	}
+}
+
 // TestASessionWithNoRuntimeGetsNoRoute pins a session with no runtime, such as a host
 // step's, in a run with a route: its launch has no QORY_HOST_URL, and its request to the
 // host goes to the gateway's proxy and reaches no handler.
