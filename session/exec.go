@@ -111,13 +111,17 @@ func withExec(helper, unset []string, after afterLaunch, command string, args []
 // For a signal whose default action does not end a process, or when Exec outlives the
 // signal, it returns 128 and the signal's number. Otherwise it returns the exit
 // status, as a shell does: the program's, 2 for arguments it cannot read, 127 for a
-// program it does not find, or finds only through . or an empty entry of PATH, and
-// 126 for one it cannot execute, its reason written to stderr.
+// program it does not find, or finds only through . or an empty entry of PATH, 126
+// for one it cannot execute, and 125 when it cannot make itself not dumpable, its
+// reason written to stderr.
 func Exec(args []string, stderr io.Writer) int {
 	// From its start, no process of the agent's reads Exec's memory, environment or
 	// descriptors, or traces it, After's key included: the program's execve makes the
 	// program dumpable again, and Exec stays as it is.
-	undumpable()
+	if err := undumpable(); err != nil {
+		fmt.Fprintf(stderr, "exec: allow prctl(PR_SET_DUMPABLE) in the wall's seccomp profile: Exec could not make itself not dumpable (%v), so the program did not start.\n", err)
+		return setupRunnerFailed
+	}
 	opts, argv, err := parseExec(args)
 	names := opts.names
 	if err != nil {

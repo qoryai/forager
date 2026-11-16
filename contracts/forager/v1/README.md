@@ -6322,7 +6322,8 @@ as a secret, and records an `after` record only with that key, compared in const
 time: any other `after` record, and a second key, is reported and changes no step. The
 key is in no variable and no argument, since the container's init runs as the agent's
 user and the agent can read its environment; the exec is not dumpable from its start,
-so no process of the agent's reads its memory. When the exec cannot send the key, the
+so no process of the agent's reads its memory, and exits `125` without starting the
+runtime when it cannot clear its dumpable flag. When the exec cannot send the key, the
 runtime does not start: the exec exits `125` with the reason on standard error. Where
 a later record does not reach the session, After still runs, its output on the
 launch's standard error, and the session writes no after step. The step's start marks

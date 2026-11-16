@@ -12,8 +12,8 @@ import (
 // closeInherited closes nothing outside Linux, where no enclosure runs.
 func closeInherited() {}
 
-// undumpable changes nothing outside Linux.
-func undumpable() {}
+// undumpable changes nothing outside Linux, and returns nil.
+func undumpable() error { return nil }
 
 // exited reports false at once outside Linux, where the syscall package has no wait
 // that leaves the process to be reaped.
