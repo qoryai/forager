@@ -1354,6 +1354,10 @@ request asks the gateway for, for this session.
   - the runtime's name is not a lowercase letter followed by up to 63 lowercase
     letters, digits or `-`, the name of its folder in `/qory/runtime`.
 
+  A program with more than one hard link is refused, so an install through pnpm's
+  store or an optimised Nix store fails: install the runtime with npm, or copy the
+  program into `Dir`.
+
   The session does not check the folders above `Dir`: install the runtime under
   folders that only root or the user that runs Forager can write.
 
