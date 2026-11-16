@@ -501,17 +501,14 @@ func (q *qoryRoute) serve(c net.Conn, head []byte, from *bufio.Reader, n int) {
 		return
 	}
 	c.SetReadDeadline(time.Time{})
-	// A session that ended while the body arrived gets no call, whatever runs now.
-	if sessionCtx.Err() != nil {
-		refuse(http.StatusServiceUnavailable, qoryHostNoSession, qoryHostNoRun, 0)
-		return
-	}
 	// The slot is the handler's: it is taken once the body is read, and freed when the
 	// handler returns, also after the forwarder stopped waiting for it.
 	if !q.enter() {
 		refuse(http.StatusTooManyRequests, qoryHostRateLimited, qoryHostFlight, 0)
 		return
 	}
+	// A session that ended while the body arrived gets no call, whatever runs now:
+	// call does not start the handler once ctx ended.
 	ctx, cancel := context.WithDeadline(sessionCtx, deadline)
 	defer cancel()
 	ans, called, err := q.call(ctx, p.req, buf.Bytes(), n)

@@ -497,6 +497,22 @@ func TestACallersQoryHostURLIsReserved(t *testing.T) {
 	}
 }
 
+// TestAnUnwalledRunsQoryHostURLIsForagers pins QORY_HOST_URL as one of Forager's names
+// in an unwalled run with a route: the record has the variable from Forager's fixed
+// values, and the value the run passes with --env lost.
+func TestAnUnwalledRunsQoryHostURLIsForagers(t *testing.T) {
+	sp, _ := specGateway(t, "FAKE_EXIT=0")
+	sp.QoryRoute = &recorder{}
+	sp.Variables.Run = []string{session.EnvQoryHost + "=http://forged.example"}
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := session.EnvQoryHost + "<-fixed run:denied"; !slices.Contains(variablesApplied(t, res), want) {
+		t.Errorf("the record's variables %q, want %q", variablesApplied(t, res), want)
+	}
+}
+
 // TestARunWithNoRouteHasTheGatewaysDenial pins a run with no OpenSpec.QoryRoute at a
 // real gateway: the launch has no QORY_HOST_URL, even one it inherits, and a request to
 // the host goes to the gateway's proxy, which denies it with wall:qory-host, though the
