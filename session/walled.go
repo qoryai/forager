@@ -163,12 +163,14 @@ func register(
 		return nil, err
 	}
 	defer unlock()
-	check := checkShared(docker, dir, runID, binds)
-	if unwalled {
-		check = checkSharedUnwalled(dir, runID, binds)
+	check := checkSharedUnwalled
+	if !unwalled {
+		check = func(dir, runID string, binds []bindSource) error {
+			return checkShared(docker, dir, runID, binds)
+		}
 	}
-	if check != nil {
-		return nil, check
+	if err := check(dir, runID, binds); err != nil {
+		return nil, err
 	}
 	if registerPause != nil {
 		registerPause(runID)
@@ -310,7 +312,9 @@ func checkShared(docker *wall.Docker, dir, runID string, binds []bindSource) err
 // container: it asks no engine. An entry whose lock is free counts as still going, as
 // for [othersWritable], since its run's containers may still be going; one of those
 // that cannot be read is skipped, and one of a run still going that cannot be read is
-// an error. The caller holds the registry's lock.
+// an error. An entry of a session without a wall whose lock is free is removed, the
+// run's included: that session is over, and the run can then join again after a
+// session that was killed. The caller holds the registry's lock.
 func checkSharedUnwalled(dir, runID string, binds []bindSource) error {
 	names, err := os.ReadDir(dir)
 	if err != nil {
@@ -318,14 +322,19 @@ func checkSharedUnwalled(dir, runID string, binds []bindSource) error {
 	}
 	for _, e := range names {
 		name := e.Name()
-		if name == runID || CheckRunID(name) != nil {
+		if CheckRunID(name) != nil {
 			continue
 		}
-		other, ok, err := writtenEntry(filepath.Join(dir, name))
+		file := filepath.Join(dir, name)
+		other, ok, held, err := readWritten(file)
 		if err != nil {
 			return err
 		}
-		if !ok {
+		if ok && other.Unwalled && !held {
+			os.Remove(file)
+			continue
+		}
+		if !ok || name == runID {
 			continue
 		}
 		for _, b := range other.Binds {
@@ -764,12 +773,18 @@ func othersWritable(runID string) ([]string, error) {
 // writtenEntry reads one entry of the registry for [othersWritable], and whether it
 // counts: one that is gone, or whose lock is free and that cannot be read, does not.
 func writtenEntry(file string) (walledEntry, bool, error) {
+	entry, ok, _, err := readWritten(file)
+	return entry, ok, err
+}
+
+// readWritten is [writtenEntry] and whether the entry's lock is held.
+func readWritten(file string) (walledEntry, bool, bool, error) {
 	f, err := os.Open(file)
 	if errors.Is(err, fs.ErrNotExist) {
-		return walledEntry{}, false, nil
+		return walledEntry{}, false, false, nil
 	}
 	if err != nil {
-		return walledEntry{}, false, fmt.Errorf("the registry of walled runs: %w", accesskey.ShownError(err))
+		return walledEntry{}, false, false, fmt.Errorf("the registry of walled runs: %w", accesskey.ShownError(err))
 	}
 	defer f.Close()
 	held := false
@@ -777,7 +792,7 @@ func writtenEntry(file string) (walledEntry, bool, error) {
 	case errors.Is(err, syscall.EWOULDBLOCK):
 		held = true
 	case err != nil:
-		return walledEntry{}, false,
+		return walledEntry{}, false, false,
 			fmt.Errorf("the registry of walled runs: locking %s: %w", pathShown(file), err)
 	}
 	b, err := io.ReadAll(io.LimitReader(f, 1<<20))
@@ -790,12 +805,12 @@ func writtenEntry(file string) (walledEntry, bool, error) {
 	}
 	switch {
 	case err != nil && held:
-		return walledEntry{}, false, fmt.Errorf("the registry of walled runs: the "+
+		return walledEntry{}, false, true, fmt.Errorf("the registry of walled runs: the "+
 			"entry %s of a run still going cannot be read", pathShown(file))
 	case err != nil:
-		return walledEntry{}, false, nil
+		return walledEntry{}, false, false, nil
 	}
-	return entry, true, nil
+	return entry, true, held, nil
 }
 
 // engineUnreachable is the refusal of a read of the registry that cannot ask the container
