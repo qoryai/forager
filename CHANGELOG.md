@@ -10,18 +10,6 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
-- Deploy in this order:
-  1. a Qory Apiary that accepts `session` in the model keys report;
-  2. the gateway;
-  3. a Qory Apiary that folds `dev.qory.run.target_write` and sends `use_up_to_percent`
-     and `use_up_to_windows`.
-
-  A Qory Apiary built before it accepts `session` answers a report with `session` with
-  a signed `400` `invalid_request`, and the gateway drops that report, cooldowns
-  included; every report made while a session is open has `session`.
-
-  A Qory Apiary built before the type stores each `dev.qory.run.target_write`, and its
-  fold skips it.
 - A gateway built before this change fails a run with `run_configuration_invalid` when
   the run configuration's API credential has `resets_at`, `schedule_resets_at` or
   `pause_for_s`, and ignores the run configuration's `resume`. It also ends a run `batch_refused` for a batch with
