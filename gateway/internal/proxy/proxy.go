@@ -1449,7 +1449,8 @@ func deny(w http.ResponseWriter, d Decision) {
 		return
 	}
 	if d.Rule == QoryHostRule {
-		fmt.Fprintf(w, "qory: send requests for %s as plain http:// requests to QORY_HOST_URL from a session of a run with a route: the gateway's proxy sends none of them\n", link.QoryHost)
+		fmt.Fprintf(w, "qory: send requests for %s as plain http:// requests to QORY_HOST_URL.\n"+
+			"qory: the gateway's proxy sends no request to %s; a session of a run with a route reaches it through QORY_HOST_URL\n", link.QoryHost, link.QoryHost)
 		return
 	}
 	if d.Rule == GuardRule {

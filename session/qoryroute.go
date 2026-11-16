@@ -55,20 +55,21 @@ const (
 	qoryHostBadAnswer   = "bad_answer"
 )
 
-// The forwarder's texts on the route. Each starts with the fix.
+// The forwarder's texts on the route. Each starts with the fix; a cause that would make
+// the first line longer than 100 characters goes on a second line.
 var (
-	qoryHostBadTarget = "Send the request over HTTP/1.1 to " + link.QoryHostURL + "/ as " + link.EnvQoryHost + " has it: the run's proxy reads no other form of a request to that host."
-	qoryHostBadHost   = "Send one Host header, " + link.QoryHost + ", with the request: the run's proxy reads no other Host for a request to " + link.EnvQoryHost + "."
-	qoryHostBadHeader = "Send each header of the request on one line that ends in CRLF, with a valid name and no control characters: the run's proxy reads no folded line and no bare CR or LF."
-	qoryHostBadLength = "Send the body with at most one Content-Length header and no Transfer-Encoding: the run's proxy reads a request to " + link.EnvQoryHost + " whole before it passes the request on."
-	qoryHostBadBody   = "Send the whole body within 30 seconds: the run's proxy reads it whole before it passes the request on."
-	qoryHostNoRun     = "Send requests to " + link.EnvQoryHost + " while a session of the run runs: no session runs, so the request reached no handler."
+	qoryHostBadTarget = "Send the request over HTTP/1.1 to " + link.QoryHostURL + "/ as " + link.EnvQoryHost + " has it.\nThe run's proxy reads no other form of a request to that host."
+	qoryHostBadHost   = "Send one Host header, " + link.QoryHost + ", with the request.\nThe run's proxy reads no other Host for a request to " + link.EnvQoryHost + "."
+	qoryHostBadHeader = "Send each header on one line that ends in CRLF, with a valid name and no control characters.\nThe run's proxy reads no folded line and no bare CR or LF."
+	qoryHostBadLength = "Send the body with at most one Content-Length header and no Transfer-Encoding.\nThe run's proxy reads a request to " + link.EnvQoryHost + " whole before it passes the request on."
+	qoryHostBadBody   = "Send the whole body within 30 seconds.\nThe run's proxy reads the body whole before it passes the request on."
+	qoryHostNoRun     = "Send requests to " + link.EnvQoryHost + " while a session of the run runs.\nNo session runs, so the request reached no handler."
 	qoryHostRateText  = fmt.Sprintf("Retry in 1 second: the run sent more than %d requests to %s in a second.", qoryHostRate, link.EnvQoryHost)
 	qoryHostFlight    = fmt.Sprintf("Retry in 1 second: the run has %d requests to %s in flight, the most it may have.", qoryHostInFlight, link.EnvQoryHost)
 	qoryHostLarge     = fmt.Sprintf("Shrink the body to at most %d bytes: the run's proxy takes no more on %s.", link.MaxQoryHostBody, link.EnvQoryHost)
 	qoryHostSlow      = "Send the request again later: the handler did not return within 30 seconds."
-	qoryHostBig       = fmt.Sprintf("Report this to whoever runs qory: the handler's answer has more than %d bytes, which the run's proxy does not pass on.", link.MaxQoryHostBody)
-	qoryHostBadStatus = "Report this to whoever runs qory: the handler answered with a status outside 200 to 599, or 407, which the run's proxy does not pass on."
+	qoryHostBig       = fmt.Sprintf("Report this to whoever runs qory.\nThe handler's answer has more than %d bytes, which the run's proxy does not pass on.", link.MaxQoryHostBody)
+	qoryHostBadStatus = "Report this to whoever runs qory.\nThe handler's answer has a status outside 200 to 599, or 407, which the run's proxy does not pass on."
 	qoryHostPanicked  = "Report this to whoever runs qory: the handler failed before it answered."
 )
 
@@ -81,7 +82,8 @@ type qoryRoute struct {
 	// record writes a decision of the route, a dev.qory.run.egress, which it completes
 	// with the policy's mode.
 	record func(data map[string]any)
-	// report gets a line for a handler that panicked, and for a failed call of agent.
+	// report gets two lines for a handler that panicked and for a failed call of agent:
+	// the fix, then the panic's value or the cause.
 	report func(string)
 	// done ends when the run closes.
 	done context.Context
@@ -227,9 +229,10 @@ func (q *qoryRoute) fromAgent(ctx context.Context, n int, peer netip.Addr) bool 
 	return slices.Contains(addrs, peer.Unmap())
 }
 
-// reportLookup writes a Report line for a failed call of [qoryRoute.agent] for session
-// n, at most one in [qoryHostRecordEvery], as [qoryRoute.recordRefusal] limits its
-// records. The line has no text of err, which can contain an address of the enclosure.
+// reportLookup writes two Report lines for a failed call of [qoryRoute.agent] for
+// session n, the fix and then the cause, at most once in [qoryHostRecordEvery], as
+// [qoryRoute.recordRefusal] limits its records. The lines have no text of err, which
+// can contain an address of the enclosure.
 func (q *qoryRoute) reportLookup(n int, err error) {
 	if q.report == nil {
 		return
@@ -247,7 +250,8 @@ func (q *qoryRoute) reportLookup(n int, err error) {
 	if errors.Is(err, context.DeadlineExceeded) {
 		within = fmt.Sprintf(" within %s", qoryHostAgentWait)
 	}
-	q.report(fmt.Sprintf("Check that the agent's container of session %d runs: the wall did not return its address%s, so the request to %s went to the gateway's proxy, which denies that host.", n, within, link.QoryHost))
+	q.report(fmt.Sprintf("Check that the agent's container of session %d runs: the wall returned no address%s.", n, within))
+	q.report(fmt.Sprintf("The request to %s went to the gateway's proxy, which denies that host.", link.QoryHost))
 }
 
 // clock is the time the rate limit and the records' limit read.
@@ -617,7 +621,8 @@ func (q *qoryRoute) call(ctx context.Context, read *http.Request, body []byte, n
 		defer func() {
 			if v := recover(); v != nil {
 				if q.report != nil && v != http.ErrAbortHandler {
-					q.report(fmt.Sprintf("the handler of %s panicked: %v", link.QoryHost, v))
+					q.report(fmt.Sprintf("Report a bug in the program that started the run: its handler of %s panicked.", link.QoryHost))
+					q.report(fmt.Sprintf("The handler's panic: %v", v))
 				}
 				done <- errQoryHostPanic
 			}

@@ -489,10 +489,10 @@ func TestAPeerLineAfterTheRelaysIsNotRead(t *testing.T) {
 	}
 }
 
-// TestAFailedAgentLookupIsReported pins the Report line of a failed call for the agent's
-// addresses: the line starts with the fix, has the session's number, no text of the
-// error, which can contain an address, and the wait for a call that timed out; at most
-// one line goes out a second, and a call whose forwarder closed is not reported.
+// TestAFailedAgentLookupIsReported pins the Report lines of a failed call for the
+// agent's addresses: the fix with the session's number, and the wait for a call that
+// timed out, then the cause; no text of the error, which can contain an address; at
+// most one report goes out a second, and a call whose forwarder closed is not reported.
 func TestAFailedAgentLookupIsReported(t *testing.T) {
 	var lines []string
 	q := newQoryRoute(&routeHandler{}, context.Background(), (&routeRecords{}).record, func(l string) { lines = append(lines, l) })
@@ -507,17 +507,17 @@ func TestAFailedAgentLookupIsReported(t *testing.T) {
 			t.Fatal("a failed call let the request through")
 		}
 	}
-	if len(lines) != 1 {
-		t.Fatalf("3 failed calls within a second gave %d lines: %q", len(lines), lines)
+	want := []string{
+		"Check that the agent's container of session 3 runs: the wall returned no address.",
+		"The request to " + link.QoryHost + " went to the gateway's proxy, which denies that host.",
 	}
-	want := "Check that the agent's container of session 3 runs: the wall did not return its address, so the request to " + link.QoryHost + " went to the gateway's proxy, which denies that host."
-	if lines[0] != want {
-		t.Errorf("the line %q, want %q", lines[0], want)
+	if !slices.Equal(lines, want) {
+		t.Fatalf("3 failed calls within a second gave %q, want %q", lines, want)
 	}
 	now = now.Add(qoryHostRecordEvery)
 	lookupErr = fmt.Errorf("docker inspect: %w", context.DeadlineExceeded)
 	q.fromAgent(context.Background(), 3, peer)
-	if len(lines) != 2 || !strings.Contains(lines[1], "did not return its address within "+qoryHostAgentWait.String()+",") {
+	if len(lines) != 4 || lines[2] != "Check that the agent's container of session 3 runs: the wall returned no address within "+qoryHostAgentWait.String()+"." {
 		t.Errorf("a call that timed out a second later gave %q", lines)
 	}
 	for _, l := range lines {
@@ -529,8 +529,8 @@ func TestAFailedAgentLookupIsReported(t *testing.T) {
 	closed, cancel := context.WithCancel(context.Background())
 	cancel()
 	q.fromAgent(closed, 3, peer)
-	if len(lines) != 2 {
-		t.Errorf("a call after the forwarder closed was reported: %q", lines[2:])
+	if len(lines) != 4 {
+		t.Errorf("a call after the forwarder closed was reported: %q", lines[4:])
 	}
 }
 

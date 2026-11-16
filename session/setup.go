@@ -110,7 +110,7 @@ func (r *Run) openWall(ctx context.Context) error {
 	if r.route != nil {
 		a, ok := enclosure.(wall.AgentAddresser)
 		if !ok {
-			return fmt.Errorf("Use a wall that reports the agent's address for a run with a route to its caller: the %s wall does not, so its relay cannot tell the agent's container from the setup container.", r.open.Wall.Name())
+			return fmt.Errorf("Use a wall that reports the agent's address for a run with a route to its caller.\nThe %s wall does not, so the relay writes no address that separates the agent's container from the setup container.", r.open.Wall.Name())
 		}
 		r.route.agent = a.AgentAddrs
 	}
