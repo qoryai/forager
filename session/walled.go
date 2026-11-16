@@ -149,7 +149,8 @@ func (r *registration) keep() { r.kept = true }
 // still going and, when none conflicts, lists the run among them, all under the
 // registry's lock. engine is the container engine of the run's wall, nil for a wall
 // without one, and docker the run's wall when it is a Docker, nil otherwise. unwalled
-// marks the entry of a session without a wall: [walledEntry.Unwalled].
+// marks the entry of a session without a wall, [walledEntry.Unwalled], which is
+// checked by [checkSharedUnwalled].
 func register(
 	runID string, binds []bindSource, engine *wall.Engine, docker *wall.Docker, unwalled bool,
 ) (*registration, error) {
@@ -162,8 +163,12 @@ func register(
 		return nil, err
 	}
 	defer unlock()
-	if err := checkShared(docker, dir, runID, binds); err != nil {
-		return nil, err
+	check := checkShared(docker, dir, runID, binds)
+	if unwalled {
+		check = checkSharedUnwalled(dir, runID, binds)
+	}
+	if check != nil {
+		return nil, check
 	}
 	if registerPause != nil {
 		registerPause(runID)
@@ -299,6 +304,43 @@ func checkShared(docker *wall.Docker, dir, runID string, binds []bindSource) err
 			}
 			return nil
 		})
+}
+
+// checkSharedUnwalled is checkShared for a session without a wall, which starts no
+// container: it asks no engine. An entry whose lock is free counts as still going, as
+// for [othersWritable], since its run's containers may still be going; one of those
+// that cannot be read is skipped, and one of a run still going that cannot be read is
+// an error. The caller holds the registry's lock.
+func checkSharedUnwalled(dir, runID string, binds []bindSource) error {
+	names, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("the registry of walled runs: %w", accesskey.ShownError(err))
+	}
+	for _, e := range names {
+		name := e.Name()
+		if name == runID || CheckRunID(name) != nil {
+			continue
+		}
+		other, ok, err := writtenEntry(filepath.Join(dir, name))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		for _, b := range other.Binds {
+			ob, err := resolveOther(other.RunID, b)
+			if err != nil {
+				return err
+			}
+			for _, own := range binds {
+				if err := shared(own, other.RunID, ob, !other.Unwalled); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // goingEntries calls each with the file and the entry of every walled run in the
