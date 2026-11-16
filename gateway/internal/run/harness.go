@@ -94,7 +94,7 @@ func (r *Run) checkHarness() error {
 						"Claim %s in only one harness credential, %s or %s: one has no paths", shown, first, second)
 				}
 				for _, x := range other.paths {
-					if slices.ContainsFunc(u.paths, func(y string) bool { return policy.CoversPath(x, y) || policy.CoversPath(y, x) }) {
+					if slices.ContainsFunc(u.paths, func(y string) bool { return policy.OverlapPaths(x, y) }) {
 						if one {
 							return refusal.New(refusal.RunConfigurationInvalid, names,
 								"Give the apply items of the harness credential %s paths that do not overlap on %s", first, shown)

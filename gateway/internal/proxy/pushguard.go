@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -51,8 +52,12 @@ func pushLike(r *http.Request) bool {
 // credential with no PushRef. The guard reads the request's shallow lines and its ref
 // commands up to their flush before anything is sent: each command must create,
 // update or delete PushRef. A signed push, a line of another form, and a section over
-// [MaxPushCommands] or slower than [PushCommandsWait] are refused. A body of a flush
-// alone, git's probe before a large push, names no ref and goes on.
+// [MaxPushCommands] or slower than [PushCommandsWait] are refused, and so is a
+// capability outside [pushCapabilities], push-options among them: a push option asks
+// some hosts to act on a branch other than PushRef, such as a merge into main. After
+// the flush the body ends, or a pack follows: anything else is refused. A body of a
+// flush alone, git's probe before a large push, names no ref and goes on; a flush
+// followed by more bytes is refused.
 func guardPush(w http.ResponseWriter, r *http.Request, host, clean string, c *Credential) error {
 	if !pushLike(r) {
 		return nil
@@ -107,11 +112,12 @@ func identity(values []string) bool {
 	return true
 }
 
-// readCommands reads body up to the flush that ends a push's commands and returns
-// every byte it read, the flush and what came with it included: nil error when each
-// command names ref. A [*pushRefusal] has @WHERE@ in place of the push's host and
-// path; any other error is a body that ended, failed or grew past [MaxPushCommands]
-// before the flush.
+// readCommands reads body up to the flush that ends a push's commands, and the first
+// bytes after it, and returns every byte it read: nil error when each command names
+// ref, asks for no capability outside [pushCapabilities], and the flush is followed by
+// the body's end or, after one command or more, by a pack. A [*pushRefusal] has
+// @WHERE@ in place of the push's host and path; any other error is a body that ended,
+// failed or grew past [MaxPushCommands] before the flush.
 func readCommands(body io.Reader, ref string) ([]byte, error) {
 	s := &commandLines{ref: ref}
 	var rd pktReader
@@ -123,7 +129,7 @@ func readCommands(body io.Reader, ref string) ([]byte, error) {
 			buf = append(buf, piece[:n]...)
 			if !rd.feed(piece[:n], s) {
 				if s.done {
-					return buf, nil
+					return afterFlush(body, buf, s.commands)
 				}
 				if s.refused == nil {
 					s.refused = &pushRefusal{"qory: send the push's ref commands as git does: the gateway cannot read them, so it refuses the push to @WHERE@\n"}
@@ -143,9 +149,64 @@ func readCommands(body io.Reader, ref string) ([]byte, error) {
 	}
 }
 
+// packSignature begins a pack, the part of a push's body after its commands' flush.
+const packSignature = "PACK"
+
+// afterFlush reads what follows the commands' flush in buf, the bytes read so far,
+// from body as far as it needs, and returns every byte read: nil error when the body
+// ends at the flush, or when commands is one or more and a pack follows. Anything
+// else after the flush, such as push options or more commands after git's probe, is
+// a [*pushRefusal].
+func afterFlush(body io.Reader, buf []byte, commands int) ([]byte, error) {
+	rest := len(buf) - flushEnd(buf)
+	// One byte past the signature tells a body that ends from one that goes on.
+	want := len(packSignature)
+	if commands == 0 {
+		want = 1
+	}
+	piece := make([]byte, want)
+	for rest < want {
+		n, err := body.Read(piece[:want-rest])
+		buf, rest = append(buf, piece[:n]...), rest+n
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	tail := buf[len(buf)-rest:]
+	switch {
+	case rest == 0:
+		return buf, nil
+	case commands > 0 && rest >= len(packSignature) && string(tail[:len(packSignature)]) == packSignature:
+		return buf, nil
+	}
+	return nil, &pushRefusal{"qory: push with git over HTTPS: the gateway refuses a push to @WHERE@ whose body goes on after its ref commands with anything but a pack\n"}
+}
+
+// flushEnd is the offset in buf just past the first flush, which buf contains: buf
+// is pkt-lines that [pktReader] read up to that flush.
+func flushEnd(buf []byte) int {
+	at := 0
+	for {
+		n, _ := pktLength([4]byte(buf[at : at+4]))
+		if n == 0 {
+			return at + 4
+		}
+		at += n
+	}
+}
+
+// pushCapabilities are the capabilities a push's first command may ask for, by name,
+// a value after = aside: those git and JGit send for a push over HTTP. push-options
+// and push-cert are not among them.
+var pushCapabilities = []string{"report-status", "report-status-v2", "side-band", "side-band-64k", "quiet", "atomic", "ofs-delta", "delete-refs", "agent", "object-format", "session-id"}
+
 // commandLines is a [pktSink] for the start of a push's request: shallow lines, then
 // ref commands, the first with its capabilities after a NUL, then a flush. Each
-// command must name ref; done is set at the flush.
+// command must name ref, and each capability be one of [pushCapabilities]; done is
+// set at the flush.
 type commandLines struct {
 	ref      string
 	line     []byte
@@ -174,7 +235,14 @@ func (s *commandLines) end() bool {
 			s.refused = &pushRefusal{"qory: push without --signed: the gateway refuses a signed push to @WHERE@, whose ref commands it does not read\n"}
 			return false
 		}
-		line, _, _ = strings.Cut(line, "\x00")
+		var capabilities string
+		line, capabilities, _ = strings.Cut(line, "\x00")
+		for _, c := range strings.Split(capabilities, " ") {
+			if name, _, _ := strings.Cut(c, "="); c != "" && !slices.Contains(pushCapabilities, name) {
+				s.refused = &pushRefusal{fmt.Sprintf("qory: push with git over HTTPS, without --push-option: the gateway refuses the capability %s in a push to @WHERE@\n", shownRef(c))}
+				return false
+			}
+		}
 	}
 	fields := strings.Split(line, " ")
 	if len(fields) != 3 || !objectID(fields[0]) || !objectID(fields[1]) || fields[2] == "" {
@@ -207,8 +275,9 @@ func objectID(s string) bool {
 	return true
 }
 
-// shownRef is a ref a push named, as a refusal shows it: at most 256 bytes, quoted in
-// ASCII, and a phrase in place of one that contains an access key's secret.
+// shownRef is a ref or a capability a push named, as a refusal shows it: at most 256
+// bytes, quoted in ASCII, and a phrase in place of one that contains an access key's
+// secret.
 func shownRef(ref string) string {
 	if accesskey.ContainsSecret(ref) {
 		return accesskey.ShownValue(ref, false)

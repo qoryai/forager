@@ -617,6 +617,9 @@ func (m Mode) Validate() error {
 // such as /a/{}/b*, the {} segments are matched first, then the prefix. The comparison
 // is exact, case included: on a host that ignores case this denies a spelling the host
 // would have taken, never the reverse. A pattern [ValidPath] refuses matches nothing.
+// Pass path as [CleanPath] returns it: a {} segment matches any segment that is not
+// empty, .. and one with %2f included, so on a path CleanPath did not return, /a/{}/b
+// matches /a/../b and /a/x%2fy/b.
 func MatchPath(patterns []string, path string) (string, bool) {
 	for _, p := range patterns {
 		if matchPath(p, path) {
