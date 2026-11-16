@@ -37,6 +37,7 @@ func afterRemote(t *testing.T, line string, after ...string) (runSpec, *linktest
 	w := &afterWall{}
 	sp.Wall, sp.Image, sp.Mounts = w, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
 	sp.SetupRunner = setupRunner
+	sp.Runtime, sp.RuntimeInstall = nil, nil
 	sp.Command, sp.Args = "/bin/sh", []string{"-c", line}
 	sp.After, sp.AfterTimeout = after, 10*time.Second
 	return sp, g, w, reports
