@@ -1685,9 +1685,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Security
 
-- Build Forager with Go 1.27.3 or above: go.mod requires `go 1.27.3`. Go 1.27.3 has
+- Build Forager with Go 1.27.4 or above: go.mod requires `go 1.27.4`. Go 1.27.3 has
   security fixes to `crypto/x509`, which the gateway's proxy uses to check the
-  certificates of upstream hosts.
+  certificates of upstream hosts. Go 1.27.4 fixes a crash of the `net/http` HTTP/1
+  server on a crafted request (GO-2026-6859); the gateway serves HTTP/1.
 
 ### Wall
 
