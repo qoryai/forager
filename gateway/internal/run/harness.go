@@ -128,7 +128,7 @@ func (r *Run) StackUses() []proxy.Credential {
 		}
 		for _, a := range r.applies[name] {
 			out = append(out, proxy.Credential{Name: name, Hosts: slices.Clone(a.Hosts), Scheme: a.Scheme, Username: a.Username, Header: a.Header,
-				Paths: slices.Clone(a.Paths), Value: value, Stored: true, Rejected: r.renew.rejected(name)})
+				Paths: slices.Clone(a.Paths), PushRef: a.PushRef, Value: value, Stored: true, Rejected: r.renew.rejected(name)})
 		}
 	}
 	return out

@@ -88,6 +88,9 @@ type Use struct {
 	Hosts                    []string
 	Scheme, Username, Header string
 	Paths                    []string
+	// PushRef is the one ref a git push through the use may create, update or delete;
+	// empty refuses every push (the proxy's branch guard).
+	PushRef string
 	// Stored says the credential is the server's, a run configuration's credentials
 	// entry, whose value Qory Apiary sealed to the access key.
 	Stored bool
@@ -129,11 +132,13 @@ type Stored struct {
 }
 
 // StoredApply is one way a [Stored] value is set: the hosts, the scheme with its
-// username or header, and the paths, nil for every path.
+// username or header, the paths, nil for every path, and the one ref a push through it
+// may change, empty for none.
 type StoredApply struct {
 	Hosts                    []string
 	Scheme, Username, Header string
 	Paths                    []string
+	PushRef                  string
 }
 
 // Token is the token as it is now, of a credential of the machine's; empty for a
@@ -327,7 +332,7 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 		h.set(answer)
 		h.shape = answer.shape()
 		for i, a := range answer.Apply {
-			out.Uses = append(out.Uses, &Use{Name: def.Name, Argument: sel.Argument, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths,
+			out.Uses = append(out.Uses, &Use{Name: def.Name, Argument: sel.Argument, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths, PushRef: a.PushRef,
 				Format: def.Format, Endpoint: def.Endpoint, OAuth: def.OAuth, held: h, index: i})
 		}
 		for _, p := range slices.Concat(def.Placeholders, answer.Placeholders) {
@@ -355,7 +360,7 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 			h.onRejected = s.Rejected
 		}
 		for _, a := range s.Apply {
-			out.Uses = append(out.Uses, &Use{Name: s.Name, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths, Stored: true,
+			out.Uses = append(out.Uses, &Use{Name: s.Name, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths, PushRef: a.PushRef, Stored: true,
 				Renewed: renewed, Format: s.Format, Endpoint: s.Endpoint, OAuth: s.OAuth, held: h})
 		}
 		for _, p := range s.Placeholders {
@@ -679,6 +684,7 @@ type apply struct {
 	Header   string   `json:"header"`
 	Token    string   `json:"token"`
 	Paths    []string `json:"paths"`
+	PushRef  string   `json:"push_ref"`
 }
 
 func (a apply) check() error {
@@ -703,7 +709,7 @@ func (a apply) check() error {
 func (a *answer) shape() string {
 	var b strings.Builder
 	for _, u := range a.Apply {
-		fmt.Fprintf(&b, "%q %s %s %s %q\n", u.Hosts, u.Scheme, u.Username, u.Header, u.Paths)
+		fmt.Fprintf(&b, "%q %s %s %s %q %q\n", u.Hosts, u.Scheme, u.Username, u.Header, u.Paths, u.PushRef)
 	}
 	return b.String()
 }

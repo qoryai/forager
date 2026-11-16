@@ -400,12 +400,12 @@ func effectiveApply(c server.RunCredential, values sealed.Values) []credential.S
 	var out []credential.StoredApply
 	if apply, ok := values.Apply(c.Name); ok {
 		for _, a := range apply {
-			out = append(out, credential.StoredApply{Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths})
+			out = append(out, credential.StoredApply{Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths, PushRef: a.PushRef})
 		}
 		return out
 	}
 	for _, a := range c.Applies() {
-		out = append(out, credential.StoredApply{Hosts: slices.Clone(a.Hosts), Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: slices.Clone(a.Paths)})
+		out = append(out, credential.StoredApply{Hosts: slices.Clone(a.Hosts), Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: slices.Clone(a.Paths), PushRef: a.PushRef})
 	}
 	return out
 }
@@ -436,11 +436,11 @@ func outside(c server.RunCredential, values sealed.Values) (string, bool) {
 }
 
 // differs is what no item of entry with the host h has of the answer's item a, and
-// whether there is something: the host, the scheme, the username, the header or the
-// paths, checked in that order.
+// whether there is something: the host, the scheme, the username, the header, the
+// push_ref or the paths, checked in that order.
 func differs(a sealed.Apply, h string, entry []server.Apply) (string, bool) {
 	shown := accesskey.ShownValue(h, false)
-	one := sealed.Apply{Hosts: []string{h}, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths}
+	one := sealed.Apply{Hosts: []string{h}, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths, PushRef: a.PushRef}
 	var with []server.Apply
 	for _, e := range entry {
 		if slices.Contains(e.Hosts, h) {
@@ -460,6 +460,8 @@ func differs(a sealed.Apply, h string, entry []server.Apply) (string, bool) {
 		return "sets " + shown + " with another username", true
 	case !same(func(e server.Apply) bool { return strings.EqualFold(e.Header, a.Header) }):
 		return "sets " + shown + " with another header", true
+	case !same(func(e server.Apply) bool { return e.PushRef == a.PushRef }):
+		return "sets " + shown + " with another push_ref", true
 	case !same(func(e server.Apply) bool { return within(one, e) }):
 		return "sets " + shown + " on other paths", true
 	}
@@ -468,9 +470,10 @@ func differs(a sealed.Apply, h string, entry []server.Apply) (string, bool) {
 
 // within reports whether the answer's item a narrows the entry's item e, or is it: its
 // hosts among e's hosts, the same scheme, username and header, the header's case
-// ignored, and paths that e's paths cover, every path when e has none.
+// ignored, the same push_ref, absent in both or equal, and paths that e's paths cover,
+// every path when e has none.
 func within(a sealed.Apply, e server.Apply) bool {
-	if a.Scheme != e.Scheme || a.Username != e.Username || !strings.EqualFold(a.Header, e.Header) {
+	if a.Scheme != e.Scheme || a.Username != e.Username || !strings.EqualFold(a.Header, e.Header) || a.PushRef != e.PushRef {
 		return false
 	}
 	for _, h := range a.Hosts {

@@ -104,8 +104,8 @@ func plaintextSize(digest string, credentials []string, values []Value, metas []
 }
 
 // metaJSON is what the plaintext writes of a value after the value: expires_at, then
-// apply with each item's hosts, scheme, username, header and paths, the last three only
-// when set. It holds no secret. It refuses, with [ErrRequest], an apply that
+// apply with each item's hosts, scheme, username, header, paths and push_ref, the last
+// four only when set. It holds no secret. It refuses, with [ErrRequest], an apply that
 // sealed-plaintext.schema.json refuses, as [readMeta] reads it.
 func metaJSON(v Value) ([]byte, error) {
 	var expires, apply []byte
@@ -141,6 +141,10 @@ func metaJSON(v Value) ([]byte, error) {
 			}
 			if a.Paths != nil {
 				apply = list(append(apply, ','), "paths", a.Paths)
+			}
+			if a.PushRef != "" {
+				apply = append(apply, `,"push_ref":`...)
+				apply, _ = jsontext.AppendQuote(apply, a.PushRef)
 			}
 			apply = append(apply, '}')
 		}
