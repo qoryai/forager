@@ -1322,7 +1322,9 @@ request asks the gateway for, for this session.
   - On pipes, the session reads the runtime's structured output.
 - `Forwarder` is the command installed as the runtime's hook. It must call
   `session.Forward(ctx, os.Stdin)`. That passes the hook's input to the run, over a
-  socket whose address is in the environment.
+  socket whose address is in the environment. The socket accepts records of the
+  `hooks`, `setup` and `measure` sources and refuses a record of the `output` source:
+  output records come from the runtime's standard output only.
 - `CAEnv` lists the names of the variables that point at `ca-bundle.pem` in the run
   directory: the machine's authorities, then the run's certificate. They are in
   `HostProxy.Env`, walled or not, and in the environment of a session without a wall.
