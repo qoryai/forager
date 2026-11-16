@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -348,5 +349,60 @@ func TestAForgedAfterStartKeepsTheTimeout(t *testing.T) {
 	}
 	if res.After == nil || res.After.State != event.StateFailed || res.After.ExitCode != 7 {
 		t.Errorf("Result.After %+v; want the real After's failed 7", res.After)
+	}
+}
+
+// TestAfterGitRunsNothingTheRepositoryPlants pins After's git settings and HOME: a
+// remote with a local path, whose receivepack setting git would run, is refused, since
+// git reaches a remote only over HTTPS; a hook of .git/config's hook.<name>.command does
+// not run on git 2.55 and later, nor on a git without such hooks; and HOME is a new,
+// empty directory, removed once After exits.
+func TestAfterGitRunsNothingTheRepositoryPlants(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	sp, _ := afterSpec(t, "exit 0", "/bin/sh", "-c", `echo "$HOME" > after-home; ls -A "$HOME" > after-home-list
+git commit -q --allow-empty -m after; echo "commit $?" >> after-git
+git push -q planted HEAD:refs/heads/after; echo "push $?" >> after-git`)
+	bare := filepath.Join(t.TempDir(), "bare.git")
+	for _, args := range [][]string{
+		{"init", "-q", "--bare", bare},
+		{"-C", sp.Dir, "init", "-q"},
+		{"-C", sp.Dir, "config", "user.email", "agent@example.com"},
+		{"-C", sp.Dir, "config", "user.name", "agent"},
+		{"-C", sp.Dir, "config", "hook.planted.command", "touch hook-ran"},
+		{"-C", sp.Dir, "config", "--add", "hook.planted.event", "pre-commit"},
+		{"-C", sp.Dir, "remote", "add", "planted", bare},
+		{"-C", sp.Dir, "config", "remote.planted.receivepack", "touch " + filepath.Join(sp.Dir, "receivepack-ran") + "; git-receive-pack"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %q: %v\n%s", args, err, out)
+		}
+	}
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.After == nil || res.After.State != event.StateSucceeded {
+		t.Fatalf("Result.After %+v", res.After)
+	}
+	read := func(name string) string {
+		b, _ := os.ReadFile(filepath.Join(sp.Dir, name))
+		return string(b)
+	}
+	if got := read("after-git"); !strings.HasPrefix(got, "commit 0\npush ") || got == "commit 0\npush 0\n" {
+		t.Errorf("After's git: %q; want the commit and a refused push", got)
+	}
+	for _, f := range []string{"hook-ran", "receivepack-ran"} {
+		if _, err := os.Stat(filepath.Join(sp.Dir, f)); err == nil {
+			t.Errorf("%s exists: git ran what .git/config planted", f)
+		}
+	}
+	home := strings.TrimSpace(read("after-home"))
+	if home == "" || home == os.Getenv("HOME") || read("after-home-list") != "" {
+		t.Errorf("After's HOME %q with %q", home, read("after-home-list"))
+	}
+	if _, err := os.Stat(home); err == nil {
+		t.Errorf("After's HOME %s is still there", home)
 	}
 }

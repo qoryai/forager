@@ -57,16 +57,21 @@ func TestAfterEnvDropsGitsRedirections(t *testing.T) {
 		"HOME=/home/agent", "PATH=/tmp/bin", "GIT_DIR=/x", "GIT_WORK_TREE=/x", "GIT_INDEX_FILE=/x", "GIT_EXEC_PATH=/x",
 		"GIT_CONFIG=/x", "GIT_CONFIG_PARAMETERS='core.hooksPath'='/x'", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.hooksPath",
 		"GIT_CONFIG_VALUE_0=/x", "GIT_SSH_COMMAND=/x", "GIT_ASKPASS=/x", "BASH_ENV=/x", "ENV=/x", "LD_PRELOAD=/x",
-		"LD_LIBRARY_PATH=/x", EnvSocket + "=/x", "GIT_AUTHOR_NAME=agent", "NOEQUALS",
-	})
+		"LD_LIBRARY_PATH=/x", EnvSocket + "=/x", "GIT_AUTHOR_NAME=agent", "NOEQUALS", "XDG_CONFIG_HOME=/x", "XDG_DATA_HOME=/x",
+	}, "/empty")
 	for _, kv := range env {
 		if strings.HasSuffix(kv, "=/x") || strings.HasPrefix(kv, "PATH=") || kv == "NOEQUALS" || strings.Contains(kv, "'/x'") {
 			t.Errorf("After's environment has %s", kv)
 		}
 	}
-	for _, kv := range []string{"HOME=/home/agent", "GIT_AUTHOR_NAME=agent", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
-		"GIT_TERMINAL_PROMPT=0", "GIT_PAGER=cat", "GIT_EDITOR=:", "GIT_CONFIG_COUNT=10", "GIT_CONFIG_KEY_0=core.hooksPath",
-		"GIT_CONFIG_VALUE_0=/dev/null", "GIT_CONFIG_KEY_7=credential.helper", "GIT_CONFIG_VALUE_7="} {
+	if slices.Contains(env, "HOME=/home/agent") {
+		t.Errorf("After's environment has the agent's HOME: %q", env)
+	}
+	for _, kv := range []string{"HOME=/empty", "GIT_AUTHOR_NAME=agent", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_TERMINAL_PROMPT=0", "GIT_PAGER=cat", "GIT_EDITOR=:", "GIT_CONFIG_COUNT=40", "GIT_CONFIG_KEY_0=core.hooksPath",
+		"GIT_CONFIG_VALUE_0=/dev/null", "GIT_CONFIG_KEY_3=protocol.allow", "GIT_CONFIG_VALUE_3=never",
+		"GIT_CONFIG_KEY_4=protocol.https.allow", "GIT_CONFIG_VALUE_4=always", "GIT_CONFIG_KEY_9=credential.helper", "GIT_CONFIG_VALUE_9=",
+		"GIT_CONFIG_KEY_15=hook.pre-commit.enabled", "GIT_CONFIG_VALUE_15=false"} {
 		if !slices.Contains(env, kv) {
 			t.Errorf("After's environment has no %s: %q", kv, env)
 		}

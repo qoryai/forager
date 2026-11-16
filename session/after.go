@@ -190,7 +190,13 @@ func runAfter(a afterLaunch, line func(stream string, b []byte), failed func(b [
 	cmd := exec.Command(a.words[0], a.words[1:]...)
 	program, err := afterProgram(a.words[0], agent)
 	cmd.Path, cmd.Err = program, err
-	cmd.Env = append(afterEnv(os.Environ()), "PATH="+path)
+	home, removeHome, err := emptyHome()
+	if err != nil {
+		failed(failureLine(fmt.Errorf("After's empty HOME could not be made: %w", err)))
+		return setupRunnerFailed, ""
+	}
+	defer removeHome()
+	cmd.Env = append(afterEnv(os.Environ(), home), "PATH="+path)
 	cmd.Stdout, cmd.Stderr, cmd.WaitDelay = stdout, stderr, setupOutputGrace
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
@@ -251,20 +257,38 @@ func runAfter(a afterLaunch, line func(stream string, b []byte), failed func(b [
 
 // afterDropped are the variables After does not get, by name or, ending in *, by
 // prefix: those that point git at another repository, configuration, program or
-// helper, and those that make a shell or the dynamic linker run a file first.
+// helper, those that make a shell or the dynamic linker run a file first, HOME, which
+// After gets as an empty directory, and the XDG base directories, under which git and
+// interpreters read files of the user's.
 var afterDropped = []string{
 	"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_EXEC_PATH", "GIT_CONFIG*", "GIT_SSH*",
 	"GIT_ASKPASS", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR",
 	"GIT_NAMESPACE", "GIT_PROXY_COMMAND", "GIT_EXTERNAL_DIFF", "GIT_SEQUENCE_EDITOR",
-	"BASH_ENV", "ENV", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", EnvSocket,
+	"BASH_ENV", "ENV", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", EnvSocket, "HOME", "XDG_*",
+}
+
+// hookEvents are the events of githooks(5). git 2.55 and later run no hook of
+// .git/config's hook.<name>.command for an event whose hook.<event>.enabled is false;
+// git 2.54 runs them whatever this setting is.
+var hookEvents = []string{
+	"applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "pre-merge-commit",
+	"prepare-commit-msg", "commit-msg", "post-commit", "pre-rebase", "post-checkout", "post-merge",
+	"pre-push", "pre-receive", "update", "proc-receive", "post-receive", "post-update",
+	"reference-transaction", "push-to-checkout", "pre-auto-gc", "post-rewrite",
+	"sendemail-validate", "fsmonitor-watchman", "p4-changelist", "p4-prepare-changelist",
+	"p4-post-changelist", "p4-pre-submit", "post-index-change",
 }
 
 // afterConfig are the git settings After gets through GIT_CONFIG_COUNT, which win
-// over every configuration file, the repository's .git/config included.
-var afterConfig = [][2]string{
+// over every configuration file, the repository's .git/config included. git reaches
+// a remote only over HTTPS: a local path or file:// URL would run the remote's
+// receivepack or uploadpack setting, and ssh core.sshCommand.
+var afterConfig = append([][2]string{
 	{"core.hooksPath", "/dev/null"},
 	{"core.fsmonitor", "false"},
 	{"core.attributesFile", "/dev/null"},
+	{"protocol.allow", "never"},
+	{"protocol.https.allow", "always"},
 	{"protocol.ext.allow", "never"},
 	{"submodule.recurse", "false"},
 	{"core.useReplaceRefs", "false"},
@@ -272,13 +296,22 @@ var afterConfig = [][2]string{
 	{"credential.helper", ""},
 	{"commit.gpgSign", "false"},
 	{"tag.gpgSign", "false"},
+}, hookSwitches()...)
+
+// hookSwitches are hook.<event>.enabled false for each of hookEvents.
+func hookSwitches() [][2]string {
+	var out [][2]string
+	for _, e := range hookEvents {
+		out = append(out, [2]string{"hook." + e + ".enabled", "false"})
+	}
+	return out
 }
 
 // afterEnv is env, NAME=value entries, without PATH, [afterDropped] and an entry
-// with no =, and with the variables that keep git from reading the system's and the
-// user's configuration, from asking at the terminal, from starting a pager or an
-// editor, and with [afterConfig].
-func afterEnv(env []string) []string {
+// with no =, and with HOME set to home, the variables that keep git from reading the
+// system's and the user's configuration, from asking at the terminal, from starting a
+// pager or an editor, and with [afterConfig].
+func afterEnv(env []string, home string) []string {
 	var out []string
 	for _, kv := range env {
 		name, _, ok := strings.Cut(kv, "=")
@@ -292,12 +325,27 @@ func afterEnv(env []string) []string {
 		}
 		out = append(out, kv)
 	}
-	out = append(out, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_PAGER=cat", "GIT_EDITOR=:",
+	out = append(out, "HOME="+home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_PAGER=cat", "GIT_EDITOR=:",
 		"GIT_CONFIG_COUNT="+strconv.Itoa(len(afterConfig)))
 	for i, kv := range afterConfig {
 		out = append(out, fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", i, kv[0]), fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i, kv[1]))
 	}
 	return out
+}
+
+// emptyHome makes After's HOME: a new directory under the system's temporary directory,
+// empty and of mode 0500, so neither After nor a file the agent left there is in it,
+// and nothing writes to it. remove removes it.
+func emptyHome() (dir string, remove func(), err error) {
+	dir, err = os.MkdirTemp("", "qory-after-home-")
+	if err != nil {
+		return "", nil, err
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		os.Remove(dir)
+		return "", nil, err
+	}
+	return dir, func() { os.Remove(dir) }, nil
 }
 
 // afterPath is path, a PATH, with only its absolute directories that exist and that
