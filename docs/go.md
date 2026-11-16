@@ -1322,7 +1322,9 @@ request asks the gateway for, for this session.
   session with no runtime leaves it nil. The program is a file inside `Dir`:
   `Command`, or, behind a `Wall`, the argument after the first `--` in `Args` when
   `Command` is `wall.HelperPath`, as qory starts the agent:
-  `/qory/qory run agent-env … -- <program>`. Without a `Wall`, `Command` is the
+  `/qory/qory run agent-env … -- <program>`. In that form the session checks only the
+  program after the first `--`: you decide the words before it, and they reach the
+  helper as you pass them. Without a `Wall`, `Command` is the
   program. Behind a `Wall` the enclosure sees the folder read-only at
   `/qory/runtime/<runtime>`, such as `/qory/runtime/claude`, and the session writes
   `Dir` as that path in `Command`, in each argument and in each variable value it
@@ -1338,21 +1340,34 @@ request asks the gateway for, for this session.
     that others cannot read and enter: `let others read and enter
     /opt/runtimes/claude/2.1.320 (chmod o+rx): behind a wall the runtime runs as a user
     that may not own it`. `Dir` may itself be a symbolic link: the session uses the
-    folder it leads to;
-  - the program lies outside `Dir`, is reached through a symbolic link below `Dir`, or
-    is not a regular file that others can read and execute;
-  - `Version` is empty, has more than 64 bytes, or has a character other than a
-    letter, a digit, `.`, `+` or `-`;
+    folder it leads to. Behind a `Wall`, `Dir` is, contains or lies inside `/qory` on
+    this machine, as given or as it leads;
+  - the program's path is not clean (`/opt/rt/x/../bin/claude`), lies outside `Dir`,
+    is reached through a symbolic link below `Dir`, is not a regular file that others
+    can read and execute, or has a second hard link;
+  - `Dir`, a folder between `Dir` and the program, or the program may be written by
+    its group or others (`chmod go-w`), or is owned by a user other than root and the
+    user that runs Forager;
+  - `Version` is empty, has more than 64 bytes, starts with a character other than a
+    letter or a digit, or has a character other than a letter, a digit, `.`, `+` or
+    `-`;
   - the runtime's name is not a lowercase letter followed by up to 63 lowercase
     letters, digits or `-`, the name of its folder in `/qory/runtime`.
+
+  The session does not check the folders above `Dir`: install the runtime under
+  folders that only root or the user that runs Forager can write.
 
   A `Dir` that is, contains or lies in a place a walled run can write fails the
   session before the runtime starts, with or without a `Wall`: `install the runtime in
   a folder no walled run can write: SessionSpec.RuntimeInstall.Dir …`. Those places are
   `Written` and the writable binds of the other walled runs still going, and behind a
-  `Wall` also the workspace and the run's writable binds. Behind a `Wall`, a mount or
-  a workspace that is, contains or lies inside `Dir` is
-  `mount_contains_forager_files`. See
+  `Wall` also the workspace and the run's writable binds. Without a `Wall` the session
+  lists the folder among the walled runs still going, read-only, until it ends, so a
+  walled run that starts meanwhile and binds it writable is `mount_shared_with_run`.
+  Behind a `Wall`, a mount or a workspace that is, contains or lies inside `Dir` is
+  `mount_contains_forager_files`, and on Linux `session.Exec` exits 125 when a mount
+  lies at or below `/qory/runtime/<runtime>` beside the folder's bind, as an image's
+  symbolic link on a mount's target can make it. See
   [the contract](../contracts/forager/v1/README.md#the-runtime).
 - `Declared` is the egress the harness declared. The record reports it as
   `harness_hosts`, a host that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`,

@@ -329,7 +329,7 @@ func (r *Run) start(ctx context.Context) (err error) {
 			engine = &v
 		}
 		docker, _ := spec.Wall.(*wall.Docker)
-		if r.listed, err = register(r.id, r.openBinds, engine, docker); err != nil {
+		if r.listed, err = register(r.id, r.openBinds, engine, docker, false); err != nil {
 			return err
 		}
 		undo = append(undo, r.listed.release)

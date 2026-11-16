@@ -5263,25 +5263,49 @@ join request for either mistake. The program is a file inside `Dir`: the command
 behind a wall, the argument after the first `--` when the command is Forager's helper at
 `/qory/qory`, which the caller starts the program through, as
 `qory run agent-env … -- <program>`. Without a wall the command itself is the program.
-`Run.Join` returns an error that starts with the fix, before the join request, for:
+In the helper's form the session checks only the program after the first `--`; the
+caller decides the words before it. `Run.Join` returns an error that starts with the
+fix, before the join request, for:
 
 - a `Dir` that is not absolute and clean, does not exist, is not a folder, or is a
   folder that others cannot read and enter. `Dir` may itself be a symbolic link: the
-  session uses the folder it leads to;
-- a program outside `Dir`, a program reached through a symbolic link below `Dir`, and a
-  program that is not a regular file that others can read and execute;
-- a `Version` that is empty, has more than 64 bytes, or has a character other than a
-  letter, a digit, `.`, `+` or `-`.
+  session uses the folder it leads to. Behind a wall, a `Dir` that is, contains or lies
+  inside `/qory` on the machine, as given or as it leads, is refused too: inside, one
+  path would stand for two;
+- a program path that is not clean, with a `.` or `..` name or a repeated or trailing
+  `/`; a program outside `Dir`; a program reached through a symbolic link below `Dir`;
+  and a program that is not a regular file that others can read and execute, or that
+  has a second hard link;
+- a `Dir`, a folder between `Dir` and the program, or the program, that its group or
+  others may write, or whose owner is neither root nor the user that runs Forager;
+- a `Version` that is empty, has more than 64 bytes, starts with a character other
+  than a letter or a digit, or has a character other than a letter, a digit, `.`, `+`
+  or `-`;
+- a runtime whose name is not a lowercase letter followed by up to 63 lowercase
+  letters, digits or `-`, the name of its folder in `/qory/runtime`, with or without
+  a wall.
+
+The session does not check the folders above `Dir`. The caller installs the runtime
+under folders that only root or the user that runs Forager can write, as qory does, so
+that no other user can replace `Dir` or a name on the way to it.
 
 No walled agent can change the program: a `Dir` that is, contains or lies in a place a
 walled run can write fails the session before the runtime starts. Those places are
 `SessionSpec.Written` and the writable binds of the other walled runs still going, and
-behind a wall also the workspace and the run's writable binds. Behind a wall, the
+behind a wall also the workspace and the run's writable binds. A session without a
+wall lists the folder `Dir` leads to, read-only, among the walled runs still going
+until it ends, so a walled run that starts meanwhile and binds it writable is
+`mount_shared_with_run`. Behind a wall, the
 enclosure binds the folder `Dir` leads to read-only at `/qory/runtime/<runtime>`,
 `/qory/runtime/claude` for Claude Code, and the session writes `Dir` as that path in
 the command, in each argument and in each variable value it prepares. In a walled run
 the folder is one of Forager's files (§The wall), so no mount and no workspace is,
-contains or lies inside it. `dev.qory.session.started` reports `Version` as `runtime_version`; Forager
+contains or lies inside it. An image's symbolic link can lead a mount the run lists
+to another path inside, so on Linux the helper's exec reads `/proc/self/mountinfo`
+before it starts the program, and exits 125 when a mount lies at `/qory`, at
+`/qory/runtime`, or at or below `/qory/runtime/<runtime>` beside the folder's bind.
+`dev.qory.session.started` reports `Version` as `runtime_version`, and without a wall
+in a run with a run key shows the program at `/qory/runtime/<runtime>` too; Forager
 does not run the program to check it. The caller keeps the folder unchanged until the
 run ends.
 

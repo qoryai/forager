@@ -93,11 +93,23 @@ func withExec(helper, unset []string, command string, args []string) (string, []
 // status, as a shell does: the program's, 2 for arguments it cannot read, 127 for a
 // program it does not find, or finds only through . or an empty entry of PATH, and
 // 126 for one it cannot execute, its reason written to stderr.
+//
+// On Linux, before it starts the program, Exec reads /proc/self/mountinfo and returns
+// 125, with a line on stderr that starts with the fix, when the table cannot be read,
+// or when a mount lies at /qory, at /qory/runtime, or at or below
+// /qory/runtime/<runtime> beside the one bind of the runtime's installed folder there:
+// an image's symbolic link can lead a listed mount over the folder.
 func Exec(args []string, stderr io.Writer) int {
 	names, argv, err := parseExec(args)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
+	}
+	// On Linux no mount but the runtime's installed folder may lie at or below
+	// /qory/runtime/<runtime>, so the program there is the one the caller installed.
+	if err := runtimeMounts(); err != nil {
+		fmt.Fprintln(stderr, "exec:", accesskey.ShownError(err))
+		return 125
 	}
 	// The socket is the session's, whatever names the runtime has unset.
 	addr := os.Getenv(EnvSocket)

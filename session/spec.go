@@ -250,7 +250,8 @@ type SessionSpec struct {
 	// with none refuses it: [Run.Join] returns an error. The program is a file inside
 	// Dir: Command, or, behind a Wall, the argument after the first -- in Args when
 	// Command is [wall.HelperPath], Forager's helper, which the caller starts the
-	// program through. Behind a Wall the enclosure sees Dir read-only at
+	// program through; the words before that -- are the caller's and are not checked.
+	// Behind a Wall the enclosure sees Dir read-only at
 	// /qory/runtime/<runtime>, the Runtime's name, and the session writes Dir as that
 	// path in Command, in each argument and in each variable value it prepares.
 	// dev.qory.session.started reports Version as runtime_version.
@@ -440,12 +441,17 @@ type SessionSpec struct {
 // RuntimeInstall is a runtime's program as the caller installed it on this machine.
 // [Run.Join] returns an error, before the join request, for a Dir that is not
 // absolute and clean, missing, not a folder, or a folder others cannot read and
-// enter; for a program, as [SessionSpec.RuntimeInstall] says which, that is not inside
-// Dir, that is reached through a symbolic link below Dir, or that is not a regular
-// file others can read and execute; and for an empty Version, one over 64 bytes, or
-// one with a character outside [0-9A-Za-z.+-]. Dir may itself be a symbolic link:
-// the session uses the folder it leads to. The caller keeps the folder unchanged
-// until the run ends.
+// enter, and behind a Wall for one that is, contains or lies inside /qory; for a
+// program, as [SessionSpec.RuntimeInstall] says which, whose path is not clean, that
+// is not inside Dir, that is reached through a symbolic link below Dir, that is not a
+// regular file others can read and execute, or that has a second hard link; for Dir,
+// a folder on the way to the program or the program when its group or others may
+// write it, or its owner is neither root nor the user of this process; and for an
+// empty Version, one over 64 bytes, or one that does not start with a letter or a
+// digit or has a character outside [0-9A-Za-z.+-]. Dir may itself be a symbolic link:
+// the session uses the folder it leads to. The folders above Dir are not checked:
+// the caller installs Dir under folders only root or this process's user can write,
+// and keeps the folder unchanged until the run ends.
 type RuntimeInstall struct {
 	// Dir is the folder, an absolute path of this machine: /opt/runtimes/claude/2.1.320.
 	Dir string

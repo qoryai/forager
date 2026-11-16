@@ -255,8 +255,9 @@ func newHookRun(t *testing.T, remote bool) *hookRun {
 // TestTheRuntimeEventsOfARunWithARunKeyShowNeutralPaths pins the runtime events of a run
 // with a run key: cwd of runtime.started and prompt of runtime.prompt_submitted have
 // /workspace for the working directory and <run>, <home> and <inputs>, in the record
-// and on the link, and a tool's input keeps its path; and a local run's have the paths
-// as the runtime wrote them.
+// and on the link, and a tool's input keeps its path; session.started's command is the
+// installed program at /qory/runtime/claude, without a wall too; and a local run's
+// have the paths as the runtime wrote them.
 func TestTheRuntimeEventsOfARunWithARunKeyShowNeutralPaths(t *testing.T) {
 	for _, remote := range []bool{true, false} {
 		h := newHookRun(t, remote)
@@ -265,10 +266,15 @@ func TestTheRuntimeEventsOfARunWithARunKeyShowNeutralPaths(t *testing.T) {
 			t.Fatal(err)
 		}
 		cwd, prompt := h.sp.Dir+"/sub", "Read "+h.input+" and "+h.home+"/CLAUDE.md in "+h.sp.Dir+", and log to "+h.runDir+"/x.log."
+		command := h.sp.Command
 		if remote {
 			cwd, prompt = "/workspace/sub", "Read <inputs>/issue.md and <home>/CLAUDE.md in /workspace, and log to <run>/x.log."
+			command = "/qory/runtime/claude/bin/claude"
 		}
 		for where, evs := range map[string][]map[string]any{"the record": events(t, res), "the link": h.g.Events()} {
+			if got := sessionStarted(t, evs)["command"]; got != command {
+				t.Errorf("remote %v, %s: session.started's command %v, want %s", remote, where, got, command)
+			}
 			started, prompted, tools := ofType(evs, "dev.qory.runtime.started"), ofType(evs, "dev.qory.runtime.prompt_submitted"), ofType(evs, "dev.qory.runtime.tool_started")
 			if len(started) != 1 || data(started[0])["cwd"] != cwd {
 				t.Errorf("remote %v, %s: runtime.started %v, want cwd %s", remote, where, started, cwd)

@@ -558,18 +558,23 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// as the enclosure sees it. What the server, the session or the machine set is
 	// theirs, and left as it is. Any other run sees each place at its path.
 	shown, inside := plan, func(s string) string { return s }
+	var insidePairs []pathPair
 	if r.byReference {
-		if shown, inside, err = plan.atWorkspace(); err != nil {
+		if shown, _, err = plan.atWorkspace(); err != nil {
 			return fail(err)
 		}
+		insidePairs = append(insidePairs, pathPair{plan.root, workspaceInside})
 	}
 	// Behind a wall the installed runtime's folder is at /qory/runtime/<runtime>, so
 	// the program, and any path into the folder Forager puts inside, is written there.
-	// No place of the run is, holds or lies inside the folder (checkMounts), so the
-	// two rewrites never meet.
+	// Both rewrites go in one pass, the longer path first, so no text written in a
+	// path's place is rewritten again.
 	if spec.Wall != nil && spec.install != nil {
-		workspace := inside
-		inside = func(s string) string { return workspace(spec.install.rewrite(s)) }
+		insidePairs = append(insidePairs, spec.install.pairs()...)
+	}
+	if len(insidePairs) > 0 {
+		slices.SortStableFunc(insidePairs, func(a, b pathPair) int { return len(b.from) - len(a.from) })
+		inside = func(s string) string { return replacePaths(s, insidePairs, argPaths) }
 	}
 	// Without a wall the session inherits the starting process's environment, which may
 	// contain the variables the machine's credentials are read from: their values stay
@@ -645,6 +650,20 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			return fail(fmt.Errorf("install the runtime in a folder no walled run can write: SessionSpec.RuntimeInstall.Dir %s: %w", pathShown(spec.install.dir), err))
 		}
 	}
+	// A run without a wall has no entry among the walled runs still going: the session
+	// lists the installed runtime's folder there, read-only, until it ends, so no
+	// walled run that starts meanwhile binds the folder writable.
+	if spec.Wall == nil && installBinds != nil {
+		listed, err := register(r.id, installBinds, nil, nil, true)
+		if err != nil {
+			var refused *Refusal
+			if !errors.As(err, &refused) {
+				err = fmt.Errorf("install the runtime in a folder no walled run can write: SessionSpec.RuntimeInstall.Dir %s: %w", pathShown(spec.install.dir), err)
+			}
+			return fail(err)
+		}
+		defer listed.release()
+	}
 	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
 	denied, err := deniedVariables(rt, spec.Wall != nil)
 	if err != nil {
@@ -672,8 +691,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	}
 	prepared.Command, prepared.Args, prepared.Env = inside(prepared.Command), insideAll(prepared.Args, inside), insideValues(prepared.Env, inside)
 	if r.remote != nil {
-		neutral = r.neutralPaths(spec.HarnessHome, spec.InputsDir, "", inside)
-		neutralText = r.neutralPaths(spec.HarnessHome, spec.InputsDir, spec.Dir, inside)
+		// The installed runtime's folder is shown at /qory/runtime/<runtime>, walled
+		// or not, so no path of this machine's is in the event.
+		var installPairs []pathPair
+		if spec.install != nil {
+			installPairs = spec.install.pairs()
+		}
+		neutral = r.neutralPaths(spec.HarnessHome, spec.InputsDir, "", inside, installPairs...)
+		neutralText = r.neutralPaths(spec.HarnessHome, spec.InputsDir, spec.Dir, inside, installPairs...)
 	}
 	// A value the runtime's preparation sets for one of key.Others is left out, walled
 	// or not; behind a wall the name is then unset inside.
@@ -1231,9 +1256,10 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 // and, when it differs, at their path inside the enclosure. Of two paths where one
 // contains the other, the longer is replaced, and the text written in its place is not
 // replaced again. Join refuses / as the home or the inputs of a run with a run key
-// (checkNeutral).
-func (r *Run) neutralPaths(home, inputs, dir string, inside func(string) string) func(string) string {
-	pairs := []pathPair{{r.dir, "<run>"}}
+// (checkNeutral). extra are more paths, each with the text written in its place, such
+// as the installed runtime's folder.
+func (r *Run) neutralPaths(home, inputs, dir string, inside func(string) string, extra ...pathPair) func(string) string {
+	pairs := append([]pathPair{{r.dir, "<run>"}}, extra...)
 	for _, p := range []pathPair{{home, "<home>"}, {inputs, "<inputs>"}, {dir, workspaceInside}} {
 		if p.from == "" {
 			continue

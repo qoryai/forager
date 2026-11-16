@@ -210,8 +210,9 @@ func foragerFiles(spec runSpec) []foragerFile {
 		foragerFile{filepath.Join(os.TempDir(), link.ToolDirPrefix+"*"), "where the tools' sockets are made"},
 		foragerFile{socket.Dirs(), "where the runs' record sockets are made"},
 		foragerFile{wall.TempDirs(), "where the Docker wall's environment files are made"})
-	// The runtime's installed folder is bound read-only on its own: a place that is,
-	// contains or lies inside it would bind it again, writable or at another path.
+	// The runtime's installed folder has a read-only bind at /qory/runtime/<runtime>: a
+	// place that is, contains or lies inside it would bind it again, writable or at
+	// another path.
 	if spec.install != nil {
 		out = append(out, foragerFile{spec.install.dir, "the runtime's installed folder"})
 	}
@@ -988,10 +989,11 @@ func firstWallBinds(w wall.Wall) ([]bindSource, error) {
 	return bindSources(binds)
 }
 
-// runtimeBinds is the bind of a walled session's installed runtime folder, read-only,
-// as a bind source: none for a session with no runtime or no wall.
+// runtimeBinds is the bind of a session's installed runtime folder, read-only, as a
+// bind source: none for a session with no runtime. Without a wall nothing binds the
+// folder, and the source lists it among the walled runs still going.
 func runtimeBinds(spec runSpec) ([]bindSource, error) {
-	if spec.Wall == nil || spec.install == nil {
+	if spec.install == nil {
 		return nil, nil
 	}
 	src, err := source(spec.install.resolved, "the runtime's installed folder "+pathShown(spec.install.dir), kindRuntime, false)

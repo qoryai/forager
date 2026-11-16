@@ -772,6 +772,14 @@ is `/qory/runtime/claude/bin/claude` inside. Claude Code's descriptor sets
 - Let others read and enter the folder and read and execute the program
   (`chmod o+rx`): behind a wall the runtime runs as a user that may not own them.
   `Join` returns an error otherwise.
+- Give the folder, each folder down to the program, and the program to root or to the
+  user that runs Forager, with no write for the group or others (`chmod go-w`), and
+  give the program no second hard link. `Join` returns an error otherwise.
+- Install the folder under folders that only root or the user that runs Forager can
+  write. `Join` does not check the folders above `Dir`, so qory, or any other caller,
+  keeps them that way.
+- Behind a wall, keep `Dir` away from `/qory` on the node: a `Dir` that is, contains or
+  lies inside it is refused.
 - A `Dir` that is, contains or lies in a place a walled run can write fails the
   session before the runtime starts: `SessionSpec.Written`, a writable bind of another
   walled run still going, the workspace or a writable bind of this run's.
@@ -780,6 +788,10 @@ is `/qory/runtime/claude/bin/claude` inside. Claude Code's descriptor sets
 - The wall keeps the helper, the bundle and the runtime's folder under `/qory`, so
   `wall.Docker` refuses a mount whose path inside, its `Target` or else its `Path`, is,
   contains or lies under `/qory`.
+- An image's symbolic link on a mount's target can still lead the mount there. On
+  Linux `session.Exec` reads `/proc/self/mountinfo` before it starts the program and
+  exits 125 when a mount lies at `/qory`, at `/qory/runtime`, or at or below
+  `/qory/runtime/<runtime>` beside the folder's bind.
 
 ### The measure of the enclosure
 

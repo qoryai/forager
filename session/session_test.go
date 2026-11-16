@@ -102,8 +102,8 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	os.Setenv("XDG_STATE_HOME", state)
-	// The fake runtime is this binary, installed as a runtime is: in a folder of its
-	// own, outside every test's places.
+	// The fake runtime is this binary, installed as a runtime is: in
+	// $XDG_STATE_HOME/runtime/<version>, outside every test's places.
 	if err := install(filepath.Join(state, "runtime", installVersion)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -334,15 +334,14 @@ func install(dir string) error {
 	if err != nil {
 		return err
 	}
+	// A copy, not a hard link: the session refuses a program with a second name.
 	program := filepath.Join(bin, "claude")
-	if err := os.Link(self, program); err != nil {
-		b, err := os.ReadFile(self)
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(program, b, 0o755); err != nil {
-			return err
-		}
+	b, err := os.ReadFile(self)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(program, b, 0o755); err != nil {
+		return err
 	}
 	if err := os.Chmod(program, 0o755); err != nil {
 		return err

@@ -1,37 +1,41 @@
 package session_test
 
 import (
+	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/wall"
 )
 
-// installAt installs this binary as a runtime is installed, in dir/rt/bin/claude, with
-// dir/rt a folder others can read and enter, and returns dir/rt.
+// installAt installs this binary as a runtime is installed, in dir/rt/bin/claude, a
+// copy with no other hard link, with dir/rt a folder others can read and enter and
+// only its owner can write, and returns dir/rt.
 func installAt(t *testing.T, dir string) string {
 	t.Helper()
 	rt := filepath.Join(dir, "rt")
 	bin := mkdirs(t, filepath.Join(rt, "bin"))
-	for _, d := range []string{rt, bin} {
-		if err := os.Chmod(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
+	b, err := os.ReadFile(installedProgram)
+	if err != nil {
+		t.Fatal(err)
 	}
 	program := filepath.Join(bin, "claude")
-	if err := os.Link(installedProgram, program); err != nil {
-		b, err := os.ReadFile(installedProgram)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(program, b, 0o755); err != nil {
+	if err := os.WriteFile(program, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The mode the files are made with passes through the umask.
+	for _, p := range []string{rt, bin, program} {
+		if err := os.Chmod(p, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -83,6 +87,38 @@ func TestJoinRefusesARuntimeInstallItCannotStart(t *testing.T) {
 		"a program out through ..": {func(_ *testing.T, sp *runSpec) {
 			sp.Command = sp.RuntimeInstall.Dir + "/../../" + filepath.Base(sp.RuntimeInstall.Dir)
 		}, "set SessionSpec.Command to a program inside SessionSpec.RuntimeInstall.Dir"},
+		// x leads into the workspace: the clean path is the installed program, and the
+		// path as given would start the workspace's file.
+		"a program through a link and ..": {func(t *testing.T, sp *runSpec) {
+			ws := mkdirs(t, filepath.Join(sp.Dir, "x"))
+			if err := os.Symlink(ws, filepath.Join(sp.RuntimeInstall.Dir, "x")); err != nil {
+				t.Fatal(err)
+			}
+			sp.Command = sp.RuntimeInstall.Dir + "/x/../bin/claude"
+		}, "set SessionSpec.Command to a clean path"},
+		"a program with a repeated /": {func(_ *testing.T, sp *runSpec) {
+			sp.Command = sp.RuntimeInstall.Dir + "/bin//claude"
+		}, "set SessionSpec.Command to a clean path"},
+		"a folder others may write": {func(t *testing.T, sp *runSpec) {
+			if err := os.Chmod(sp.RuntimeInstall.Dir, 0o777); err != nil {
+				t.Fatal(err)
+			}
+		}, `remove the group's and others' write permission from "<dir>"`},
+		"a folder on the way its group may write": {func(t *testing.T, sp *runSpec) {
+			if err := os.Chmod(filepath.Dir(sp.Command), 0o775); err != nil {
+				t.Fatal(err)
+			}
+		}, `remove the group's and others' write permission from "<dir>/bin"`},
+		"a program others may write": {func(t *testing.T, sp *runSpec) {
+			if err := os.Chmod(sp.Command, 0o777); err != nil {
+				t.Fatal(err)
+			}
+		}, `remove the group's and others' write permission from "<dir>/bin/claude"`},
+		"a program with a second hard link": {func(t *testing.T, sp *runSpec) {
+			if err := os.Link(sp.Command, filepath.Join(t.TempDir(), "claude")); err != nil {
+				t.Fatal(err)
+			}
+		}, `copy "<dir>/bin/claude" to a file with no other hard link`},
 		"a missing program": {func(_ *testing.T, sp *runSpec) {
 			sp.Command = filepath.Join(sp.RuntimeInstall.Dir, "bin", "none")
 		}, "install the runtime's program at"},
@@ -121,15 +157,22 @@ func TestJoinRefusesARuntimeInstallItCannotStart(t *testing.T) {
 		"a version of 65 bytes": {func(_ *testing.T, sp *runSpec) {
 			sp.RuntimeInstall.Version = strings.Repeat("1", 65)
 		}, "set SessionSpec.RuntimeInstall.Version to the installed version"},
+		"a version of -":  {func(_ *testing.T, sp *runSpec) { sp.RuntimeInstall.Version = "-" }, "set SessionSpec.RuntimeInstall.Version to the installed version"},
+		"a version of ..": {func(_ *testing.T, sp *runSpec) { sp.RuntimeInstall.Version = ".." }, "set SessionSpec.RuntimeInstall.Version to the installed version"},
+		"a folder with a NUL": {func(_ *testing.T, sp *runSpec) {
+			sp.RuntimeInstall.Dir += "\x00x"
+		}, "set SessionSpec.RuntimeInstall.Dir to an absolute, clean path"},
 		"a runtime whose name no folder has": {func(_ *testing.T, sp *runSpec) { sp.Runtime = runtimes.Bare("Other") }, "name the runtime with a lowercase letter"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sp := spec(t, "FAKE_EXIT=0")
 			useInstall(&sp, installAt(t, t.TempDir()))
+			dir := sp.RuntimeInstall.Dir
 			c.change(t, &sp)
 			res, err := run(t.Context(), sp)
-			if err == nil || !strings.HasPrefix(err.Error(), c.want) {
-				t.Fatalf("got %+v, %v; want an error that starts %q", res, err, c.want)
+			want := strings.ReplaceAll(c.want, "<dir>", dir)
+			if err == nil || !strings.HasPrefix(err.Error(), want) {
+				t.Fatalf("got %+v, %v; want an error that starts %q", res, err, want)
 			}
 			var r *session.Refusal
 			if errors.As(err, &r) {
@@ -219,7 +262,7 @@ func TestAWalledRunStartsTheRuntimeFromTheBoundFolder(t *testing.T) {
 	}
 }
 
-// TestAPlaceOverTheRuntimeFolderIsNoRun pins the walled run's own places against the
+// TestAPlaceOverTheRuntimeFolderIsNoRun pins the places a walled run lists against the
 // installed runtime's folder: a mount that contains the folder or lies inside it,
 // either mode, and a writable mount that contains a link on the way to it, are
 // mount_contains_forager_files, and the wall wraps nothing.
@@ -419,5 +462,153 @@ func TestAWalledRuntimeMayStartThroughTheHelper(t *testing.T) {
 				t.Error("the enclosure was wrapped")
 			}
 		})
+	}
+}
+
+// TestJoinAcceptsTheEdgesOfARuntimeInstall pins what passes beside the refusals: a
+// version of exactly 64 bytes, and a folder and program owned by this user with no
+// write for the group or others. A folder of another user's is refused; the test
+// makes one only when it runs as root, since chown needs root.
+func TestJoinAcceptsTheEdgesOfARuntimeInstall(t *testing.T) {
+	sp := spec(t, "FAKE_EXIT=0")
+	useInstall(&sp, installAt(t, t.TempDir()))
+	sp.RuntimeInstall.Version = "2" + strings.Repeat("0", 63)
+	if res, err := run(t.Context(), sp); err != nil || res.ExitCode != 0 {
+		t.Fatalf("a version of 64 bytes: %+v, %v", res, err)
+	}
+
+	if os.Getuid() != 0 {
+		t.Skip("a folder of another user's needs chown, which needs root")
+	}
+	sp = spec(t, "FAKE_EXIT=0")
+	useInstall(&sp, installAt(t, t.TempDir()))
+	if err := os.Chown(sp.RuntimeInstall.Dir, 65534, 65534); err != nil {
+		t.Fatal(err)
+	}
+	want := `make root or the user that runs Forager the owner of "` + sp.RuntimeInstall.Dir + `"`
+	if err := runErr(sp); err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("a folder of another user's: %v; want an error that starts %q", err, want)
+	}
+}
+
+// TestAWalledRunRefusesAFolderAroundQory pins the folder against /qory, where the
+// enclosure has Forager's helper and the runtimes' folders: behind a wall a folder
+// that is, contains or lies inside /qory here is refused, since one path inside would
+// stand for two. / contains /qory on every machine.
+func TestAWalledRunRefusesAFolderAroundQory(t *testing.T) {
+	w := &openWall{}
+	sp := walledSpec(t, w)
+	sp.Mounts = []wall.Mount{{Path: sp.Dir}}
+	sp.RuntimeInstall = &session.RuntimeInstall{Dir: "/", Version: "2.1.320"}
+	sp.Command = "/bin/sh"
+	want := "install the runtime in a folder outside /qory and set SessionSpec.RuntimeInstall.Dir to it"
+	if err := runErr(sp); err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("got %v; want an error that starts %q", err, want)
+	}
+	if w.wrapped {
+		t.Error("the enclosure was wrapped")
+	}
+}
+
+// TestAWalledRunWritesANestedLinkOnce pins the rewrite of a folder that is a link to
+// a folder inside it: the folder as given and as resolved are written at
+// /qory/runtime/claude in one pass, the longer path first, so the program is
+// /qory/runtime/claude/bin/claude, not a path inside it.
+func TestAWalledRunWritesANestedLinkOnce(t *testing.T) {
+	t.Setenv("QORY_TEST_HOST_ONLY", "1")
+	root := t.TempDir()
+	dir := installAt(t, root)
+	// root/current leads to root/rt: the folder as resolved lies inside the folder's
+	// parent, and the folder as given is root/current.
+	link := filepath.Join(root, "current")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &openWall{}
+	sp := walledSpec(t, w)
+	sp.Mounts = []wall.Mount{{Path: sp.Dir}}
+	useInstall(&sp, link)
+	sp.Args = append(sp.Args, resolved+"/share/notes.md")
+	if res, err := run(t.Context(), sp); err != nil || res.ExitCode != 0 {
+		t.Fatalf("%+v, %v", res, err)
+	}
+	if !slices.Contains(w.got.Args, "/qory/runtime/claude/bin/claude") || !slices.Contains(w.got.Args, "/qory/runtime/claude/share/notes.md") {
+		t.Errorf("the launch inside is %q %q", w.got.Command, w.got.Args)
+	}
+}
+
+// TestAnUnwalledRuntimeIsListedAmongTheWalledRuns pins the entry of a session without
+// a wall: while it runs, its installed folder is in the registry of walled runs,
+// read-only, so a walled run that mounts the folder's parent writable is
+// mount_shared_with_run; once it ends, its entry is gone and that run starts.
+func TestAnUnwalledRuntimeIsListedAmongTheWalledRuns(t *testing.T) {
+	root := t.TempDir()
+	dir := installAt(t, root)
+	wait := filepath.Join(t.TempDir(), "go")
+	sp := spec(t, "FAKE_EXIT=0", "FAKE_WAIT="+wait)
+	useInstall(&sp, dir)
+	sp.RunID = event.NewRunID()
+	s := start(sp)
+	defer func() {
+		os.WriteFile(wait, nil, 0o600)
+		<-s.done
+	}()
+	entry := filepath.Join(os.Getenv("XDG_STATE_HOME"), "qory-forager", "walled", sp.RunID)
+	for end := time.Now().Add(30 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(entry); err == nil {
+			break
+		}
+		select {
+		case <-s.done:
+			t.Fatalf("the session ended: %+v, %v", s.res, s.err)
+		default:
+		}
+		if time.Now().After(end) {
+			t.Fatal("the session wrote no entry among the walled runs")
+		}
+	}
+	b, err := os.ReadFile(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listed struct {
+		Unwalled bool `json:"unwalled"`
+		Binds    []struct {
+			Kind     string `json:"kind"`
+			Writable bool   `json:"writable"`
+		} `json:"binds"`
+	}
+	if err := json.Unmarshal(b, &listed); err != nil || !listed.Unwalled || len(listed.Binds) != 1 || listed.Binds[0].Kind != "runtime" || listed.Binds[0].Writable {
+		t.Errorf("the entry is %s (%v)", b, err)
+	}
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := walledSpec(t, &openWall{})
+	other.Mounts, other.Dir = []wall.Mount{{Path: root}}, root
+	r := refusalOf(t, "mount_shared_with_run", runErr(other))
+	if !strings.Contains(r.Detail, "contains the runtime's installed folder "+resolved+" of the run "+sp.RunID+", which is still going") {
+		t.Errorf("detail %q", r.Detail)
+	}
+
+	if err := os.WriteFile(wait, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	<-s.done
+	if s.err != nil || s.res.ExitCode != 0 {
+		t.Fatalf("the session: %+v, %v", s.res, s.err)
+	}
+	if _, err := os.Stat(entry); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the entry is still there: %v", err)
+	}
+	other = walledSpec(t, &openWall{})
+	other.Mounts, other.Dir = []wall.Mount{{Path: root}}, root
+	if res, err := run(t.Context(), other); err != nil || res.ExitCode != 0 {
+		t.Errorf("the walled run after the session: %+v, %v", res, err)
 	}
 }

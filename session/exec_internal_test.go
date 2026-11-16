@@ -1,9 +1,11 @@
 package session
 
 import (
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -96,5 +98,36 @@ func TestSendMeasureSendsOneRecord(t *testing.T) {
 	defer mu.Unlock()
 	if len(got) != 1 || got[0].Source != descriptor.SourceMeasure || !maps.Equal(got[0].Record, map[string]any{"peak_memory_bytes": float64(123)}) {
 		t.Errorf("the socket read %+v; want one measure record with peak_memory_bytes 123", got)
+	}
+}
+
+// TestCheckRuntimeMountsRefusesAMountOverTheRuntime pins the check of the helper's exec
+// on the mount table: the wall's binds, the runtime's folder once for each runtime
+// among them, pass, and so does a mount point with an escaped space; a mount at /qory,
+// at /qory/runtime, a second one at a runtime's folder, or one below it, fails with a
+// line that starts with the fix and has the mount point.
+func TestCheckRuntimeMountsRefusesAMountOverTheRuntime(t *testing.T) {
+	line := func(id int, point string) string {
+		return fmt.Sprintf("%d 1 0:5%d /src%d %s ro,relatime - ext4 /dev/sda1 rw\n", id, id, id, point)
+	}
+	base := line(1, "/") + line(2, "/qory/qory") + line(3, "/qory/hooks") + line(4, "/qory/runtime/claude") +
+		line(5, "/workspace") + line(6, "/qory/runtime/codex") + line(7, `/work\040space`) + line(8, "/qory/runtimes")
+	if err := checkRuntimeMounts(base); err != nil {
+		t.Fatalf("the wall's binds: %v", err)
+	}
+	for _, c := range []struct{ name, point, want string }{
+		{"a mount at /qory", "/qory", "/qory"},
+		{"a mount at /qory/runtime", "/qory/runtime", "/qory/runtime"},
+		{"a second mount at the folder", "/qory/runtime/claude", "/qory/runtime/claude"},
+		{"a mount below the folder", "/qory/runtime/claude/bin", "/qory/runtime/claude/bin"},
+		{"an escaped mount below the folder", `/qory/runtime/claude/my\040bin`, "/qory/runtime/claude/my bin"},
+	} {
+		err := checkRuntimeMounts(base + line(9, c.point))
+		if err == nil || !strings.HasPrefix(err.Error(), "remove the image's symbolic link that leads a mount to "+c.want+":") {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+	if got := unescapeMountPoint(`/a\134b\011c\04`); got != "/a\\b\tc\\04" {
+		t.Errorf("unescapeMountPoint: %q", got)
 	}
 }

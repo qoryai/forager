@@ -23,6 +23,18 @@ func TestAnExpressionIsRefused(t *testing.T) {
 	}
 }
 
+// TestARuntimeVersionIsRefused pins that a descriptor pins no runtime version: Parse
+// refuses runtime_version, which the schema no longer has.
+func TestARuntimeVersionIsRefused(t *testing.T) {
+	bad, err := fs.ReadFile(contracts.FS, "fixtures/invalid/descriptor-runtime-version.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := descriptor.Parse("descriptor.yaml", bad); err == nil || !strings.Contains(err.Error(), "runtime_version") {
+		t.Errorf("a descriptor with runtime_version: %v", err)
+	}
+}
+
 // TestMatchIsEqualityOrPresenceOnly pins the match grammar: equality on strings,
 // numbers and booleans across YAML and JSON decodings, presence with {present: true},
 // nested paths, and no match on a missing path.

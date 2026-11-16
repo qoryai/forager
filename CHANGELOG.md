@@ -10,6 +10,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Delete `runtime_version` from each runtime descriptor of yours: the descriptor schema
+  now refuses it, so `descriptor.Parse` returns an error for a descriptor that has it.
+  The version comes from `SessionSpec.RuntimeInstall.Version`.
 - A gateway built before this change fails a run with `run_configuration_invalid` when
   the run configuration's API credential has `resets_at`, `schedule_resets_at` or
   `pause_for_s`, and ignores the run configuration's `resume`. It also ends a run `batch_refused` for a batch with
@@ -1899,13 +1902,21 @@ release may change what an existing document does, and says so under Upgrading.
   session starts the program from that folder, never from the image, so a run image
   needs no runtime. `Command`, or behind a wall the argument after the first `--` in
   `Args` when `Command` is `wall.HelperPath`, is a file inside `RuntimeInstall.Dir`, such
-  as `/opt/runtimes/claude/2.1.320/bin/claude`. Let others read and enter the folder and
-  read and execute the program (`chmod o+rx`), and keep the folder unchanged until the
-  run ends. `Join` returns an error that starts with the fix, before the join request,
-  for a session with a `Runtime` and no `RuntimeInstall`, for a `RuntimeInstall` on a
-  session with no runtime, and for a folder, a program or a version it refuses, as
-  `docs/go.md` lists under The spec. Before, the session started `Command` as given,
-  behind a wall from the image.
+  as `/opt/runtimes/claude/2.1.320/bin/claude`, by a clean path. Let others read and
+  enter the folder and read and execute the program (`chmod o+rx`). Give the folder,
+  each folder down to the program and the program to root or to the user that runs
+  Forager, with no write for the group or others (`chmod go-w`), give the program no
+  second hard link, and install the folder under folders only those two users can
+  write. Behind a wall, keep the folder away from `/qory` on the machine. Keep the
+  folder unchanged until the run ends. `Join` returns an error that starts with the
+  fix, before the join request, for a session with a `Runtime` and no
+  `RuntimeInstall`, for a `RuntimeInstall` on a session with no runtime, and for a
+  folder, a program or a version it refuses, as `docs/go.md` lists under The spec. A
+  version starts with a letter or a digit. Before, the session started `Command` as
+  given, behind a wall from the image.
+- Stop calling `Version` of a `runtimes.Runtime`, and remove it from a runtime written
+  in Go: the interface no longer has it. Read the version you installed from your
+  `SessionSpec.RuntimeInstall.Version`.
 - Return `[]runtimes.Event` from `Map` in a runtime written in Go: `Runtime.Map` returns
   the events of one record in order, each with its type and data, and nil for none.
   Before, it returned one type, its data and `ok`.
@@ -2495,6 +2506,19 @@ release may change what an existing document does, and says so under Upgrading.
   `mount_contains_forager_files`, and the registry of walled runs lists it among the
   wall's binds. With or without a wall, a folder that is, contains or lies in a place a
   walled run can write fails the session before the runtime starts.
+- A session without a wall lists its runtime's installed folder in the registry of
+  walled runs, read-only, from before the runtime starts until the session ends. A
+  walled run that starts meanwhile and binds the folder, or a folder that contains it,
+  writable is `mount_shared_with_run`. Such an entry is removed as soon as its session
+  is gone, since no container outlives it.
+- On Linux `session.Exec` reads `/proc/self/mountinfo` before it starts the program,
+  and exits 125 with a line that starts with the fix when the table cannot be read, or
+  when a mount lies at `/qory`, at `/qory/runtime`, or at or below
+  `/qory/runtime/<runtime>` beside the bind of the runtime's installed folder. An
+  image's symbolic link on a mount's target can lead the mount there.
+- In a run with a run key, `dev.qory.session.started` shows the runtime's installed
+  folder as `/qory/runtime/<runtime>` without a wall too, so its `command` is
+  `/qory/runtime/claude/bin/claude`, not the path on the machine.
 - Behind a separate gateway, every forwarder of the session holds a connection it took
   while the gateway cannot be reached: it keeps the agent's connection open, writes
   nothing to it, and dials the gateway again for up to 120 seconds, waiting 250 ms after
