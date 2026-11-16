@@ -355,7 +355,7 @@ func TestDockerQoryLinkPausesAndResumesUnderAnotherKey(t *testing.T) {
 		}
 	}
 	if !slices.ContainsFunc(cmdlines, func(l string) bool {
-		return strings.HasPrefix(l, "cmdline=claude ") && strings.Contains(l, " --resume "+sessionID)
+		return strings.HasPrefix(l, "cmdline=/qory/runtime/claude/bin/claude ") && strings.Contains(l, " --resume "+sessionID)
 	}) {
 		t.Errorf("no process of run 2 is Claude Code with --resume %s: %q", sessionID, cmdlines)
 	}

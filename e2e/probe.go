@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/wall"
 	"golang.org/x/term"
 )
 
@@ -96,6 +98,11 @@ type report struct {
 	// and PreparedErr why there was nothing to read.
 	Prepared    *preparedReport `json:"prepared,omitempty"`
 	PreparedErr string          `json:"prepared_err"`
+	// RuntimeWrites are the attempts on the runtime's installed folder and on Forager's
+	// helper that succeeded, each by what it tried: empty when every one failed.
+	// RuntimeProgram says the probe found its program in the folder after them.
+	RuntimeWrites  []string `json:"runtime_writes"`
+	RuntimeProgram bool     `json:"runtime_program"`
 	// Workdir is the probe's working directory, and HostWorkspace whether the
 	// workspace's path on the machine exists inside.
 	Workdir       string `json:"workdir"`
@@ -324,15 +331,14 @@ func probeReadOnly() *readOnlyReport {
 	r.WriteExit = exitCode(cmd.Run(), &stderr)
 	r.WriteStderr = strings.TrimSpace(stderr.String())
 	if os.Getenv("PROBE_DOCKER") == "1" {
-		r.InnerExit, r.InnerOutput = innerWrite(false)
-		r.PrivExit, r.PrivOutput = innerWrite(true)
-		for _, line := range strings.Split(r.PrivOutput, "\n") {
-			if rest, ok := strings.CutPrefix(line, remountPrefix); ok {
-				r.PrivRemount = rest
-			}
-			if rest, ok := strings.CutPrefix(line, setattrPrefix); ok {
-				r.PrivSetattr = rest
-			}
+		wd, err := os.Getwd()
+		if err != nil {
+			r.InnerExit, r.InnerOutput = -1, err.Error()
+			r.PrivExit, r.PrivOutput = -1, err.Error()
+		} else {
+			r.InnerExit, r.InnerOutput = innerWrite(false, wd, agentFile)
+			priv := writeInside(true, wd, agentFile)
+			r.PrivExit, r.PrivOutput, r.PrivRemount, r.PrivSetattr = priv.Exit, priv.Output, priv.Remount, priv.Setattr
 		}
 	}
 	if addr := os.Getenv("PROBE_SETUP_ADDR"); addr != "" {
@@ -603,6 +609,8 @@ func probe(args []string) int {
 		r.CgroupV2 = true
 	}
 
+	r.RuntimeWrites, r.RuntimeProgram = runtimeWrites()
+
 	for i, a := range args {
 		if a == "--settings" && i+1 < len(args) {
 			if f, err := os.OpenFile(args[i+1], os.O_WRONLY, 0); err != nil {
@@ -808,4 +816,50 @@ func hook(settings string) string {
 		}
 	}
 	return said.String()
+}
+
+// runtimeFolder is where the suite's session sees the runtime's installed folder: the
+// probe's program is bin/claude in it.
+var runtimeFolder = path.Join(wall.RuntimeDir, "claude")
+
+// plantedName is the file the probe tries to create in the runtime's installed folder.
+const plantedName = "planted-by-the-agent"
+
+// runtimeWrites tries, as the agent, to change the runtime's installed folder and
+// Forager's helper: to create a file in each folder, and to open, change the mode of,
+// rename and remove the probe's program. It returns the attempts that succeeded, and
+// whether the program is still there, a regular file.
+func runtimeWrites() ([]string, bool) {
+	program := path.Join(runtimeFolder, "bin", "claude")
+	var done []string
+	try := func(what string, err error) {
+		if err == nil {
+			done = append(done, what)
+		}
+	}
+	create := func(p string) error {
+		f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o755)
+		if err == nil {
+			f.Close()
+		}
+		return err
+	}
+	openWrite := func(p string) error {
+		f, err := os.OpenFile(p, os.O_WRONLY, 0)
+		if err == nil {
+			f.Close()
+		}
+		return err
+	}
+	try("create a file in "+runtimeFolder, create(path.Join(runtimeFolder, plantedName)))
+	try("create a file in "+path.Dir(program), create(path.Join(path.Dir(program), plantedName)))
+	try("open "+program+" for writing", openWrite(program))
+	try("change the mode of "+program, os.Chmod(program, 0o777))
+	try("rename "+program, os.Rename(program, program+".old"))
+	try("remove "+program, os.Remove(program))
+	try("create a file in "+path.Dir(wall.HelperPath), create(path.Join(path.Dir(wall.HelperPath), plantedName)))
+	try("open "+wall.HelperPath+" for writing", openWrite(wall.HelperPath))
+	try("change the mode of "+wall.HelperPath, os.Chmod(wall.HelperPath, 0o777))
+	info, err := os.Lstat(program)
+	return done, err == nil && info.Mode().IsRegular()
 }

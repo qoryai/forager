@@ -438,7 +438,7 @@ type keysWall struct {
 }
 
 // newKeysWall skips the test without an engine, without a Linux build of the test binary
-// off Linux, and without an image with Claude Code in QORY_WALL_CLAUDE_IMAGE; each skip
+// off Linux, and without an image for Claude Code in QORY_WALL_CLAUDE_IMAGE; each skip
 // fails under QORY_WALL_REQUIRE. It points this machine's roots at the suite's
 // authority.
 func newKeysWall(t *testing.T) keysWall {
@@ -453,7 +453,7 @@ func newKeysWall(t *testing.T) keysWall {
 	helper := Helper(t)
 	image := os.Getenv("QORY_WALL_CLAUDE_IMAGE")
 	if image == "" {
-		Skip(t, "QORY_WALL_CLAUDE_IMAGE is empty: it selects an image with Claude Code 2.1.316")
+		Skip(t, "QORY_WALL_CLAUDE_IMAGE is empty: it selects an image for Claude Code 2.1.316")
 	}
 	if err := trustRecorders(t); err != nil {
 		t.Fatalf("this machine's roots are not the suite's authority: %v", err)
@@ -556,13 +556,15 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 		dir = t.TempDir()
 	}
 	open := session.OpenSpec{RunsDir: runs, Gateway: g, RunID: s.runID, ForagerVersion: "walltest", Report: report}
+	install := claudeInstall(t)
 	join := session.SessionSpec{
-		Runtime: rt,
-		Command: "claude",
-		Args:    append([]string{"-p", s.prompt, "--output-format", "stream-json", "--verbose"}, s.args...),
-		Env:     s.env,
-		Dir:     dir,
-		Stdin:   strings.NewReader(""),
+		Runtime:        rt,
+		RuntimeInstall: install,
+		Command:        claudeProgram(install),
+		Args:           append([]string{"-p", s.prompt, "--output-format", "stream-json", "--verbose"}, s.args...),
+		Env:            s.env,
+		Dir:            dir,
+		Stdin:          strings.NewReader(""),
 	}
 	if s.qory != "" {
 		join.Args = append(append(append([]string{"run", "agent-env", filepath.Join(s.qory, "kept")}, s.link...), "--", join.Command), join.Args...)
