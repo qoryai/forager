@@ -61,12 +61,13 @@ type afterRun struct {
 }
 
 // runAfter runs the session's After in a new container, once the runtime exited: it
-// removes the agent's container, starts the After container, reads the step's records
-// and removes the container. Every failure ends the after step failed, with a line, and
-// changes nothing else of the session.
+// removes the setup container, when the run has one, and the agent's container, starts
+// the After container, reads the step's records and removes the container. Every failure
+// ends the after step failed, with a line, and changes nothing else of the session.
 //
-// The step starts first, so a failure of the removal or the start is in it. The whole of
-// it runs under a context that the caller's end does not cancel, within [afterWindow]; a
+// The step starts first, so a failure of the agent's container's removal or of the
+// start is in it; the setup container's wall step comes before it. The whole of it runs
+// under a context that the caller's end does not cancel, within [afterWindow]; a
 // caller's end that comes while it runs cuts the window to the stop grace from then, and
 // the run's close cuts it at once, the step then ending cancelled with -1. A window that
 // ends the step cancelled with -1, and with reason timeout when no stop from outside came.
@@ -91,10 +92,22 @@ func (r *Run) runAfter(a afterRun) {
 	})
 	defer stopWatch()
 
+	// The setup container shares the workspace and the inside network with After's
+	// container, so it is removed first, as Run.RemoveSetup removes it and with its
+	// wall step: a later Join, RemoveSetup and ContainerKept see a run that never had
+	// one. The step comes before the after step, which is the one open at a time.
+	var setupErr error
+	if r.setupUp != nil {
+		setupErr = r.removeSetupContainer(ctx)
+	}
 	steps.handle(runtimes.Record{Source: runtimes.SourceAfter, Record: map[string]any{"event": setupStarted}})
 	fail := func(text string) {
 		steps.handle(runtimes.Record{Source: runtimes.SourceAfter, Record: map[string]any{"event": setupLine, "stream": "stderr", "bytes": encode([]byte(text + "\n")), "runner": true}})
 		steps.finish(ctx.Err() != nil)
+	}
+	if setupErr != nil {
+		fail(fmt.Sprintf("Close the run to remove the setup container, which may still run.\nAfter did not run: the removal failed: %v.", errors.Unwrap(setupErr)))
+		return
 	}
 	if err := a.unwrapAgent(ctx); err != nil {
 		fail(fmt.Sprintf("Close the run to remove the agent's container, which may still run.\nAfter did not run: the removal failed: %v.", accesskey.ShownError(err)))

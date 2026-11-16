@@ -76,6 +76,10 @@ func withExec(helper, unset []string, command string, args []string) (string, []
 // then inherits it ignored. A signal that reaches Exec after the program has exited
 // changes nothing.
 //
+// Just before it starts the program, with [EnvSocket] set, Exec sends the session one
+// record of the launch source, so the session knows the program started: a docker run
+// that failed, and an Exec that finds no program, send none.
+//
 // When the program has exited and [EnvSocket] is set, Exec reads the enclosure's peak
 // memory and CPU time from its cgroup v2 files and sends them to the session's socket
 // as one record of the measure source: peak_memory_bytes from memory.peak, and
@@ -148,6 +152,12 @@ func Exec(args []string, stderr io.Writer) int {
 	}
 	closeInherited()
 	notify := passedOn()
+	if addr != "" {
+		// The session runs After only for a launch whose program started: a docker run
+		// that failed, or a helper that found no program, sends nothing. A lost record
+		// leaves After unrun and the session reports it.
+		sendLaunch(addr)
+	}
 	code, sig, err := startAndWait(path, argv, notify)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -194,6 +204,13 @@ func endsByDefault(sig syscall.Signal) bool {
 		return false
 	}
 	return true
+}
+
+// sendLaunch sends the session one record of the launch source, {"event": "started"},
+// just before Exec starts the program: the container ran, and the workspace is the
+// program's to change.
+func sendLaunch(addr string) error {
+	return socket.Send(context.Background(), addr, []descriptor.Record{{Source: descriptor.SourceLaunch, Record: map[string]any{"event": "started"}}})
 }
 
 // sendMeasure sends the measure of the cgroup v2 files under root, [readMeasure]'s, to

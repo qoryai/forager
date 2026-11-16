@@ -503,7 +503,7 @@ type SessionSpec struct {
 	// directory above them, and that no group or other user may write, but a directory
 	// with the sticky bit; a directory on a read-only mount counts as unchanged. So a
 	// write into the workspace by that user, also while After runs, cannot change which
-	// program After's command finds in PATH. After's program is refused, exit status 126, when it or a directory
+	// program After's command finds in PATH. After does not run a program, and exits with status 126, when it or a directory
 	// above it fails the same check. It is the session's after step, of kind
 	// event.StepAfter and name after: its lines are the command's output, and its exit
 	// status the command's. Its records reach the session over the one connection that
@@ -522,8 +522,12 @@ type SessionSpec struct {
 	// from SIGTERM to SIGKILL, 1 s for After's last output and 1 minute for the removal
 	// and the start; after the context's end it gets StopGrace from that moment, and its
 	// step then ends cancelled with -1. A run closed from outside starts no After, nor
-	// does a launch that exits 125, docker's status for a container it could not run:
-	// Result.After is nil. The setup container, when it still runs, stays: it does not reach After's socket. Empty
+	// does a launch whose helper never said it started the program, such as a docker run
+	// that failed: Result.After is nil. A runtime that exits 125 by itself gets After. The
+	// session first removes the setup container, when the run has one, as Run.RemoveSetup
+	// does, with its wall step before the after step, since it shares the workspace and
+	// the network with After's container; when that fails, After does not run and its step
+	// ends failed with -1. Empty
 	// means none. After needs the run's Wall, an enclosure that is a wall.AfterWrapper
 	// with an Unwrap, Exec and an AfterTimeout above zero, and its words no NUL.
 	After []string
@@ -752,7 +756,9 @@ type Result struct {
 	// intervals, and batch_refused when it refused a batch from the run's session.
 	ClosedReason string
 	// After is the outcome of the session's after step, SessionSpec.After's: nil when
-	// the spec has no After, and when no After started: the run was closed from outside.
+	// the spec has no After, and when no After started: the run was closed from outside,
+	// or the launch failed before the helper started the program, such as a docker run
+	// that exited 125 with no container.
 	// A caller that sets After treats nil as an After that did not run.
 	After *AfterResult
 }

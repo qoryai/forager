@@ -504,12 +504,29 @@ func TestARunClosedDuringTheRemovalIsTriedAgain(t *testing.T) {
 	}
 }
 
-// TestNoAfterRunsWhenTheAgentsContainerNeverStarted pins a launch that exits 125, the
-// status of a docker run that could not run its container: the workspace is unchanged,
-// so the session removes the agent's container, starts no After container, writes no
-// after step and has no Result.After.
+// neverStartsWall is an afterWall whose launch fails before the helper runs, as a docker
+// run does that exits 125 with no container: Wrap returns a command that exits 125 and
+// starts neither the helper nor the program.
+type neverStartsWall struct{ *afterWall }
+
+func (w *neverStartsWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.afterWall.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *neverStartsWall) Wrap(_ context.Context, l wall.Launch) (wall.Launch, error) {
+	return wall.Launch{Command: "/bin/sh", Args: []string{"-c", "exit 125"}, Dir: l.Dir}, nil
+}
+
+// TestNoAfterRunsWhenTheAgentsContainerNeverStarted pins a launch that fails before the
+// helper starts the program, here a command that exits 125 as a failed docker run does:
+// the workspace is unchanged, so the session removes the agent's container, starts no
+// After container, writes no after step and has no Result.After, and reports why.
 func TestNoAfterRunsWhenTheAgentsContainerNeverStarted(t *testing.T) {
-	sp, w := afterSpec(t, "exit 125", "/bin/sh", "-c", "touch after-ran")
+	sp, aw := afterSpec(t, "exit 0", "/bin/sh", "-c", "touch after-ran")
+	w := &neverStartsWall{afterWall: aw}
+	sp.Wall = w
+	reports := reportsOf(t, &sp)
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
@@ -527,6 +544,28 @@ func TestNoAfterRunsWhenTheAgentsContainerNeverStarted(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(sp.Dir, "after-ran")); err == nil {
 		t.Error("After ran")
+	}
+	if !slices.ContainsFunc(reports(), func(r string) bool {
+		return strings.HasPrefix(r, "After did not run: no record said the program started")
+	}) {
+		t.Errorf("the reports %q have no line that After did not run", reports())
+	}
+}
+
+// TestAnAfterRunsWhenTheRuntimeExits125 pins that a runtime the helper started and that
+// exits 125 by itself is no failed launch: it may have changed the workspace, and gets
+// After.
+func TestAnAfterRunsWhenTheRuntimeExits125(t *testing.T) {
+	sp, _ := afterSpec(t, "exit 125", "/bin/sh", "-c", "touch after-ran")
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 125 || res.After == nil || res.After.State != event.StateSucceeded {
+		t.Errorf("result %+v, After %+v; want the runtime's 125 and After succeeded", res, res.After)
+	}
+	if _, err := os.Stat(filepath.Join(sp.Dir, "after-ran")); err != nil {
+		t.Errorf("After did not run: %v", err)
 	}
 }
 
@@ -818,5 +857,148 @@ git push -q planted HEAD:refs/heads/after; echo "push $?" >> after-git`)
 	}
 	if _, err := os.Stat(home); err == nil {
 		t.Errorf("After's HOME %s is still there", home)
+	}
+}
+
+// setupAfterWall is a setupWall whose enclosure also removes the agent's container and
+// starts After's, with the afterWall's calls in one order that includes the setup
+// container's removal.
+type setupAfterWall struct {
+	setupWall
+	aw *afterWall
+}
+
+func (w *setupAfterWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *setupAfterWall) RemoveSetup(ctx context.Context) error {
+	w.aw.note("remove setup")
+	return w.setupWall.RemoveSetup(ctx)
+}
+
+func (w *setupAfterWall) Unwrap(ctx context.Context) error { return w.aw.Unwrap(ctx) }
+
+func (w *setupAfterWall) WrapAfter(ctx context.Context, l wall.Launch) (wall.Launch, error) {
+	return w.aw.WrapAfter(ctx, l)
+}
+
+func (w *setupAfterWall) UnwrapAfter(ctx context.Context) error { return w.aw.UnwrapAfter(ctx) }
+
+// afterWithSetup opens a run with a setup container, joins a session with After and
+// returns the run, the result and the wall.
+func afterWithSetup(t *testing.T, after string, removeErr error) (*session.Run, *session.Result, *setupAfterWall) {
+	t.Helper()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	sp, aw := afterSpec(t, "exit 0", "/bin/sh", "-c", after)
+	w := &setupAfterWall{aw: aw}
+	w.removeErr = removeErr
+	sp.Wall, sp.Image = w, "example.com/agent:1"
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands[:1]}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.Join(ctx, sp.SessionSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r, res, w
+}
+
+// TestAfterStartsOnceTheSetupContainerIsGone pins the setup container's removal before
+// After: the session removes it before the agent's container and After's start, with the
+// wall step "remove the setup container" ahead of the after step, and the run is then as
+// one after Run.RemoveSetup: RemoveSetup returns nil and removes nothing again, and
+// ContainerKept is false, so a push step can follow.
+func TestAfterStartsOnceTheSetupContainerIsGone(t *testing.T) {
+	r, res, w := afterWithSetup(t, "touch after-ran", nil)
+	if res.After == nil || res.After.State != event.StateSucceeded {
+		t.Fatalf("Result.After %+v; want succeeded", res.After)
+	}
+	if got, want := w.aw.calls(), []string{"remove setup", "unwrap", "wrap after", "unwrap after"}; !slices.Equal(got, want) {
+		t.Errorf("the wall's calls %q, want %q", got, want)
+	}
+	var names []string
+	for _, s := range steps(t, events(t, res)) {
+		names = append(names, fmt.Sprint(s.started["kind"], " ", s.started["name"]))
+	}
+	if n := len(names); n < 2 || names[n-2] != "wall remove the setup container" || names[n-1] != "after after" {
+		t.Errorf("the steps %q; want the removal's wall step, then the after step, last", names)
+	}
+	ctx := context.Background()
+	if err := r.RemoveSetup(ctx); err != nil {
+		t.Errorf("RemoveSetup after After: %v; want nil", err)
+	}
+	if w.removes != 1 {
+		t.Errorf("the wall removed the setup container %d times, want 1", w.removes)
+	}
+	if r.ContainerKept() {
+		t.Error("ContainerKept is true after the setup container's removal")
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAFailedSetupRemovalSkipsAfter pins a setup container that cannot be removed: After
+// does not run and its step ends failed with a line, the wall's step ends failed too,
+// ContainerKept is true, no session joins the run, and RemoveSetup tries the removal
+// again.
+func TestAFailedSetupRemovalSkipsAfter(t *testing.T) {
+	r, res, w := afterWithSetup(t, "touch after-ran", errors.New("engine down"))
+	if res.After == nil || res.After.State != event.StateFailed || res.After.ExitCode != -1 {
+		t.Fatalf("Result.After %+v; want failed, -1", res.After)
+	}
+	all := steps(t, events(t, res))
+	if last := all[len(all)-1]; !strings.Contains(last.logs["stderr"], "Close the run to remove the setup container, which may still run.\nAfter did not run: the removal failed: engine down") {
+		t.Errorf("the after step's lines %q", last.logs)
+	}
+	if got, want := w.aw.calls(), []string{"remove setup", "unwrap"}; !slices.Equal(got, want) {
+		t.Errorf("the wall's calls %q, want %q: the agent's container's removal at the session's end, and no After container", got, want)
+	}
+	if !r.ContainerKept() {
+		t.Error("ContainerKept is false after a setup container that may still run")
+	}
+	ctx := context.Background()
+	if err := r.RemoveSetup(ctx); err == nil || w.removes != 2 {
+		t.Errorf("RemoveSetup: %v after %d removals; want an error and a second try", err, w.removes)
+	}
+	r.Close(ctx, session.Outcome{State: event.StateFailed})
+}
+
+// slowWriter sleeps before each write, as a terminal that cannot keep up does.
+type slowWriter struct{ delay time.Duration }
+
+func (w slowWriter) Write(p []byte) (int, error) {
+	time.Sleep(w.delay)
+	return len(p), nil
+}
+
+// TestAfterReadsEveryRecordBeforeItDecidesTheStepHasNoExit pins the drain of After's
+// socket: with a terminal that takes 20 ms for each of 100 lines, the session reads the
+// records long after After's container ended, and the step still has its exit, not the
+// line "ended with no exit status". The socket's grace of 5 s is long enough to read them all.
+func TestAfterReadsEveryRecordBeforeItDecidesTheStepHasNoExit(t *testing.T) {
+	sp, _ := afterSpec(t, "exit 0", "/bin/sh", "-c", "i=0; while [ $i -lt 100 ]; do echo line $i; i=$((i+1)); done; exit 3")
+	sp.SocketGrace = 5 * time.Second
+	sp.Stdout = slowWriter{20 * time.Millisecond}
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.After == nil || res.After.State != event.StateFailed || res.After.ExitCode != 3 {
+		t.Fatalf("Result.After %+v; want failed with the command's 3", res.After)
+	}
+	all := steps(t, events(t, res))
+	if got := all[len(all)-1].logs["stdout"]; strings.Count(got, "\n") != 100 {
+		t.Errorf("the after step has %d lines, want 100", strings.Count(got, "\n"))
+	}
+	if strings.Contains(all[len(all)-1].logs["stderr"], "no exit status") {
+		t.Errorf("the after step has the line %q", all[len(all)-1].logs["stderr"])
 	}
 }

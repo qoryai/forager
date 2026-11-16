@@ -321,13 +321,14 @@ type Record struct {
 }
 
 // The sources of a record. A descriptor's rules map records of SourceOutput and
-// SourceHooks; the session reads the records of SourceSetup, SourceMeasure and
-// SourceAfter.
+// SourceHooks; the session reads the records of SourceSetup, SourceMeasure,
+// SourceLaunch and SourceAfter.
 const (
 	SourceOutput  = "output"
 	SourceHooks   = "hooks"
 	SourceSetup   = "setup"
 	SourceMeasure = "measure"
+	SourceLaunch  = "launch"
 	SourceAfter   = "after"
 )
 

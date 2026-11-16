@@ -12,6 +12,10 @@ import (
 // SetCgroupRoot sets where [Exec] reads the enclosure's cgroup v2 files.
 func SetCgroupRoot(root string) { cgroupRoot = root }
 
+// SetAgentUser sets the user After's program check treats as the agent's, in place of
+// the user the process runs as.
+func SetAgentUser(uid int) { agentUser = func() int { return uid } }
+
 // SetExecHooks sets what [Exec] calls just before it starts the program and once it
 // has reaped it; nil for nothing.
 func SetExecHooks(before, after func()) { beforeStart, afterWait = before, after }

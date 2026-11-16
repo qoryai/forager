@@ -125,6 +125,11 @@ func execAfter(a afterLaunch, stderr io.Writer) int {
 	return 0
 }
 
+// agentUser is the user After's program check treats as the agent's: the user the helper
+// runs as, which behind a wall is never root, since a root image is refused. A test
+// running as root sets it to another user, since no file is safe from root.
+var agentUser = os.Getuid
+
 // runAfter runs the words of a with no input, in a new process group, with
 // [afterEnv]'s environment and [afterPath]'s PATH, hands line each line of its output
 // and failed the line it writes when it cannot start or wait for the command, and
@@ -132,7 +137,7 @@ func execAfter(a afterLaunch, stderr io.Writer) int {
 // past a.timeout, out_of_memory when the cgroup's oom_kill count rose while it ran.
 func runAfter(a afterLaunch, line func(stream string, b []byte), failed func(b []byte)) (int, string) {
 	before, counted := oomKills(cgroupRoot)
-	agent := os.Getuid()
+	agent := agentUser()
 	path := afterPath(os.Getenv("PATH"), agent)
 	// LookPath reads the process's PATH: the command is found in the filtered one.
 	os.Setenv("PATH", path)
@@ -380,14 +385,14 @@ func afterProgram(word string, agent int) (string, error) {
 		}
 	}
 	if changeableAbove(real, agent) {
-		return "", fmt.Errorf("%w: %s is a file the agent's user could have changed, or lies under such a directory", errAgentProgram, accesskey.ShownValue(real, false))
+		return "", fmt.Errorf("%w.\n%s is a file the agent's user could have changed, or lies under such a directory, so After did not run", errAgentProgram, accesskey.ShownValue(real, false))
 	}
 	return real, nil
 }
 
 // errAgentProgram is the error of an After program the agent's user could have
 // changed.
-var errAgentProgram = errors.New("After's program is refused")
+var errAgentProgram = errors.New("Use a program for After in a directory the agent's user cannot write")
 
 // oomKills is the oom_kill count of memory.events under root, and whether it could be
 // read.

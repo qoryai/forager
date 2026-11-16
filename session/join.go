@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
@@ -39,11 +40,6 @@ var exitObserved func()
 // settings.json. Behind a wall the enclosure binds the session's directory alone,
 // read-only.
 const SessionsDir = "sessions"
-
-// dockerRunFailed is the status of a docker run that could not run its container, such as
-// one with an image or a mount the engine refuses. A launch that exits with it started
-// nothing in the workspace.
-const dockerRunFailed = 125
 
 // endedBeforeJoin is what a refusal of a session whose run the gateway closed before
 // its runtime started says.
@@ -958,12 +954,19 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// is drained counts, and only behind a wall: without one there is no enclosure.
 	var measureMu sync.Mutex
 	var measure map[string]any
+	// launched is true once the helper in the enclosure said it starts the program.
+	var launched atomic.Bool
 	// records returns an error for a setup record that is not recorded; Serve counts it
 	// against the cap on a connection's bad lines.
 	records := func(rec runtimes.Record) error {
 		switch rec.Source {
 		case runtimes.SourceSetup:
 			return setupSteps.handle(rec)
+		case runtimes.SourceLaunch:
+			if spec.Wall != nil {
+				launched.Store(true)
+			}
+			return nil
 		case runtimes.SourceMeasure:
 			if spec.Wall != nil {
 				measureMu.Lock()
@@ -1195,10 +1198,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	keyLimit := r.stops.end() == event.ReasonModelKeyLimit
 	// After runs in a new container once the runtime exited, whatever ended it: its exit,
 	// the time limit, a pause or a stop from outside. A run closed from outside starts
-	// none, and neither does a launch that exits with docker's status for a container it
-	// could not run: the workspace is unchanged. The step ends before the session's
-	// dev.qory.session.exited.
-	if len(spec.After) > 0 && !closed && exit.code != dockerRunFailed {
+	// none, and neither does a launch whose helper never said it started the program,
+	// such as a docker run that failed: the workspace is unchanged. A runtime that exits
+	// with any status after the helper started it gets After. The step ends before the
+	// session's dev.qory.session.exited.
+	if len(spec.After) > 0 && !closed && !launched.Load() {
+		r.open.Report("After did not run: no record said the program started in the enclosure, so the workspace is taken as unchanged")
+	}
+	if len(spec.After) > 0 && !closed && launched.Load() {
 		r.runAfter(afterRun{
 			ctx: ctx, runCtx: runCtx, spec: spec, enclosure: enclosure, unwrapAgent: unwrapAgent,
 			steps: afterSteps, dir: shown.Dir, mounts: shown.Mounts, proxy: fwd.Addr(),

@@ -474,6 +474,15 @@ func (r *Run) RemoveSetup(ctx context.Context) (err error) {
 	case r.keptBy > 0:
 		return wall.ContainerKeptError(fmt.Errorf("Close the run: the agent's container of session %d could not be removed and may still run, so the setup container stays until the close.", r.keptBy))
 	}
+	return r.removeSetupContainer(ctx)
+}
+
+// removeSetupContainer removes the run's setup container, which the caller checked is
+// there, and writes the wall step "remove the setup container" as [Run.RemoveSetup]
+// does: a success clears setupUp, so the run is as one that never had the container;
+// a failure sets wallFailed and setupFailed, and keeps setupUp for the next try. The
+// caller holds r.joining.
+func (r *Run) removeSetupContainer(ctx context.Context) error {
 	step := r.startStep(event.StepWall, "remove the setup container")
 	// A panic that a caller recovers leaves no step open, and no session joins.
 	defer func() {
