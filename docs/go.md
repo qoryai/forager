@@ -730,6 +730,67 @@ runs, with a burst of 20, and sends 8 `POST /artifacts` with a body over 1 MiB a
 smaller body takes no send slot. The gateway reads an answer of at most 16 MiB, and a
 larger one is a `502` `answer_too_large`.
 
+### The route to the caller
+
+Set `OpenSpec.QoryRoute` to an `http.Handler` to answer plain HTTP requests that a
+session's programs send to `http://host.qory.invalid/`, such as a script that asks the
+caller to start a test suite:
+
+```go
+func openWithRoute(ctx context.Context, spec session.OpenSpec) (*session.Run, error) {
+	spec.QoryRoute = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := r.Header.Get(link.QorySessionHeader) // "1" for the run's first session
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		log.Printf("session %s asks for %s %s?%s with %d bytes", n, r.Method, r.URL.Path, r.URL.RawQuery, len(body))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		io.WriteString(w, `{"queued":true}`)
+	})
+	return session.Open(ctx, spec)
+}
+```
+
+Inside a session, read the base URL from `session.EnvQoryHost`, `QORY_HOST_URL`, and send
+each request through `HTTP_PROXY`. The launch of each session with a runtime gets the
+variable, and its `SessionSpec.Setup` commands with it; a session with no runtime and
+`Run.Setup` do not. The route is open while a session's launch runs and closed between
+sessions.
+
+The session's forwarder serves the route in the process that calls `Join`, walled or not,
+with a gateway on the machine or a separate one; nothing of a request reaches the
+gateway. Behind a wall, the session gives the wall a proxy password of the session's
+launch alone, `wall.Launch.ProxyPassword`, which the wall writes into the proxy URL
+inside. The wall's relay writes the address each connection comes from
+(`wall.Launch.ProxyPeer`), and the forwarder serves a request to the route only with the
+password and from the address of the session's agent container, which the enclosure
+reports (`wall.AgentAddresser`). The setup container's requests go to the gateway, which
+denies them, also with the session's password. `Open` fails for a run with a route
+behind a wall that is no `wall.AgentAddresser`. The handler gets the method,
+the path, the query, `Content-Type`, the body read whole, and `Qory-Session`, and its
+context ends after 30 seconds, at the session's end or at the run's close. The forwarder
+answers these itself, with `{"error":<code>,"message":<text>}`:
+
+| Status and code | When |
+|---|---|
+| `400` `bad_request` | the request line is not `<method> http://host.qory.invalid/<path> HTTP/1.1`, host in lower case with no port or trailing dot; the head has not exactly one `Host: host.qory.invalid`, or a line without CRLF; the body has more than one `Content-Length` or a `Transfer-Encoding`; or the body does not arrive whole within 30 seconds |
+| `413` `payload_too_large` | the body is over 1 MiB |
+| `429` `rate_limited` | over 10 requests of the run in a second, or 4 calls of the handler that have not returned, those that outlast their context among them |
+| `503` `session_not_running` | the request's session does not run, it ends while the body arrives, or it or the run ends before the handler returns |
+| `504` `timeout` | the handler does not return within 30 seconds |
+| `502` `bad_answer` | the answer is over 1 MiB, its status is outside 200 to 599 or is `407`, or the handler panics |
+
+Behind a wall, with `QoryRoute` set, the forwarder reads one plain request per
+connection, as it does with a check set: plain-HTTP keep-alive ends after each request.
+Each request is one `dev.qory.run.egress` with `channel: qory_host` and
+`rule: wall:qory-host`; of the refusals with `400`, `429` and `503`, at most one each a
+second is recorded. The gateway's proxy denies every other request to the host, a
+`CONNECT` among them, with a `403` and that rule. The contract's README, §The route to
+the caller, lists what the program sees.
+
 ### The engine proxy
 
 `(*session.Run).EngineProxy(hosts)` sends the requests of the machine's container

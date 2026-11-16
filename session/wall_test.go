@@ -7,6 +7,8 @@ import (
 	"io"
 	"io/fs"
 	"net"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -24,8 +26,8 @@ import (
 )
 
 // openWall is a wall with nothing in it: it records what the session sends it
-// and starts the launch as it is, pointed at the proxy and the socket by their own
-// addresses.
+// and starts the launch as it is, pointed at the proxy, with the launch's proxy
+// password, and at the socket by their addresses.
 type openWall struct {
 	req     wall.Request
 	got     wall.Launch
@@ -41,10 +43,22 @@ func (w *openWall) Prepare(_ context.Context, req wall.Request) (wall.Enclosure,
 func (w *openWall) ProxyAddr() string { return "127.0.0.1:0" }
 func (w *openWall) Wrap(_ context.Context, l wall.Launch) (wall.Launch, error) {
 	w.got, w.wrapped = l, true
-	env := append(append([]string(nil), l.Env...), "HTTP_PROXY=http://"+l.Proxy, session.EnvSocket+"="+l.Socket)
+	proxy := url.URL{Scheme: "http", Host: l.Proxy}
+	if l.ProxyPassword != "" {
+		proxy.User = url.UserPassword(link.ProxyUser, l.ProxyPassword)
+	}
+	env := append(append([]string(nil), l.Env...), "HTTP_PROXY="+proxy.String(), session.EnvSocket+"="+l.Socket)
 	return wall.Launch{Command: l.Command, Args: l.Args, Env: env, Dir: l.Dir}, nil
 }
 func (w *openWall) Close(context.Context) error { w.closed++; return nil }
+
+// agentAddr is where the open wall's enclosure reports the agent's container, and where
+// the tests' connections to a walled forwarder come from: loopback.
+var agentAddr = netip.MustParseAddr("127.0.0.1")
+
+func (w *openWall) AgentAddrs(context.Context) ([]netip.Addr, error) {
+	return []netip.Addr{agentAddr}, nil
+}
 
 // relayWall is an open wall with a relay: the launch reaches the proxy through a
 // listener of the test's that opens every connection with the run's proxy secret, as

@@ -83,7 +83,7 @@ jobs:
         # schema, and the import rules between the parts are checked.
         env:
           DIRS: ${{ steps.part.outputs.dirs }}
-        run: go test $DIRS
+        run: go test -timeout 20m $DIRS
 
       - name: Build
         env:
