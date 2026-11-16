@@ -113,6 +113,9 @@ type report struct {
 	// RunAPI is what the probe found of the run API, when PROBE_RUN_API is 1: the probe
 	// then tries nothing else.
 	RunAPI *runAPIReport `json:"run_api,omitempty"`
+	// QoryHost is what the probe found of the route to the caller's handler, when
+	// PROBE_QORY_HOST is 1: the probe then tries nothing else.
+	QoryHost *qoryHostReport `json:"qory_host,omitempty"`
 	// Planted is what the probe planted in its HOME and the workspace, when
 	// PROBE_PLANT_HOME is 1: the probe then tries nothing else.
 	Planted *plantReport `json:"planted,omitempty"`
@@ -445,6 +448,12 @@ func probe(args []string) int {
 	}
 	if os.Getenv("PROBE_PLANT_HOME") == "1" {
 		r.Planted = plantHome()
+		b, _ := json.Marshal(r)
+		fmt.Println(probePrefix + string(b))
+		return 0
+	}
+	if os.Getenv("PROBE_QORY_HOST") == "1" {
+		r.QoryHost = probeQoryHost()
 		b, _ := json.Marshal(r)
 		fmt.Println(probePrefix + string(b))
 		return 0

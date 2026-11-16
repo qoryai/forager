@@ -614,6 +614,7 @@ func Run(t *testing.T, o Options) {
 	setupRemovedAfterSession(t, o, origin, outside)
 	afterJoinFreshHome(t, o, origin, outside)
 	runAPIThroughTheWall(t, o, origin, outside)
+	qoryHostThroughTheWall(t, o, origin, outside)
 	transcriptSent(t, o, origin, outside)
 	transcriptPlanted(t, o, origin, outside)
 	terminal(t, o, origin, outside)
@@ -1491,6 +1492,8 @@ type variant struct {
 	// runAPICheck, when set, is the check that the run sets with
 	// (*session.Run).SetRunAPICheck after the open.
 	runAPICheck func(ctx context.Context, req session.RunAPIRequest) (*session.RunAPIRefusal, error)
+	// qoryRoute, when set, is the run's route to link.QoryHost, OpenSpec.QoryRoute.
+	qoryRoute http.Handler
 	// mode is the helper's mode the runtime runs in; empty for the probe.
 	mode string
 	// stdin, when set, is the session's standard input in place of an empty one, and
@@ -1639,6 +1642,7 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 		RunID:          v.runID,
 		ForagerVersion: "walltest",
 		Report:         report,
+		QoryRoute:      v.qoryRoute,
 	},
 		SessionSpec: session.SessionSpec{
 			Runtime:           rt,
