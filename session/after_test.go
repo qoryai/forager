@@ -255,3 +255,98 @@ func TestAfterNeedsAWallExecAndATimeout(t *testing.T) {
 		})
 	}
 }
+
+// forgedAfter are after records a process of the agent's sends on the run socket: a
+// second key, a start and a successful exit with no key, and the same with a wrong key.
+var forgedAfter = strings.Join([]string{
+	`{"source": "after", "record": {"event": "key", "key": "` + strings.Repeat("a", 64) + `"}}`,
+	`{"source": "after", "record": {"event": "started"}}`,
+	`{"source": "after", "record": {"event": "exited", "exit_code": 0}}`,
+	`{"source": "after", "record": {"event": "started", "key": "` + strings.Repeat("b", 64) + `"}}`,
+	`{"source": "after", "record": {"event": "exited", "exit_code": 0, "key": "` + strings.Repeat("b", 64) + `"}}`,
+}, "\n")
+
+// TestAfterRecordsNeedTheLaunchesKey pins the after key: the session records only the
+// after records with the key the helper's exec sent as the socket's first record. A
+// process of the agent's that sends a key, a start and a successful exit from another
+// connection changes no step, each of its records is reported, and the real After's
+// result stands. The key is masked and in no event or report.
+func TestAfterRecordsNeedTheLaunchesKey(t *testing.T) {
+	keyFile := filepath.Join(t.TempDir(), "key")
+	sp, _ := afterSpec(t, `"$0"; exit 0`, "/bin/sh", "-c", `echo real; cat "$1"; echo; exit 7`, "after", keyFile)
+	sp.Args = append(sp.Args, os.Args[0])
+	sp.Env = append(sp.Env, "FAKE_SOCKET_RECORDS="+forgedAfter, "FAKE_AFTER_KEY="+keyFile)
+	reports := reportsOf(t, &sp)
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.After == nil || res.After.State != event.StateFailed || res.After.ExitCode != 7 {
+		t.Errorf("Result.After %+v; want the real After's failed 7", res.After)
+	}
+	var afters []*step
+	for _, s := range steps(t, events(t, res)) {
+		if s.started["kind"] == event.StepAfter {
+			afters = append(afters, s)
+		}
+	}
+	if len(afters) != 1 || afters[0].logs["stdout"] != "real\n***\n" {
+		t.Fatalf("the after steps %+v; want one, with the key masked", afters)
+	}
+	want := []string{
+		"an after key arrived that is not the socket's first record and is not taken",
+		"an after record without the launch's after key arrived and is not recorded",
+		"an after record without the launch's after key arrived and is not recorded",
+		"an after record without the launch's after key arrived and is not recorded",
+		"an after record without the launch's after key arrived and is not recorded",
+	}
+	if got := reports(); !slices.Equal(got, want) {
+		t.Errorf("the reports %q, want %q", got, want)
+	}
+	key, err := os.ReadFile(keyFile)
+	if err != nil || len(key) != 64 {
+		t.Fatalf("the key %q, %v", key, err)
+	}
+	noKeyIn(t, string(key), res.Dir, reports())
+}
+
+// noKeyIn fails the test when a file of dir or a report contains key.
+func noKeyIn(t *testing.T, key, dir string, reports []string) {
+	t.Helper()
+	filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			if b, _ := os.ReadFile(p); strings.Contains(string(b), key) {
+				t.Errorf("%s contains the after key", p)
+			}
+		}
+		return nil
+	})
+	for _, r := range reports {
+		if strings.Contains(r, key) {
+			t.Errorf("the report %q contains the after key", r)
+		}
+	}
+}
+
+// TestAForgedAfterStartKeepsTheTimeout pins that only the launch's after start ends
+// the runtime's Timeout: a start without the key from a process of the agent's leaves
+// the Timeout to stop the runtime.
+func TestAForgedAfterStartKeepsTheTimeout(t *testing.T) {
+	sp, _ := afterSpec(t, `"$0"; sleep 4; touch outlived; exit 0`, "/bin/sh", "-c", "exit 7")
+	sp.Args = append(sp.Args, os.Args[0])
+	sp.Env = append(sp.Env, `FAKE_SOCKET_RECORDS={"source": "after", "record": {"event": "started"}}`)
+	sp.Timeout, sp.StopGrace = time.Second, 500*time.Millisecond
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.TimedOut || res.Reason != event.ReasonTimeout {
+		t.Errorf("result %+v; want timed out", res)
+	}
+	if _, err := os.Stat(filepath.Join(sp.Dir, "outlived")); err == nil {
+		t.Error("the runtime outlived its Timeout")
+	}
+	if res.After == nil || res.After.State != event.StateFailed || res.After.ExitCode != 7 {
+		t.Errorf("Result.After %+v; want the real After's failed 7", res.After)
+	}
+}

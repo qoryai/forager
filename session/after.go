@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/session/internal/descriptor"
 	"github.com/qoryai/forager/session/internal/socket"
 	"golang.org/x/sys/unix"
@@ -85,13 +88,49 @@ const (
 	afterReasonOutOfMemo = "out_of_memory"
 )
 
+// afterKeyEvent is the event of the after source's key record: the key [Exec] makes
+// for the launch, which it sends as the socket's first record, before the program
+// starts, and which each of its later after records has as key. The session records
+// an after record only with that key: a process of the agent's can reach the socket,
+// but not the key.
+const afterKeyEvent = "key"
+
+// afterKeySize is the length of an after key: 32 random bytes in lower-case
+// hexadecimal.
+const afterKeySize = 64
+
+// sendAfterKey makes a random after key and sends it to the socket at addr as one
+// record of the after source, with event key.
+func sendAfterKey(addr string) (string, error) {
+	if addr == "" {
+		return "", errors.New(EnvSocket + " is not set")
+	}
+	b := make([]byte, afterKeySize/2)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	key := hex.EncodeToString(b)
+	if afterKeyMade != nil {
+		afterKeyMade(key)
+	}
+	rec := descriptor.Record{Source: descriptor.SourceAfter, Record: map[string]any{"event": afterKeyEvent, "key": key}}
+	if err := socket.Send(context.Background(), addr, []descriptor.Record{rec}); err != nil {
+		return "", err
+	}
+	return key, nil
+}
+
+// afterKeyMade, when set, gets each after key Exec makes: a test's hook.
+var afterKeyMade func(string)
+
 // runAfterStep runs After for [Exec] once the program exited and the measure was sent,
-// and reports it to the socket at addr as records of the after source. When the first
-// record cannot be sent, After still runs, with its output to stderr: what it leaves in
-// the workspace counts, and the session sees no after step.
-func runAfterStep(addr string, a afterLaunch, stderr io.Writer) {
+// and reports it to the socket at addr as records of the after source, each with key.
+// When the first record cannot be sent, After still runs, with its output to stderr:
+// what it leaves in the workspace counts, and the session sees no after step.
+func runAfterStep(addr, key string, a afterLaunch, stderr io.Writer) {
 	ctx := context.Background()
 	record := func(m map[string]any) descriptor.Record {
+		m["key"] = key
 		return descriptor.Record{Source: descriptor.SourceAfter, Record: m}
 	}
 	// Without the socket both streams go to stderr: the launch's stdout is the
@@ -138,13 +177,16 @@ func runAfterStep(addr string, a afterLaunch, stderr io.Writer) {
 // past a.timeout, out_of_memory when the cgroup's oom_kill count rose while it ran.
 func runAfter(a afterLaunch, line func(stream string, b []byte), failed func(b []byte)) (int, string) {
 	before, counted := oomKills(cgroupRoot)
-	path := afterPath(os.Getenv("PATH"))
+	agent := os.Getuid()
+	path := afterPath(os.Getenv("PATH"), agent)
 	// LookPath reads the process's PATH: the command is found in the filtered one.
 	os.Setenv("PATH", path)
 	var mu sync.Mutex
 	stdout := &setupLines{mu: &mu, stream: "stdout", line: line}
 	stderr := &setupLines{mu: &mu, stream: "stderr", line: line}
 	cmd := exec.Command(a.words[0], a.words[1:]...)
+	program, err := afterProgram(a.words[0], agent)
+	cmd.Path, cmd.Err = program, err
 	cmd.Env = append(afterEnv(os.Environ()), "PATH="+path)
 	cmd.Stdout, cmd.Stderr, cmd.WaitDelay = stdout, stderr, setupOutputGrace
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -174,7 +216,7 @@ func runAfter(a afterLaunch, line func(stream string, b []byte), failed func(b [
 	}
 	term := time.AfterFunc(a.timeout, func() { signalGroup(syscall.SIGTERM) })
 	kill := time.AfterFunc(a.timeout+afterKillWait, func() { signalGroup(syscall.SIGKILL) })
-	err := cmd.Wait()
+	err = cmd.Wait()
 	signalMu.Lock()
 	waited = true
 	signalMu.Unlock()
@@ -256,16 +298,17 @@ func afterEnv(env []string) []string {
 }
 
 // afterPath is path, a PATH, with only its absolute directories that exist and that
-// the process's user cannot write, nor any directory above them: a program the agent
-// placed is not found. /usr/bin:/bin when none is left.
-func afterPath(path string) string {
+// the agent's user, agent, could not have changed: [agentMayChange] is false for the
+// directory and for every directory above it. A program the agent placed is not found.
+// /usr/bin:/bin when none is left.
+func afterPath(path string, agent int) string {
 	var kept []string
 	for _, dir := range filepath.SplitList(path) {
 		if dir == "" || !filepath.IsAbs(dir) || slices.Contains(kept, filepath.Clean(dir)) {
 			continue
 		}
 		dir = filepath.Clean(dir)
-		if st, err := os.Stat(dir); err != nil || !st.IsDir() || writableAbove(dir) {
+		if st, err := os.Stat(dir); err != nil || !st.IsDir() || changeableAbove(dir, agent) {
 			continue
 		}
 		kept = append(kept, dir)
@@ -276,20 +319,71 @@ func afterPath(path string) string {
 	return strings.Join(kept, string(filepath.ListSeparator))
 }
 
-// writableAbove reports whether the process's user can write dir or a directory
+// changeableAbove reports whether [agentMayChange] is true for p or for a directory
 // above it, up to /.
-func writableAbove(dir string) bool {
+func changeableAbove(p string, agent int) bool {
 	for {
-		if unix.Access(dir, unix.W_OK) == nil {
+		if agentMayChange(p, agent) {
 			return true
 		}
-		up := filepath.Dir(dir)
-		if up == dir {
+		up := filepath.Dir(p)
+		if up == p {
 			return false
 		}
-		dir = up
+		p = up
 	}
 }
+
+// agentMayChange reports whether the user agent could have changed the file or
+// directory at p, or replaced what it contains, or whether p cannot be read: p belongs
+// to agent, who may set its mode, or is writable by its group or by others, but for a
+// directory with the sticky bit, or, when the process runs as agent, the process may
+// write it. A file or directory on a read-only mount cannot be changed: no process of
+// the container may mount again.
+func agentMayChange(p string, agent int) bool {
+	var st unix.Stat_t
+	if err := unix.Stat(p, &st); err != nil {
+		return true
+	}
+	if readOnlyMount(p) {
+		return false
+	}
+	dir := st.Mode&unix.S_IFMT == unix.S_IFDIR
+	switch {
+	case int(st.Uid) == agent:
+		return true
+	case st.Mode&0o022 != 0 && !(dir && st.Mode&unix.S_ISVTX != 0):
+		return true
+	}
+	return agent == os.Getuid() && unix.Access(p, unix.W_OK) == nil
+}
+
+// afterProgram is the file After's program, word, runs: [exec.LookPath]'s in the PATH
+// of the process, with every link followed. It returns an error when the agent's user,
+// agent, could have changed the file or a directory above it, [changeableAbove].
+func afterProgram(word string, agent int) (string, error) {
+	found, err := exec.LookPath(word)
+	if err != nil {
+		return "", err
+	}
+	real, err := filepath.EvalSymlinks(found)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(real) {
+		if real, err = filepath.Abs(real); err != nil {
+			return "", err
+		}
+	}
+	if changeableAbove(real, agent) {
+		return "", fmt.Errorf("%w: %s is a file the agent's user could have changed, or lies under such a directory", errAgentProgram, accesskey.ShownValue(real, false))
+	}
+	return real, nil
+}
+
+// errAgentProgram is the error of an After program the agent's user could have
+// changed.
+var errAgentProgram = errors.New("After's program is refused")
 
 // oomKills is the oom_kill count of memory.events under root, and whether it could be
 // read.

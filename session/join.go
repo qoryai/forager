@@ -865,7 +865,20 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		}
 		mapper.Handle(rec)
 	}
-	go sock.Serve(records, func(err error) { r.open.Report("socket: " + accesskey.ShownError(err).Error()) })
+	// The launch's Exec sends the after step's key as the socket's first record, before
+	// the program starts and while no process of the agent's runs: Serve reads the
+	// connections one at a time, in the order they connected, from one goroutine.
+	firstOnSocket := true
+	fromSocket := func(rec runtimes.Record) {
+		first := firstOnSocket
+		firstOnSocket = false
+		if rec.Source == runtimes.SourceAfter && rec.Record["event"] == afterKeyEvent {
+			afterSteps.takeKey(rec.Record, first)
+			return
+		}
+		records(rec)
+	}
+	go sock.Serve(fromSocket, func(err error) { r.open.Report("socket: " + accesskey.ShownError(err).Error()) })
 	closeSocket := sync.OnceFunc(func() { sock.Close() })
 	defer closeSocket()
 	defer mapper.Close()

@@ -65,7 +65,7 @@ func withExec(helper, unset []string, after afterLaunch, command string, args []
 // once the program exits. Before it starts the program it closes every file descriptor
 // above 2, apart from the Go runtime's poller, an eventpoll and an eventfd, which reach
 // no file. It runs as the program does: the same user, groups and capabilities. It is
-// not dumpable while it waits, so no process of the agent's reads its /proc files or
+// not dumpable from its start, so no process of the agent's reads its /proc files or
 // traces it. With nested Docker, [wall.Nest] executes Exec after it becomes the agent's
 // user. Exec starts the program in a separate process group, as a shell starts a job.
 // When its standard input is a terminal whose foreground group is Exec's, that group
@@ -85,10 +85,15 @@ func withExec(helper, unset []string, after afterLaunch, command string, args []
 // and a host's cgroup seen without a cgroup namespace. A value it cannot read is left
 // out of the record, and a record with no value is not sent.
 //
-// With --after-word, Exec then runs SessionSpec.After, as its documentation says, and
-// reports it to the socket as records of the after source: that it started, each line
-// of its output, and its exit status with the reason, timeout or out_of_memory, when
-// it did not end by itself. Exec stops the container's other processes only when it is
+// With --after-word, Exec first makes a random key, 32 bytes in hexadecimal, and sends
+// it to the socket as a record of the after source with event key, before it starts
+// the program: the socket's first record, sent while no process of the agent's runs.
+// When the key cannot be sent, the program does not start and Exec returns 125, its
+// reason written to stderr. The key is in no variable or argument. Once the program
+// has exited, Exec runs SessionSpec.After, as its documentation says, and reports it
+// to the socket as records of the after source, each with the key: that it started,
+// each line of its output, and its exit status with the reason, timeout or
+// out_of_memory, when it did not end by itself. Exec stops the container's other processes only when it is
 // the container's first program: the child of pid 1, an engine's init program such as
 // Docker's docker-init, in a pid namespace other than the machine's. Otherwise After
 // does not start and its exit status is 125. When the first
@@ -109,6 +114,10 @@ func withExec(helper, unset []string, after afterLaunch, command string, args []
 // program it does not find, or finds only through . or an empty entry of PATH, and
 // 126 for one it cannot execute, its reason written to stderr.
 func Exec(args []string, stderr io.Writer) int {
+	// From its start, no process of the agent's reads Exec's memory, environment or
+	// descriptors, or traces it, After's key included: the program's execve makes the
+	// program dumpable again, and Exec stays as it is.
+	undumpable()
 	opts, argv, err := parseExec(args)
 	names := opts.names
 	if err != nil {
@@ -134,6 +143,15 @@ func Exec(args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "exec: %s: not found\n", program)
 		return 127
 	}
+	var key string
+	if len(opts.after.words) > 0 {
+		// The key reaches the session before the program starts, while no process of
+		// the agent's runs in the container: the socket's first record is Exec's.
+		if key, err = sendAfterKey(addr); err != nil {
+			fmt.Fprintf(stderr, "exec: run the launch where the run socket reaches the container: After's key could not be sent (%v), so the program did not start.\n", err)
+			return setupRunnerFailed
+		}
+	}
 	closeInherited()
 	notify := passedOn()
 	code, sig, err := startAndWait(path, argv, notify)
@@ -154,7 +172,7 @@ func Exec(args []string, stderr io.Writer) int {
 		// Exec keeps ignoring the signals, while After gets their default actions: a
 		// signal Exec catches, unlike one it ignores, has its default action in a child.
 		signal.Notify(make(chan os.Signal, 1), notify...)
-		runAfterStep(addr, opts.after, stderr)
+		runAfterStep(addr, key, opts.after, stderr)
 	}
 	if sig != 0 && endsByDefault(sig) {
 		raise(sig)
@@ -221,9 +239,6 @@ func startAndWait(path string, argv []string, notify []os.Signal) (int, syscall.
 	if foreground() {
 		attr.Foreground, attr.Ctty = true, 0
 	}
-	// While Exec waits, no process of the agent's reads its memory, environment or
-	// descriptors, or traces it: the program's execve makes the program dumpable again.
-	undumpable()
 	if beforeStart != nil {
 		beforeStart()
 	}

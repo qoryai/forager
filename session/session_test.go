@@ -81,6 +81,13 @@ func TestMain(m *testing.M) {
 				return err
 			})
 		}
+		if file := os.Getenv("FAKE_AFTER_KEY"); file != "" {
+			session.SetAfterKeyHook(func(key string) {
+				if err := os.WriteFile(file, []byte(key), 0o600); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+				}
+			})
+		}
 		os.Exit(session.Exec(os.Args[2:], os.Stderr))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "setup-command" {
@@ -91,6 +98,8 @@ func TestMain(m *testing.M) {
 		os.Exit(fakePreparation())
 	case os.Getenv("FAKE_SETUP_RECORDS") != "":
 		os.Exit(fakeSetupRecords())
+	case os.Getenv("FAKE_SOCKET_RECORDS") != "":
+		os.Exit(fakeSocketRecords())
 	case os.Getenv("QORY_TEST_FORWARD") != "":
 		if err := socket.Forward(context.Background(), os.Getenv(session.EnvSocket), os.Stdin); err != nil {
 			fmt.Fprintln(os.Stderr, err)

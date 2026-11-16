@@ -3,6 +3,7 @@ package session
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -131,6 +132,9 @@ type setupSteps struct {
 	onStart func()
 	// outcome is the after step's, once it ended.
 	outcome *AfterResult
+	// key is the after step's key, which the launch's Exec sends as the socket's first
+	// record; nil until then. An after record without it is not recorded.
+	key []byte
 	// terminal writes a setup line, masked, to the user's terminal.
 	terminal func(stream string, b []byte)
 	// neutral writes a line the setup runner writes when it cannot start or wait for
@@ -272,12 +276,48 @@ func (s *setupSteps) start(stopping func() bool) {
 	s.ready, s.stopping = true, stopping
 }
 
+// takeKey takes the after step's key from m, the record member of an after record
+// with event key, when first: the record is the first the socket read, sent by the
+// launch's Exec before the program started. The key is added to the run's masker. A key
+// record that is not the first, one for a session with no After, and one with a key of
+// another shape are reported and change nothing.
+func (s *setupSteps) takeKey(m map[string]any, first bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key, _ := m["key"].(string)
+	switch {
+	case !first || s.key != nil:
+		s.r.open.Report("an after key arrived that is not the socket's first record and is not taken")
+	case s.kind != event.StepAfter || s.ended:
+		s.r.open.Report("an after key arrived for a session with no after step to come and is not taken")
+	case len(key) != afterKeySize || strings.Trim(key, "0123456789abcdef") != "":
+		s.r.open.Report("an after key arrived that is not 64 lower-case hexadecimal characters and is not taken")
+	default:
+		s.key = []byte(key)
+		if err := s.r.masker.AddSecret(s.key); err != nil {
+			s.r.open.Report("the after key is not masked: " + err.Error())
+		}
+	}
+}
+
+// keyed reports whether m, the record member of an after record, has the after
+// step's key, compared in constant time. Called with the lock held.
+func (s *setupSteps) keyed(m map[string]any) bool {
+	got, _ := m["key"].(string)
+	return s.key != nil && subtle.ConstantTimeCompare([]byte(got), s.key) == 1
+}
+
 // handle writes the step event of rec, a record of the setup source, when rec comes in
 // order; it reports a record that is not a setup record, comes out of order, or comes
-// after the setup ended.
+// after the setup ended. For the after step it also reports, and does not record, a
+// record without the step's key.
 func (s *setupSteps) handle(rec runtimes.Record) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.kind == event.StepAfter && !s.keyed(rec.Record) {
+		s.r.open.Report("an after record without the launch's after key arrived and is not recorded")
+		return
+	}
 	if s.ended {
 		if s.kind == event.StepAfter {
 			s.r.open.Report("an after record arrived after the after step ended and is not recorded")

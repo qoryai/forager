@@ -16,6 +16,10 @@ func SetCgroupRoot(root string) { cgroupRoot = root }
 // has reaped it; nil for nothing.
 func SetExecHooks(before, after func()) { beforeStart, afterWait = before, after }
 
+// SetAfterKeyHook sets what [Exec] calls with each after key it makes; nil for
+// nothing.
+func SetAfterKeyHook(made func(key string)) { afterKeyMade = made }
+
 // SetAfterStop sets what [Exec] calls to stop the container's other processes before
 // and after SessionSpec.After, in place of stopping them.
 func SetAfterStop(stop func(docker bool) error) {

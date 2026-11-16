@@ -83,6 +83,25 @@ func fakeSetupRecords() int {
 	return 0
 }
 
+// fakeSocketRecords sends the records of FAKE_SOCKET_RECORDS, one per line, each with
+// its source, to the run socket over one connection, as a process of the agent's can.
+func fakeSocketRecords() int {
+	var recs []runtimes.Record
+	for _, line := range strings.Split(strings.TrimSpace(os.Getenv("FAKE_SOCKET_RECORDS")), "\n") {
+		var rec runtimes.Record
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 81
+		}
+		recs = append(recs, rec)
+	}
+	if err := socket.Send(context.Background(), os.Getenv(session.EnvSocket), recs); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 82
+	}
+	return 0
+}
+
 // setupRunner is the test binary as the setup runner.
 var setupRunner = []string{os.Args[0], "setup-command"}
 

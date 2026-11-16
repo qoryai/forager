@@ -1,12 +1,15 @@
 package session
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // TestParseExecReadsAfter pins Exec's After options: --after-timeout and --after-word
@@ -82,12 +85,104 @@ func TestAfterPathKeepsDirectoriesTheUserCannotWrite(t *testing.T) {
 	if err := os.Mkdir(under, 0o500); err != nil {
 		t.Fatal(err)
 	}
-	got := afterPath(strings.Join([]string{"", ".", "bin", writable, under, "/nonexistent/bin", "/usr/bin", "/usr/bin/", "/bin"}, ":"))
+	got := afterPath(strings.Join([]string{"", ".", "bin", writable, under, "/nonexistent/bin", "/usr/bin", "/usr/bin/", "/bin"}, ":"), os.Getuid())
 	if got != "/usr/bin:/bin" {
 		t.Errorf("afterPath: %q, want /usr/bin:/bin", got)
 	}
-	if got := afterPath(writable); got != "/usr/bin:/bin" {
+	if got := afterPath(writable, os.Getuid()); got != "/usr/bin:/bin" {
 		t.Errorf("afterPath of a writable directory alone: %q", got)
+	}
+}
+
+// TestAgentMayChangeADirectoryItOwns pins the agent's ~/.local/bin with mode 555 on it
+// and every directory above it up to the home: no process can write it, but the agent
+// owns it and may set its mode again, so After's PATH leaves it out, and a program in
+// it is refused.
+func TestAgentMayChangeADirectoryItOwns(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can write every directory")
+	}
+	home := t.TempDir()
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	program := filepath.Join(bin, "git")
+	if err := os.WriteFile(program, []byte("#!/bin/sh\n"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{bin, filepath.Dir(bin), home} {
+		if err := os.Chmod(d, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(d, 0o755) })
+	}
+	if unix.Access(bin, unix.W_OK) == nil {
+		t.Fatal("the user can write the directory of mode 555")
+	}
+	for _, p := range []string{bin, program} {
+		if !agentMayChange(p, os.Getuid()) {
+			t.Errorf("%s of mode 555 that the agent owns counts as unchanged", p)
+		}
+	}
+	if got := afterPath(bin+":/usr/bin", os.Getuid()); got != "/usr/bin" {
+		t.Errorf("afterPath: %q, want /usr/bin", got)
+	}
+	if _, err := afterProgram(program, os.Getuid()); !errors.Is(err, errAgentProgram) {
+		t.Errorf("afterProgram of the agent's file: %v", err)
+	}
+	if got, err := afterProgram("/bin/sh", os.Getuid()); err != nil || got == "" {
+		t.Errorf("afterProgram of /bin/sh: %q, %v", got, err)
+	}
+}
+
+// TestAgentMayChangeByMode pins the modes [agentMayChange] reads, as root, for an
+// agent of another user: a directory writable by its group or by others, without the
+// sticky bit, and a file writable by its group or by others, may be changed; the same
+// directory with the sticky bit, and a file and a directory of mode 755 of another
+// user, may not.
+func TestAgentMayChangeByMode(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("only root makes files of another user")
+	}
+	const owner, agent = 4242, 4243
+	root := t.TempDir()
+	for name, c := range map[string]struct {
+		dir  bool
+		mode uint32
+		want bool
+	}{
+		"group-writable directory": {true, 0o775, true},
+		"other-writable directory": {true, 0o757, true},
+		"sticky other-writable":    {true, 0o1777, false},
+		"directory of mode 755":    {true, 0o755, false},
+		"group-writable file":      {false, 0o775, true},
+		"other-writable file":      {false, 0o757, true},
+		"file of mode 755":         {false, 0o755, false},
+	} {
+		p := filepath.Join(root, strings.ReplaceAll(name, " ", "-"))
+		var err error
+		if c.dir {
+			err = os.Mkdir(p, 0o700)
+		} else {
+			err = os.WriteFile(p, nil, 0o700)
+		}
+		if err == nil {
+			err = os.Chown(p, owner, owner)
+		}
+		if err == nil {
+			// unix.Chmod takes the sticky bit as the mode's 01000.
+			err = unix.Chmod(p, c.mode)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := agentMayChange(p, agent); got != c.want {
+			t.Errorf("%s: agentMayChange %v, want %v", name, got, c.want)
+		}
+		if got := agentMayChange(p, owner); !got {
+			t.Errorf("%s: the owner may not change it", name)
+		}
 	}
 }
 
