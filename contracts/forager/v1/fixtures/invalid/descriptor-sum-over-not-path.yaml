@@ -1,7 +1,6 @@
 # A sum's over is a dotted path, never an expression.
 version: 1
 runtime: example
-runtime_version: "1.0.0"
 sources:
   output: {format: jsonl}
 rules:

@@ -1,7 +1,6 @@
 # A rule matches and copies; an expression is a Forager change, not a descriptor.
 version: 1
 runtime: claude
-runtime_version: "2.1.273"
 sources:
   hooks:
     install: claude-settings

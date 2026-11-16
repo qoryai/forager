@@ -23,8 +23,11 @@ func TestClaudeCodeIsARuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rt.Name() != claude.Name || rt.Version() == "" || !rt.ReadsOutput() {
-		t.Errorf("name %q, version %q, reads output %v", rt.Name(), rt.Version(), rt.ReadsOutput())
+	if rt.Name() != claude.Name || !rt.ReadsOutput() {
+		t.Errorf("name %q, reads output %v", rt.Name(), rt.ReadsOutput())
+	}
+	if r, ok := rt.(runtimes.InstallRequired); !ok || !r.InstallRequired() {
+		t.Error("Claude Code does not require an installed folder")
 	}
 	runtimetest.Conforms(t, rt)
 	runtimetest.Replays(t, rt, contracts.FS, "runtimes/claude/fixtures")
@@ -339,11 +342,11 @@ func TestSettingsThatAreNoJSONObjectComeWithAFix(t *testing.T) {
 
 // TestEveryLaunchTurnsOffNonessentialTraffic pins the descriptor's fixed variables:
 // Prepare sets CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC and
-// CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL to 1 and
-// CLAUDE_CODE_MAX_RETRIES to 15, walled or not, and so does the env of the run's copy
+// CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL to 1, CLAUDE_CODE_MAX_RETRIES to 15
+// and DISABLE_AUTOUPDATER to 1, walled or not, and so does the env of the run's copy
 // of the --settings file, in place of the file's value of each name in any case, which
 // the launch lists as left out. A launch that passes no --settings, or one whose env
-// is no object, gets a copy whose env sets the three variables too.
+// is no object, gets a copy whose env sets the four variables too.
 func TestEveryLaunchTurnsOffNonessentialTraffic(t *testing.T) {
 	rt, err := claude.New()
 	if err != nil {
@@ -359,7 +362,7 @@ func TestEveryLaunchTurnsOffNonessentialTraffic(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := []string{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1", "CLAUDE_CODE_MAX_RETRIES=15"}; !slices.Equal(got.Env, want) {
+		if want := []string{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1", "CLAUDE_CODE_MAX_RETRIES=15", "DISABLE_AUTOUPDATER=1"}; !slices.Equal(got.Env, want) {
 			t.Errorf("walled %v: Env %q; want %q", walled, got.Env, want)
 		}
 		if want := []string{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL", "CLAUDE_CODE_MAX_RETRIES", "claude_code_disable_nonessential_traffic"}; !slices.Equal(got.LeftOut, want) {
@@ -375,7 +378,7 @@ func TestEveryLaunchTurnsOffNonessentialTraffic(t *testing.T) {
 		if err := json.Unmarshal(b, &doc); err != nil {
 			t.Fatal(err)
 		}
-		if want := map[string]string{"KEEP": "yes", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL": "1", "CLAUDE_CODE_MAX_RETRIES": "15"}; !reflect.DeepEqual(doc.Env, want) {
+		if want := map[string]string{"KEEP": "yes", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL": "1", "CLAUDE_CODE_MAX_RETRIES": "15", "DISABLE_AUTOUPDATER": "1"}; !reflect.DeepEqual(doc.Env, want) {
 			t.Errorf("walled %v: the copy's env is %v; want %v", walled, doc.Env, want)
 		}
 	}
@@ -395,7 +398,7 @@ func TestEveryLaunchTurnsOffNonessentialTraffic(t *testing.T) {
 		if err := json.Unmarshal(b, &doc); err != nil {
 			t.Fatal(err)
 		}
-		if want := map[string]string{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL": "1", "CLAUDE_CODE_MAX_RETRIES": "15"}; !reflect.DeepEqual(doc.Env, want) || len(got.LeftOut) != 0 {
+		if want := map[string]string{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL": "1", "CLAUDE_CODE_MAX_RETRIES": "15", "DISABLE_AUTOUPDATER": "1"}; !reflect.DeepEqual(doc.Env, want) || len(got.LeftOut) != 0 {
 			t.Errorf("%s: the copy's env is %v, LeftOut %q; want %v and nothing left out", name, doc.Env, got.LeftOut, want)
 		}
 	}

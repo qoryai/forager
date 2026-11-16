@@ -246,7 +246,7 @@ func TestQoryRunAPIReachesTheAgent(t *testing.T) {
 		sp.RunID = event.NewRunID()
 		sp.Env = append(sp.Env, forged)
 		sp.Variables.Run = []string{forged}
-		sp.Command, sp.Args = "/bin/sh", []string{"-c", `test "$` + session.EnvRunAPI + `" = "` + link.RunAPIURL(sp.RunID) + `"`}
+		sp.Command, sp.Args = installedShell, []string{"-c", `test "$` + session.EnvRunAPI + `" = "` + link.RunAPIURL(sp.RunID) + `"`}
 		if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 			t.Errorf("%v %+v", err, res)
 		}
@@ -254,7 +254,7 @@ func TestQoryRunAPIReachesTheAgent(t *testing.T) {
 	t.Run("without a wall or a control plane", func(t *testing.T) {
 		sp, _ := specGateway(t)
 		sp.Env = append(sp.Env, forged)
-		sp.Command, sp.Args = "/bin/sh", []string{"-c", `test -z "${` + session.EnvRunAPI + `+set}"`}
+		sp.Command, sp.Args = installedShell, []string{"-c", `test -z "${` + session.EnvRunAPI + `+set}"`}
 		if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 			t.Errorf("%v %+v", err, res)
 		}
@@ -262,7 +262,7 @@ func TestQoryRunAPIReachesTheAgent(t *testing.T) {
 	t.Run("without a wall or a control plane, from the run's variables", func(t *testing.T) {
 		sp, _ := specGateway(t)
 		sp.Variables.Run = []string{forged}
-		sp.Command, sp.Args = "/bin/sh", []string{"-c", `test -z "${` + session.EnvRunAPI + `+set}"`}
+		sp.Command, sp.Args = installedShell, []string{"-c", `test -z "${` + session.EnvRunAPI + `+set}"`}
 		if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 			t.Errorf("%v %+v", err, res)
 		}

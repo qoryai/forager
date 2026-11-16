@@ -134,6 +134,11 @@ func (r *Run) join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// AgentEnv starts no program, so the installed runtime is checked here and not in
+	// checkSession.
+	if s.install, err = checkInstall(s.SessionSpec, spec.Runtime, r.open.Wall != nil); err != nil {
+		return nil, err
+	}
 	// The session may reach the run's forwarder from here on.
 	r.shutCheck(errCheckAfterJoin, false)
 	// The run's host proxies and its engine proxy end before the join request and the
@@ -527,8 +532,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		return fail(err)
 	}
 	markSetup(plan.sources, r.setupUp != nil)
+	// The installed runtime's folder, bound read-only, is checked against the walled
+	// runs still going with the places: no walled agent of another run may change it.
+	installBinds, err := runtimeBinds(spec)
+	if err != nil {
+		return fail(err)
+	}
 	if r.listed != nil {
-		if err := r.listed.update(slices.Concat(plan.sources, r.wallOwn, r.setupBinds)); err != nil {
+		if err := r.listed.update(slices.Concat(plan.sources, installBinds, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
 		}
 		defer func() {
@@ -547,10 +558,23 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// as the enclosure sees it. What the server, the session or the machine set is
 	// theirs, and left as it is. Any other run sees each place at its path.
 	shown, inside := plan, func(s string) string { return s }
+	var insidePairs []pathPair
 	if r.byReference {
-		if shown, inside, err = plan.atWorkspace(); err != nil {
+		if shown, _, err = plan.atWorkspace(); err != nil {
 			return fail(err)
 		}
+		insidePairs = append(insidePairs, pathPair{plan.root, workspaceInside})
+	}
+	// Behind a wall the installed runtime's folder is at /qory/runtime/<runtime>, so
+	// the program, and any path into the folder Forager puts inside, is written there.
+	// Both rewrites go in one pass, the longer path first, so no text written in a
+	// path's place is rewritten again.
+	if spec.Wall != nil && spec.install != nil {
+		insidePairs = append(insidePairs, spec.install.pairs()...)
+	}
+	if len(insidePairs) > 0 {
+		slices.SortStableFunc(insidePairs, func(a, b pathPair) int { return len(b.from) - len(a.from) })
+		inside = func(s string) string { return replacePaths(s, insidePairs, argPaths) }
 	}
 	// Without a wall the session inherits the starting process's environment, which may
 	// contain the variables the machine's credentials are read from: their values stay
@@ -601,7 +625,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// there. It lies outside every place the enclosure binds.
 	var transcriptDir, transcriptUnder string
 	if spec.Wall != nil {
-		if transcriptDir, transcriptUnder, err = makeTranscriptDir(rt, dir, n, spec.Dir, slices.Concat(plan.sources, r.wallOwn, r.setupBinds)); err != nil {
+		if transcriptDir, transcriptUnder, err = makeTranscriptDir(rt, dir, n, spec.Dir, slices.Concat(plan.sources, installBinds, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
 		}
 	}
@@ -619,6 +643,27 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	written := sync.OnceValues(func() ([]string, error) {
 		return writtenPlaces(spec, r.id, plan, slices.Concat(r.wallOwn, r.setupBinds))
 	})
+	// The program of a walled agent's making is no runtime's: the installed folder
+	// lies in no place a walled run can write, and holds none.
+	if spec.install != nil {
+		if _, err := readableDir(written)(spec.install.dir); err != nil {
+			return fail(fmt.Errorf("install the runtime in a folder no walled run can write: SessionSpec.RuntimeInstall.Dir %s: %w", pathShown(spec.install.dir), err))
+		}
+	}
+	// A run without a wall has no entry among the walled runs still going: the session
+	// lists the installed runtime's folder there, read-only, until it ends, so no
+	// walled run that starts meanwhile binds the folder writable.
+	if spec.Wall == nil && installBinds != nil {
+		listed, err := register(r.id, installBinds, nil, nil, true)
+		if err != nil {
+			var refused *Refusal
+			if !errors.As(err, &refused) {
+				err = fmt.Errorf("install the runtime in a folder no walled run can write: SessionSpec.RuntimeInstall.Dir %s: %w", pathShown(spec.install.dir), err)
+			}
+			return fail(err)
+		}
+		defer listed.release()
+	}
 	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
 	denied, err := deniedVariables(rt, spec.Wall != nil)
 	if err != nil {
@@ -646,8 +691,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	}
 	prepared.Command, prepared.Args, prepared.Env = inside(prepared.Command), insideAll(prepared.Args, inside), insideValues(prepared.Env, inside)
 	if r.remote != nil {
-		neutral = r.neutralPaths(spec.HarnessHome, spec.InputsDir, "", inside)
-		neutralText = r.neutralPaths(spec.HarnessHome, spec.InputsDir, spec.Dir, inside)
+		// The installed runtime's folder is shown at /qory/runtime/<runtime>, walled
+		// or not, so no path of this machine's is in the event.
+		var installPairs []pathPair
+		if spec.install != nil {
+			installPairs = spec.install.pairs()
+		}
+		neutral = r.neutralPaths(spec.HarnessHome, spec.InputsDir, "", inside, installPairs...)
+		neutralText = r.neutralPaths(spec.HarnessHome, spec.InputsDir, spec.Dir, inside, installPairs...)
 	}
 	// A value the runtime's preparation sets for one of key.Others is left out, walled
 	// or not; behind a wall the name is then unset inside.
@@ -950,7 +1001,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			return fail(err)
 		}
 		r.listed.askID(runCtx, spec.Wall)
-		if err := r.listed.update(slices.Concat(again.sources, binds, r.wallOwn, r.setupBinds)); err != nil {
+		if err := r.listed.update(slices.Concat(again.sources, binds, installBinds, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
 		}
 		inner, innerArgs := withExec(spec.Exec, unset, command, args)
@@ -961,6 +1012,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: shown.Mounts, Limits: spec.Limits,
 			ProxyToken: r.relayToken, ProxyPassword: routePassword, ProxyPeer: r.route != nil,
 			Transcript: wall.Transcript{Path: transcriptDir, Under: transcriptUnder},
+			Runtime:    runtimeFolder(spec, rt),
 		})
 		if err != nil {
 			return fail(accesskey.ShownError(err))
@@ -1180,8 +1232,8 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 		"session": n, "runtime": accesskey.ShownName(rt.Name(), false), "command": accesskey.ShownValue(command, false), "args": shownValues(args),
 		"dir": accesskey.ShownValue(dir, false), "interactive": interactive,
 	}
-	if v := rt.Version(); v != "" {
-		started["runtime_version"] = accesskey.ShownValue(v, false)
+	if spec.install != nil {
+		started["runtime_version"] = accesskey.ShownValue(spec.install.version, false)
 	}
 	// rt is a bare runtime for a nil Runtime and for a bare one the caller set. A session
 	// whose runtime the caller set has no bare.
@@ -1233,9 +1285,10 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 // and, when it differs, at their path inside the enclosure. Of two paths where one
 // contains the other, the longer is replaced, and the text written in its place is not
 // replaced again. Join refuses / as the home or the inputs of a run with a run key
-// (checkNeutral).
-func (r *Run) neutralPaths(home, inputs, dir string, inside func(string) string) func(string) string {
-	pairs := []pathPair{{r.dir, "<run>"}}
+// (checkNeutral). extra are more paths, each with the text written in its place, such
+// as the installed runtime's folder.
+func (r *Run) neutralPaths(home, inputs, dir string, inside func(string) string, extra ...pathPair) func(string) string {
+	pairs := append([]pathPair{{r.dir, "<run>"}}, extra...)
 	for _, p := range []pathPair{{home, "<home>"}, {inputs, "<inputs>"}, {dir, workspaceInside}} {
 		if p.from == "" {
 			continue

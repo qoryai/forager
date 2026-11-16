@@ -34,6 +34,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -279,6 +280,36 @@ func Helper(t *testing.T) string {
 	return exe
 }
 
+// InstallVersion is the version the suite's sessions pass for the runtime's installed
+// folder, and dev.qory.session.started reports.
+const InstallVersion = "2.1.316"
+
+// Install makes a runtime's installed folder with a copy of the helper at bin/claude,
+// others able to read and enter each folder and to read and run the copy, and returns
+// it.
+func Install(t *testing.T, helper string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "runtime")
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(helper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "claude"), b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The mode the files are made with passes through the umask.
+	for _, p := range []string{dir, bin, filepath.Join(bin, "claude")} {
+		if err := os.Chmod(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
 // Options are what the suite is told about the adapter under test.
 type Options struct {
 	// Wall is the adapter, built with [Helper] as its helper and [RelayArgs].
@@ -297,6 +328,10 @@ type Options struct {
 	Exec []string
 	// Probe is the helper's path inside the enclosure.
 	Probe string
+	// Install is a folder of this machine that others can read and enter, with a copy
+	// of the helper at bin/claude, as [Install] makes it: the runtime's installed
+	// folder, which each session of the suite starts the probe from.
+	Install string
 	// Hooks says the adapter carries the hook socket across on this machine. Where it
 	// does not, an engine in a virtual machine, the hook check is skipped and said so.
 	Hooks bool
@@ -454,6 +489,14 @@ func Run(t *testing.T, o Options) {
 	check("no way to this machine through the proxy unless the policy names it", p.OwnViaProxy == 403 && p.MetaViaProxy == 403 && own.Load() == 0, fmt.Sprintf("this machine's listener answered %d through the proxy and was reached %d times; the metadata address answered %d", p.OwnViaProxy, own.Load(), p.MetaViaProxy))
 	check("no way to the engine's host by the network's first address", len(p.HostByGateway) == 0, p.HostByGateway)
 	check("the record is read-only", p.RecordWrite != "", "the probe opened events.jsonl for writing")
+	check("the runtime's installed folder and the helper are read-only", len(p.RuntimeWrites) == 0 && p.RuntimeProgram, fmt.Sprintf("the attempts that succeeded: %q; the program is still there: %v", p.RuntimeWrites, p.RuntimeProgram))
+	started := map[string]any{}
+	for _, e := range r.events {
+		if e["type"] == "dev.qory.session.started" {
+			started = e["data"].(map[string]any)
+		}
+	}
+	check("the event shows the installed version", started["runtime_version"] == InstallVersion, fmt.Sprintf("session.started %v; want runtime_version %s", started, InstallVersion))
 	check("not root", p.UID != 0 && p.GID != 0, fmt.Sprintf("uid %d gid %d", p.UID, p.GID))
 	check("no capabilities and none to gain", zero(p.CapEff) && zero(p.CapPrm) && zero(p.CapBnd) && zero(p.CapInh) && zero(p.CapAmb) && p.NoNewPrivs == "1", fmt.Sprintf("CapEff %s CapPrm %s CapBnd %s CapInh %s CapAmb %s NoNewPrivs %s", p.CapEff, p.CapPrm, p.CapBnd, p.CapInh, p.CapAmb, p.NoNewPrivs))
 	// The helper's exec waits for the runtime as its parent: as the agent's user, with
@@ -507,6 +550,15 @@ func Run(t *testing.T, o Options) {
 		check("a container the agent's docker command starts reaches the origin by the proxy of the agent's configuration, and nothing else",
 			c.Err == "" && c.Proxy != "" && c.OutsideAddress != "" && c.OutsideName != "" && c.Metadata != "" && c.OriginDirect != "" && c.ViaProxy == 200,
 			fmt.Sprintf("%+v; the agent's configuration, as its user sees it: %v", c, n.Config))
+		for _, c := range []struct {
+			name string
+			w    innerWritten
+			priv bool
+		}{{"a container the agent starts", n.Runtime, false}, {"a privileged container the agent starts", n.Privileged, true}} {
+			check(c.name+" cannot write the runtime's installed folder",
+				c.w.Exit != 0 && strings.Contains(strings.ToLower(c.w.Output), "read-only file system") && (!c.priv || c.w.Remount != "" && c.w.Setattr != ""),
+				fmt.Sprintf("the write of %s exited %d with %q; the bind-remount %q, mount_setattr %q", path.Join(runtimeFolder, plantedName), c.w.Exit, c.w.Output, c.w.Remount, c.w.Setattr))
+		}
 		problem := n.Neighbours.problem()
 		check("on the inside network only the enclosure and the relay answer a container the agent starts, privileged on the enclosure's network with IPv6 on, and nothing connects",
 			problem == "", problem)
@@ -1654,7 +1706,8 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 	},
 		SessionSpec: session.SessionSpec{
 			Runtime:           rt,
-			Command:           o.Probe,
+			RuntimeInstall:    &session.RuntimeInstall{Dir: o.Install, Version: InstallVersion},
+			Command:           filepath.Join(o.Install, "bin", "claude"),
 			Args:              []string{mode, "--settings", settings},
 			Env:               env,
 			Dir:               dir,

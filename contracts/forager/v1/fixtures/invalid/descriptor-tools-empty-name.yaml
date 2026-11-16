@@ -1,7 +1,6 @@
 # A tool's name in tools.summary is not empty.
 version: 1
 runtime: example
-runtime_version: "1.0.0"
 sources:
   output: {format: jsonl}
 tools:

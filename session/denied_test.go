@@ -114,9 +114,12 @@ func TestAWalledLaunchStartsThroughTheHelpersExec(t *testing.T) {
 
 // TestADeniedNameIsUnsetBehindAWall pins that behind a wall a name the runtime denies
 // or the node's deny list removes, which nothing sets, is unset inside, so an image's
-// value for it does not show through; that a pattern of the deny list unsets nothing;
-// and that a name a source sets and wins with, or one the session or the wall sets for
-// the run, keeps its value and is never unset.
+// value for it does not show through: among them Claude Code's BUN_OPTIONS, which
+// loads code into its native binary, and CLAUDE_CODE_API_BASE_URL and
+// CLAUDE_CODE_REMOTE_SETTINGS_PATH, which move its API host and its remote settings;
+// that a pattern of the deny list unsets nothing; and that a name a source sets and
+// wins with, or one the session or the wall sets for the run, keeps its value and is
+// never unset.
 func TestADeniedNameIsUnsetBehindAWall(t *testing.T) {
 	w := &openWall{}
 	sp, g := specGateway(t, "INHERITED_DENIED=from-the-shell")
@@ -128,7 +131,8 @@ func TestADeniedNameIsUnsetBehindAWall(t *testing.T) {
 		t.Fatal(err)
 	}
 	names, _ := unsetIn(t, w.got)
-	for _, name := range []string{"APP_SECRET", "CLAUDE_ENV_FILE", "CLAUDE_CODE_SHELL"} {
+	for _, name := range []string{"APP_SECRET", "CLAUDE_ENV_FILE", "CLAUDE_CODE_SHELL", "BUN_OPTIONS",
+		"CLAUDE_CODE_API_BASE_URL", "CLAUDE_CODE_REMOTE_SETTINGS_PATH"} {
 		if !slices.Contains(names, name) || len(entriesOf(w.got.Env, name)) != 0 {
 			t.Errorf("%s: unset %q, the wall's environment %q; want it unset alone", name, names, entriesOf(w.got.Env, name))
 		}

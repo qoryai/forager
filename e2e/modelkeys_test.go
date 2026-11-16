@@ -438,7 +438,7 @@ type keysWall struct {
 }
 
 // newKeysWall skips the test without an engine, without a Linux build of the test binary
-// off Linux, and without an image with Claude Code in QORY_WALL_CLAUDE_IMAGE; each skip
+// off Linux, and without an image for Claude Code in QORY_WALL_CLAUDE_IMAGE; each skip
 // fails under QORY_WALL_REQUIRE. It points this machine's roots at the suite's
 // authority.
 func newKeysWall(t *testing.T) keysWall {
@@ -453,7 +453,7 @@ func newKeysWall(t *testing.T) keysWall {
 	helper := Helper(t)
 	image := os.Getenv("QORY_WALL_CLAUDE_IMAGE")
 	if image == "" {
-		Skip(t, "QORY_WALL_CLAUDE_IMAGE is empty: it selects an image with Claude Code 2.1.316")
+		Skip(t, "QORY_WALL_CLAUDE_IMAGE is empty: it selects an image for Claude Code 2.1.316")
 	}
 	if err := trustRecorders(t); err != nil {
 		t.Fatalf("this machine's roots are not the suite's authority: %v", err)
@@ -520,11 +520,11 @@ type keysSession struct {
 	dir     string
 	walled  *keysWall
 	timeout time.Duration
-	// qory, when set, is a folder that [qoryFolder] makes: the launch starts Claude Code
-	// through qory run agent-env with CLAUDE_CONFIG_DIR at qory's agent home, as a
-	// dispatched walled run of qory does. link are the verb's words between the kept
-	// file and --.
-	qory string
+	// qory, when set, is what [qoryFolder] makes: the wall's helper is the qory build,
+	// and the launch starts Claude Code as a dispatched walled run of qory does,
+	// through the helper's qory run agent-env with CLAUDE_CONFIG_DIR at qory's agent
+	// home. link are the verb's words between the kept file and --.
+	qory *qoryRun
 	link []string
 }
 
@@ -556,18 +556,22 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 		dir = t.TempDir()
 	}
 	open := session.OpenSpec{RunsDir: runs, Gateway: g, RunID: s.runID, ForagerVersion: "walltest", Report: report}
+	install := claudeInstall(t)
 	join := session.SessionSpec{
-		Runtime: rt,
-		Command: "claude",
-		Args:    append([]string{"-p", s.prompt, "--output-format", "stream-json", "--verbose"}, s.args...),
-		Env:     s.env,
-		Dir:     dir,
-		Stdin:   strings.NewReader(""),
+		Runtime:        rt,
+		RuntimeInstall: install,
+		Command:        claudeProgram(install),
+		Args:           append([]string{"-p", s.prompt, "--output-format", "stream-json", "--verbose"}, s.args...),
+		Env:            s.env,
+		Dir:            dir,
+		Stdin:          strings.NewReader(""),
 	}
-	if s.qory != "" {
-		join.Args = append(append(append([]string{"run", "agent-env", filepath.Join(s.qory, "kept")}, s.link...), "--", join.Command), join.Args...)
-		join.Command = filepath.Join(s.qory, "qory")
-		join.Mounts = append(join.Mounts, wall.Mount{Path: s.qory, ReadOnly: true})
+	if s.qory != nil {
+		// qory starts the agent at the helper's path with the program after --, as
+		// qory's cmd/agentenv.go writes it: the session checks that program.
+		join.Args = slices.Concat(qoryAgentEnvArgs, []string{filepath.Join(s.qory.folder, "kept")}, s.link, []string{"--", join.Command}, join.Args)
+		join.Command = wall.HelperPath
+		join.Mounts = append(join.Mounts, wall.Mount{Path: s.qory.folder, ReadOnly: true})
 		join.LaunchFixed = slices.Clone(qoryLaunchFixed)
 	}
 	if s.walled != nil {
@@ -575,6 +579,12 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 		open.Image = s.walled.image
 		join.Forwarder = []string{wall.HelperPath, "forward"}
 		join.Exec = append([]string{wall.HelperPath}, ExecArgs...)
+		if s.qory != nil {
+			// The helper is the qory build, with qory's verbs, as qory run binds it.
+			open.Wall = &wall.Docker{Command: s.walled.command, Helper: s.qory.helper, RelayArgs: qoryRelayArgs, NestArgs: qoryNestArgs}
+			join.Forwarder = append([]string{wall.HelperPath}, qoryForwardArgs...)
+			join.Exec = append([]string{wall.HelperPath}, qoryExecArgs...)
+		}
 	} else {
 		exe, err := os.Executable()
 		if err != nil {

@@ -93,7 +93,7 @@ func TestTheImageIsFetchedThroughTheEngineProxy(t *testing.T) {
 			}
 			imageWithCredentials(g)
 			// A runtime with no model keys: the run's one credential is the registry's.
-			sp.Runtime = nil
+			sp.Runtime, sp.RuntimeInstall = nil, nil
 			addr := freeLoopback(t)
 			w := &pullingWall{}
 			w.during = func(context.Context) error {

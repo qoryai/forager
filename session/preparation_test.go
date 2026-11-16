@@ -93,7 +93,7 @@ func preparedSpec(t *testing.T, line string, env ...string) runSpec {
 	sp := spec(t, env...)
 	sp.Wall, sp.Image, sp.Mounts = &openWall{}, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
 	sp.Forwarder = nil
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", line}
+	sp.Command, sp.Args = installedShell, []string{"-c", line}
 	sp.SetupRunner = setupRunner
 	return sp
 }
@@ -152,7 +152,7 @@ func TestSetupCommandsRunBeforeTheRuntime(t *testing.T) {
 	// connection with the run's proxy secret, as the wall's relay does.
 	sp.Wall, sp.Image, sp.Mounts = &relayWall{}, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
 	sp.Forwarder = nil
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", `cp prepared.json runtime-saw.json && cat > runtime-input; exit 5`}
+	sp.Command, sp.Args = installedShell, []string{"-c", `cp prepared.json runtime-saw.json && cat > runtime-input; exit 5`}
 	sp.Stdin = strings.NewReader("for the runtime\n")
 	sp.Variables.Run = []string{"PREP_VARIABLE=from the run"}
 	sp.SetupRunner = setupRunner
@@ -196,7 +196,7 @@ func TestSetupCommandsRunBeforeTheRuntime(t *testing.T) {
 	evs := events(t, res)
 	started := sessionStarted(t, evs)
 	script := filepath.Join(res.SessionDir, session.PreparationScript)
-	if started["command"] != "/bin/sh" || started["args"].([]any)[0] != script || started["args"].([]any)[1] != "/bin/sh" {
+	if started["command"] != "/bin/sh" || started["args"].([]any)[0] != script || started["args"].([]any)[1] != "/qory/runtime/claude/bin/sh" {
 		t.Errorf("session.started command %v args %v", started["command"], started["args"])
 	}
 	if got, _ := started["setup_commands"].([]any); !slices.Equal(got, []any{"install", "start services"}) {
@@ -601,7 +601,7 @@ func TestSetupCommandsNeedAWallARunnerANameAndAProgram(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := sessionStarted(t, events(t, res))
-	if _, ok := started["setup_commands"]; ok || started["command"] != "/bin/sh" || started["args"].([]any)[0] != "-c" {
+	if _, ok := started["setup_commands"]; ok || started["command"] != "/qory/runtime/claude/bin/sh" || started["args"].([]any)[0] != "-c" {
 		t.Errorf("session.started %v", started)
 	}
 	if _, err := os.Stat(filepath.Join(res.SessionDir, session.PreparationScript)); err == nil {

@@ -457,7 +457,9 @@ func TestTheRelayWritesThePeerOnlyForARunWithARoute(t *testing.T) {
 // host goes to the gateway's proxy and reaches no handler.
 func TestASessionWithNoRuntimeGetsNoRoute(t *testing.T) {
 	sp, g := specGateway(t)
-	sp.Runtime, sp.Args = nil, nil
+	// A session with no runtime starts no installed program, so it has no
+	// RuntimeInstall.
+	sp.Runtime, sp.RuntimeInstall, sp.Args = nil, nil, nil
 	h := &recorder{}
 	s := startRouteSession(t, sp, h)
 	if s.host != "unset" {

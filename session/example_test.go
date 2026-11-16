@@ -59,10 +59,12 @@ func Example() {
 		os.Exit(1)
 	}
 	res, err := run.Join(ctx, session.SessionSpec{
-		Runtime:   rt,
-		Command:   "claude",
-		Args:      []string{"--settings", "/path/to/settings.json", "-p", "Reply with the single word pong."},
-		Forwarder: []string{exe, "forward"},
+		Runtime: rt,
+		// The folder you installed Claude Code in, and the version you installed.
+		RuntimeInstall: &session.RuntimeInstall{Dir: "/opt/runtimes/claude/2.1.320", Version: "2.1.320"},
+		Command:        "/opt/runtimes/claude/2.1.320/bin/claude",
+		Args:           []string{"--settings", "/path/to/settings.json", "-p", "Reply with the single word pong."},
+		Forwarder:      []string{exe, "forward"},
 	})
 	// The close's outcome is the session's, or failed with -1 when it did not start. A
 	// session paused at the model key limit closes the run paused with model_key_limit.

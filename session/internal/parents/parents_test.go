@@ -17,7 +17,6 @@ import (
 // id of the tool call that started it.
 const doc = `version: 1
 runtime: amp
-runtime_version: "1"
 sources: {output: {format: jsonl}}
 parent:
   source: output
@@ -419,7 +418,6 @@ func TestTheFirstLinkCounts(t *testing.T) {
 // outputDoc is a descriptor whose output, not its hooks, reports a subagent's start.
 const outputDoc = `version: 1
 runtime: amp
-runtime_version: "1"
 sources: {output: {format: jsonl}}
 parent:
   source: output

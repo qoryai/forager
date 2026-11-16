@@ -532,7 +532,8 @@ func TestAReadOnlyWorkspaceOverAnotherWalledRunsBindIsNoRun(t *testing.T) {
 }
 
 // TestTheEntryOfAWalledRunLastsAsLongAsTheRun pins the registry's entry: the run's id,
-// its process and its binds, each as passed, as resolved and whether writable, in a
+// its process and its binds, each as passed, as resolved and whether writable, the
+// installed runtime's folder among them, read-only, in a
 // file only its user reads, removed when the run ends, so the run that was refused
 // starts.
 func TestTheEntryOfAWalledRunLastsAsLongAsTheRun(t *testing.T) {
@@ -553,12 +554,12 @@ func TestTheEntryOfAWalledRunLastsAsLongAsTheRun(t *testing.T) {
 		RunID string `json:"run_id"`
 		PID   int    `json:"pid"`
 		Binds []struct {
-			Path, Resolved string
-			Writable       bool
+			Path, Resolved, Kind string
+			Writable             bool
 		} `json:"binds"`
 	}
 	if err := json.Unmarshal(b, &entry); err != nil || entry.RunID != first.RunID ||
-		entry.PID != os.Getpid() || len(entry.Binds) != 2 {
+		entry.PID != os.Getpid() || len(entry.Binds) != 3 {
 		t.Fatalf("the entry %s: %v", b, err)
 	}
 	real, _ := filepath.EvalSymlinks(root)
@@ -570,6 +571,10 @@ func TestTheEntryOfAWalledRunLastsAsLongAsTheRun(t *testing.T) {
 	if bd.Path != first.RunsDir || bd.Resolved != filepath.Join(runs, "runs", first.RunID) ||
 		bd.Writable {
 		t.Errorf("the run directory's bind %+v", bd)
+	}
+	installed, _ := filepath.EvalSymlinks(installDir)
+	if bd := entry.Binds[2]; bd.Path != installed || bd.Resolved != installed || bd.Writable || bd.Kind != "runtime" {
+		t.Errorf("the runtime folder's bind %+v", bd)
 	}
 
 	sp := walledSpec(t, &openWall{})

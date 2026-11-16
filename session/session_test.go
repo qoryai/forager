@@ -104,6 +104,12 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	os.Setenv("XDG_STATE_HOME", state)
+	// The fake runtime is this binary, installed as a runtime is: in
+	// $XDG_STATE_HOME/runtime/<version>, outside every test's places.
+	if err := install(filepath.Join(state, "runtime", installVersion)); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	// The transcript of a Claude Code launch with no HOME is read under the tests' home,
 	// not this user's.
 	session.SetUserHome(filepath.Join(state, "home"))
@@ -307,18 +313,66 @@ func specGateway(t *testing.T, env ...string) (runSpec, *linktest.Fake) {
 		Report:         func(l string) { t.Log("report:", l) },
 	},
 		SessionSpec: session.SessionSpec{
-			Runtime:   claudeCode(t),
-			Command:   os.Args[0],
-			Args:      []string{"--settings", writeSettings(t, t.TempDir())},
-			Env:       append([]string{"FAKE_RUNTIME=1", "PATH=" + os.Getenv("PATH")}, env...),
-			Dir:       dir,
-			Stdin:     strings.NewReader(""),
-			Stdout:    &out,
-			Stderr:    &errs,
-			Forwarder: []string{"env", "QORY_TEST_FORWARD=1", os.Args[0]},
-			Exec:      []string{os.Args[0], "exec"},
+			Runtime:        claudeCode(t),
+			RuntimeInstall: &session.RuntimeInstall{Dir: installDir, Version: installVersion},
+			Command:        installedProgram,
+			Args:           []string{"--settings", writeSettings(t, t.TempDir())},
+			Env:            append([]string{"FAKE_RUNTIME=1", "PATH=" + os.Getenv("PATH")}, env...),
+			Dir:            dir,
+			Stdin:          strings.NewReader(""),
+			Stdout:         &out,
+			Stderr:         &errs,
+			Forwarder:      []string{"env", "QORY_TEST_FORWARD=1", os.Args[0]},
+			Exec:           []string{os.Args[0], "exec"},
 		},
 	}, g
+}
+
+// installVersion is the version of the runtime the tests install.
+const installVersion = "2.1.316"
+
+// installDir and installedProgram are the folder TestMain installs this binary in as
+// the runtime most tests run as, and the program there; installedShell is a program
+// there that runs the system's shell with its arguments.
+var installDir, installedProgram, installedShell string
+
+// install puts this binary in dir as bin/claude, a hard link when the system makes
+// one and a copy otherwise, so it is a regular file in a folder others can read, and
+// sets installDir and installedProgram.
+func install(dir string) error {
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		return err
+	}
+	for _, d := range []string{dir, bin} {
+		if err := os.Chmod(d, 0o755); err != nil {
+			return err
+		}
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	// A copy, not a hard link: the session refuses a program with a second name.
+	program := filepath.Join(bin, "claude")
+	b, err := os.ReadFile(self)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(program, b, 0o755); err != nil {
+		return err
+	}
+	if err := os.Chmod(program, 0o755); err != nil {
+		return err
+	}
+	// A test that runs a shell script as the runtime runs it through bin/sh there: a
+	// copy of the system's shell may not run, so it is a script that starts it.
+	shell := filepath.Join(bin, "sh")
+	if err := os.WriteFile(shell, []byte("#!/bin/sh\nexec /bin/sh \"$@\"\n"), 0o755); err != nil {
+		return err
+	}
+	installDir, installedProgram, installedShell = dir, program, shell
+	return nil
 }
 
 // claudeCode is the runtime most tests run as: the contract's descriptor for Claude
@@ -592,7 +646,7 @@ func TestInteractiveRunsOnAPseudoTerminal(t *testing.T) {
 	sp := spec(t)
 	sp.Forwarder = nil
 	sp.Interactive = true
-	sp.Command = "sh"
+	sp.Command = installedShell
 	sp.Args = []string{"-c", "echo hello; exit 4"}
 	res, err := run(context.Background(), sp)
 	if err != nil {
@@ -644,7 +698,7 @@ func TestAHeadlessArgumentRunsOnPipesWhateverTheCallerHas(t *testing.T) {
 		sp.Forwarder = nil
 		sp.Interactive = true
 		sp.Runtime = runtimes.Bare("other-agent")
-		sp.Command = "sh"
+		sp.Command = installedShell
 		sp.Args = []string{"-c", "echo hello", "sh", "-p"}
 		res, err := run(context.Background(), sp)
 		if err != nil {
@@ -682,7 +736,7 @@ func TestInteractiveRunFollowsTheTerminalSize(t *testing.T) {
 	sp.Stdout = &out
 	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
 	record := filepath.Join(sp.RunsDir, sp.RunID, "session.jsonl")
-	sp.Command = "sh"
+	sp.Command = installedShell
 	sp.Args = []string{"-c", "stty size; read line; stty size"}
 	done := make(chan *session.Result, 1)
 	go func() {
@@ -762,7 +816,7 @@ func (b *syncBuffer) String() string {
 func TestContextEndStopsTheRuntime(t *testing.T) {
 	sp := spec(t)
 	sp.Forwarder = nil
-	sp.Command = "sh"
+	sp.Command = installedShell
 	sp.Args = []string{"-c", "sleep 30"}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
@@ -778,7 +832,7 @@ func TestContextEndStopsTheRuntime(t *testing.T) {
 func TestTimeoutStopsTheRuntimeAndIsTheReason(t *testing.T) {
 	sp := spec(t)
 	sp.Forwarder = nil
-	sp.Command = "sh"
+	sp.Command = installedShell
 	sp.Args = []string{"-c", "sleep 30"}
 	sp.Timeout = 300 * time.Millisecond
 	res, err := run(context.Background(), sp)
@@ -1006,7 +1060,7 @@ func TestMachineAndSetupAreInRunStarted(t *testing.T) {
 func TestStopGraceIsHowLongTheRuntimeHasToLeave(t *testing.T) {
 	sp := spec(t)
 	sp.Forwarder = nil
-	sp.Command = "sh"
+	sp.Command = installedShell
 	sp.Args = []string{"-c", "trap '' TERM; sleep 30 & wait; wait"}
 	sp.Timeout = 200 * time.Millisecond
 	sp.StopGrace = 300 * time.Millisecond
@@ -1026,7 +1080,7 @@ func TestStopGraceIsHowLongTheRuntimeHasToLeave(t *testing.T) {
 func TestStopSignalIsTheOneTheRunNames(t *testing.T) {
 	sp := spec(t)
 	sp.Forwarder = nil
-	sp.Command = "sh"
+	sp.Command = installedShell
 	sp.Args = []string{"-c", "trap 'exit 7' INT; trap '' TERM; sleep 30 & wait"}
 	sp.Timeout = 300 * time.Millisecond
 	sp.StopSignal = "SIGINT"
@@ -1073,7 +1127,7 @@ func TestTheRuntimeSaysHowItIsAskedToLeaveAndTheRunMaySayOtherwise(t *testing.T)
 			sp := spec(t)
 			var got runtimes.Attach
 			sp.Runtime = leaves{Runtime: runtimes.Bare("other-agent"), stop: runtimes.Stop{Signal: "SIGINT", Grace: 20 * time.Second}, prepared: &got}
-			sp.Command, sp.Args = "sh", []string{"-c", script}
+			sp.Command, sp.Args = installedShell, []string{"-c", script}
 			sp.Timeout = 300 * time.Millisecond
 			sp.StopSignal = c.named
 			res, err := run(context.Background(), sp)
@@ -1083,7 +1137,7 @@ func TestTheRuntimeSaysHowItIsAskedToLeaveAndTheRunMaySayOtherwise(t *testing.T)
 			if !res.TimedOut || res.ExitCode != c.code {
 				t.Errorf("result %+v", res)
 			}
-			if got.SessionDir != res.SessionDir || got.Launch.Command != "sh" || len(got.Forwarder) == 0 {
+			if got.SessionDir != res.SessionDir || got.Launch.Command != installedShell || len(got.Forwarder) == 0 {
 				t.Errorf("Prepare was given %+v", got)
 			}
 			started := ofType(events(t, res), "dev.qory.session.started")
@@ -1115,8 +1169,11 @@ func TestOnlyNoRuntimeIsMarkedBare(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			sp, g := specGateway(t)
 			sp.Runtime = c.runtime(t)
+			if sp.Runtime == nil {
+				sp.RuntimeInstall = nil
+			}
 			sp.Forwarder = nil
-			sp.Command, sp.Args = "sh", []string{"-c", "exit 0"}
+			sp.Command, sp.Args = installedShell, []string{"-c", "exit 0"}
 			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
@@ -1133,8 +1190,8 @@ func TestOnlyNoRuntimeIsMarkedBare(t *testing.T) {
 
 func TestNoRuntimeIsABareOneNamedAfterTheCommand(t *testing.T) {
 	sp := spec(t)
-	sp.Runtime = nil
-	sp.Command, sp.Args = "sh", []string{"-c", "exit 3"}
+	sp.Runtime, sp.RuntimeInstall = nil, nil
+	sp.Command, sp.Args = installedShell, []string{"-c", "exit 3"}
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)

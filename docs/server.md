@@ -174,7 +174,7 @@ and for each name the run takes the value of the highest that sets it:
   defaults. The list is the contract's
   [`denied-variables.json`](../contracts/forager/v1/denied-variables.json), the runtime's
   `denies`, and `SessionSpec.Variables.Deny`. It holds the session's names, the proxy's, the
-  trust store's, Docker's, `PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `BASH_ENV` and
+  trust store's, Docker's, `PATH`, `NODE_OPTIONS`, `BUN_OPTIONS`, `LD_PRELOAD`, `BASH_ENV` and
   `HOME`, and in `model_keys` and `forge_tokens` the model keys' variables, `ANTHROPIC_API_KEY`,
   `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`, and the forge tokens', `GH_TOKEN`,
   `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITLAB_TOKEN`,

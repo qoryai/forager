@@ -24,7 +24,6 @@ import (
 // dev.qory.runtime.started.
 const resumer = `version: 1
 runtime: resumer
-runtime_version: "1"
 sources:
   output: {format: jsonl}
 resume:
@@ -65,7 +64,7 @@ func resumerSpec(t *testing.T, restored string) (runSpec, *linktest.Fake, string
 	home := t.TempDir()
 	slug := cwdSlugOf(sp.Dir)
 	sp.Runtime, sp.Forwarder = rt, nil
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", resumerScript, "sh"}
+	sp.Command, sp.Args = installedShell, []string{"-c", resumerScript, "sh"}
 	sp.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "SLUG=" + slug}
 	sp.Masker = &mask.Masker{}
 	if err := sp.Masker.AddSecret([]byte("sk-fake-resume-secret")); err != nil {
@@ -294,9 +293,18 @@ func TestAJoinReturnsWithNoTranscriptReaderLeft(t *testing.T) {
 	t.Run("a runtime that does not start", func(t *testing.T) {
 		sp, _, _ := resumerSpec(t, "")
 		session.SetTranscriptPoll(&sp.SessionSpec, time.Millisecond)
-		sp.Command = filepath.Join(t.TempDir(), "none")
+		// An installed program that is no program: the join passes its checks and the
+		// start fails.
+		dir := installAt(t, t.TempDir())
+		useInstall(&sp, dir)
+		if err := os.Remove(sp.Command); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(sp.Command, []byte("no program\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		_, readers, err := joined(t, sp)
-		if err == nil || !strings.Contains(err.Error(), "no such file or directory") {
+		if err == nil || !strings.Contains(err.Error(), "exec format error") {
 			t.Fatalf("the join's error %v; want the failed start", err)
 		}
 		if readers != 0 {

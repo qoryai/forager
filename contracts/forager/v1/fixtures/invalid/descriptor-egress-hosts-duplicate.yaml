@@ -1,7 +1,6 @@
 # Egress hosts list each host once.
 version: 1
 runtime: claude
-runtime_version: "2.1.273"
 sources:
   output:
     format: jsonl

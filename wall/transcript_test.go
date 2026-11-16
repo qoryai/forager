@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path"
 	"slices"
 	"strings"
 	"testing"
@@ -92,14 +93,15 @@ func TestALaunchWithNoTranscriptDirectoryBindsNone(t *testing.T) {
 }
 
 // TestATranscriptDirectoryThatOverlapsAMountIsRefused pins the refusals: a directory
-// that lies inside a mount, contains one or is not clean, a place below the home with a ..
-// name or that is absolute, and a home where the place inside overlaps a mount's place
-// inside or /qory.
+// that lies inside a mount, the socket's directory or the installed runtime's folder,
+// contains one or is not clean, a place below the home with a .. name or that is
+// absolute, and a home where the place inside overlaps a mount's place inside or /qory.
 func TestATranscriptDirectoryThatOverlapsAMountIsRefused(t *testing.T) {
 	for name, change := range map[string]func(*Launch){
 		"inside the workspace":     func(l *Launch) { l.Transcript.Path = "/work/.claude" },
 		"contains a mount":         func(l *Launch) { l.Transcript.Path = "/home/dev" },
 		"the socket's directory":   func(l *Launch) { l.Transcript.Path = "/tmp/qory-run-1" },
+		"the runtime's folder":     func(l *Launch) { l.Runtime = RuntimeFolder{Path: path.Dir(l.Transcript.Path), Name: "claude"} },
 		"not clean":                func(l *Launch) { l.Transcript.Path = "/runs/x/../work" },
 		"relative":                 func(l *Launch) { l.Transcript.Path = "runs/x" },
 		"a .. name below home":     func(l *Launch) { l.Transcript.Under = "../.ssh" },

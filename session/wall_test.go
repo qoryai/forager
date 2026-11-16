@@ -27,7 +27,9 @@ import (
 
 // openWall is a wall with nothing in it: it records what the session sends it
 // and starts the launch as it is, pointed at the proxy, with the launch's proxy
-// password, and at the socket by their addresses.
+// password, and at the socket by their addresses, and with the installed runtime's
+// folder, which an enclosure sees at /qory/runtime/<runtime>, at its path on this
+// machine.
 type openWall struct {
 	req     wall.Request
 	got     wall.Launch
@@ -48,7 +50,26 @@ func (w *openWall) Wrap(_ context.Context, l wall.Launch) (wall.Launch, error) {
 		proxy.User = url.UserPassword(link.ProxyUser, l.ProxyPassword)
 	}
 	env := append(append([]string(nil), l.Env...), "HTTP_PROXY="+proxy.String(), session.EnvSocket+"="+l.Socket)
-	return wall.Launch{Command: l.Command, Args: l.Args, Env: env, Dir: l.Dir}, nil
+	shown := runtimeShown(l.Runtime)
+	args := make([]string, len(l.Args))
+	for i, a := range l.Args {
+		args[i] = shown(a)
+	}
+	for i, kv := range env {
+		env[i] = shown(kv)
+	}
+	return wall.Launch{Command: shown(l.Command), Args: args, Env: env, Dir: l.Dir}, nil
+}
+
+// runtimeShown writes /qory/runtime/<runtime>, where an enclosure sees the installed
+// runtime's folder, as the folder's path on this machine, for a wall that starts the
+// launch on this machine.
+func runtimeShown(r wall.RuntimeFolder) func(string) string {
+	if r.Path == "" {
+		return func(s string) string { return s }
+	}
+	inside := wall.RuntimeDir + "/" + r.Name
+	return func(s string) string { return strings.ReplaceAll(s, inside, r.Path) }
 }
 func (w *openWall) Close(context.Context) error { w.closed++; return nil }
 
@@ -158,7 +179,7 @@ func TestWallWrapsTheLaunch(t *testing.T) {
 	w = &openWall{}
 	sp = spec(t)
 	sp.Wall, sp.Image, sp.Env = w, "i", nil
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", `test -z "$QORY_TEST_HOST_ONLY"`}
+	sp.Command, sp.Args = installedShell, []string{"-c", `test -z "$QORY_TEST_HOST_ONLY"`}
 	if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 		t.Errorf("a nil environment under a wall carried the process's own: %v %+v", err, res)
 	}
@@ -176,7 +197,7 @@ func TestTheForwarderCarriesTheProxySecret(t *testing.T) {
 			sp, g := specGateway(t, "FAKE_EXIT=0", "FAKE_ALLOWED_URL=http://api.example/a")
 			out := filepath.Join(t.TempDir(), "env")
 			sp.Forwarder = nil
-			sp.Command, sp.Args = "/bin/sh", []string{"-c", `env > "$0"; exec "$1"`, out, os.Args[0]}
+			sp.Command, sp.Args = installedShell, []string{"-c", `env > "$0"; exec "$1"`, out, os.Args[0]}
 			if walled {
 				sp.Wall, sp.Image = &relayWall{}, "example.com/agent:1"
 			}
@@ -215,7 +236,7 @@ func TestTheUnwalledForwarderTakesOnlyTheAgentsPassword(t *testing.T) {
 	sp, g := specGateway(t, "FAKE_EXIT=0", "FAKE_ALLOWED_URL=http://api.example/a", "FAKE_STRAY="+strays)
 	out := filepath.Join(t.TempDir(), "env")
 	sp.Forwarder = nil
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", `env > "$0"; exec "$1"`, out, os.Args[0]}
+	sp.Command, sp.Args = installedShell, []string{"-c", `env > "$0"; exec "$1"`, out, os.Args[0]}
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)

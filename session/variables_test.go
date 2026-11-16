@@ -28,7 +28,7 @@ import (
 func dumpsEnv(t *testing.T, sp *runSpec) string {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "env")
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", `env > "$0"`, out}
+	sp.Command, sp.Args = installedShell, []string{"-c", `env > "$0"`, out}
 	sp.Forwarder = nil
 	return out
 }

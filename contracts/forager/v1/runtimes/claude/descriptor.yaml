@@ -1,4 +1,6 @@
-# Claude Code 2.1.316. The rules were written against 2.1.273 and its published hooks
+# Claude Code, as the caller installed it: the session runs the program of
+# SessionSpec.RuntimeInstall and reports the version installed there, so this file pins
+# no version. The rules were written against 2.1.273 and its published hooks
 # reference and headless output, and the fixtures beside this file are what they were
 # checked on. For 2.1.316 the events, input fields and output members below were checked
 # against the published hooks reference, the headless page and the changelog, and on runs
@@ -32,7 +34,6 @@
 version: 1
 runtime: claude
 title: Claude Code
-runtime_version: "2.1.316"
 sources:
   output:
     format: jsonl
@@ -58,7 +59,13 @@ headless:
 # variables move where requests and the credential go, add headers, switch to another
 # provider, wrap or replace the shell, move the settings and the credential file, or
 # change the client certificate and the trust of TLS connections; each is in the
-# environment-variable reference and in the 2.1.288 binary.
+# environment-variable reference and in the 2.1.288 binary. The last nine switch to
+# Google Cloud's, a gateway's or Mantle's endpoint, move the login's host or the host
+# client data goes to, turn on the mode of a cloud session, move the API's host when
+# ANTHROPIC_BASE_URL is unset, as it is behind a wall with no API credential, or move
+# the remote settings file; each is in the 2.1.325 binary. BUN_OPTIONS loads code into
+# Bun, which the native binary is built with: the contract's deny list has it too, and
+# here it is unset inside, so an image's value of it does not reach Claude Code.
 secrets:
   credential_files: [~/.claude/.credentials.json]
   denies: [ANTHROPIC_BASE_URL, ANTHROPIC_BEDROCK_BASE_URL, ANTHROPIC_BEDROCK_MANTLE_BASE_URL,
@@ -69,7 +76,10 @@ secrets:
            CLAUDE_CODE_CLIENT_CERT, CLAUDE_CODE_CLIENT_KEY, CLAUDE_CODE_CERT_STORE,
            CLAUDE_CODE_PLUGIN_DIRS, CLAUDE_RELAUNCH_SESSION_ADD_DIRS,
            CLAUDE_CODE_PLUGIN_SEED_DIR, CLAUDE_CODE_PLUGIN_CACHE_DIR,
-           CLAUDE_CODE_MANAGED_SETTINGS_PATH]
+           CLAUDE_CODE_MANAGED_SETTINGS_PATH, CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD,
+           ANTHROPIC_GOOGLE_CLOUD_BASE_URL, CLAUDE_CODE_USE_GATEWAY, CLAUDE_CODE_USE_MANTLE,
+           CLAUDE_CODE_CUSTOM_OAUTH_URL, CLAUDE_CODE_CLIENT_DATA_URL, CLAUDE_CODE_REMOTE,
+           CLAUDE_CODE_API_BASE_URL, CLAUDE_CODE_REMOTE_SETTINGS_PATH, BUN_OPTIONS]
 # Claude Code sends Anthropic's Messages format. A composer writes the run's model id as
 # --model and its effort value as --effort, an agent's effort value in the agent file's
 # effort frontmatter, and the base URL in ANTHROPIC_BASE_URL. Claude Code reads an API
@@ -139,16 +149,22 @@ tools:
 # when that plugin is installed, and at start when it is enabled.
 # Without CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL, an interactive walled
 # run of 2.1.316 in observe mode connected to downloads.claude.ai.
+# With DISABLE_AUTOUPDATER, Claude Code does not update itself: the session runs the
+# version the caller installed, from a folder that is read-only behind a wall.
 # CLAUDE_CODE_MAX_RETRIES is how many times Claude Code retries a failed API request,
 # 10 by default. The value 15 is for a separate gateway's restart: in a direct test,
 # Claude Code with 15 went on through an outage of its proxy of 300 s.
 fixed:
+  DISABLE_AUTOUPDATER: "1"
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
   CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: "1"
   CLAUDE_CODE_MAX_RETRIES: "15"
 # The hosts Claude Code needs to reach, for a server to allow for a run. A machine's
 # policy can still block them.
 egress_hosts: [api.anthropic.com]
+# The session starts Claude Code only from the folder of SessionSpec.RuntimeInstall,
+# and Join returns an error for a session of it without one.
+install_required: true
 # Claude Code writes the transcript of its session to the file whose path each hook's
 # input contains as transcript_path: ~/.claude/projects/, the working directory with
 # every character other than an ASCII letter or digit replaced by -, then the session
