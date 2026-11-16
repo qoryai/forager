@@ -251,7 +251,7 @@ func (o *unwalledOrigin) requests() []string {
 }
 
 // hostValue is the fake token of the machine's forge credential of the host proxy's
-// run, which the gateway reads from hostSource.
+// run, which its adapter answers; hostSource holds it too.
 const (
 	hostValue  = "fake-forge-token-of-the-host-proxy-test"
 	hostSource = "E2E_TEST_HOST_VALUE"
@@ -286,9 +286,8 @@ func TestTheGatewaySetsTheCredentialOnAHostProxyRequest(t *testing.T) {
 
 	runs := filepath.Join(t.TempDir(), "runs")
 	g, err := gateway.Start(context.Background(), gateway.Config{Version: "test", Heartbeat: time.Second,
-		RunDir: func(id string) string { return filepath.Join(runs, id) },
-		Credentials: []gateway.Credential{{Name: "forge", Env: hostSource, Hosts: []string{"127.0.0.1"},
-			Scheme: "basic", Username: "x-access-token"}},
+		RunDir:      func(id string) string { return filepath.Join(runs, id) },
+		Credentials: []gateway.Credential{{Name: "forge", Adapter: []string{forgeAdapter(t)}, Hosts: []string{"127.0.0.1"}}},
 		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"127.0.0.1"}},
 			Credentials: []gateway.PolicyCredential{{Name: "forge"}}},
 		Report: func(l string) { t.Log("the gateway reported:", l) }})
@@ -361,6 +360,18 @@ func TestTheGatewaySetsTheCredentialOnAHostProxyRequest(t *testing.T) {
 	})
 }
 
+// forgeAdapter is an adapter that answers hostValue as a basic token for x-access-token
+// on 127.0.0.1, with a push_ref, so the branch guard lets a push of that branch through.
+func forgeAdapter(t *testing.T) string {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "forge-adapter")
+	answer := `{"version":1,"token":"` + hostValue + `","apply":[{"hosts":["127.0.0.1"],"scheme":"basic","username":"x-access-token","push_ref":"refs/heads/qory/wi_01"}]}`
+	if err := os.WriteFile(file, []byte("#!/bin/sh\necho '"+answer+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
 // throughHostProxy sends a request with the method to target through h, trusting h's
 // bundle, fails the test unless it gets a 200, and returns h's password.
 func throughHostProxy(t *testing.T, h session.HostProxy, method, target string) string {
@@ -383,9 +394,17 @@ func throughHostProxy(t *testing.T, h session.HostProxy, method, target string) 
 	}
 	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
 		Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: roots}}}
-	req, err := http.NewRequest(method, target, nil)
+	var body io.Reader
+	if strings.HasSuffix(target, "/git-receive-pack") {
+		// A flush alone, git's probe, names no ref: the branch guard passes it.
+		body = strings.NewReader("0000")
+	}
+	req, err := http.NewRequest(method, target, body)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/x-git-receive-pack-request")
 	}
 	resp, err := client.Do(req)
 	if err != nil {
