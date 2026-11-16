@@ -1948,7 +1948,7 @@ and `-1` when no process exit status exists, the rule of `dev.qory.run.exited`'s
 `exit_code`. `duration_ms` is the time from the step's start to its end. Each member of
 the two events is required, apart from `reason` on `dev.qory.run.step_exited`, which an
 `after` step alone has: `timeout`, cancelled at `SessionSpec.AfterTimeout`, or
-`out_of_memory`, failed when the kernel killed a process of the agent's container for
+`out_of_memory`, failed when the kernel killed a process of After's container for
 lack of memory while the step ran.
 
 | `kind` | The step |
@@ -1982,9 +1982,9 @@ command of `(*session.Run).Setup` and of `SessionSpec.Setup`, and an `after` ste
 named `after`, for a session with `SessionSpec.After`: it lies inside the session, after
 the runtime's exit, and ends before the session's `dev.qory.session.exited`, which
 keeps the runtime's `state` and `exit_code`. Its lines are `dev.qory.run.log` events with
-`session` and `step`. A runtime event the session reads from the runtime's output may
-still follow the after step's `dev.qory.run.step_started`, since the output reaches the
-session through the launch's pipe and the after step's records through the socket.
+`session` and `step`. No runtime event follows the after step's
+`dev.qory.run.step_started`: the session has read the runtime's output to its end and
+closed its events before it starts After's container.
 
 The caller writes the steps of its host work, `fetch`, `compose`, `build`, `push`,
 `machine` and `copy`, before the first join, between joins, or after the last join and
@@ -5733,8 +5733,8 @@ they arrive, so two hook calls in a row keep their order. There is no answer and
 framing beyond the newline. The forwarder the session installs as a hook is one such
 client; a harness that reports something itself writes the same shape with
 `source: hooks`. A record of the `hooks` source reaches a receiver only through the
-descriptor's rules. The socket accepts records of the `hooks`, `setup`, `measure` and
-`after` sources and refuses a record of the `output` source: the session skips it and writes no
+descriptor's rules. The launch's socket accepts records of the `hooks`, `setup` and
+`measure` sources and refuses a record of the `output` source: the session skips it and writes no
 event for it. Output records come from the runtime's standard output only, which the
 session reads on the host, while any process in the agent's container can write to the
 socket. The setup runner is another client: it writes records
@@ -5746,11 +5746,12 @@ setup commands inside the wall (§The wall, Setup inside the wall). Its `record`
 wait for the command; or `exited`, with `exit_code`, 0 to 255. The helper's exec is a
 third client: once the runtime exits it writes a record of the `measure` source
 (§The events, The measure of the enclosure), and for a session with
-`SessionSpec.After` records of the `after` source, as the setup runner's without
-`command` and `started`, whose `exited` may have `reason`, `timeout` or `out_of_memory`.
-The `after` source has a socket of its own, in After's container alone (§The wall,
-After), which accepts records of that source only, over the first connection it
-accepts. The launch's socket refuses a record of the `after` source. The session cuts
+`SessionSpec.After`, in After's container, records of the `after` source, as the setup
+runner's without `command` and `started`, whose `exited` may have `reason`, `timeout`
+or `out_of_memory`. The `after` source has a socket in a directory that no other
+container binds, in After's container alone (§The wall, After), which accepts records of
+that source only, over the first connection it accepts. The launch's socket refuses a
+record of the `after` source. The session cuts
 off a connection of the launch's socket that stays open longer than 5 seconds, so the
 runner opens a connection for each batch of records. Each socket is removed when its
 session ends.
@@ -5759,7 +5760,7 @@ session ends.
 {"source": "setup", "record": {"command": 1, "event": "started"}}
 {"source": "setup", "record": {"command": 1, "event": "line", "stream": "stdout", "bytes": "YWRkZWQgMjE0IHBhY2thZ2VzCg=="}}
 {"source": "setup", "record": {"command": 1, "event": "exited", "exit_code": 0}}
-{"source": "after", "record": {"event": "exited", "exit_code": 143, "reason": "timeout", "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
+{"source": "after", "record": {"event": "exited", "exit_code": 143, "reason": "timeout"}}
 ```
 
 ## Images
@@ -5955,8 +5956,8 @@ pinned digest. For a run with a certificate authority, the Docker wall writes th
 certificate as `qory-run-<id>.crt` in `<CertsDir>/<host>/`, `/etc/docker/certs.d` by
 default, for the reference's registry host and for each host of `credential_hosts`, and
 removes the files when the step ends, also when the pull fails or its context ends.
-The agent's container, the setup container, and the container the wall reads the image's
-files from, are created with `--pull=never`, so the engine pulls the image in the image
+The agent's container, After's container, the setup container, and the container the
+wall reads the image's files from, are created with `--pull=never`, so the engine pulls the image in the image
 step alone. Docker Engine reads that directory at each pull. On its classic image store it reads
 none for `docker.io`, so an image there comes only through a blind relay, with no
 credential; on its containerd image store this is unverified. Without
@@ -6373,9 +6374,12 @@ the working directory, as the agent had it, a directory with After's socket at
 `/qory/hooks`, the helper and the bundle, and none of the agent's other mounts, the
 agent's hook socket or its transcript. Its environment is the image's, the proxy
 variables with no password, the bundle's variables and `QORY_RUN_SOCKET`, and none of
-the run's variables. The run's proxy holds the read credential alone, and the route to
-the caller (§The route to the caller) answers it `403`, since the route serves a
-request only with the password of the agent's launch, from the agent's address. A setup
+the run's variables. Its proxy URL has no password, so it has no route to the caller
+(§The route to the caller): a request without the password gets `403` from the
+gateway's proxy, which denies the route's host, and one with the agent's password gets
+`503`, since that session ended; the handler is called for neither. Forager does not
+narrow the run's proxy for After: the proxy applies the credentials the run's
+configuration holds, and its push guard as it is. A setup
 container that still runs is not removed: it shares the inside network, not After's
 socket, and a write it makes into the workspace gives the agent no more than it could
 write before the runtime exited, since the caller checks the result on the host and
@@ -6405,7 +6409,7 @@ so the caller refuses `hook.*` keys in `.git/config` before it sets After. Other
 `.git/config` that name a program, such as a filter, also still apply: the caller checks
 them first. The workspace is the one input After shares with the agent; a program a key
 of `.git/config` or a `.gitattributes` names runs in After's container, as its user, with
-no root, capability, write credential or key.
+no root, capability or key, and with the run's credentials as the proxy applies them.
 
 After's `PATH` keeps the absolute directories that exist and that the agent's user
 could not have changed, nor any directory above them: a directory the agent's user
@@ -6416,7 +6420,8 @@ agent's user may write. A directory on a read-only mount counts as unchanged.
 `PATH` or given as a path, with every link followed, is refused under the same rule:
 the step ends `failed` with `126` and the reason as its line. The workspace is on no
 such `PATH`, so a write into it by the agent's user, also while After runs, cannot
-change which program runs. At `AfterTimeout` the group gets `SIGTERM`, and `SIGKILL` 5
+change which program After's command finds there. It does not change which programs git
+starts from `.git/config`, described above. At `AfterTimeout` the group gets `SIGTERM`, and `SIGKILL` 5
 seconds later. When the helper's exec ends, the container ends, and with it every
 process After left.
 
@@ -6448,8 +6453,11 @@ that window it removes After's container, and the step ends `cancelled` with `-1
 reason `timeout`. When the caller's context ends before or while After runs, After
 runs on, and the step, the agent's removal and After's start included, gets no more than
 the stop grace from that moment; the step then ends `cancelled` with `-1` and no reason.
-A run closed from outside starts no After, or cuts it at once, and
-`(*session.Result).After` is nil when it started none. A run without a wall has no
+A run closed from outside starts no After, or cuts it at once, and neither does a
+launch that exits `125`, docker's status for a container it could not run, since the
+workspace is unchanged; `(*session.Result).After` is nil when it started none. A
+removal of the agent's container that the context's end or the run's close cuts is
+tried again as the session ends, and counts as failed only if that removal fails. A run without a wall has no
 After.
 
 **Nested Docker.** *Experimental.* Under the nested runtime the enclosure has a root,

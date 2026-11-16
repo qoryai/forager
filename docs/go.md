@@ -477,8 +477,8 @@ The error for the agent's container of session 1 matches `wall.ErrContainerKept`
 `(*session.Run).ContainerKept()` reports whether a container of the run that can write
 the run's binds may still run outside a session:
 
-- It is true once removing the agent's container of a session, as the session ended, or
-  the setup container, in `RemoveSetup`, failed, and stays true.
+- It is true once removing the agent's container of a session, as the session ended,
+  After's container, or the setup container, in `RemoveSetup`, failed, and stays true.
 - With a wall whose enclosure has no `Unwrap`, it is also true from the end of the first
   session until `Close`, since the agent's container stays until the close.
 - During a session it does not count the container of the session that runs.
@@ -1457,17 +1457,25 @@ request asks the gateway for, for this session.
   (`Unwrap`), so no process of the agent is left, background jobs and, with nested Docker,
   inner containers included. It then starts After's container from the run's image,
   under the run's container runtime, as the wall's user with no capability and no
-  nested Docker, on the inside network with the run's proxy and no route to the caller.
-  The container binds the mount that holds `Dir` and a socket of its own, and none of
-  the run's variables. The wall must be a `wall.AfterWrapper` with an `Unwrap`, as the
+  nested Docker, on the inside network with the run's proxy. The container binds the
+  mount that holds `Dir` and a socket in a directory that no other container binds, and
+  none of the run's variables. Its proxy URL has no password, so it has no route to the
+  caller: a request to the route gets `403` from the gateway's proxy, and one with the
+  agent's password gets `503`, since that session ended; the handler is called for
+  neither. Forager does not narrow the run's proxy for After: it applies the credentials
+  the run's configuration holds, and the push guard as it is. The wall must be a `wall.AfterWrapper` with an `Unwrap`, as the
   Docker wall is: Join refuses `After` behind another wall. After runs in `Dir` with no
   input, without the variables that point git elsewhere, with an empty `HOME` and no
   `XDG_*` variable, and with settings that keep git from running a hook, an fsmonitor,
   a credential helper or a signing program, and from reaching a remote other than over
   HTTPS. Its `PATH` has no directory the agent's user owns or may write, and its
   program is refused when that user could have changed it. A write into the workspace
-  by that user, while After runs, cannot change which program runs, since no directory
-  that user may write is on the `PATH`. The helper in the container sends the step's
+  by that user, while After runs, cannot change which program After's command finds in
+  the `PATH`, since no directory that user may write is on it. It does not change which
+  programs git starts from the workspace's `.git/config`: a filter, `textconv` or merge
+  driver that file names still runs as After's user, and on git 2.54.0, which has no
+  setting that turns off every `hook.<name>.command`, so does such a hook. qory refuses
+  unknown `.git/config` keys. The helper in the container sends the step's
   records over one connection that it opens before After starts, and the session reads
   that connection alone, so a process After starts cannot write the step. It is the
   session's `after` step, with its output as the step's lines, before
@@ -1476,7 +1484,12 @@ request asks the gateway for, for this session.
   container for lack of memory, `failed` with `out_of_memory`. A runtime stopped at
   `Timeout`, and a pause, still get After. When the caller's context ends, After still
   runs, and the removal, the start and After together get no more than `StopGrace`; its
-  step then ends `cancelled` with `-1`. A closed run starts no After. The setup
+  step then ends `cancelled` with `-1`. A closed run starts no After, nor does a launch
+  that exits `125`, docker's status for a container it could not run. A removal of the
+  agent's container that the context's end cuts is tried again as the session ends.
+  With After, `Join` may take `AfterTimeout` plus 66 seconds more than its 15 seconds:
+  the removal and the start together get 60 seconds, then 5 seconds between SIGTERM and
+  SIGKILL and 1 second of output. The setup
   container, when it still runs, is not removed: it does not reach After's socket.
   After needs a `Wall` and `Exec`. See
   [the contract](../contracts/forager/v1/README.md#the-wall).
@@ -1599,7 +1612,8 @@ request asks the gateway for, for this session.
   refused, and `-1` when the step ended with no status, such as when the agent's
   container could not be removed or After's container did not start; and `Reason`,
   `timeout`, `out_of_memory` or empty. It is nil when no After ran: the run was closed,
-  or the runtime did not start. A caller that set `After` treats that as a failure.
+  the runtime did not start, or the launch exited `125`. A caller that set `After` treats
+  that as a failure.
 
 `(*session.Run).Close` takes a `session.Outcome`, the `State`, `Reason` and `ExitCode`
 of the run's `dev.qory.run.exited`, and writes that event once. A run no session joined,
@@ -1634,9 +1648,9 @@ session that ended otherwise.
   them. It returns as soon as the gateway accepts them or the batch gets a `410`.
 - `RunClosed` and `ClosedReason`, as `session.Result` has them.
 - `WallKept`, true when removing a container of the run's wall failed at some point of
-  the run: the agent's container at a session's end, the setup container in
-  `RemoveSetup`, or a container at the close. Any error of the wall's `Unwrap` or
-  `RemoveSetup` sets it, and so does any error of the close that is not marked
+  the run: the agent's container at a session's end, After's container, the setup
+  container in `RemoveSetup`, or a container at the close. Any error of the wall's
+  `Unwrap`, `UnwrapAfter` or `RemoveSetup` sets it, and so does any error of the close that is not marked
   `wall.ErrNoContainerKept`. A process may have kept writing the run's binds after its
   session ended, so do not trust what is in them. `WallKept` stays true when a later
   removal succeeded. A close whose every failure matches `wall.ErrNoContainerKept`, as

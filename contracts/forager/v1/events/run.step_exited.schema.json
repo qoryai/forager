@@ -11,6 +11,6 @@
     "state": {"description": "How the step ended: succeeded, failed or cancelled, the values of dev.qory.run.exited's state but paused. succeeded: the step ended well; failed: it ended badly; cancelled: it was stopped before it ended.", "type": "string", "enum": ["succeeded", "failed", "cancelled"]},
     "exit_code": {"description": "The exit status of the step's process, as exit_code of dev.qory.run.exited is: -1 when no process exit status exists, such as for a step that runs no process.", "type": "integer", "minimum": -1},
     "duration_ms": {"description": "Milliseconds from the step's dev.qory.run.step_started to its end.", "type": "integer", "minimum": 0},
-    "reason": {"description": "Why an after step ended otherwise than by its command's exit; no other step has one. timeout: the command ran past SessionSpec.AfterTimeout and was stopped, cancelled. out_of_memory: the kernel killed a process of the agent's container for lack of memory while the step ran, failed.", "type": "string", "enum": ["timeout", "out_of_memory"]}
+    "reason": {"description": "Why an after step ended otherwise than by its command's exit; no other step has one. timeout: the command ran past SessionSpec.AfterTimeout and was stopped, cancelled. out_of_memory: the kernel killed a process of After's container for lack of memory while the step ran, failed.", "type": "string", "enum": ["timeout", "out_of_memory"]}
   }
 }

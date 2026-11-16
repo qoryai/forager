@@ -1964,23 +1964,35 @@ release may change what an existing document does, and says so under Upgrading.
   and with nested Docker no inner container, then starts After's container through the
   new `wall.AfterWrapper` (`WrapAfter`, `UnwrapAfter`), which the Docker wall
   implements: the run's image under the run's container runtime, as the wall's user with
-  no capability and no nested Docker, on the inside network with the run's proxy and no
-  route to the caller, with the mount that holds `Dir`, a socket of its own and none of
-  the run's variables. After runs with git's hooks, fsmonitor, credential helpers,
-  signing, the system's and user's configuration, and remotes other than HTTPS off, an
-  empty `HOME`, no `XDG_*` variable, and a `PATH` without a directory the agent's user
-  owns or may write; a program it could have changed is refused, and a write into the
-  workspace by that user, while After runs, cannot change which program runs. The
-  session writes it as an `after` step before `dev.qory.session.exited`, which keeps
-  the runtime's state, and `Result.After` has its outcome. The helper's exec, with the
-  new option `--after-only`, sends the step's records over one connection that it opens
-  before After starts, and the session reads that connection alone
+  no capability and no nested Docker, on the inside network with the run's proxy, with
+  the mount that holds `Dir`, a socket in a directory that no other container binds, and
+  none of the run's variables. After's container has no route to the caller: its proxy
+  URL has no password, so a request to the route gets `403` from the gateway's proxy,
+  and one with the agent's password gets `503`, since that session ended; the handler is
+  called for neither. Forager does not narrow the run's proxy for After: the proxy
+  applies the credentials the run's configuration holds, and the push guard as it is.
+  After runs with git's hooks, fsmonitor, credential helpers, signing, the system's and
+  user's configuration, and remotes other than HTTPS off, an empty `HOME`, no `XDG_*`
+  variable, and a `PATH` without a directory the agent's user owns or may write. A
+  program After's command looks up in `PATH`, and that it could have changed, is refused,
+  and a write into the workspace by that user, while After runs, cannot change which
+  program that lookup finds. It does not change which programs git starts from the
+  workspace's `.git/config`: a filter, `textconv` or merge driver it names still runs as
+  After's user, and on git 2.54.0, which has no setting that turns off every
+  `hook.<name>.command`, so does such a hook. qory refuses unknown `.git/config` keys.
+  The session writes After as an `after` step before `dev.qory.session.exited`, which
+  keeps the runtime's state, and `Result.After` has its outcome. The helper's exec, with
+  the new option `--after-only`, sends the step's records over one connection that it
+  opens before After starts, and the session reads that connection alone
   (`socket.ListenAfter`, `ServeFirst`): a process After starts cannot write the step. A
   runtime stopped at `Timeout`, a pause and a stop from the context all get After; after
   the context's end the removal, the start and After get `StopGrace` together, and a
-  closed run starts none. A failure to remove the agent's container or to start After's
-  ends the step `failed` with `-1`. The launch's socket refuses a record of the `after`
-  source. Join refuses After behind a wall that is no `wall.AfterWrapper` with an
+  closed run starts none, nor does a launch that exits `125`, docker's status for a
+  container it could not run. A failure to remove the agent's container or to start
+  After's ends the step `failed` with `-1`; a removal that the context's end cuts is
+  tried again as the session ends. With After, `Join` may take `AfterTimeout` plus 66
+  seconds more than its 15 seconds. The launch's socket refuses a record of the
+  `after` source. Join refuses After behind a wall that is no `wall.AfterWrapper` with an
   `Unwrap`, without an `AfterTimeout`, or without a wall.
 - `OpenSpec.QoryRoute`, an `http.Handler` that serves a session's plain HTTP requests
   to `http://host.qory.invalid/`, walled or not, on one machine or behind a separate
@@ -2641,8 +2653,9 @@ release may change what an existing document does, and says so under Upgrading.
 - The Docker suites check `SessionSpec.After`: a background job the runtime leaves is
   gone when After runs, After stops at `AfterTimeout`, a process of After's command that
   writes to After's socket changes none of the step's records, After's container gets
-  nothing from the route to the caller, and After runs once the join's context ends.
-  With nested Docker, a file the agent writes with the enclosure's root, through a
+  nothing from the route to the caller, and the agent's planted proxy password gets
+  `403` and `503` there, After's command cannot read or take the helper's descriptors,
+  and After runs once the join's context ends. With nested Docker, a file the agent writes with the enclosure's root, through a
   privileged inner container, is not in After's container. The suites need the hook
   socket to cross into the enclosure: on an engine in a virtual machine they skip it.
 - `TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun` runs Claude Code 2.1.316

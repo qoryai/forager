@@ -464,22 +464,28 @@ type SessionSpec struct {
 	// workspace. The session removes the agent's container first, which ends every
 	// process in it, with nested Docker the inner containers too, and then starts After's
 	// container: the run's image under the run's container runtime, as the wall's user
-	// with no capability and no nested Docker, on the wall's network with the run's proxy
-	// and no route to the caller, with the mount that holds Dir and a socket of its own,
-	// and none of the run's variables. Exec starts After there, with the option
+	// with no capability and no nested Docker, on the wall's network with the run's proxy,
+	// with the mount that holds Dir and a socket in a directory that no other container
+	// binds, and none of the run's variables. Its proxy URL has no password, so it has
+	// no route to the caller: a request to the route gets 403 from the gateway's proxy,
+	// and one with the agent's password 503, since that session ended. The session does
+	// not narrow the run's proxy for After: it applies the credentials the run's
+	// configuration holds, and the push guard as it is. Exec starts After there, with the option
 	// --after-only. After runs in Dir, with no input, in a new process group, with the
 	// container's environment but GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_EXEC_PATH,
 	// GIT_CONFIG*, GIT_SSH*, GIT_ASKPASS, BASH_ENV, ENV, LD_PRELOAD, LD_LIBRARY_PATH,
 	// XDG_* and QORY_RUN_SOCKET, with HOME a new, empty directory that nothing writes
 	// to, and with variables that keep git from reading the system's and the user's
 	// configuration, from running a hook, an fsmonitor, a credential helper or a signing
-	// program, and from reaching a remote other than over HTTPS. git 2.54 still runs a
-	// hook of .git/config's hook.<name>.command: the caller refuses such keys. PATH
+	// program, and from reaching a remote other than over HTTPS. Programs that git starts
+	// from the workspace's .git/config still run as After's user: a filter, textconv or
+	// merge driver, and on git 2.54.0, which has no setting that turns off every
+	// hook.<name>.command, such a hook. The caller refuses such keys. PATH
 	// keeps only absolute directories that the agent's user does not own, nor any
 	// directory above them, and that no group or other user may write, but a directory
 	// with the sticky bit; a directory on a read-only mount counts as unchanged. So a
 	// write into the workspace by that user, also while After runs, cannot change which
-	// program runs. After's program is refused, exit status 126, when it or a directory
+	// program After's command finds in PATH. After's program is refused, exit status 126, when it or a directory
 	// above it fails the same check. It is the session's after step, of kind
 	// event.StepAfter and name after: its lines are the command's output, and its exit
 	// status the command's. Its records reach the session over the one connection that
@@ -489,15 +495,17 @@ type SessionSpec struct {
 	// reason timeout. When the kernel kills a process of the container for lack of
 	// memory while After runs, the step ends failed with reason out_of_memory. When the
 	// agent's container cannot be removed, or After's cannot start, the step ends failed
-	// with -1 and the reason as its line. The step ends before the session's
+	// with -1 and the reason as its line. A removal that the context's end cuts is tried
+	// again as the session ends. The step ends before the session's
 	// dev.qory.session.exited, whose state and exit status stay the runtime's;
 	// Result.After is the step's outcome. A runtime stopped at the Timeout, a pause and
 	// a runtime stopped by the context's end all get After. The step, the agent's
 	// container's removal and After's start included, is cut off at AfterTimeout, 5 s
 	// from SIGTERM to SIGKILL, 1 s for After's last output and 1 minute for the removal
 	// and the start; after the context's end it gets StopGrace from that moment, and its
-	// step then ends cancelled with -1. A run closed from outside starts no After. The
-	// setup container, when it still runs, stays: it does not reach After's socket. Empty
+	// step then ends cancelled with -1. A run closed from outside starts no After, nor
+	// does a launch that exits 125, docker's status for a container it could not run:
+	// Result.After is nil. The setup container, when it still runs, stays: it does not reach After's socket. Empty
 	// means none. After needs the run's Wall, an enclosure that is a wall.AfterWrapper
 	// with an Unwrap, Exec and an AfterTimeout above zero, and its words no NUL.
 	After []string
@@ -749,7 +757,7 @@ type Closed struct {
 	// ClosedReason is the 410's code when RunClosed, as [Result.ClosedReason] is.
 	ClosedReason string
 	// WallKept is true when removing a container of the run's wall failed at some point
-	// of the run: a session's Unwrap, RemoveSetup, or the close. A process may have kept
+	// of the run: a session's Unwrap or UnwrapAfter, RemoveSetup, or the close. A process may have kept
 	// writing the run's binds after its session ended, so do not trust what is in them.
 	// WallKept stays true when a later removal succeeded. A close whose every failure
 	// matches [wall.ErrNoContainerKept], such as the Docker wall's on a network or the

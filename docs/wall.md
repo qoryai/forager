@@ -37,6 +37,12 @@ fails. Tools, path rules and images need a wall.
 - The relay copies a fixed port to the gateway's proxy, opening every connection with the
   run's proxy secret, and decides nothing. It forwards no packet between its networks.
 - Neither the relay nor the agent's container runs the image's health check.
+- With `SessionSpec.After`, once the runtime exits the session removes the agent's
+  container and starts After's: a container of the same image on the same inside
+  network, run as the same user with the same hardening and no health check, that
+  binds the mount that holds the workspace and a new socket directory, and has a proxy
+  URL with no password. It has no route to the caller. The session removes it when
+  After ends, and `Close` and `Reap` find it by the run's label.
 - The relay listens on the wall's inside network alone, on its one address in each of
   its subnets, and takes a connection only from an address in those subnets.
 - So every connection is the proxy's to decide and record.
@@ -872,8 +878,8 @@ For a run with a certificate authority, the Docker wall writes the run's certifi
 `qory-run-<id>.crt` in the directory of the image's registry host and of each host of
 the run's credentials, and removes the files when the step ends, also when the pull
 fails. Each later join finds the image by its digest and writes no `image` step. The
-agent's container, the setup container, and the container the wall reads the image's
-files from, are created with `--pull=never`, so the engine pulls the image in the
+agent's container, After's container, the setup container, and the container the wall
+reads the image's files from, are created with `--pull=never`, so the engine pulls the image in the
 `image` step alone. Without
 `EngineProxy`, the engine pulls over the machine's network.
 
@@ -973,7 +979,8 @@ if err := run.RemoveSetup(ctx); err != nil {
   setup container it returns nil and writes no step, so you need no condition around it.
   If the removal fails, close the run: the setup container may still run and change the
   working folder, so run no `push` step after this error. `run.ContainerKept()` is then
-  true, as it is after the agent's container of a session could not be removed. After a
+  true, as it is after the agent's container of a session, or After's container, could
+  not be removed. After a
   `Setup` whose start of the setup container failed, `RemoveSetup` still removes the
   container, which the engine may have started.
 - Run a `push` step before the close only after `Join` returned and `RemoveSetup`

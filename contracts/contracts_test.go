@@ -1325,3 +1325,20 @@ func TestAMeasureRecordValidates(t *testing.T) {
 		}
 	}
 }
+
+// TestTheAfterSourceHasNoKey pins the texts of the after source: After's records carry no
+// key, and the launch's socket does not accept the source. The schemas and the README
+// are read as text, since no validator reads their descriptions.
+func TestTheAfterSourceHasNoKey(t *testing.T) {
+	for _, name := range []string{"record.schema.json", "events/run.step_started.schema.json", "events/run.step_exited.schema.json", "README.md"} {
+		b, err := fs.ReadFile(contracts.FS, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, banned := range []string{"event: key", "hexadecimal characters, in the socket's first record", "every other process of the agent's container", "the sources hooks, setup, measure and after", `"source": "after", "record": {"event": "exited", "exit_code": 143, "reason": "timeout", "key"`} {
+			if strings.Contains(string(b), banned) {
+				t.Errorf("%s has %q: After's records carry no key, and After's container is not the agent's", name, banned)
+			}
+		}
+	}
+}

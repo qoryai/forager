@@ -154,7 +154,7 @@ type Enclosure interface {
 	Close(ctx context.Context) error
 }
 
-// AfterWrapper is an enclosure that starts a session's After in a container of its own, once
+// AfterWrapper is an enclosure that starts a session's After in a new container, once
 // the agent's container of the session is removed: the run's image, the one mount that
 // holds the launch's Dir, a socket directory that no other container binds, the run's proxy
 // and nothing else of the launch. The session removes the agent's container first (Unwrap),
@@ -163,8 +163,10 @@ type AfterWrapper interface {
 	// WrapAfter returns the launch that starts l inside the enclosure, as [Enclosure.Wrap]
 	// does, on the pipes of whoever starts it and with no input. Only l.Command, l.Args,
 	// l.Env, l.Dir, l.Proxy, l.CA, l.Socket, l.Mounts and l.Limits are read. The container has
-	// no route to the caller, no hook socket, no home, no transcript and no nested Docker
-	// daemon.
+	// no route to the caller (its proxy URL has no password: a request to the route gets
+	// 403 from the gateway's proxy, and one with the agent's password 503), no hook socket,
+	// no home, no transcript and no nested Docker daemon. With nested Docker it sets no
+	// IPv6 sysctl, as Wrap does not.
 	WrapAfter(ctx context.Context, l Launch) (Launch, error)
 	// UnwrapAfter removes the After container within the adapter's removal limit, as
 	// [Enclosure.Close] would, and returns once the engine removed it. A container that is
