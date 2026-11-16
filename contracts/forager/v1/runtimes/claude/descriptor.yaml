@@ -59,10 +59,13 @@ headless:
 # variables move where requests and the credential go, add headers, switch to another
 # provider, wrap or replace the shell, move the settings and the credential file, or
 # change the client certificate and the trust of TLS connections; each is in the
-# environment-variable reference and in the 2.1.288 binary. The last seven switch to
+# environment-variable reference and in the 2.1.288 binary. The last nine switch to
 # Google Cloud's, a gateway's or Mantle's endpoint, move the login's host or the host
-# client data goes to, or turn on the mode of a cloud session; each is in the 2.1.325
-# binary.
+# client data goes to, turn on the mode of a cloud session, move the API's host when
+# ANTHROPIC_BASE_URL is unset, as it is behind a wall with no API credential, or move
+# the remote settings file; each is in the 2.1.325 binary. BUN_OPTIONS loads code into
+# Bun, which the native binary is built with: the contract's deny list has it too, and
+# here it is unset inside, so an image's value of it does not reach Claude Code.
 secrets:
   credential_files: [~/.claude/.credentials.json]
   denies: [ANTHROPIC_BASE_URL, ANTHROPIC_BEDROCK_BASE_URL, ANTHROPIC_BEDROCK_MANTLE_BASE_URL,
@@ -75,7 +78,8 @@ secrets:
            CLAUDE_CODE_PLUGIN_SEED_DIR, CLAUDE_CODE_PLUGIN_CACHE_DIR,
            CLAUDE_CODE_MANAGED_SETTINGS_PATH, CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD,
            ANTHROPIC_GOOGLE_CLOUD_BASE_URL, CLAUDE_CODE_USE_GATEWAY, CLAUDE_CODE_USE_MANTLE,
-           CLAUDE_CODE_CUSTOM_OAUTH_URL, CLAUDE_CODE_CLIENT_DATA_URL, CLAUDE_CODE_REMOTE]
+           CLAUDE_CODE_CUSTOM_OAUTH_URL, CLAUDE_CODE_CLIENT_DATA_URL, CLAUDE_CODE_REMOTE,
+           CLAUDE_CODE_API_BASE_URL, CLAUDE_CODE_REMOTE_SETTINGS_PATH, BUN_OPTIONS]
 # Claude Code sends Anthropic's Messages format. A composer writes the run's model id as
 # --model and its effort value as --effort, an agent's effort value in the agent file's
 # effort frontmatter, and the base URL in ANTHROPIC_BASE_URL. Claude Code reads an API

@@ -3,6 +3,7 @@
   "names": [
     "AWS_CA_BUNDLE",
     "BASH_ENV",
+    "BUN_OPTIONS",
     "CURL_CA_BUNDLE",
     "DOCKER_CERT_PATH",
     "DOCKER_CONFIG",

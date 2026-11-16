@@ -1060,14 +1060,21 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Security
 
-- The Claude Code descriptor denies 7 more variables, so no value of the server's, the
+- The Claude Code descriptor denies 10 more variables, so no value of the server's, the
   run's or the machine's reaches Claude Code, and a walled run has them unset.
   `CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD`, `ANTHROPIC_GOOGLE_CLOUD_BASE_URL`,
   `CLAUDE_CODE_USE_GATEWAY` and `CLAUDE_CODE_USE_MANTLE` switch Claude Code to Google
   Cloud's, a gateway's or Mantle's endpoint. `CLAUDE_CODE_CUSTOM_OAUTH_URL` and
   `CLAUDE_CODE_CLIENT_DATA_URL` move the host of the login and the host client data goes
-  to. `CLAUDE_CODE_REMOTE` turns on the mode of a cloud session. Each is in the Claude
-  Code 2.1.325 binary.
+  to. `CLAUDE_CODE_REMOTE` turns on the mode of a cloud session.
+  `CLAUDE_CODE_API_BASE_URL` moves the API's host when `ANTHROPIC_BASE_URL` is unset, as
+  it is behind a wall with no API credential. `CLAUDE_CODE_REMOTE_SETTINGS_PATH` moves
+  the remote settings file. `BUN_OPTIONS` loads code into Bun, which Claude Code's
+  native binary is built with, so an image's value of it is unset inside too. Each is
+  in the Claude Code 2.1.325 binary.
+- `denied-variables.json` lists `BUN_OPTIONS` beside `NODE_OPTIONS`: `BUN_OPTIONS`
+  with `--preload` runs a file before a program built with Bun, so no value of the
+  server's, the run's, the machine's or the harness's reaches any runtime.
 - The Claude Code descriptor's `fixed` sets `DISABLE_AUTOUPDATER=1` in every Claude Code
   launch, walled or not, in the launch and in the `--settings` copy. With it, Claude Code
   does not update itself, so the session runs the version the caller installed. A value

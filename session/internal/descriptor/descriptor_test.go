@@ -80,7 +80,7 @@ func TestClaudeDeclaresItsModelCredential(t *testing.T) {
 	}
 	if len(s.Reserves) != 0 ||
 		!reflect.DeepEqual(s.CredentialFiles, []string{"~/.claude/.credentials.json"}) ||
-		len(s.Denies) != 30 || s.Denies[0] != "ANTHROPIC_BASE_URL" || s.Denies[29] != "CLAUDE_CODE_REMOTE" {
+		len(s.Denies) != 33 || s.Denies[0] != "ANTHROPIC_BASE_URL" || s.Denies[32] != "BUN_OPTIONS" {
 		t.Errorf("reserves %v, credential_files %v, denies %v", s.Reserves, s.CredentialFiles, s.Denies)
 	}
 }

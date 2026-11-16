@@ -35,7 +35,10 @@
         "CLAUDE_CODE_USE_MANTLE",
         "CLAUDE_CODE_CUSTOM_OAUTH_URL",
         "CLAUDE_CODE_CLIENT_DATA_URL",
-        "CLAUDE_CODE_REMOTE"
+        "CLAUDE_CODE_REMOTE",
+        "CLAUDE_CODE_API_BASE_URL",
+        "CLAUDE_CODE_REMOTE_SETTINGS_PATH",
+        "BUN_OPTIONS"
       ],
       "credential_files": [
         "~/.claude/.credentials.json"

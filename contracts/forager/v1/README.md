@@ -1472,7 +1472,7 @@ and the runtime's `denies` and `overrides`, which `runtimes.json` lists.
 | `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY` | they choose the daemon the agent's Docker client reaches under nested Docker (a Docker daemon inside the wall, separate from the machine's), and how |
 | `DOCKER_CONFIG` | the wall sets it for nested Docker |
 | `PATH` | the enclosure resolves the launch's program through it, and which program runs is the node's choice (§Images) |
-| `NODE_OPTIONS`, `LD_PRELOAD`, `BASH_ENV` | they load code into node, into any dynamically linked program, or into bash before the launch's program starts |
+| `NODE_OPTIONS`, `BUN_OPTIONS`, `LD_PRELOAD`, `BASH_ENV` | they load code into node, into Bun, as in a runtime built with Bun such as Claude Code's native binary, into any dynamically linked program, or into bash before the launch's program starts |
 | `HOME` | the image sets it to a writable place (§Images), and the agent and its tools read their configuration under it |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, and every variable a runtime descriptor reads a model key from | a model key passed in is the agent's to read and send anywhere; the gateway holds it and the session sets the variable to its placeholder (§Credentials) |
 | `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITLAB_TOKEN`, `GL_TOKEN`, `BITBUCKET_TOKEN` | a forge token passed in is the agent's; a credential's placeholder takes the variable instead |
