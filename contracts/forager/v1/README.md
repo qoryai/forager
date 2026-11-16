@@ -826,7 +826,8 @@ first command may ask only for the capabilities `report-status`, `report-status-
 `side-band`, `side-band-64k`, `quiet`, `atomic`, `ofs-delta`, `delete-refs`, `agent`,
 `object-format` and `session-id`: a push with push options (`push-options`), which
 ask some hosts to act on another branch, such as a merge into the default branch, is
-refused, and so is any other capability. After the flush the body ends, or a pack
+refused, and so is any other capability, and a capability list with a tab or
+another control character. After the flush the body ends, or a pack
 (`PACK`) follows: anything else is refused. A signed push (`push-cert`), a line of
 another form, and commands longer than 64 KiB (65536 bytes) or slower than 10 seconds
 are refused. A request body of a flush alone, git's probe before a large push, names

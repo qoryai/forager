@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/qoryai/forager/accesskey"
 )
@@ -237,6 +238,12 @@ func (s *commandLines) end() bool {
 		}
 		var capabilities string
 		line, capabilities, _ = strings.Cut(line, "\x00")
+		// git splits capabilities at any whitespace, the list below at spaces only: a
+		// tab or another control character would hide a capability from the list.
+		if strings.ContainsFunc(capabilities, unicode.IsControl) {
+			s.refused = &pushRefusal{fmt.Sprintf("qory: push with git over HTTPS, without --push-option: the gateway refuses the capabilities %s, which have a control character, in a push to @WHERE@\n", shownRef(capabilities))}
+			return false
+		}
 		for _, c := range strings.Split(capabilities, " ") {
 			if name, _, _ := strings.Cut(c, "="); c != "" && !slices.Contains(pushCapabilities, name) {
 				s.refused = &pushRefusal{fmt.Sprintf("qory: push with git over HTTPS, without --push-option: the gateway refuses the capability %s in a push to @WHERE@\n", shownRef(c))}
