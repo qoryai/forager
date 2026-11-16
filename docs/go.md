@@ -1391,10 +1391,14 @@ request asks the gateway for, for this session.
   qory's commit of what the agent left in the workspace, and `AfterTimeout`, above
   zero, how long it may run. Before After starts, `Exec` stops every other process of
   the agent's container, background jobs included, and with nested Docker every inner
-  container. After runs in `Dir` with no input, without the variables that point git
-  elsewhere, and with settings that keep git from running a hook, an fsmonitor, a
-  credential helper or a signing program; its `PATH` has no directory the agent can
-  write. It is the session's `after` step, with its output as the step's lines,
+  container, plugin, swarm service and the swarm; when one is left, After does not
+  start. After runs in `Dir` with no input, without the variables that point git
+  elsewhere, with an empty `HOME` and no `XDG_*` variable, and with settings that keep
+  git from running a hook, an fsmonitor, a credential helper or a signing program, and
+  from reaching a remote other than over HTTPS. Its `PATH` has no directory the agent's
+  user owns or may write, and its program is refused when that user could have changed
+  it. Its records reach the session with a key `Exec` sends before the runtime starts,
+  so a process of the agent's cannot write the step. It is the session's `after` step, with its output as the step's lines,
   before `dev.qory.session.exited`, which keeps the runtime's status. At `AfterTimeout`
   the step ends `cancelled` with reason `timeout`; when the kernel kills a process of
   the container for lack of memory, `failed` with `out_of_memory`. A runtime stopped at
@@ -1516,8 +1520,9 @@ request asks the gateway for, for this session.
   did not start.
 - `After`, for a spec with `After`, the after step's outcome: `Step`, its number;
   `State`, `succeeded`, `failed` or `cancelled`; `ExitCode`, the command's status,
-  `125` when the container's other processes were not stopped and After did not start,
-  and `-1` when the step ended with no status; and `Reason`, `timeout`,
+  `127` for a program `Exec` did not find, `126` for one it could not start or
+  refused, `125` when the container's other processes were not stopped and After did
+  not start, and `-1` when the step ended with no status; and `Reason`, `timeout`,
   `out_of_memory` or empty. It is nil when no record of the step's start reached the
   session: no After ran that the session saw, and a caller that set `After` treats
   that as a failure.

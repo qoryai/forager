@@ -821,11 +821,17 @@ A credential the machine defines with `env` or `file` has no `push_ref`, so no p
 goes through it; an adapter's answer may have `push_ref` on an item, as a run
 configuration's may. The proxy reads the request's `shallow` lines,
 then its ref commands up to their flush, each `<old id> <new id> <ref>`: every command
-must name `push_ref`, so the push creates, updates or deletes that branch alone. A
-signed push (`push-cert`), a line of another form, and commands longer than 64 KiB
-(65536 bytes) or slower than 10 seconds are refused. A request body of a flush alone,
-git's probe before a large push, names no ref and passes. A push that passes goes on as
-it came. A refused push gets a `403` with a one-line text body before anything reaches
+must name `push_ref`, so the push creates, updates or deletes that branch alone. The
+first command may ask only for the capabilities `report-status`, `report-status-v2`,
+`side-band`, `side-band-64k`, `quiet`, `atomic`, `ofs-delta`, `delete-refs`, `agent`,
+`object-format` and `session-id`: a push with push options (`push-options`), which
+ask some hosts to act on another branch, such as a merge into the default branch, is
+refused, and so is any other capability. After the flush the body ends, or a pack
+(`PACK`) follows: anything else is refused. A signed push (`push-cert`), a line of
+another form, and commands longer than 64 KiB (65536 bytes) or slower than 10 seconds
+are refused. A request body of a flush alone, git's probe before a large push, names
+no ref and passes; a flush followed by more bytes is refused. A push that passes goes
+on as it came. A refused push gets a `403` with a one-line text body before anything reaches
 the host, and its `dev.qory.run.egress` is `denied` with the `path_rule`
 `wall:push-ref`; it has no `dev.qory.run.target_write`. Such texts are
 `qory: push only refs/heads/qory/wi_01 to git.example/example-org/app.git/git-receive-pack:
@@ -5629,8 +5635,9 @@ wait for the command; or `exited`, with `exit_code`, 0 to 255. The helper's exec
 third client: once the runtime exits it writes a record of the `measure` source
 (§The events, The measure of the enclosure), and for a session with
 `SessionSpec.After` records of the `after` source, as the setup runner's without
-`command`, whose `exited` may have `reason`, `timeout` or `out_of_memory` (§The wall,
-After). The session cuts off a connection
+`command`, whose `exited` may have `reason`, `timeout` or `out_of_memory`. Its first
+`after` record, sent before the runtime starts, has `event` `key` and `key`, and each
+later one has the same `key` (§The wall, After). The session cuts off a connection
 that stays open longer than 5 seconds, so the runner opens a connection for each batch
 of records. The socket is removed when the run ends.
 
@@ -5638,7 +5645,8 @@ of records. The socket is removed when the run ends.
 {"source": "setup", "record": {"command": 1, "event": "started"}}
 {"source": "setup", "record": {"command": 1, "event": "line", "stream": "stdout", "bytes": "YWRkZWQgMjE0IHBhY2thZ2VzCg=="}}
 {"source": "setup", "record": {"command": 1, "event": "exited", "exit_code": 0}}
-{"source": "after", "record": {"event": "exited", "exit_code": 143, "reason": "timeout"}}
+{"source": "after", "record": {"event": "key", "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
+{"source": "after", "record": {"event": "exited", "exit_code": 143, "reason": "timeout", "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
 ```
 
 ## Images
@@ -6236,30 +6244,56 @@ such as a commit of what the agent left in the workspace, with `AfterTimeout`, h
 it may run, above zero. The helper's exec (§The wall, Names unset inside) runs it once
 the runtime exits and the measure is sent. It first stops every other process of the
 agent's container: it sends `SIGKILL` to each process of the agent's user but itself
-and the container's init, pid 1, and with nested Docker removes each container of the
-inner daemon through its API, until `/proc` lists none of them, for at most 2 seconds.
-It stops processes only as the container's first program: the child of pid 1, an
-engine's init program such as Docker's `docker-init`, in a pid namespace other than the
-machine's. A background job the agent started, such as a
-`nohup` or a `setsid` process, thus changes nothing after the runtime exits. After then
-runs in the working directory, as the runtime's user, with no input, in a process group
-of its own, with the runtime's environment less `GIT_DIR`, `GIT_WORK_TREE`,
+and the container's init, pid 1. With nested Docker it removes, through the inner
+daemon's API, the swarm's services, the swarm itself (a forced leave), each plugin and
+each container, stopped ones included. It goes on until `/proc` lists no process that
+started after the exec, of any user, and the daemon lists none of these objects, for
+at most 2 seconds. A list or a removal that fails, or that the daemon does not answer
+within 1 second, counts as objects left. It stops processes only as the container's
+first program: the child of pid 1, an engine's init program such as Docker's
+`docker-init`, in a pid namespace other than the machine's. A background job the agent
+started, such as a `nohup` or a `setsid` process, thus changes nothing after the
+runtime exits.
+
+The exec runs as the agent's user, so it cannot stop the inner daemon and its
+containerd, which run as the enclosure's root: they keep running while After runs. A
+BuildKit build has no list in the daemon's API, so the exec cannot remove it: its
+processes count as left, and After does not start while they run.
+
+After then runs in the working directory, as the runtime's user, with no input, in a
+new process group, with the runtime's environment less `GIT_DIR`, `GIT_WORK_TREE`,
 `GIT_INDEX_FILE`, `GIT_EXEC_PATH`, `GIT_OBJECT_DIRECTORY`,
 `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_COMMON_DIR`, `GIT_NAMESPACE`, every name that
-starts with `GIT_CONFIG` or `GIT_SSH`, `GIT_ASKPASS`, `GIT_PROXY_COMMAND`,
+starts with `GIT_CONFIG`, `GIT_SSH` or `XDG_`, `GIT_ASKPASS`, `GIT_PROXY_COMMAND`,
 `GIT_EXTERNAL_DIFF`, `GIT_SEQUENCE_EDITOR`, `BASH_ENV`, `ENV`, `LD_PRELOAD`,
-`LD_LIBRARY_PATH`, `LD_AUDIT` and `QORY_RUN_SOCKET`. It gets `GIT_CONFIG_NOSYSTEM=1`,
-`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_TERMINAL_PROMPT=0`, `GIT_PAGER=cat`, `GIT_EDITOR=:`,
-and through `GIT_CONFIG_COUNT`, which wins over every configuration file,
-`.git/config` included: `core.hooksPath=/dev/null`, `core.fsmonitor=false`,
-`core.attributesFile=/dev/null`, `protocol.ext.allow=never`, `submodule.recurse=false`,
+`LD_LIBRARY_PATH`, `LD_AUDIT` and `QORY_RUN_SOCKET`. Its `HOME` is a new, empty
+directory of mode `0500` under the system's temporary directory, removed once After
+exits, so no file the agent left in its home, such as `~/.netrc`, reaches it. It gets
+`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_TERMINAL_PROMPT=0`,
+`GIT_PAGER=cat`, `GIT_EDITOR=:`, and through `GIT_CONFIG_COUNT`, which wins over every
+configuration file, `.git/config` included: `core.hooksPath=/dev/null`,
+`core.fsmonitor=false`, `core.attributesFile=/dev/null`, `protocol.allow=never`,
+`protocol.https.allow=always`, `protocol.ext.allow=never`, `submodule.recurse=false`,
 `core.useReplaceRefs=false`, `core.commitGraph=false`, an empty `credential.helper`,
-`commit.gpgSign=false` and `tag.gpgSign=false`. Its `PATH` keeps the absolute
-directories that exist and that the agent's user cannot write, nor any directory above
-them; `/usr/bin:/bin` when none is left. Other keys of `.git/config`, such as a
-filter, still apply: the caller checks them first. At `AfterTimeout` the group gets
-`SIGTERM`, and `SIGKILL` 5 seconds later; the exec then stops the container's other
-processes again, as it does after every After.
+`commit.gpgSign=false`, `tag.gpgSign=false`, and `hook.<event>.enabled=false` for each
+hook event of githooks(5). So git reaches a remote over HTTPS alone: a remote with a
+local path or a `file://` URL, whose `receivepack` or `uploadpack` setting git would
+run, and one over ssh, whose `core.sshCommand` git would run, are refused. Git 2.55 and
+later run no hook of `.git/config`'s `hook.<name>.command` with these settings; git
+2.54 runs such a hook whatever they are, so the caller refuses `hook.*` keys in
+`.git/config` before it sets After. Other keys of `.git/config`, such as a filter, also
+still apply: the caller checks them first.
+
+After's `PATH` keeps the absolute directories that exist and that the agent's user
+could not have changed, nor any directory above them: a directory the agent's user
+owns, which it may make writable again, and one its group or other users may write,
+but a directory with the sticky bit such as `/tmp`, is left out, and so is one the
+agent's user may write. A directory on a read-only mount counts as unchanged.
+`/usr/bin:/bin` is the `PATH` when none is left. The program After runs, found in that
+`PATH` or given as a path, with every link followed, is refused under the same rule:
+the step ends `failed` with `126` and the reason as its line. At `AfterTimeout` the
+group gets `SIGTERM`, and `SIGKILL` 5 seconds later; the exec then stops the
+container's other processes again, as it does after every After.
 
 The exec reports After on `QORY_RUN_SOCKET` as records of the `after` source (§The
 local socket), and the session writes them as the session's `after` step (§The events,
@@ -6267,16 +6301,28 @@ Steps): `succeeded` on 0, `failed` otherwise, `cancelled` with `reason` `timeout
 `AfterTimeout`, `failed` with `out_of_memory` when `oom_kill` in the cgroup's
 `memory.events` rose while After ran, and `failed` with `125` and its reason as the
 step's line when the other processes were not stopped, in which case After does not
-start. Where the socket does not cross into the enclosure, After still runs, its output
-on the launch's standard error, and the session writes no after step. The step's start
-marks the runtime's exit: the session decides there whether the runtime timed out,
-stops the run's time limit, and holds the launch for at most `AfterTimeout`, 5 seconds
-and the stop grace. A runtime stopped at the time limit still gets After. A stop from
-outside, the caller's context or the run's close, gives After no more than the stop
-grace; its step then ends `cancelled` with `-1`. A runtime that does not exit within
-the stop grace of a stop signal gets no After. After's records come from inside the
-enclosure, as a setup runner's do; an agent that kills the exec first leaves no after
-step, and `(*session.Result).After` is then nil. A run without a wall has no After.
+start. Any process in the agent's container can write to the socket, so the exec signs
+its records: before it starts the runtime, while no process of the agent's runs, it
+makes a random key, 32 bytes in lower-case hexadecimal, and sends it as the socket's
+first record, an `after` record with `event` `key`. Each later `after` record has the
+key as `key`. The session takes the key only from the socket's first record, masks it
+as a secret, and records an `after` record only with that key, compared in constant
+time: any other `after` record, and a second key, is reported and changes no step. The
+key is in no variable and no argument, since the container's init runs as the agent's
+user and the agent can read its environment; the exec is not dumpable from its start,
+so no process of the agent's reads its memory. When the exec cannot send the key, the
+runtime does not start: the exec exits `125` with the reason on standard error. Where
+a later record does not reach the session, After still runs, its output on the
+launch's standard error, and the session writes no after step. The step's start marks
+the runtime's exit: the session decides there whether the runtime timed out, stops the
+run's time limit, and holds the launch for at most `AfterTimeout`, 10 seconds and the
+stop grace: 2 seconds for each of the two stops, 5 seconds from `SIGTERM` to `SIGKILL`,
+and 1 second for After's last output. A runtime stopped at the time limit still gets
+After. A stop from outside, the caller's context or the run's close, gives After no
+more than the stop grace from that stop; its step then ends `cancelled` with `-1`. A
+runtime that does not exit within the stop grace of a stop signal gets no After. An
+agent that kills the exec first leaves no after step, and `(*session.Result).After` is
+then nil. A run without a wall has no After.
 
 **Nested Docker.** *Experimental.* Under the nested runtime the enclosure has a root,
 and whether that root reaches the mounts the run lists as the machine's root is

@@ -15,8 +15,8 @@ import (
 	"github.com/qoryai/forager/event"
 )
 
-// modeLeaveJob is a runtime that leaves a job behind: it starts a process in a session
-// of its own that writes jobFile after jobDelay, and exits 0 at once.
+// modeLeaveJob is a runtime that leaves a job behind: it starts a process in a new
+// session that writes jobFile after jobDelay, and exits 0 at once.
 const modeLeaveJob = "leave-job"
 
 // The job's file in the workspace, its delay, and the file After writes there.

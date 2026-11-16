@@ -19,6 +19,9 @@ release may change what an existing document does, and says so under Upgrading.
   path with one matches no request.
 - Read `after` as a step kind, and `reason` on `dev.qory.run.step_exited`: a gateway
   built before this change refuses a batch that has them.
+- Remove a stray `{` or `}` from the paths of `egress.paths`, of a credential's `paths`
+  and of an apply item's `paths`: a `{` or `}` outside a segment written exactly `{}`
+  is refused from this change, where before it was a character of the path.
 - A gateway built before this change fails a run with `run_configuration_invalid` when
   the run configuration's API credential has `resets_at`, `schedule_resets_at` or
   `pause_for_s`, and ignores the run configuration's `resume`. It also ends a run `batch_refused` for a batch with
@@ -1135,9 +1138,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 - The proxy reads every git push to a host of a credential before it sends a byte: each
   ref command must name the credential's `push_ref`. A push to another branch or a tag,
-  a push through a credential with no `push_ref`, a signed push, and any other form of
-  request that names `receive-pack` get a `403` with a one-line text, recorded as
-  `denied` with the rule `wall:push-ref`.
+  a push through a credential with no `push_ref`, a signed push, a push with push
+  options or a capability outside the guard's list, a body with anything but a pack
+  after the commands' flush, and any other form of request that names `receive-pack`
+  get a `403` with a one-line text, recorded as `denied` with the rule
+  `wall:push-ref`.
 - The gateway sends a model keys report at each session's start, the join's `200`, and
   at its end, when it numbers the session's `dev.qory.session.exited` or when the run
   ends at the gateway while the join is open, also when no window changed. Each report
@@ -1925,13 +1930,20 @@ release may change what an existing document does, and says so under Upgrading.
 
 - `SessionSpec.After` and `AfterTimeout`: a command the helper's exec runs inside the
   wall once the runtime exits, such as a commit of what the agent left. The exec first
-  stops every other process of the agent's container, and with nested Docker every
-  inner container, and runs After with git's hooks, fsmonitor, credential helpers,
-  signing and the system's and user's configuration off, and a `PATH` without a
-  directory the agent can write. The session writes it as an `after` step before
-  `dev.qory.session.exited`, and `Result.After` has its outcome. A runtime stopped at
-  `Timeout` still gets After. `Exec` takes `--after-timeout MS`, `--after-word WORD` and
-  `--after-docker`. Join refuses After without a wall or an `AfterTimeout`.
+  stops every other process of the agent's container, and with nested Docker removes
+  the inner daemon's swarm services, swarm, plugins and containers; a process of any
+  user that started after the exec, or a list that fails or answers late, counts as
+  left, and After then does not start. After runs with git's hooks, fsmonitor,
+  credential helpers, signing, the system's and user's configuration, and remotes
+  other than HTTPS off, an empty `HOME`, no `XDG_*` variable, and a `PATH` without a
+  directory the agent's user owns or may write; a program it could have changed is
+  refused. The session writes it as an `after` step before `dev.qory.session.exited`,
+  and `Result.After` has its outcome. The exec sends a random key as the socket's first
+  record, before the runtime starts, and the session records only the after records
+  with that key. A runtime stopped at `Timeout` still gets After. `Exec` takes
+  `--after-timeout MS`, `--after-word WORD` and `--after-docker`, is not dumpable from
+  its start, and with After exits `125` without starting the runtime when it cannot
+  send the key. Join refuses After without a wall or an `AfterTimeout`.
 - `(*session.Run).SetRunAPICheck`, `session.RunAPIRequest` and `session.RunAPIRefusal`:
   a check of each POST that a walled program sends to the run API, before anything of it
   reaches the gateway. Call `SetRunAPICheck` after `Open` and before `Setup` and the

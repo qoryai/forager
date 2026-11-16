@@ -33,7 +33,7 @@
       ]
     },
     "record": {
-      "description": "The JSON object as the runtime produced it, unchanged; for setup, command, the command's number from 1, and event: started, line with stream (stdout or stderr), bytes (the line in standard base64) and, on a line the runner writes when it cannot start or wait for the command, runner true, or exited with exit_code (0 to 255); for measure, peak_memory_bytes and cpu_time_ms, each a whole number from 0 to 2^53-1, and each left out when it could not be read; for after, event: started, line as a setup record's, or exited with exit_code (0 to 255) and, when the command did not end by itself, reason: timeout or out_of_memory.",
+      "description": "The JSON object as the runtime produced it, unchanged; for setup, command, the command's number from 1, and event: started, line with stream (stdout or stderr), bytes (the line in standard base64) and, on a line the runner writes when it cannot start or wait for the command, runner true, or exited with exit_code (0 to 255); for measure, peak_memory_bytes and cpu_time_ms, each a whole number from 0 to 2^53-1, and each left out when it could not be read; for after, event: key with key, the helper's exec's key, 64 lower-case hexadecimal characters, in the socket's first record, sent before the runtime starts; started, line as a setup record's, or exited with exit_code (0 to 255) and, when the command did not end by itself, reason: timeout or out_of_memory; each with key, the same key, without which the session does not record it.",
       "type": "object"
     }
   }
