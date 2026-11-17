@@ -412,8 +412,21 @@ func TestThePushProxySetsThePushCredentialAlone(t *testing.T) {
 // values expire an hour after the start; 5 minutes before, the gateway requests both
 // from the reference receiver in one request, and from then on the run's proxy sets
 // work-1's second value and the push proxy push-1's second value. The run's proxy
-// returns a 403 for push-1's path and sends nothing.
+// returns a 403 for push-1's path and sends nothing. In a write-no-push run, with
+// work-1 alone, the renewal requests work-1 alone, and the run has no push proxy
+// before or after it.
 func TestThePushAndWorkValuesAreRenewed(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		push bool
+	}{{"write", true}, {"write-no-push", false}} {
+		t.Run(c.name, func(t *testing.T) { renewsPush(t, c.push) })
+	}
+}
+
+// renewsPush is TestThePushAndWorkValuesAreRenewed for a write run, with push, or a
+// write-no-push run.
+func renewsPush(t *testing.T, push bool) {
 	certFile, keyFile, roots := testCertificate(t, t.TempDir())
 	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
@@ -435,9 +448,12 @@ func TestThePushAndWorkValuesAreRenewed(t *testing.T) {
 	clock := &stepClock{now: time.Now().UTC().Truncate(time.Second)}
 	begun := clock.Now()
 	ref := newReference(t, "localhost")
-	ref.doc = []byte(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"credentials":[` +
-		`{"name":"work-1","apply":[{"hosts":["localhost"],"scheme":"header","header":"x-api-key","paths":["/work/*"]}]},` +
-		`{"name":"push-1","purpose":"push","apply":[{"hosts":["localhost"],"scheme":"header","header":"x-api-key","paths":["/push/*"]}]}]}`)
+	doc := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"credentials":[` +
+		`{"name":"work-1","apply":[{"hosts":["localhost"],"scheme":"header","header":"x-api-key","paths":["/work/*"]}]}`
+	if push {
+		doc += `,{"name":"push-1","purpose":"push","apply":[{"hosts":["localhost"],"scheme":"header","header":"x-api-key","paths":["/push/*"]}]}`
+	}
+	ref.doc = []byte(doc + `]}`)
 	ref.h.Secrets = func(_ receiver.Run, names []string) ([]receiver.Value, *receiver.Refusal) {
 		ref.mu.Lock()
 		n := len(ref.asked)
@@ -489,21 +505,41 @@ func TestThePushAndWorkValuesAreRenewed(t *testing.T) {
 		}
 		return v
 	}
-	if w, p := through(a.ProxySecret, "/work/x"), through(a.PushProxySecret, "/push/x"); w != "work-1-value-1-of-the-renewal-test" || p != "push-1-value-1-of-the-renewal-test" {
-		t.Fatalf("before the renewal the origin got %q and %q", w, p)
+	noPushProxy := func(when string) {
+		t.Helper()
+		if tokens, proxied := gateway.PushTokens(h.g, a.RunID); a.PushProxySecret != "" || proxied || len(tokens) != 0 {
+			t.Errorf("%s the write-no-push run's push_proxy_secret %q, push proxy %v with %v; want none", when, a.PushProxySecret, proxied, tokens)
+		}
+	}
+	if push {
+		if p := through(a.PushProxySecret, "/push/x"); p != "push-1-value-1-of-the-renewal-test" {
+			t.Fatalf("before the renewal the push proxy reached the origin with %q", p)
+		}
+	} else {
+		noPushProxy("before the renewal")
+	}
+	if w := through(a.ProxySecret, "/work/x"); w != "work-1-value-1-of-the-renewal-test" {
+		t.Fatalf("before the renewal the run's proxy reached the origin with %q", w)
 	}
 	// The run's proxy has no credential for push-1's path, so no path rule covers it.
 	if got := through(a.ProxySecret, "/push/x"); got != "(no request: 403)" {
 		t.Errorf("the run's proxy on push-1's path: %q", got)
 	}
+	want := []string{"work-1"}
+	if push {
+		want = append(want, "push-1")
+	}
 	clock.advance(time.Hour - 5*time.Minute)
 	eventually(t, "the renewal before expires_at", func() bool { return len(asked()) == 2 })
-	if a := asked(); !slices.Equal(a[1], []string{"work-1", "push-1"}) {
-		t.Errorf("the renewal's secrets request was for %v; want work-1 and push-1", a[1])
+	if a := asked(); !slices.Equal(a[1], want) {
+		t.Errorf("the renewal's secrets request was for %v; want %v", a[1], want)
 	}
 	eventually(t, "the second values at the origin", func() bool {
-		return through(a.ProxySecret, "/work/x") == "work-1-value-2-of-the-renewal-test" && through(a.PushProxySecret, "/push/x") == "push-1-value-2-of-the-renewal-test"
+		return through(a.ProxySecret, "/work/x") == "work-1-value-2-of-the-renewal-test" && (!push || through(a.PushProxySecret, "/push/x") == "push-1-value-2-of-the-renewal-test")
 	})
+	if !push {
+		noPushProxy("after the renewal")
+	}
 	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID))
 	h.close()
 }
