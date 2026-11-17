@@ -248,8 +248,9 @@ Every `dev.qory.run.exited` shows how the run ended in `state`: `succeeded`, `fa
 outcome its caller gives. A run its starter ends with an outcome has that outcome. When
 the close's outcome has a reason, or the run ends without a close, or its starter gives
 a reason, `dev.qory.run.exited` contains why in `reason`: an open code, Forager's or the
-starter's, carried as given. The close writes `timeout`, `cancelled`, `interrupted`,
-`cancelled`, a run stopped from where it was started (a Ctrl-C), and `no_session`,
+starter's, carried as given. The gateway accepts a starter's code in the close only
+`failed`, in a run a session joined, such as qory's end code `push_refused`. The close
+writes `timeout`, `cancelled`, `interrupted`, `cancelled`, a run stopped from where it was started (a Ctrl-C), and `no_session`,
 `failed`, a run closed with no session after its host work failed, such as a fetch,
 and `model_key_limit`, `paused`, a run whose last session ended `paused` with
 `model_key_limit`, which a control plane reads as a pause of the run, and posts them. The close writes and posts `image_missing`, `failed` with exit code

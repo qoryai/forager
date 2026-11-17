@@ -208,6 +208,18 @@ func TestTheReservedCodesAreTheContracts(t *testing.T) {
 	}
 }
 
+// TestQorysEndCodesAreStarterReasons pins the four end codes qory sets in a failed
+// run's outcome, $defs end_codes of integrations' contracts/run/v1/outcome.schema.json,
+// as starter's reasons: none is one of Forager's reserved codes, so none is dropped. A
+// code of the pattern outside that list, push_window_closed, is a starter's reason too.
+func TestQorysEndCodesAreStarterReasons(t *testing.T) {
+	for _, code := range []string{"push_credential_missing", "push_refused", "prebuilt_image_too_large", "push_not_recorded", "push_window_closed"} {
+		if event.Reserved(code) || !event.StarterReason(code) {
+			t.Errorf("%s: reserved %v, a starter's reason %v; want not reserved, a starter's reason", code, event.Reserved(code), event.StarterReason(code))
+		}
+	}
+}
+
 // TestSequenceIsPaddedAndContiguous pins the sequence format the receiver sorts on.
 func TestSequenceIsPaddedAndContiguous(t *testing.T) {
 	e := event.NewEmitter(event.NewRunID(), nil)

@@ -1162,6 +1162,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Update the gateway before qory closes a run with a starter's code, such as the end
+  code `push_refused`. A gateway built before this change returns `400`
+  `invalid_request` to the batch with that `dev.qory.run.exited`, and ends the run
+  `failed` with `batch_refused`.
 - Update the gateway before the sessions that write `peak_memory_bytes` and
   `cpu_time_ms` on `dev.qory.session.exited`. A gateway built with an older contract
   does not have them, and ends the run `failed` with `batch_refused` at the batch that
@@ -1443,6 +1447,17 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- The gateway accepts a session's `dev.qory.run.exited` with a starter's reason, a
+  code of the reason's pattern that is none of Forager's reserved codes, when it is
+  `failed` in a run a session joined. qory closes such a run with one of the four end
+  codes of integrations' `contracts/run/v1/outcome.schema.json`:
+  `push_credential_missing`, `push_refused`, `prebuilt_image_too_large` and
+  `push_not_recorded`. The code reaches the server unchanged, as it does from the
+  starter's outcome, where none of the four is a reserved code. Before, the gateway
+  refused every starter's reason in the close. It still refuses one with another
+  state, and one in a run no session joined. The fixture
+  `link-batch-beyond-schema-exited-starter-reason.json` has the state `succeeded`, so
+  the gateway refuses it after a join too.
 - A run that opens while Qory Apiary restarts opens once Qory Apiary is back. The
   gateway tries the run's registration, or its attach, again 1, 2, 4, 8 and 15 seconds
   after the try before, then every 15 seconds, within 120 seconds of the run request's

@@ -1089,6 +1089,43 @@ func TestTheEndMember(t *testing.T) {
 	}
 }
 
+// TestQorysEndCodesPassTheReceiver pins the four end codes qory sets in a failed run's
+// outcome, $defs end_codes of integrations' contracts/run/v1/outcome.schema.json, and
+// push_window_closed, a code of the pattern outside that list, at the receiver: an
+// outcome failed with the code is kept as it came, and the end member of the next 2xx
+// to a batch is failed with the code, which ReadEnd reads unchanged. So is push_refused
+// with the state succeeded, since the rule that an end code goes only with failed is
+// the control plane's, not the receiver's.
+func TestQorysEndCodesPassTheReceiver(t *testing.T) {
+	s := newStand(t)
+	s.now = time.Now().UTC().Truncate(time.Second)
+	for _, c := range []server.ServerEnd{
+		{State: "failed", Reason: "push_credential_missing"},
+		{State: "failed", Reason: "push_refused"},
+		{State: "failed", Reason: "prebuilt_image_too_large"},
+		{State: "failed", Reason: "push_not_recorded"},
+		{State: "failed", Reason: "push_window_closed"},
+		{State: "succeeded", Reason: "push_refused"},
+	} {
+		id := event.NewRunID()
+		if _, rec := s.register(directKey, s.directBody(id)); rec.Code != http.StatusOK {
+			t.Fatal(rec.Code)
+		}
+		if _, rec := s.outcome(directKey, id, s.outcomeBody(c.State, c.Reason)); rec.Code != http.StatusOK {
+			t.Fatalf("the outcome %+v: %d %s", c, rec.Code, rec.Body.String())
+		}
+		_, rec := s.batch(directKey2, event.NewEmitter(id, nil), event.RunHeartbeat)
+		var got map[string]map[string]string
+		json.Unmarshal(rec.Body.Bytes(), &got)
+		if want := map[string]map[string]string{"end": {"state": c.State, "reason": c.Reason}}; rec.Code != http.StatusAccepted || !jsonEqual(got, want) {
+			t.Errorf("the end of the outcome %+v: %d %s", c, rec.Code, rec.Body.String())
+		}
+		if end := server.ReadEnd(rec.Body.Bytes()); end == nil || *end != c {
+			t.Errorf("the end of the outcome %+v, as Forager reads it: %+v", c, end)
+		}
+	}
+}
+
 // TestTheClientsAgainstTheReceiver runs Forager's client calls of a run through a
 // gateway against the receiver: a gateway-shape body from a direct node, or from a key
 // with no node, is node_is_direct and never a direct registration; a gateway's key is

@@ -593,8 +593,10 @@ var stopModelKeyLimit = []byte(`{"stop":{"reason":"` + event.ReasonModelKeyLimit
 // close of a read run whose setup container could not be removed, and write_needs_wall
 // the close of a run whose access is not read and that has no wall. It accepts
 // model_key_limit, the pause after a limit refusal, paused, only for a run with a join
-// whose last dev.qory.session.exited has that reason. The gateway writes the event of
-// every other end itself. joined is true when the gateway numbered a join of the run,
+// whose last dev.qory.session.exited has that reason. It accepts a starter's reason,
+// event.StarterReason's code of the reason's pattern that is none of Forager's reserved
+// codes, such as qory's end code push_refused, only failed in a run with a join. The
+// gateway writes the event of every other end itself. joined is true when the gateway numbered a join of the run,
 // and last is the reason of the last dev.qory.session.exited the run's stream numbered,
 // empty for none.
 func closeRule(data map[string]any, joined bool, last string) string {
@@ -625,6 +627,13 @@ func closeRule(data map[string]any, joined bool, last string) string {
 			return "a run.exited " + why + " of a run with a join"
 		case data["state"] != event.StateFailed || code != -1:
 			return "a run.exited " + why + " that is not failed with exit_code -1"
+		}
+	case event.StarterReason(why):
+		switch {
+		case data["state"] != event.StateFailed:
+			return "a run.exited " + why + " that is not failed"
+		case !joined:
+			return "a run.exited " + why + " of a run with no join"
 		}
 	default:
 		return "a run.exited with a reason the gateway decides"
