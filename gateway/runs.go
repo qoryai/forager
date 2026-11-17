@@ -69,6 +69,12 @@ type linkRun struct {
 	stack       *proxy.Proxy
 	stackSecret secretValue
 
+	// push is the run's push proxy, and pushSecret its secret on the local link, held so
+	// that no print of the run shows it; both nil for a run with no push credential and
+	// once the run let go of what it holds, under mu ([linkRun.closePush]).
+	push       *proxy.Proxy
+	pushSecret secretValue
+
 	// batch takes one batch of the session's at a time.
 	batch sync.Mutex
 	// joining takes one join, or one reload's decision and commit, at a time, so a
@@ -567,6 +573,9 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	if err := lr.openStack(req.Wall || remote, ca); err != nil {
 		return fail(err)
 	}
+	if err := lr.openPush(req.Wall || remote, ca); err != nil {
+		return fail(err)
+	}
 	lr.mu.Lock()
 	given := lr.refresh()
 	lr.opened = true
@@ -805,12 +814,13 @@ func (lr *linkRun) arm() {
 func (lr *linkRun) serverEnd(end server.ServerEnd) { lr.end(stoppedBy(end)) }
 
 // release lets go of what the run holds on the gateway's side: its stack proxy, its
-// secret and proxy first, so an ended run's secrets are refused at once, even while a
+// push proxy, its secret and proxy first, so an ended run's secrets are refused at once, even while a
 // reload in flight winds down; then its reload, its tools and its credentials. Each may
 // be absent.
 func (lr *linkRun) release() {
 	lr.cancel()
 	lr.closeStack()
+	lr.closePush()
 	if lr.secret != nil {
 		lr.g.proxies.Unregister(lr.secret.reveal())
 	}
@@ -1198,7 +1208,7 @@ func ended(e ending, session int, from time.Time) map[string]any {
 
 // runAnswerDoc is the run answer as the gateway writes it,
 // contracts/forager/v1/link-run-answer.schema.json: on the one address without the
-// labels, the proxy secret and the stack proxy secret.
+// labels, the proxy secret, the stack proxy secret and the push proxy secret.
 type runAnswerDoc struct {
 	Version              int                          `json:"version"`
 	RunID                string                       `json:"run_id"`
@@ -1208,6 +1218,7 @@ type runAnswerDoc struct {
 	Variables            map[string]server.Variable   `json:"variables,omitempty"`
 	ProxySecret          string                       `json:"proxy_secret,omitempty"`
 	StackProxySecret     string                       `json:"stack_proxy_secret,omitempty"`
+	PushProxySecret      string                       `json:"push_proxy_secret,omitempty"`
 	CertificateAuthority string                       `json:"certificate_authority,omitempty"`
 	Placeholders         []string                     `json:"placeholders,omitempty"`
 	Reserved             []string                     `json:"reserved,omitempty"`
@@ -1266,6 +1277,12 @@ func (lr *linkRun) compute() refreshed {
 	var given []map[string]any
 	pol := lr.r.Policy()
 	applied := appliedOf(pol, lr.r.Beside(), lr.r.Held(), lr.r.Chosen(), lr.px.Terminated())
+	if push := pushApplied(lr.r.PushUses()); len(push) > 0 {
+		// Every record lists the push credentials, which the push proxy sets from the
+		// run's open until its close.
+		listed, _ := applied["credentials"].([]any)
+		applied["credentials"] = append(slices.Clone(listed), push...)
+	}
 	if hosts := lr.r.StackHosts(); !lr.opened && len(hosts) > 0 {
 		// The open's record lists the run configuration's stack_hosts, which the stack
 		// proxy allows until the run's first join request, in JSON's types as the rest.
@@ -1326,7 +1343,7 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 	doc, digest := policyDocument(pol)
 	a := runAnswerDoc{
 		Version: 1, RunID: lr.id, Labels: lr.labels, Policy: doc, Digest: digest, Variables: variables(lr.r.Variables()),
-		ProxySecret: lr.secret.reveal(), StackProxySecret: lr.stackSecret.reveal(), CertificateAuthority: string(authority), Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(),
+		ProxySecret: lr.secret.reveal(), StackProxySecret: lr.stackSecret.reveal(), PushProxySecret: lr.pushSecret.reveal(), CertificateAuthority: string(authority), Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(),
 		CredentialHosts: credentialHosts(lr.r.Held()), Image: lr.image(), Applied: lr.given[len(lr.given)-1],
 	}
 	if held := lr.r.Held(); held != nil {

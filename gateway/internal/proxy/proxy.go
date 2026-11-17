@@ -194,6 +194,9 @@ type Proxy struct {
 	// unlisted, when set, is the body of the 403 of a host no allow entry matches under
 	// enforce ([Proxy.Unlisted]).
 	unlisted atomic.Pointer[func(host string, port int) string]
+	// pathless, when set, is the body of the 403 of a request on a terminated host that
+	// no path rule covers ([Proxy.PathRefused]).
+	pathless atomic.Pointer[func(method, host, path string) string]
 	// admit, when set, decides each host an allow entry matches ([Proxy.Admit]).
 	admit atomic.Pointer[func(host, rule string) bool]
 	// guardBody, when set, is the body of the 403 of a host the guard refuses
@@ -545,6 +548,12 @@ func (p *Proxy) AllowFirst(entries []string) {
 // enforce: body's text for the host and the port, in place of the line with the
 // policy's mode. Every other refusal keeps its body.
 func (p *Proxy) Unlisted(body func(host string, port int) string) { p.unlisted.Store(&body) }
+
+// PathRefused sets the body of the 403 that refuses a request on a terminated host
+// because no path rule covers its path: body's text for the request's method, host and
+// path, each as the proxy shows them, in place of the line with the policy's mode. Every
+// other refusal keeps its body.
+func (p *Proxy) PathRefused(body func(method, host, path string) string) { p.pathless.Store(&body) }
 
 // Admit sets a check of each host an allow entry matches, rule being the entry: a host
 // it returns false for is decided as one no allow entry matches, refused under enforce

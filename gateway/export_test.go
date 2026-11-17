@@ -338,3 +338,16 @@ func Swept(g *Gateway, runID string) bool {
 func SetSweepTicker(c *Config, tick func(every time.Duration) <-chan time.Time) {
 	c.sweepTicker = func(every time.Duration) (<-chan time.Time, func()) { return tick(every), func() {} }
 }
+
+// PushTokens are the values of the push credentials that g's push proxy of the run of
+// runID sets now, by the credential's name, and whether the run has a push proxy.
+func PushTokens(g *Gateway, runID string) (map[string]string, bool) {
+	g.mu.Lock()
+	lr := g.runs[runID]
+	g.mu.Unlock()
+	out := map[string]string{}
+	for _, u := range lr.r.PushUses() {
+		out[u.Name] = string(u.Value())
+	}
+	return out, lr.pushProxy() != nil
+}

@@ -566,6 +566,10 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 				fmt.Fprintf(w, "qory: %s %s%s denied by the gateway: the path could be read two ways\n", accesskey.ShownValue(r.Method, false), d.Host, accesskey.ShownValue(clean, false))
 				return
 			}
+			if body := t.p.pathless.Load(); body != nil {
+				io.WriteString(w, (*body)(accesskey.ShownValue(r.Method, false), d.Host, accesskey.ShownValue(clean, false)))
+				return
+			}
 			fmt.Fprintf(w, "qory: %s %s%s denied by policy (mode %s): no path rule of the run's covers it\n", accesskey.ShownValue(r.Method, false), d.Host, accesskey.ShownValue(clean, false), req.Mode)
 			return
 		}
