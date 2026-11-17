@@ -2068,13 +2068,11 @@ release may change what an existing document does, and says so under Upgrading.
   (`socket.ListenAfter`, `ServeFirst`): a process After starts cannot write the step. A
   runtime stopped at `Timeout`, a pause and a stop from the context all get After; after
   the context's end the removal, the start and After get `StopGrace` together, and a
-  closed run starts none, nor does a launch whose helper sent no record that it started
-  the program, such as a docker run that failed, which leaves `Result.After` nil. The
-  helper's exec sends the new `launch` source's record `{"event": "started"}` just
-  before it starts the program, and before the session's setup commands run, so a
-  runtime that exits `125` by itself, and a session whose setup command fails, still get
-  After. A session with After passes the helper `--launch-record`: when the record
-  cannot be sent, the helper exits `125` and starts no program.
+  closed run starts none, and every other exit gets After, `125` included: a launch that
+  failed before any container existed, such as a docker run that exited `125` with no
+  container, still gets After on the unchanged workspace, and `Result.After` is nil only
+  for a spec with no After and a closed run. If After's container cannot start for the
+  same cause, the after step ends `failed` with `-1`, after the launch's error line.
   The session removes the setup container first, when the run has one, as
   `Run.RemoveSetup` does, with its wall step before the after step; the run is then as
   one after `RemoveSetup`, and a removal that fails ends After `failed` and leaves

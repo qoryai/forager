@@ -5807,8 +5807,8 @@ they arrive, so two hook calls in a row keep their order. There is no answer and
 framing beyond the newline. The forwarder the session installs as a hook is one such
 client; a harness that reports something itself writes the same shape with
 `source: hooks`. A record of the `hooks` source reaches a receiver only through the
-descriptor's rules. The launch's socket accepts records of the `hooks`, `setup`,
-`measure` and `launch` sources and skips a record of the `output` source, writing no
+descriptor's rules. The launch's socket accepts records of the `hooks`, `setup`
+and `measure` sources and skips a record of the `output` source, writing no
 event for it. Output records come from the runtime's standard output only, which the
 session reads on the host, while any process in the agent's container can write to the
 socket. The setup runner is another client: it writes records
@@ -5818,18 +5818,7 @@ setup commands inside the wall (§The wall, Setup inside the wall). Its `record`
 `stdout` or `stderr`, and `bytes`, the line in standard base64, a long line in parts of
 4096 bytes, and `runner: true` on a line the runner writes when it cannot start or
 wait for the command; or `exited`, with `exit_code`, 0 to 255. The helper's exec is a
-third client: just before it starts the runtime's program it writes one record of the
-`launch` source, `{"event": "started"}`, which tells the session the helper started the
-program in the enclosure. The record comes before the runtime's preparation script runs
-the session's setup commands inside the wall, so it means the helper started, not that
-those commands succeeded: a session with `SessionSpec.After` runs After when a setup
-command fails, and not for a launch that failed before the helper started the program,
-such as a docker run that exited `125` with no container. A session with After passes
-the helper `--launch-record`: when the helper cannot send the record, it writes the
-reason to standard error and exits `125` without starting the program, so "the program
-started" holds exactly when the record was sent. Without that option the helper writes
-the error and starts the program. A record of the `launch` source with another `event`
-is skipped and reported. Once the runtime exits it writes a record of the `measure` source
+third client: once the runtime exits it writes a record of the `measure` source
 (§The events, The measure of the enclosure), and for a session with
 `SessionSpec.After`, in After's container, records of the `after` source, as the setup
 runner's without `command` and `started`, whose `exited` may have `reason`, `timeout`
@@ -6552,11 +6541,13 @@ that window it removes After's container, and the step ends `cancelled` with `-1
 reason `timeout`. When the caller's context ends before or while After runs, After
 runs on, and the step, the agent's removal and After's start included, gets no more than
 the stop grace from that moment; the step then ends `cancelled` with `-1` and no reason.
-A run closed from outside starts no After, or cuts it at once, and neither does a
-launch whose helper sent no record of the `launch` source, such as a docker run that
-failed, since the workspace is unchanged; `(*session.Result).After` is nil when it
-started none. A runtime that exits `125` by itself, and a session whose setup command
-failed after the helper started, sent that record and get After. A
+A run closed from outside starts no After, or cuts it at once, and `(*session.Result).After`
+is nil then and for a session with no After; every other exit gets After, `125`
+included. When the launch failed before any container existed, such as a docker run
+that exited `125` with no container, After still starts on the unchanged workspace; if
+its container cannot start for the same cause, the after step ends `failed` with `-1`.
+The launch's error line, the engine's output as the session's lines carry it, comes
+before the after step's failure line in the run's record and on the terminal. A
 removal of the agent's container that the context's end or the run's close cuts is
 tried again as the session ends, and counts as failed only if that removal fails. A run without a wall has no
 After.

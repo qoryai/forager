@@ -1452,7 +1452,7 @@ request asks the gateway for, for this session.
 - `Forwarder` is the command installed as the runtime's hook. It must call
   `session.Forward(ctx, os.Stdin)`. That passes the hook's input to the run, over a
   socket whose address is in the environment. The socket accepts records of the
-  `hooks`, `setup`, `measure` and `launch` sources and skips a record of the `output`
+  `hooks`, `setup` and `measure` sources and skips a record of the `output`
   source:
   output records come from the runtime's standard output only.
 - `CAEnv` lists the names of the variables that point at `ca-bundle.pem` in the run
@@ -1553,12 +1553,12 @@ request asks the gateway for, for this session.
   container for lack of memory, `failed` with `out_of_memory`. A runtime stopped at
   `Timeout`, and a pause, still get After. When the caller's context ends, After still
   runs, and the removal, the start and After together get no more than `StopGrace`; its
-  step then ends `cancelled` with `-1`. A closed run starts no After, nor does a launch
-  whose helper sent no record that it started the program, such as a docker run that failed
-  (`Result.After` is nil). The helper sends that record before the session's setup commands run inside
-  the wall, so a runtime that exits `125` by itself, and a session whose setup command fails, still get
-  After. With After the session passes the helper `--launch-record`: when the record cannot be
-  sent, the helper exits `125` and starts no program. A removal of the
+  step then ends `cancelled` with `-1`. A closed run starts no After, and every other
+  exit gets it, `125` included (`Result.After` is nil only for a spec with no `After` and
+  a closed run): when the launch failed before any container existed, such as a docker
+  run that exited `125` with no container, After still starts on the unchanged
+  workspace, and if After's container cannot start for the same cause, the after step
+  ends `failed` with `-1`, after the launch's error line. A removal of the
   agent's container that the context's end cuts is tried again as the session ends.
   With After, `Join` may take `AfterTimeout` plus 66 seconds more than its 15 seconds:
   the removal and the start together get 60 seconds, then 5 seconds between SIGTERM and
