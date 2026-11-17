@@ -1259,9 +1259,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 - Write each path of a machine credential's `paths` in `forager.yaml` without a `.` or
   `..` segment, an empty segment, a backslash, or an encoded slash, backslash, dot or
-  percent sign, also before a segment's first `;` or `%3B`. The gateway refuses such a
-  path as it resolves the machine's credentials, as the server already refuses it in a
-  run configuration, since the proxy denies every request path with one.
+  percent sign, also before a segment's first `;` or `%3B`. The gateway does not start
+  with such a path (`policy.UnclearPath`), as the server refuses it in a run
+  configuration: the proxy denies every request path with one, so the path matches no
+  request.
 - Update the gateway before the sessions that write `peak_memory_bytes` and
   `cpu_time_ms` on `dev.qory.session.exited`. A gateway built with an older contract
   does not have them, and ends the run `failed` with `batch_refused` at the batch that

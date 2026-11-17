@@ -1163,18 +1163,43 @@ func TestAnAdaptersLineHasNoKey(t *testing.T) {
 	}
 }
 
-// TestCheckPathsRefusesAnUnclearPath pins checkPaths on a machine credential's paths: a
-// path that policy.UnclearPath reports is refused with the path in the error's first
-// line, and a clean path and a path with a {} segment pass.
+// TestCheckPathsRefusesAnUnclearPath pins Check on the paths of a machine credential
+// that can have paths, from an adapter or from env: a path that policy.UnclearPath
+// reports is refused with the fix on the first line and the cause on the second, a path
+// outside the path grammar is refused with the grammar text first, even when it is also
+// unclear, and a clean path and a path with a {} segment pass.
 func TestCheckPathsRefusesAnUnclearPath(t *testing.T) {
-	err := checkPaths("model", []string{"/v1/responses", "/v1/../responses"})
-	if err == nil {
-		t.Fatal("checkPaths took /v1/../responses")
+	unclear := func(p string) string {
+		return `Remove empty, . and .. segments, backslashes, %2F, %5C, %2E and %25 from path "` + p + `" of credential forge.` + "\n" +
+			"The proxy reads each segment up to its first ; or %3B, takes each %-code in either case, such as %2f, and denies a control character too. " +
+			"It denies every request whose path has one of these parts, so the path matches no request."
 	}
-	if first, _, _ := strings.Cut(err.Error(), "\n"); !strings.Contains(first, `the path "/v1/../responses" of the credential model`) {
-		t.Errorf("first line %q; want the path and the credential in it", first)
+	grammar := func(p string) string {
+		return "Write each credential path from /, with { and } only as the segment {} and * only at the end.\n" +
+			`The path "` + p + `" of credential forge is not in that form.`
 	}
-	if err := checkPaths("model", []string{"/v1/responses", "/repos/{}/app", "/v1/*"}); err != nil {
-		t.Errorf("a clean path and a {} path: %v", err)
+	for source, def := range map[string]func(...string) Definition{
+		"adapter": func(paths ...string) Definition {
+			return Definition{Name: "forge", Adapter: []string{"/opt/forge-adapter"}, Paths: paths}
+		},
+		"env": func(paths ...string) Definition {
+			return Definition{Name: "forge", Env: "FORGE_TOKEN", Hosts: []string{"api.git.example"}, Scheme: "bearer", Paths: paths}
+		},
+	} {
+		for _, c := range []struct{ path, want string }{
+			{"/v1/../responses", unclear("/v1/../responses")},
+			{"/a//b", unclear("/a//b")},
+			{"/a/..;x/b", unclear("/a/..;x/b")},
+			{"/a%2fb", unclear("/a%2fb")},
+			{"/a/{x}/../b", grammar("/a/{x}/../b")},
+		} {
+			err := def("/v1/responses", c.path).Check()
+			if err == nil || err.Error() != c.want {
+				t.Errorf("%s, path %s: %v; want %s", source, c.path, err, c.want)
+			}
+		}
+		if err := def("/v1/responses", "/repos/{}/app", "/v1/*").Check(); err != nil {
+			t.Errorf("%s, a clean path and a {} path: %v", source, err)
+		}
 	}
 }

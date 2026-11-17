@@ -57,7 +57,7 @@ func TestAReservedAccountHeaderIsRefused(t *testing.T) {
 		err := server.CheckCredentials([]server.RunCredential{c}, "")
 		var r *accesskey.Refusal
 		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !slices.Equal(r.Names, []string{"subscription"}) ||
-			!strings.Contains(err.Error(), "Set account_header of the credential \"subscription\" to another header than ") ||
+			!strings.Contains(err.Error(), "Set account_header of the credential \"subscription\" to a header other than ") ||
 			!strings.Contains(err.Error(), ".\nThat header frames the request") {
 			t.Errorf("account_header %s: %v", h, err)
 		}
@@ -74,15 +74,20 @@ func TestAReservedAccountHeaderIsRefused(t *testing.T) {
 // unclearPath reports whether err is the refusal of an unclear path: the fix on its
 // first line, the path's rule and the cause on its second.
 func unclearPath(err error) bool {
-	first, second, _ := strings.Cut(err.Error(), "\n")
-	return strings.HasPrefix(first, "Remove empty, . and .. segments, backslashes, %2F, %5C, %2E, %25 from the path ") &&
-		strings.HasPrefix(second, "Each segment is read up to its first ; or %3B, and %2f counts as %2F. The proxy denies every request whose path has one of these parts, so the path matches no request")
+	var r *accesskey.Refusal
+	if !errors.As(err, &r) {
+		return false
+	}
+	first, second, _ := strings.Cut(r.Detail, "\n")
+	return strings.HasPrefix(first, "Remove empty, . and .. segments, backslashes, %2F, %5C, %2E and %25 from path ") &&
+		second == "The proxy reads each segment up to its first ; or %3B, takes each %-code in either case, such as %2f, and denies a control character too. "+
+			"It denies every request whose path has one of these parts, so the path matches no request"
 }
 
 // TestAnUnclearModelKeyPathIsRefused pins that a path of an API credential that the
 // schema's grammar takes but that has a part policy.CleanPath refuses in a request's
-// path, a dot segment, an empty segment, a backslash or an encoded slash, backslash, dot
-// or percent sign, is run_configuration_invalid, since the proxy denies every request
+// path, a dot segment, an empty segment, a backslash, a control character or an encoded
+// slash, backslash, dot or percent sign, is run_configuration_invalid, since the proxy denies every request
 // path with one. A segment counts by its part before its first ; or %3B, as a server
 // such as Tomcat reads it. A dot inside a name, or after the last slash of a path that
 // ends in *, is no segment, and a ; after a name starts a parameter of a normal segment.
@@ -92,7 +97,8 @@ func unclearPath(err error) bool {
 func TestAnUnclearModelKeyPathIsRefused(t *testing.T) {
 	for _, p := range []string{"/a/../b", "/a/./b", "/..", "/.", "/a/..", "/a/../*", "/a/./*", "/./*", "/a//b", "//*",
 		"/a/%2e%2e/b", "/a%2Fb", "/a%5cb", "/a%25b", `/a\b`, "/a/%2e*",
-		"/a/..;/b", "/a/.;/b", "/a/..;x/b", "/a/..;", "/a/..;*", "/a/;x/b", "/a/..%3b/b", "/a/..%3B/b", "/a/%2e%2e;/b", "/a/%2e;/b"} {
+		"/a/..;/b", "/a/.;/b", "/a/..;x/b", "/a/..;", "/a/..;*", "/a/;x/b", "/a/..%3b/b", "/a/..%3B/b", "/a/%2e%2e;/b", "/a/%2e;/b",
+		"/a\x01b", "/a\x7fb"} {
 		c := subscription()
 		c.Paths = []string{"/backend-api/codex/*", p}
 		err := server.CheckCredentials([]server.RunCredential{c}, "")
@@ -164,7 +170,7 @@ func TestAnAccountHeaderComesWithItsClaimAndOAuth(t *testing.T) {
 		err := server.CheckCredentials([]server.RunCredential{c}, "")
 		var r *accesskey.Refusal
 		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !slices.Equal(r.Names, []string{"subscription"}) ||
-			!strings.Contains(err.Error(), "Give the credential \"subscription\" both account_header and account_claim, with oauth, or neither.\nIt has") {
+			!strings.Contains(err.Error(), "Give the credential \"subscription\" both account_header and account_claim, with oauth, or neither.\nThe credential has one of them, or both without oauth") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}

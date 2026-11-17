@@ -116,19 +116,19 @@ func CheckCredentials(creds []RunCredential, model string) error {
 		}
 		if a := c.Auth; (a.AccountHeader != "") != (a.AccountClaim != "") || (a.AccountHeader != "" && !a.OAuth) {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"Give the credential %s both account_header and account_claim, with oauth, or neither.\nIt has one of them, or both without oauth", name)
+				"Give the credential %s both account_header and account_claim, with oauth, or neither.\nThe credential has one of them, or both without oauth", name)
 		}
 		if h := c.Auth.AccountHeader; h != "" && (ReservedHeader(h) || strings.EqualFold(h, "authorization")) {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"Set account_header of the credential %s to another header than %s.\nThat header frames the request, contains the token, or the proxy sets it", name, accesskey.ShownName(h, true))
+				"Set account_header of the credential %s to a header other than %s.\nThat header frames the request, contains the token, or the proxy sets it", name, accesskey.ShownName(h, true))
 		}
 		for _, a := range c.Applies() {
 			for _, p := range a.Paths {
 				if policy.UnclearPath(p) {
 					return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-						"Remove empty, . and .. segments, backslashes, %%2F, %%5C, %%2E, %%25 from the path %s of the credential %s.\n"+
-							"Each segment is read up to its first ; or %%3B, and %%2f counts as %%2F. "+
-							"The proxy denies every request whose path has one of these parts, so the path matches no request", accesskey.ShownValue(p, true), name)
+						"Remove empty, . and .. segments, backslashes, %%2F, %%5C, %%2E and %%25 from path %s of the credential %s.\n"+
+							"The proxy reads each segment up to its first ; or %%3B, takes each %%-code in either case, such as %%2f, and denies a control character too. "+
+							"It denies every request whose path has one of these parts, so the path matches no request", accesskey.ShownValue(p, true), name)
 				}
 			}
 		}
