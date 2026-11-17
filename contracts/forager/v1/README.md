@@ -2481,10 +2481,9 @@ removed with `read_needs_setup_removed`, each `failed` with `exit_code` `-1`. qo
 closes a run with no join whose access is not read and that has no wall with
 `write_needs_wall`, `failed` with `exit_code` `-1`. The close writes a starter's reason
 when its caller gives one, and the gateway accepts it only `failed` in a run a session
-joined: qory closes such a run with one of the four end codes of integrations'
-`contracts/run/v1/outcome.schema.json`, `push_credential_missing`, `push_refused`,
-`prebuilt_image_too_large` and `push_not_recorded`, as it sets them in the starter's
-outcome (§The server, The outcome). The gateway returns `400` `invalid_request` to a
+joined, such as the end code `push_refused` of integrations'
+`contracts/run/v1/outcome.schema.json`, which qory also sets in the starter's outcome
+(§The server, The outcome). The gateway returns `400` `invalid_request` to a
 batch with a `dev.qory.run.exited` with a starter's reason and another state, or of a
 run no session joined, and ends the run `failed` with `batch_refused`.
 `(*session.Run).Close` returns an error for each of the eleven codes with another state

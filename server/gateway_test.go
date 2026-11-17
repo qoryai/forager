@@ -591,7 +591,7 @@ var endCodes = []string{"push_credential_missing", "push_refused", "prebuilt_ima
 
 // TestPostOutcomeSendsQorysEndCodesUnchanged pins qory's end codes on their way to the
 // server and back: PostOutcome sends each, with the state failed, as the body's reason,
-// byte for byte; and a delivery whose signed 202 carries the end member failed with the
+// byte for byte; and a delivery whose signed 202 contains the end member failed with the
 // code reads it unchanged.
 func TestPostOutcomeSendsQorysEndCodesUnchanged(t *testing.T) {
 	a := newApiary(t)
