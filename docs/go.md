@@ -46,7 +46,10 @@ The module is a library with two entry points: the gateway and the session.
   `(*session.Run).HostProxy`, a forwarder on loopback with a password, for every run,
   walled or not: see [the host proxy](#the-host-proxy). qory fetches the run's harness
   definition through `(*session.Run).StackProxy` instead, which reaches the hosts of
-  `gateway.stack_hosts` and of the run configuration's `stack_hosts` alone.
+  `gateway.stack_hosts` and of the run configuration's `stack_hosts` alone, and pushes
+  and makes the pull request calls of its submit step through
+  `(*session.Run).PushProxy`, which reaches the run's push proxy: see
+  [the push proxy](#the-push-proxy).
 - It joins a session to the run, `(*session.Run).Join`, with a
   [`session.SessionSpec`](../session/spec.go): the program to start, and how. It gets a
   [`session.Result`](../session/spec.go) back once the runtime has exited and the
@@ -381,6 +384,66 @@ Give git `ProxyURL` and `CABundle` through its configuration, as the example doe
 leave `Env` out of git's environment. `Env` contains `NO_PROXY=localhost,127.0.0.1,::1`,
 and git sends a request to a host that `NO_PROXY` lists past `http.proxy`, so a harness
 host on loopback would not go through the stack proxy.
+
+### The push proxy
+
+`(*session.Run).PushProxy` starts a forwarder of the same kind for qory's push of the
+work item's branch and the pull request calls of its submit step, in a run whose run
+configuration has a push credential
+([credentials](credentials.md#push-credentials)). Call it after a `Join` returns, or
+before the first one. It returns a `session.HostProxy`:
+
+- `ProxyURL`, `Env` and `CABundle` are as for `HostProxy`, with a password made for
+  this forwarder alone. Every connection through it reaches the run's push proxy, not
+  the run's proxy. On one machine the forwarder opens each connection to the gateway's
+  proxy with `QORY-RELAY` and the run answer's `push_proxy_secret`. Behind a separate
+  gateway it dials the gateway's one address with `QORY-PUSH` and the run key.
+- The push proxy allows the hosts of the push credentials' items alone, in enforce
+  mode, reads each request with the run's certificate authority, and sets the push
+  credentials alone, on their items' paths, with the branch guard of each item's
+  `push_ref`. The run's policy is not checked there. Each decision is a
+  `dev.qory.run.egress` with `channel: push`. A host no push credential is for gets a
+  `403` with this body:
+
+  ```
+  qory: send only the push and its pull request calls through the push proxy.
+  qory: egress to other.example.net:443 denied by the gateway: no push credential of the run is for this host
+  ```
+
+  A path of such a host that no item covers, such as a merge, gets a `403` with this
+  body:
+
+  ```
+  qory: send only the push and its pull request calls through the push proxy.
+  qory: PUT api.git.example/repos/example-org/app/pulls/12/merge denied by the gateway: no push credential of the run covers this path
+  ```
+- Behind a wall or a separate gateway the push proxy is guarded as the run's proxy is.
+- The gateway keeps the push proxy open from the run's open until its close, so qory
+  can push after each session. The forwarder ends at `Close()`, at the next `Join` and
+  at `Run.Close`; call `PushProxy` again after that `Join` returns.
+- `PushProxy` returns "Add a push credential to the run configuration: this run has no
+  push proxy." for a run whose open lists no push credential, such as a
+  `write-no-push` run. It returns "Call PushProxy after Join returns: a session of the
+  run is still running." during a `Join`, "Exit the copy step before you start the push
+  proxy: a join during it closes the push proxy." during a `copy` step, the host
+  proxy's error when a session's wall was kept, "Open another run: this run is
+  closed." after `Close`, and an error when the port cannot be opened.
+- No wall, relay or container gets the push proxy secret or the run key, so a session,
+  the setup step and After reach the run's proxy alone, which never sets a push
+  credential.
+
+```go
+p, err := run.PushProxy()                         // after the session's Join returns
+if err != nil {
+	return err
+}
+push := exec.Command("git", "push", "origin", "HEAD:refs/heads/qory/wi_01")
+push.Env = append(os.Environ(), "GIT_CONFIG_COUNT=2",
+	"GIT_CONFIG_KEY_0=http.proxy", "GIT_CONFIG_VALUE_0="+p.ProxyURL,
+	"GIT_CONFIG_KEY_1=http.sslCAInfo", "GIT_CONFIG_VALUE_1="+p.CABundle)
+err = push.Run()
+p.Close()                                         // the next Join closes it too
+```
 
 A git push through the host proxy, to a host the run's proxy terminates, gets the
 gateway's `dev.qory.run.target_write` (`event.RunTargetWrite`): `event.WriteStarted` as

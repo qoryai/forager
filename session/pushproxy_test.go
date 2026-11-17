@@ -30,7 +30,7 @@ const (
 	pushBusy    = "Call PushProxy after Join returns: a session of the run is still running."
 )
 
-// withPush makes g answer each run request with a run answer of a run with a push
+// withPush makes g return, for each run request, a run answer of a run with a push
 // credential ([linktest.WithPush]).
 func withPush(g *linktest.Fake, local bool) {
 	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {

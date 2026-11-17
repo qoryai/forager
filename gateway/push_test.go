@@ -323,10 +323,10 @@ func TestThePushProxySetsThePushCredentialAlone(t *testing.T) {
 }
 
 // TestThePushAndWorkValuesAreRenewed pins the card's renewal: a run's work-1 and push-1
-// values expire an hour after the start; 5 minutes before, the gateway asks the
-// reference receiver for both in one request, and from then on the run's proxy sets
+// values expire an hour after the start; 5 minutes before, the gateway requests both
+// from the reference receiver in one request, and from then on the run's proxy sets
 // work-1's second value and the push proxy push-1's second value. The run's proxy
-// answers push-1's path with a 403 and sends nothing.
+// returns a 403 for push-1's path and sends nothing.
 func TestThePushAndWorkValuesAreRenewed(t *testing.T) {
 	certFile, keyFile, roots := testCertificate(t, t.TempDir())
 	pair, err := tls.LoadX509KeyPair(certFile, keyFile)

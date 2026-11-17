@@ -549,8 +549,8 @@ func (p *Proxy) AllowFirst(entries []string) {
 // policy's mode. Every other refusal keeps its body.
 func (p *Proxy) Unlisted(body func(host string, port int) string) { p.unlisted.Store(&body) }
 
-// PathRefused sets the body of the 403 that refuses a request on a terminated host
-// because no path rule covers its path: body's text for the request's method, host and
+// PathRefused sets the body of the 403 returned for a request on a terminated host
+// whose path no path rule covers: body's text for the request's method, host and
 // path, each as the proxy shows them, in place of the line with the policy's mode. Every
 // other refusal keeps its body.
 func (p *Proxy) PathRefused(body func(method, host, path string) string) { p.pathless.Store(&body) }

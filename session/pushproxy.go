@@ -13,7 +13,7 @@ import (
 // calls of its submit step. Every request through it reaches the run's push proxy at
 // the gateway, which allows the hosts and paths of the run configuration's push
 // credentials alone, sets those credentials, with the branch guard of each item's
-// push_ref, and answers every other request with a 403; the run's policy does not apply
+// push_ref, and returns a 403 for every other request; the run's policy does not apply
 // there, and each decision is a dev.qory.run.egress with channel push. The run's proxy,
 // which the sessions, the setup step, After and [Run.HostProxy] go through, never sets
 // a push credential. Env and CABundle are as [Run.HostProxy] sets them.

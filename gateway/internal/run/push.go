@@ -16,7 +16,7 @@ func (r *Run) HasPush() bool {
 	return slices.ContainsFunc(r.stored, func(c server.RunCredential) bool { return c.Push() })
 }
 
-// checkPush refuses, run_configuration_invalid with the credential's name, a push
+// checkPush returns run_configuration_invalid, with the credential's name, for a push
 // credential of the run configuration the run starts with that the push proxy cannot
 // set: one with placeholders, which no session gets, and two items of push credentials,
 // of one credential or of two, that claim one exact host when one of them has no paths,
@@ -84,8 +84,8 @@ const (
 	pushOverlap = "Give the push credentials' apply items on one host paths that do not overlap."
 )
 
-// checkPushHosts refuses, under pol's enforce mode, a host of a push credential's items
-// that the policy's egress allow list does not cover, as [credential.ResolveWith] does
+// checkPushHosts returns run_configuration_invalid, under pol's enforce mode, for a host
+// of a push credential's items that the policy's egress allow list does not cover, as [credential.ResolveWith] does
 // for a work credential: at the start and at every reload alike.
 func (r *Run) checkPushHosts(pol *policy.Loaded) error {
 	if pol.Policy.Egress.Mode != policy.Enforce {

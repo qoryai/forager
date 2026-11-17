@@ -814,8 +814,8 @@ func (lr *linkRun) arm() {
 func (lr *linkRun) serverEnd(end server.ServerEnd) { lr.end(stoppedBy(end)) }
 
 // release lets go of what the run holds on the gateway's side: its stack proxy, its
-// push proxy, its secret and proxy first, so an ended run's secrets are refused at once, even while a
-// reload in flight winds down; then its reload, its tools and its credentials. Each may
+// push proxy, its secret and proxy first, so an ended run's secrets are refused at once,
+// even while a reload in flight winds down; then its reload, its tools and its credentials. Each may
 // be absent.
 func (lr *linkRun) release() {
 	lr.cancel()

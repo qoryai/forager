@@ -19,8 +19,8 @@ import (
 // mode and allows the hosts of the push credentials' items alone, with no policy of the
 // run's and no model key, at the run's limits with counters apart from the run's proxy.
 // It ends TLS for those hosts with ca, the run's authority, sets each push credential on
-// the paths of its items, with the branch guard of each item's push_ref, and answers
-// every other path of those hosts with a 403. It reports the pushes it passes as the
+// the paths of its items, with the branch guard of each item's push_ref, and returns a
+// 403 for every other path of those hosts. It reports the pushes it passes as the
 // run's proxy does ([proxy.Proxy.ObserveWrites]). Each decision is a
 // dev.qory.run.egress with channel push ([pushEgress]). When guarded is true it is
 // guarded as the run's proxy is. It stays open until the run lets go of what it holds:
@@ -93,7 +93,7 @@ func (lr *linkRun) pushProxy() *proxy.Proxy {
 }
 
 // closePush closes the run's push proxy, once, as the run lets go of what it holds: its
-// secret is refused from then on, and every connection through it closes.
+// secret opens nothing from then on, and every connection through it closes.
 func (lr *linkRun) closePush() {
 	lr.mu.Lock()
 	px, secret := lr.push, lr.pushSecret
@@ -115,14 +115,14 @@ func pushEgress(d proxy.Decision) map[string]any {
 	return data
 }
 
-// pushUnlisted is the body of the 403 a run's push proxy answers for a host that no
+// pushUnlisted is the body of the 403 a run's push proxy returns for a host that no
 // push credential's item is for.
 func pushUnlisted(host string, port int) string {
 	return fmt.Sprintf("qory: send only the push and its pull request calls through the push proxy.\n"+
 		"qory: egress to %s:%d denied by the gateway: no push credential of the run is for this host\n", host, port)
 }
 
-// pushPathRefused is the body of the 403 a run's push proxy answers for a request on a
+// pushPathRefused is the body of the 403 a run's push proxy returns for a request on a
 // push credential's host whose path no item of a push credential covers.
 func pushPathRefused(method, host, path string) string {
 	return fmt.Sprintf("qory: send only the push and its pull request calls through the push proxy.\n"+
