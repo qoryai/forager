@@ -8,9 +8,9 @@ import (
 
 // ErrRunClosed is the error that the errors of [Run.NextSession] and [Run.PushedCommits]
 // wrap once [Run.Close] began or the gateway closed the run; the call sent nothing.
-// Test for it with [errors.Is]. A 410 to a call that was sent, for a run that ends
-// during the call, is not ErrRunClosed: [server.Ended] reports that case.
-var ErrRunClosed = errors.New("the run is closed")
+// Test for it with [errors.Is]. A 410 from the gateway, for a run that ended there
+// before or during the call, is not ErrRunClosed: [server.Ended] reports it.
+var ErrRunClosed = errors.New("this run is closed")
 
 // NextSession sends the run's next-session request with body, a JSON document of
 // next-session-request.schema.json of qoryai/integrations, and returns the answer's
@@ -25,7 +25,8 @@ var ErrRunClosed = errors.New("the run is closed")
 //
 // It returns an error that wraps [ErrRunClosed], with nothing sent, once [Run.Close]
 // began or the gateway closed the run, and an error with nothing sent for a run with no
-// control plane. It returns an [*accesskey.Refusal] for a refusal: From is apiary for
+// control plane. In an open run with no control plane, the error does not wrap
+// [ErrRunClosed]. It returns an [*accesskey.Refusal] for a refusal: From is apiary for
 // Qory Apiary's code, passed on with its status, such as 409 run_ended, and gateway for
 // the gateway's, such as 413 payload_too_large for a body over the limit or 502
 // control_plane_unavailable when no valid answer came; a 410 is the end of the run at
@@ -59,6 +60,8 @@ func (r *Run) PushedCommits(ctx context.Context, body []byte) ([]byte, error) {
 // hostCallAllowed is the error of the host call name in a run that is closed or has no
 // control plane, nil otherwise.
 func (r *Run) hostCallAllowed(name string) error {
+	// The *Run that Open returns with an error, when start failed, is closed too, and so
+	// gets ErrRunClosed.
 	switch {
 	case r.runAPIClosed():
 		return fmt.Errorf("Open another run to send the %s request: %w.", name, ErrRunClosed)

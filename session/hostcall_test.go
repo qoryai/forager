@@ -240,15 +240,14 @@ func TestHostCallsWithNoControlPlane(t *testing.T) {
 }
 
 // closedHostCalls fails the test unless both host calls of r return an error that wraps
-// [session.ErrRunClosed] and starts with the fix, with nothing sent: no refusal and no
-// end of the run at the gateway, which a call the gateway got would return.
+// [session.ErrRunClosed] and starts with the fix, with nothing sent: the text is that of
+// the check before the send, which a sent call never returns.
 func closedHostCalls(t *testing.T, what string, r *session.Run) {
 	t.Helper()
 	for name, call := range map[string]func(context.Context, []byte) ([]byte, error){"next-session": r.NextSession, "pushed-commits": r.PushedCommits} {
 		got, err := call(context.Background(), []byte(`{}`))
-		want := "Open another run to send the " + name + " request: the run is closed."
-		var ref *accesskey.Refusal
-		if _, ended := server.Ended(err); got != nil || !errors.Is(err, session.ErrRunClosed) || err.Error() != want || errors.As(err, &ref) || ended {
+		want := "Open another run to send the " + name + " request: this run is closed."
+		if got != nil || !errors.Is(err, session.ErrRunClosed) || err.Error() != want {
 			t.Errorf("%s: %s: %q %v", what, name, got, err)
 		}
 	}
@@ -293,7 +292,16 @@ func TestHostCallsInAClosedRun(t *testing.T) {
 		}
 		defer r.Close(ctx, session.Outcome{State: event.StateCancelled})
 		// The next heartbeat's batch gets the 410 that closes the run.
-		g.OnBatch(func([]map[string]any) linktest.Reply { return *gone("stopped", "cancelled", "no_longer_needed") })
+		var gave410 atomic.Bool
+		g.OnBatch(func([]map[string]any) linktest.Reply {
+			gave410.Store(true)
+			return *gone("stopped", "cancelled", "no_longer_needed")
+		})
+		for deadline := time.Now().Add(15 * time.Second); !gave410.Load(); time.Sleep(20 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal("the gateway got no batch to return the 410 to")
+			}
+		}
 		waitFor(t, func() bool {
 			_, _, err := r.RunAPI()
 			return err != nil && strings.HasPrefix(err.Error(), "Open another run to reach the run API")
