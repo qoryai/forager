@@ -205,8 +205,8 @@ func (r *remote) handle(raw net.Conn) {
 	r.bound++
 	r.mu.Unlock()
 	tc.SetDeadline(time.Time{})
-	// The relay's preamble and the stack proxy's have the same length.
-	if head, err := br.Peek(len(link.RelayPreamble) + 1); err == nil && (string(head) == link.RelayPreamble+" " || string(head) == link.StackPreamble+" ") {
+	// The relay's preamble, the stack proxy's and the push proxy's, each with its space.
+	if head, ok := relayHead(br); ok {
 		defer tc.Close()
 		line, err := br.ReadString('\n')
 		if err != nil {
@@ -393,4 +393,15 @@ func (f *Fake) Bound() int {
 	f.remote.mu.Lock()
 	defer f.remote.mu.Unlock()
 	return f.remote.bound
+}
+
+// relayHead is the word and space a bound connection opens with, one of the relay's
+// preamble, [link.StackPreamble] and [link.PushPreamble], and whether it opens with one.
+func relayHead(br *bufio.Reader) (string, bool) {
+	for _, word := range []string{link.RelayPreamble, link.StackPreamble, link.PushPreamble} {
+		if head, err := br.Peek(len(word) + 1); err == nil && string(head) == word+" " {
+			return string(head), true
+		}
+	}
+	return "", false
 }

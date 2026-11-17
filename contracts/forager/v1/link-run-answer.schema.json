@@ -121,6 +121,11 @@
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]{22,256}$"
     },
+    "push_proxy_secret": {
+      "description": "The run's push proxy secret, on the local link alone, in the form of proxy_secret: at least 128 bits from the system's random source, made by the gateway for this run. After `QORY-RELAY` on the gateway's proxy address, it opens a connection to the run's push proxy, which reaches the hosts and paths of the run configuration's push credentials alone and sets them there. Present only when the run configuration has a push credential, and it opens nothing once the run ends. Compared in constant time and never logged, it never leaves the machine and reaches no wall, relay or container: qory's push goes through it, on the host. Behind a separate gateway the answer has none: `QORY-PUSH` and the run key open those connections.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{22,256}$"
+    },
     "resume": {
       "description": "The run configuration's resume: the paused run whose runtime session this run continues, the runtime's session id and the path of its transcript (README §The run API, The transcript of a paused run). Before the runtime of the run's first session whose runtime has resume starts, the session reads the transcript over the link with GET <run.url>/<run_id>/transcript and writes it at path. Present when the run configuration has resume, on the local link and behind a separate gateway, and absent otherwise.",
       "$ref": "run-configuration.schema.json#/properties/resume"

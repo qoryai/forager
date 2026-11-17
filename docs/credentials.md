@@ -448,6 +448,70 @@ lists each harness credential by `name` and `purpose` alone, and the stack proxy
 `dev.qory.run.egress` records have no `path` and no `path_rule`. `harness_hidden` is
 fixed when the run starts: a reload ignores it.
 
+### Push credentials
+
+A host credential with `purpose: push` is for qory's push of the work item's branch and
+the pull request calls of its submit step. Forager has no access level: Qory Apiary sends
+a push credential only for a `write` run, beside a read work credential. A run with no
+push credential opens no push proxy, so nothing in it can push with a push credential.
+
+```json
+{"version": 1,
+ "security_policy": {"version": 1, "egress": {"mode": "enforce", "allow": ["git.example", "api.git.example"]}},
+ "credentials": [
+   {"name": "work-1",
+    "apply": [{"hosts": ["git.example"], "scheme": "basic",
+               "username": "x-access-token", "paths": ["/example-org/app.git/*"]}],
+    "placeholders": ["GIT_TOKEN"]},
+   {"name": "push-1", "purpose": "push",
+    "apply": [{"hosts": ["git.example"], "scheme": "basic", "username": "x-access-token",
+               "paths": ["/example-org/app.git/*"], "push_ref": "refs/heads/qory/wi_01"},
+              {"hosts": ["api.git.example"], "scheme": "bearer",
+               "paths": ["/repos/example-org/app/pulls", "/repos/example-org/app/pulls/{}"]}]}]}
+```
+
+- Only the run's push proxy sets a push credential, on its items' hosts and paths, with
+  the branch guard of each item's `push_ref`. The run's proxy, which the sessions, the
+  setup step, After, the image step and `HostProxy` go through, never sets one, and the
+  run answer lists no host or placeholder for it. A push through the run's proxy gets
+  the branch guard's `403`, `wall:push-ref`, when no work credential there has a
+  `push_ref`.
+- qory reaches the push proxy through `(*session.Run).PushProxy`
+  ([the push proxy](go.md#the-push-proxy)). The push proxy allows the push credentials'
+  hosts alone. It sets the push value only on the paths of the push items, and returns
+  a `403` for a path that no item covers.
+- The push proxy checks paths, not methods. On a path an item covers, every method gets
+  the push value: under the item `/repos/example-org/app/pulls/{}`, a `PATCH` of
+  `/repos/example-org/app/pulls/12` passes, and `PUT
+  /repos/example-org/app/pulls/12/merge` gets a `403`. The branch guard limits each git
+  push to the item's `push_ref`.
+- The paths of the push items pin the repository. An item with no paths covers every
+  path on its hosts.
+- The push proxy stays open from the run's open until its close, through every join.
+  On one machine the run answer's `push_proxy_secret` opens it. Behind a separate
+  gateway `QORY-PUSH` and the run key open it. Neither enters a wall or a container.
+- The run gets a certificate authority. The gateway fetches and renews the value as any
+  other stored credential's.
+- The policy in force must allow each host of a push credential, and no path rule of
+  the node's may cover one, since the push proxy checks no path rule. At the start,
+  the run stops with `run_configuration_invalid` otherwise. At a reload, the reload
+  fails and the policy in force stays. The texts:
+  - a host under no allow entry in `enforce` mode: "Add each push credential's host to
+    the run's egress allow list.";
+  - a host a deny entry covers: "Remove each push credential's host from the egress
+    deny lists.";
+  - a host a node's path rule covers: "Remove the node's path rules for each push
+    credential's host: the push proxy checks none.".
+
+  Each has a second line with the credential and the host.
+- A push credential with `placeholders` stops the run with "Remove placeholders from
+  push credentials: no session gets a push credential.", with the credential on a
+  second line.
+- Two `apply` items of push credentials on one host need paths, and their paths must
+  not overlap. A work credential on the same host and paths is fine: no proxy sets both.
+- Every `dev.qory.run.policy_applied`, the open's and each join's, lists each item of a
+  push credential with `purpose: push`.
+
 ## Tools
 
 A **tool** is a program of the machine's that serves hosts. It is for what a run reaches

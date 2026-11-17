@@ -10,6 +10,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- A gateway built before this change fails a run whose run configuration has a
+  credential with `purpose: push` with `run_configuration_invalid`, and reads a
+  `QORY-PUSH` connection on its one address as a request of the link's HTTP. A schema
+  built before this change fails `channel: push` in `dev.qory.run.egress` and `purpose:
+  push` in `dev.qory.run.policy_applied`; its link-run-answer schema accepts
+  `push_proxy_secret`.
 - Send `push_ref` on the apply item of a credential that pushes, such as
   `refs/heads/qory/wi_01`: from this change the gateway returns `403` for every git push
   through an item without it, and through a credential the machine defines with `env` or
@@ -266,6 +272,15 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- A host credential may have `purpose: push`, for qory's push and the pull request
+  calls of its submit step through the run's push proxy (§Credentials, Push
+  credentials). The run answer has `push_proxy_secret` on the local link for such a
+  run, `QORY-PUSH` and the run key open the push proxy on a separate gateway's one
+  address, `dev.qory.run.egress` has `channel: push`, and
+  `dev.qory.run.policy_applied` lists each push credential's items with `purpose:
+  push`. A push credential with `placeholders`, on a host the policy in force does not
+  allow or a path rule of the node's covers, or whose items overlap on a host is
+  `run_configuration_invalid`; a reload that does not allow a push host fails.
 - An apply item of a host credential, in the run configuration, the secrets answer and
   an adapter's output, may have `push_ref`, the one branch a git push through it may
   change (§Credentials, The push branch). A renewal keeps it.
@@ -1192,6 +1207,13 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- A run whose run configuration has a push credential gets a push proxy, which sets
+  the push credentials alone, on their items' hosts and paths, with each item's branch
+  guard, and returns a `403` for every other host and path, with the first line "qory:
+  send only the push and its pull request calls through the push proxy." It stays open
+  until the run closes, a reopened run on a separate gateway opens it again, and its
+  decisions are `dev.qory.run.egress` with `channel: push`. The run's proxy never sets a
+  push credential.
 - The proxy reads every git push to a host of a credential before it sends a byte: each
   ref command must name the credential's `push_ref`. A push to another branch or a tag,
   a push through a credential with no `push_ref`, a signed push, a push with push
@@ -2038,6 +2060,14 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `(*session.Run).PushProxy` starts a forwarder on loopback for qory's push and the
+  pull request calls of its submit step, which reaches the run's push proxy: on one
+  machine with the run answer's `push_proxy_secret`, behind a separate gateway with
+  `QORY-PUSH` and the run key (`server.Link.DialPush`). It has the host proxy's rules,
+  returns an error while the setup container is up or `ContainerKept` is true, and ends
+  at the next `Join`, at `Setup` and at `Close`. For a run with no push credential it
+  returns "Add a push credential to the run configuration: this run has no push
+  proxy." The push proxy secret and the run key reach no wall and no container.
 - `SessionSpec.After` and `AfterTimeout`: a command that runs in a new container of the
   wall once the runtime exits, such as a commit of what the agent left. The session
   first removes the agent's container (`Unwrap`), so no process of the agent is left,

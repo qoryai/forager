@@ -31,6 +31,23 @@ const ProxySecret = "fake-proxy-secret-0123456789abcdef"
 // contains on the local link.
 const StackProxySecret = "fake-stack-proxy-secret-0123456789abcdef"
 
+// PushProxySecret is the push proxy secret of a run answer [WithPush] makes on the
+// local link.
+const PushProxySecret = "fake-push-proxy-secret-0123456789abcdef"
+
+// WithPush makes a, a run answer of [RunAnswer] or [RemoteRunAnswer], the answer of a
+// run with a push credential: its applied lists push-1 on git.example with purpose
+// push, and on the local link it has the push proxy secret PushProxySecret.
+func WithPush(a map[string]any, local bool) map[string]any {
+	applied, _ := a["applied"].(map[string]any)
+	creds, _ := applied["credentials"].([]any)
+	applied["credentials"] = append(creds, map[string]any{"name": "push-1", "hosts": []string{"git.example"}, "scheme": "basic", "paths": []string{"/example-org/app.git/*"}, "purpose": "push"})
+	if local {
+		a["push_proxy_secret"] = PushProxySecret
+	}
+	return a
+}
+
 // Reply is one answer of the fake gateway: its status, its body, marshalled as JSON
 // unless it is a []byte, none when nil, and headers of its own beside the digest; and,
 // on a separate gateway, how it is signed.

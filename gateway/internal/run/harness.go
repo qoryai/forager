@@ -38,12 +38,7 @@ func (r *Run) StackAllows(host string) bool {
 // their paths overlap. A work
 // credential on the same host is no conflict: no proxy sets both.
 func (r *Run) checkHarness() error {
-	type item struct {
-		name  string
-		hosts []string
-		paths []string
-	}
-	var items []item
+	var items []applyItem
 	for _, c := range r.stored {
 		if !c.Harness() {
 			continue
@@ -70,41 +65,24 @@ func (r *Run) checkHarness() error {
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
 					"Add %s to a stack_hosts list: the harness credential %s is for it", host, name)
 			}
-			items = append(items, item{c.Name, a.Hosts, a.Paths})
+			items = append(items, applyItem{c.Name, a.Hosts, a.Paths})
 		}
 	}
-	for i, u := range items {
-		for _, other := range items[:i] {
-			for _, host := range u.hosts {
-				if !slices.Contains(other.hosts, host) {
-					continue
-				}
-				first, second, shown := accesskey.ShownName(other.name, true), accesskey.ShownName(u.name, true), accesskey.ShownValue(host, false)
-				one := other.name == u.name
-				names := refusal.Shown(other.name, u.name)
-				if one {
-					names = refusal.Shown(u.name)
-				}
-				if len(u.paths) == 0 || len(other.paths) == 0 {
-					if one {
-						return refusal.New(refusal.RunConfigurationInvalid, names,
-							"Claim %s in only one apply item of the harness credential %s: one has no paths", shown, first)
-					}
-					return refusal.New(refusal.RunConfigurationInvalid, names,
-						"Claim %s in only one harness credential, %s or %s: one has no paths", shown, first, second)
-				}
-				for _, x := range other.paths {
-					if slices.ContainsFunc(u.paths, func(y string) bool { return policy.OverlapPaths(x, y) }) {
-						if one {
-							return refusal.New(refusal.RunConfigurationInvalid, names,
-								"Give the apply items of the harness credential %s paths that do not overlap on %s", first, shown)
-						}
-						return refusal.New(refusal.RunConfigurationInvalid, names,
-							"Give the harness credentials %s and %s paths that do not overlap on %s", first, second, shown)
-					}
-				}
-			}
+	if c, ok := firstConflict(items); ok {
+		first, second, shown := accesskey.ShownName(c.first, true), accesskey.ShownName(c.second, true), accesskey.ShownValue(c.host, false)
+		switch {
+		case c.one && c.pathless:
+			return refusal.New(refusal.RunConfigurationInvalid, c.names(),
+				"Claim %s in only one apply item of the harness credential %s: one has no paths", shown, first)
+		case c.pathless:
+			return refusal.New(refusal.RunConfigurationInvalid, c.names(),
+				"Claim %s in only one harness credential, %s or %s: one has no paths", shown, first, second)
+		case c.one:
+			return refusal.New(refusal.RunConfigurationInvalid, c.names(),
+				"Give the apply items of the harness credential %s paths that do not overlap on %s", first, shown)
 		}
+		return refusal.New(refusal.RunConfigurationInvalid, c.names(),
+			"Give the harness credentials %s and %s paths that do not overlap on %s", first, second, shown)
 	}
 	return nil
 }

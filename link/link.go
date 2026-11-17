@@ -50,6 +50,12 @@ const RelayPreamble = "QORY-RELAY"
 // connection unanswered.
 const StackPreamble = "QORY-STACK"
 
+// PushPreamble is what opens a connection to a run's push proxy on a separate gateway's
+// one address: this word, a space, the run key and a newline, on a bound connection.
+// Only qory's process on the host holds the run key: no wall, relay or container gets
+// it.
+const PushPreamble = "QORY-PUSH"
+
 // EnvRunSocket is the variable that names the run's record socket in the session's
 // environment.
 const EnvRunSocket = "QORY_RUN_SOCKET"
