@@ -784,6 +784,47 @@ func TestReportsFollowTheSessions(t *testing.T) {
 	}
 }
 
+// TestAnEndReportHasTheKeysOutAfterA401 pins a report with both session and
+// unauthorized: a key the provider returns 401 for while session 1 is open goes in
+// unauthorized, and the session's end report, made at its numbered
+// dev.qory.session.exited, has the session's number and that key, and passes the schema.
+func TestAnEndReportHasTheKeysOutAfterA401(t *testing.T) {
+	g := startGroupRun(t)
+	n := g.h.joined(g.runID)
+	g.h.post(sessionStarted(g.runID, n))
+	g.reject("model")
+	if status, calls := g.sendTo(t, modelPath); status != http.StatusOK || strings.Join(calls, ",") != "model,model-2" {
+		t.Fatalf("the request: %d, %v; want 200 after model and model-2", status, calls)
+	}
+	const out = `"unauthorized":[{"credential":"model","at":"`
+	eventually(t, "a report with model unauthorized", func() bool {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		return len(g.reports) > 0 && strings.Contains(string(g.reports[len(g.reports)-1]), out)
+	})
+	// Past the gap of a second, no report of the changes before waits.
+	time.Sleep(1500 * time.Millisecond)
+	g.mu.Lock()
+	before := len(g.reports)
+	g.mu.Unlock()
+	g.h.post(sessionExited(g.runID, n))
+	eventually(t, "the end report", func() bool { g.mu.Lock(); defer g.mu.Unlock(); return len(g.reports) > before })
+	g.mu.Lock()
+	end := g.reports[before]
+	g.mu.Unlock()
+	if !strings.Contains(string(end), `"session":`+strconv.Itoa(n)+`,`) || !strings.Contains(string(end), out) {
+		t.Errorf("the end report %s; want session %d and model in unauthorized", end, n)
+	}
+	schema, err := contracts.Compile("model-keys-report.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, _ := contracts.Decode("r.json", end)
+	if err := schema.Validate(doc); err != nil {
+		t.Errorf("the end report %s fails the schema: %v", end, err)
+	}
+}
+
 // TestTheGatewaysSessionEndMakesAnEndReport pins the end report of a session the
 // gateway ends, with the reporter idle: a batch the link refuses ends the run, and the
 // session's end report goes after the run's end, with its number. A join with no

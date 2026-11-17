@@ -1422,8 +1422,9 @@ release may change what an existing document does, and says so under Upgrading.
   at its end, when it numbers the session's `dev.qory.session.exited` or when the run
   ends at the gateway while the join is open, also when no window changed. Each report
   made while a session is open has the session's number in `session`. A start or end
-  report keeps its session and windows across tries, with a new `time` for each try,
-  and the reports keep the gap of a second and one in flight.
+  report keeps its session, its windows and its keys in `unauthorized` across tries,
+  with a new `time` for each try, and the reports keep the gap of a second and one in
+  flight.
   After the run's end, the gateway writes one line to its log with the count of the
   reports that were not sent or not accepted within 10 seconds.
   `server.ModelKeysReport` has `Session`.

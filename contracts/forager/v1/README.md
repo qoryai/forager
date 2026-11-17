@@ -3903,9 +3903,11 @@ Each entry of `keys` is one key and one limit window:
 The report may also have `unauthorized`, 1 to 6 entries, each credential at most once:
 each key the gateway no longer sets after a model provider's `401` that no renewal
 brought back, `credential`, its name, and `at`, the gateway's clock when the `401`
-arrived, an RFC 3339 time as `observed_at`. Each report has every such key, so a key a
-renewal brought back is absent from the next report. Absent when the group has none
-(§Credentials, Keys out after a 401). The server ignores an entry whose `credential` is
+arrived, an RFC 3339 time as `observed_at`. Each report has every such key when the
+gateway made it, so a key a renewal brought back is absent from the next report the
+gateway makes; a report made at a session's start or end keeps the keys it was made
+with across its tries. Absent when the group has none (§Credentials, Keys out after a
+401). The server ignores an entry whose `credential` is
 not one of the run's credentials, and treats the report as if that entry were absent.
 More than 6 entries, a credential twice or an entry of the wrong type is a
 signed `400` `invalid_request`:
@@ -3928,8 +3930,8 @@ when nothing changed: its start report at the join's `200`, and its end report w
 gateway numbers its `dev.qory.session.exited`, or when the run ends at the gateway while
 its join is open. A join sent again that gets its `200` again makes no second start
 report. A boundary report waits for the gap of a
-second after the report before, and keeps the session and the windows it was made with
-across its tries, with a new `time` for each try. So the end report of session 2 never
+second after the report before, and keeps the session, the windows and the keys in
+`unauthorized` it was made with across its tries, with a new `time` for each try. So the end report of session 2 never
 has the state or the number of session 3, and reports reach the server in the order the
 gateway made them, each with a later `time` than the one before. A boundary report that
 waits takes the place of the next try of a report of changes, and contains its changes.
