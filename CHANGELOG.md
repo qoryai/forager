@@ -285,6 +285,11 @@ release may change what an existing document does, and says so under Upgrading.
   `control_plane_unavailable` when no valid answer came. No container reaches either
   call: they go over the link alone, and the run API's route returns `404` for both
   paths (§The gateway's link, The host calls).
+- `session.ErrRunClosed`: the error of `Run.NextSession` and `Run.PushedCommits` wraps
+  it once `Close` began or the gateway closed the run, with nothing sent, so a caller
+  tests the case with `errors.Is`. A `410` to a call that was sent is not
+  `ErrRunClosed`: `server.Ended` reports it. The error's text is, for next-session,
+  `Open another run to send the next-session request: the run is closed.`
 - A host credential may have `purpose: push`, for qory's push and the pull request
   calls of its submit step through the run's push proxy (§Credentials, Push
   credentials). The run answer has `push_proxy_secret` on the local link for such a
