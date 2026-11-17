@@ -424,7 +424,7 @@ returns and before `Close`. Each error starts with the fix, and writes nothing:
 
 | Call | When | Error |
 |---|---|---|
-| `StartStep` | a kind other than fetch, compose, build, push, machine and copy | `start a host step of kind fetch, compose, build, push, machine or copy, not "setup": Join writes the join, image and wall steps` |
+| `StartStep` | a kind other than fetch, compose, build, push, machine and copy | `Start a host step of kind fetch, compose, build, push, machine or copy.` and, on a second line, `The kind "setup" is not one of them: Join writes the join, image, wall, setup and after steps.` |
 | `StartStep` | while a `Join` runs | `start the host step after Join returns: a session of the run is still running` |
 | `StartStep` | while step 1 is open | `exit step 1 before the next host step starts: one host step is open at a time` |
 | `StartStep` | after `Close` | `open a new run for the host step: the run is closed` |
@@ -481,8 +481,8 @@ The error for the agent's container of session 1 matches `wall.ErrContainerKept`
 `(*session.Run).ContainerKept()` reports whether a container of the run that can write
 the run's binds may still run outside a session:
 
-- It is true once removing the agent's container of a session, as the session ended, or
-  the setup container, in `RemoveSetup`, failed, and stays true.
+- It is true once removing the agent's container of a session, as the session ended,
+  After's container, or the setup container, in `RemoveSetup`, failed, and stays true.
 - With a wall whose enclosure has no `Unwrap`, it is also true from the end of the first
   session until `Close`, since the agent's container stays until the close.
 - During a session it does not count the container of the session that runs.
@@ -1452,7 +1452,8 @@ request asks the gateway for, for this session.
 - `Forwarder` is the command installed as the runtime's hook. It must call
   `session.Forward(ctx, os.Stdin)`. That passes the hook's input to the run, over a
   socket whose address is in the environment. The socket accepts records of the
-  `hooks`, `setup` and `measure` sources and refuses a record of the `output` source:
+  `hooks`, `setup` and `measure` sources and skips a record of the `output`
+  source:
   output records come from the runtime's standard output only.
 - `CAEnv` lists the names of the variables that point at `ca-bundle.pem` in the run
   directory: the machine's authorities, then the run's certificate. They are in
@@ -1464,7 +1465,10 @@ request asks the gateway for, for this session.
   bundle instead.
 - `Wall` starts the runtime behind a wall. See [the wall](wall.md#from-go). A walled
   run needs `Exec`, the command that calls `session.Exec` inside the enclosure, which
-  every walled launch starts through.
+  every walled launch starts through, and which runs `After` in After's container. The
+  session passes `Exec` its options before `--`: `--unset NAME` for each name to unset.
+  For After's container the session passes `--after-only`, `--after-timeout MS` and
+  `--after-word WORD` for each word, and no program.
   `Mounts` are what else of the machine the wall shows, and `ForagerFiles` the caller's
   files, which no mount may hold. See [Forager's files](wall.md#foragers-files).
 - `Written` are the places of this machine a walled run can write, as the caller records
@@ -1515,6 +1519,62 @@ request asks the gateway for, for this session.
   records to the run socket, `QORY_RUN_SOCKET`, and the session writes the step from
   them. Where the run socket does not cross into the enclosure, an engine in a virtual
   machine such as a Mac's, the runner exits 125 and the session with it.
+- `After` is a command that runs in a new container of the wall once the runtime exits,
+  such as qory's commit of what the agent left in the workspace, and `AfterTimeout`,
+  above zero, how long it may run. The session removes the agent's container first
+  (`Unwrap`), so no process of the agent is left, background jobs and, with nested Docker,
+  inner containers included. It then starts After's container from the run's image,
+  under the run's container runtime, as the wall's user with no capability and no
+  nested Docker, on the inside network with the run's proxy. The container binds the
+  mount that holds `Dir` and a socket in a directory that no other container binds, and
+  none of the run's variables. It binds no installed runtime folder: After runs the
+  caller's command, so a path into that folder in `After` is passed as it is. Its proxy URL has no password, so it has no route to the
+  caller: a request to the route gets `403` from the gateway's proxy, and one with the
+  agent's password gets `503`, since that session ended; the handler is called for
+  neither. Forager does not narrow the run's proxy for After: it applies the credentials
+  the run's configuration holds, and the push guard as it is. The wall must be a `wall.AfterWrapper` with an `Unwrap`, as the
+  Docker wall is: Join returns an error for `After` behind another wall. After runs in `Dir` with no
+  input, without the variables that point git elsewhere, with an empty `HOME` and no
+  `XDG_*` variable, and with settings that keep git from running a hook, an fsmonitor,
+  a credential helper or a signing program, and from reaching a remote other than over
+  HTTPS. Its `PATH` has no directory the agent's user owns or may write, and its
+  program does not run, exit status 126, when that user could have changed it. A write into the workspace
+  by that user, while After runs, cannot change which program After's command finds in
+  the `PATH`, since no directory that user may write is on it. It does not change which
+  programs git starts from the workspace's `.git/config`: a filter, `textconv` or merge
+  driver that file names still runs as After's user, and on git 2.54.0, which has no
+  setting that turns off every `hook.<name>.command`, so does such a hook. qory's check
+  of `.git/config` fails on unknown keys. The helper in the container sends the step's
+  records over one connection that it opens before After starts, and the session reads
+  that connection alone, so a process After starts cannot write the step. It is the
+  session's `after` step, with its output as the step's lines, before
+  `dev.qory.session.exited`, which keeps the runtime's status. At `AfterTimeout` the step
+  ends `cancelled` with reason `timeout`; when the kernel kills a process of the
+  container for lack of memory, `failed` with `out_of_memory`. A runtime stopped at
+  `Timeout`, and a pause, still get After. When the caller's context ends, After still
+  runs, and the removal, the start and After together get no more than `StopGrace`; its
+  step then ends `cancelled` with `-1`. A run closed before After starts gets none,
+  and every other exit gets it, `125` included (`Result.After` is nil only for a spec
+  with no `After` and a run closed before After starts; a run closed while After runs
+  has `Result.After` `cancelled` with `-1`). Join returns an error and no `Result`, so
+  runs no After, when the wall's `Wrap` fails (with the Docker wall, a missing image
+  fails there) and when the launch does not start (`ErrNotStarted`), and also when the wait for the launch returns an error that is no exit status. That happens when the runtime exited 0 and a write of its output failed (the writer of `SessionSpec.Stdout` or `Stderr`, or the run's log), or when `Wait` itself failed; the runtime may have changed the workspace then, and no After runs. When the launch failed before any container existed, such as a docker
+  run that exited `125` with no container, After still starts on the unchanged
+  workspace, and if After's container cannot start for the same cause, the after step
+  ends `failed` with `-1`, after the launch's error line. A removal of the
+  agent's container that the context's end cuts is tried again as the session ends.
+  With After, `Join` may take `AfterTimeout` plus 66 seconds more than its 15 seconds:
+  the removal and the start together get 60 seconds, then 5 seconds between SIGTERM and
+  SIGKILL and 1 second of output. The session
+  removes the setup container first, when the run has one, as `RemoveSetup` does and with
+  its wall step "remove the setup container", which comes before the after step: it
+  shares the workspace and the inside network with After's container. The run is then as
+  one after `RemoveSetup`: a later `RemoveSetup` returns nil, `ContainerKept()` is false
+  and a later join finds no setup container. A removal that fails sets `ContainerKept()`,
+  ends the wall step `failed`, and After does not run: its step ends `failed` with `-1`
+  and a line. `RemoveSetup` then tries the removal again.
+  After needs a `Wall` and `Exec`. See
+  [the contract](../contracts/forager/v1/README.md#the-wall).
 - `Gateway` is the gateway the run speaks to, `session.LocalGateway(l)` with the local
   link the gateway hands out, `(*gateway.Gateway).LocalLink()`, or a
   `session.RemoteGateway` on a separate machine (see
@@ -1628,6 +1688,13 @@ request asks the gateway for, for this session.
   `batch_refused` when it refused a batch from the run's session. The runtime was stopped as at its time limit. A server's
   `410` closes no run: Qory Apiary records what a run reports and never ends a run it
   did not start.
+- `After`, for a spec with `After`, the after step's outcome: `Step`, its number;
+  `State`, `succeeded`, `failed` or `cancelled`; `ExitCode`, the command's status,
+  `127` for a program the helper did not find, `126` for one it could not start or
+  that does not run, and `-1` when the step ended with no status, such as when the agent's
+  container could not be removed or After's container did not start; and `Reason`,
+  `timeout`, `out_of_memory` or empty. It is nil only for a spec with no `After`, and for a run
+  closed before After starts. A caller that set `After` treats nil as a failure.
 
 `(*session.Run).Close` takes a `session.Outcome`, the `State`, `Reason` and `ExitCode`
 of the run's `dev.qory.run.exited`, and writes that event once. A run no session joined,
@@ -1662,9 +1729,9 @@ session that ended otherwise.
   them. It returns as soon as the gateway accepts them or the batch gets a `410`.
 - `RunClosed` and `ClosedReason`, as `session.Result` has them.
 - `WallKept`, true when removing a container of the run's wall failed at some point of
-  the run: the agent's container at a session's end, the setup container in
-  `RemoveSetup`, or a container at the close. Any error of the wall's `Unwrap` or
-  `RemoveSetup` sets it, and so does any error of the close that is not marked
+  the run: the agent's container at a session's end, After's container, the setup
+  container in `RemoveSetup`, or a container at the close. Any error of the wall's
+  `Unwrap`, `UnwrapAfter` or `RemoveSetup` sets it, and so does any error of the close that is not marked
   `wall.ErrNoContainerKept`. A process may have kept writing the run's binds after its
   session ended, so do not trust what is in them. `WallKept` stays true when a later
   removal succeeded. A close whose every failure matches `wall.ErrNoContainerKept`, as

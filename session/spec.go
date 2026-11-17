@@ -476,6 +476,66 @@ type SessionSpec struct {
 	// dev.qory.session.exited. dev.qory.session.started reports the launch without it.
 	// The run's Wall needs one.
 	Exec []string
+	// After is a command, its program and arguments, that runs in a new container of the
+	// wall once the runtime exits, such as a commit of what the agent left in the
+	// workspace. The session removes the agent's container first, which ends every
+	// process in it, with nested Docker the inner containers too, and then starts After's
+	// container: the run's image under the run's container runtime, as the wall's user
+	// with no capability and no nested Docker, on the wall's network with the run's proxy,
+	// with the mount that holds Dir and a socket in a directory that no other container
+	// binds, and none of the run's variables, and no installed runtime folder, so a path into
+	// it in After stays as written. Its proxy URL has no password, so it has
+	// no route to the caller: a request to the route gets 403 from the gateway's proxy,
+	// and one with the agent's password 503, since that session ended. The session does
+	// not narrow the run's proxy for After: it applies the credentials the run's
+	// configuration holds, and the push guard as it is. Exec starts After there, with the option
+	// --after-only. After runs in Dir, with no input, in a new process group, with the
+	// container's environment but GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_EXEC_PATH,
+	// GIT_CONFIG*, GIT_SSH*, GIT_ASKPASS, BASH_ENV, ENV, LD_PRELOAD, LD_LIBRARY_PATH,
+	// XDG_* and QORY_RUN_SOCKET, with HOME a new, empty directory that nothing writes
+	// to, and with variables that keep git from reading the system's and the user's
+	// configuration, from running a hook, an fsmonitor, a credential helper or a signing
+	// program, and from reaching a remote other than over HTTPS. Programs that git starts
+	// from the workspace's .git/config still run as After's user: a filter, textconv or
+	// merge driver, and on git 2.54.0, which has no setting that turns off every
+	// hook.<name>.command, such a hook. The caller's check of .git/config must fail on such keys. PATH
+	// keeps only absolute directories that the agent's user does not own, nor any
+	// directory above them, and that no group or other user may write, but a directory
+	// with the sticky bit; a directory on a read-only mount counts as unchanged. So a
+	// write into the workspace by that user, also while After runs, cannot change which
+	// program After's command finds in PATH. After does not run a program, and exits with status 126, when it or a directory
+	// above it fails the same check. It is the session's after step, of kind
+	// event.StepAfter and name after: its lines are the command's output, and its exit
+	// status the command's. Its records reach the session over the one connection that
+	// Exec opens before After starts, and the session reads that connection alone: a
+	// process After starts cannot write the step. At AfterTimeout Exec sends SIGTERM to
+	// the command's process group and SIGKILL 5 s later: the step ends cancelled with
+	// reason timeout. When the kernel kills a process of the container for lack of
+	// memory while After runs, the step ends failed with reason out_of_memory. When the
+	// agent's container cannot be removed, or After's cannot start, the step ends failed
+	// with -1 and the reason as its line. A removal that the context's end cuts is tried
+	// again as the session ends. The step ends before the session's
+	// dev.qory.session.exited, whose state and exit status stay the runtime's;
+	// Result.After is the step's outcome. A runtime stopped at the Timeout, a pause and
+	// a runtime stopped by the context's end all get After. The step, the agent's
+	// container's removal and After's start included, is cut off at AfterTimeout, 5 s
+	// from SIGTERM to SIGKILL, 1 s for After's last output and 1 minute for the removal
+	// and the start; after the context's end it gets StopGrace from that moment, and its
+	// step then ends cancelled with -1. A run closed from outside before After starts gets
+	// none, and one closed while After runs ends the step cancelled with -1. After runs
+	// after every other exit, 125 included: when the launch failed before any container
+	// existed, such as a docker run that exited 125 with no container, After still starts
+	// on the unchanged workspace, and when its container cannot start for the same cause,
+	// the after step ends failed with -1 after the launch's error line. The
+	// session first removes the setup container, when the run has one, as Run.RemoveSetup
+	// does, with its wall step before the after step, since it shares the workspace and
+	// the network with After's container; when that fails, After does not run and its step
+	// ends failed with -1. Empty
+	// means none. After needs the run's Wall, an enclosure that is a wall.AfterWrapper
+	// with an Unwrap, Exec and an AfterTimeout above zero, and its words no NUL.
+	After []string
+	// AfterTimeout is how long After may run: above zero with After, unused without.
+	AfterTimeout time.Duration
 	// Timeout is how long the runtime may run, the session's setup commands included; zero
 	// means no limit. At the limit the runtime is stopped the way the context ending
 	// stops it, and dev.qory.session.exited contains the reason. qory passes the time
@@ -698,6 +758,38 @@ type Result struct {
 	// session_lost when it heard nothing from the session for three heartbeat
 	// intervals, and batch_refused when it refused a batch from the run's session.
 	ClosedReason string
+	// After is the outcome of the session's after step, SessionSpec.After's: nil when
+	// the spec has no After, and when the run was closed from outside before After
+	// started; a run closed while After runs has it cancelled with ExitCode -1. Join
+	// returns an error and no Result, and runs no After, when the wall's Wrap fails (with
+	// the Docker wall, a missing image fails there), when the launch does not start
+	// (ErrNotStarted), and when the wait for the launch returns an error that is no exit
+	// status: the runtime exited 0 and a write of its output failed (Stdout, Stderr or the
+	// run's log), or Wait failed; the runtime may have changed the workspace then. A
+	// launch that failed before any container existed, such as a docker run that exited
+	// 125, still gets After, on the unchanged workspace; if After's container cannot start
+	// for the same cause, After is failed with ExitCode -1.
+	// A caller that sets After treats nil as an After that did not run.
+	After *AfterResult
+}
+
+// AfterResult is the outcome of a session's after step.
+type AfterResult struct {
+	// Step is the step's number in the run.
+	Step int
+	// State is the state of the step's dev.qory.run.step_exited: succeeded when the
+	// command exited 0, cancelled at AfterTimeout or at a stop from outside, and failed
+	// otherwise.
+	State string
+	// ExitCode is the command's exit status, 128 and the signal's number for a command a
+	// signal ended, 127 for a program Exec did not find, 126 for one it could not start
+	// or that does not run, 125 when Exec could not make After's HOME, and -1 when the step ended
+	// with no status: the agent's container could not be removed, After's container did
+	// not start, no record of After's exit arrived, or the step was cut off.
+	ExitCode int
+	// Reason is event.ReasonTimeout at AfterTimeout, event.ReasonOutOfMemory for a
+	// container short of memory, and empty otherwise.
+	Reason string
 }
 
 // Closed is what the close of a run came to.
@@ -720,7 +812,7 @@ type Closed struct {
 	// ClosedReason is the 410's code when RunClosed, as [Result.ClosedReason] is.
 	ClosedReason string
 	// WallKept is true when removing a container of the run's wall failed at some point
-	// of the run: a session's Unwrap, RemoveSetup, or the close. A process may have kept
+	// of the run: a session's Unwrap or UnwrapAfter, RemoveSetup, or the close. A process may have kept
 	// writing the run's binds after its session ended, so do not trust what is in them.
 	// WallKept stays true when a later removal succeeded. A close whose every failure
 	// matches [wall.ErrNoContainerKept], such as the Docker wall's on a network or the

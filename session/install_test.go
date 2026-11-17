@@ -690,3 +690,29 @@ func TestOnlyARuntimeThatRequiresAnInstallNeedsOne(t *testing.T) {
 		})
 	}
 }
+
+// TestAftersWordsAreNotWrittenAtTheRuntimeFolder pins that a path into the installed
+// runtime's folder in SessionSpec.After stays as it is: After's container binds no
+// runtime folder, so /qory/runtime/<runtime> does not exist there, and the agent's
+// launch is the one that gets the folder at that place.
+func TestAftersWordsAreNotWrittenAtTheRuntimeFolder(t *testing.T) {
+	t.Setenv("QORY_TEST_HOST_ONLY", "1")
+	dir := installAt(t, t.TempDir())
+	tool := filepath.Join(dir, "bin", "tool")
+	sp, w := afterSpec(t, "exit 0", "/bin/sh", "-c", "true", tool)
+	useInstall(&sp, dir)
+	sp.Args = append(sp.Args, tool)
+	res, err := run(t.Context(), sp)
+	if err != nil || res.After == nil || res.After.State != event.StateSucceeded {
+		t.Fatalf("%+v, %v", res, err)
+	}
+	if !slices.Contains(w.got.Args, "/qory/runtime/claude/bin/tool") {
+		t.Errorf("the agent's launch %q has no path at the runtime folder", w.got.Args)
+	}
+	if !slices.Contains(w.after.Args, tool) {
+		t.Errorf("After's launch %q has not the path %s as it was given", w.after.Args, tool)
+	}
+	if words := strings.Join(w.after.Args, " "); strings.Contains(words, "/qory/runtime") {
+		t.Errorf("After's launch has a path at the runtime folder: %s", words)
+	}
+}

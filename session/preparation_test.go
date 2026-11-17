@@ -76,7 +76,36 @@ func fakeSetupRecords() int {
 		}
 		recs = append(recs, runtimes.Record{Source: runtimes.SourceSetup, Record: m})
 	}
-	if err := socket.Send(context.Background(), os.Getenv(session.EnvSocket), recs); err != nil {
+	addr := os.Getenv(session.EnvSocket)
+	if forged := os.Getenv("FAKE_AFTER_SOCKET"); forged != "" {
+		// A process of After's container that is told where the socket is.
+		addr = forged
+	}
+	if err := socket.Send(context.Background(), addr, recs); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 82
+	}
+	return 0
+}
+
+// fakeSocketRecords sends the records of FAKE_SOCKET_RECORDS, one per line, each with
+// its source, to the run socket over one connection, as a process of the agent's can.
+func fakeSocketRecords() int {
+	var recs []runtimes.Record
+	for _, line := range strings.Split(strings.TrimSpace(os.Getenv("FAKE_SOCKET_RECORDS")), "\n") {
+		var rec runtimes.Record
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 81
+		}
+		recs = append(recs, rec)
+	}
+	addr := os.Getenv(session.EnvSocket)
+	if forged := os.Getenv("FAKE_AFTER_SOCKET"); forged != "" {
+		// A process of After's container that is told where the socket is.
+		addr = forged
+	}
+	if err := socket.Send(context.Background(), addr, recs); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 82
 	}

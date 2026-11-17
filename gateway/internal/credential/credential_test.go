@@ -150,6 +150,7 @@ func TestCredentialsWithPathsThatDoNotOverlapShareAHost(t *testing.T) {
 		"two organizations on github.com": {def("product", "PRODUCT_TOKEN", github, "/example-org/product.git/*"), def("harness", "HARNESS_TOKEN", github, "/operator-org/harness.git/*")},
 		"a host pattern above the host":   {def("product", "PRODUCT_TOKEN", []string{"*.github.com"}, "/example-org/*"), def("harness", "HARNESS_TOKEN", []string{"api.github.com"}, "/operator-org/*")},
 		"an exact path beside a prefix":   {def("product", "PRODUCT_TOKEN", github, "/example-org"), def("harness", "HARNESS_TOKEN", github, "/example-org/harness.git/*")},
+		"one segment beside another path": {def("product", "PRODUCT_TOKEN", github, "/repos/example-org/app/pulls/{}"), def("harness", "HARNESS_TOKEN", github, "/repos/example-org/app/pulls/{}/merge")},
 	} {
 		held, err := resolve(defs...)
 		if err != nil {
@@ -172,6 +173,12 @@ func TestCredentialsWithPathsThatDoNotOverlapShareAHost(t *testing.T) {
 			"give the credentials product and harness paths that do not overlap on github.com, or claim it in only one of them: their paths /example-org/harness.git/info/refs and /example-org/harness.git/* overlap"},
 		"one exact path in both": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/graphql"), def("harness", "HARNESS_TOKEN", github, "/graphql")},
 			"give the credentials product and harness paths that do not overlap on github.com, or claim it in only one of them: their paths /graphql and /graphql overlap"},
+		"one segment and an exact path": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/repos/example-org/app/pulls/{}"), def("harness", "HARNESS_TOKEN", github, "/repos/example-org/app/pulls/12")},
+			"give the credentials product and harness paths that do not overlap on github.com, or claim it in only one of them: their paths /repos/example-org/app/pulls/{} and /repos/example-org/app/pulls/12 overlap"},
+		"one segment under a prefix": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/repos/*"), def("harness", "HARNESS_TOKEN", github, "/repos/{}/app")},
+			"give the credentials product and harness paths that do not overlap on github.com, or claim it in only one of them: their paths /repos/* and /repos/{}/app overlap"},
+		"a stray brace": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/repos/{owner}/app"), def("harness", "HARNESS_TOKEN", github, "/operator-org/*")},
+			"Write each credential path from /, with { and } only as the segment {} and * only at the end.\nThe path \"/repos/{owner}/app\" of credential product is not in that form."},
 		"the second without paths": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/example-org/*"), def("harness", "HARNESS_TOKEN", github)}, alone},
 		"the first without paths":  {[]Definition{def("product", "PRODUCT_TOKEN", github), def("harness", "HARNESS_TOKEN", github, "/operator-org/*")}, alone},
 	} {

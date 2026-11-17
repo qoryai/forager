@@ -387,14 +387,16 @@ const (
 func (c RunCredential) Harness() bool { return c.Purpose == PurposeHarness }
 
 // Apply is one item of a host credential's apply, run-configuration.schema.json: the
-// hosts its value is set on, the scheme with its username or header, and the paths,
-// nil for every path.
+// hosts its value is set on, the scheme with its username or header, the paths, nil
+// for every path, and PushRef, the one ref a git push through it may create, update or
+// delete, empty when it may push none.
 type Apply struct {
 	Hosts    []string `json:"hosts"`
 	Scheme   string   `json:"scheme"`
 	Username string   `json:"username,omitzero"`
 	Header   string   `json:"header,omitzero"`
 	Paths    []string `json:"paths,omitzero"`
+	PushRef  string   `json:"push_ref,omitzero"`
 }
 
 // Applies are where and how the credential's value is set: for an API credential one

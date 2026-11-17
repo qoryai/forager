@@ -59,7 +59,8 @@ const (
 // compose of the harness, a fetch of the run's image, a setup command, the join of a
 // session, the start of a wall or the start or the removal of a setup container, a build
 // of an image, host work that sends the run's commits, the start of the machine the run
-// runs on, and host work that copies the session's work out of the wall.
+// runs on, host work that copies the session's work out of the wall, and the command
+// SessionSpec.After runs inside the wall once the runtime exits.
 const (
 	StepFetch   = "fetch"
 	StepCompose = "compose"
@@ -71,6 +72,7 @@ const (
 	StepPush    = "push"
 	StepMachine = "machine"
 	StepCopy    = "copy"
+	StepAfter   = "after"
 )
 
 // The states of a write, the state of dev.qory.run.target_write: it began, the system
@@ -132,6 +134,12 @@ const (
 	// run whose last session ended with it, and that close is paused too.
 	ReasonModelKeyLimit = "model_key_limit"
 )
+
+// ReasonOutOfMemory is why an after step failed: the kernel killed a process of the
+// agent's container for lack of memory while the step ran. It is the reason of
+// dev.qory.run.step_exited alone; an after step that ran past SessionSpec.AfterTimeout
+// has ReasonTimeout there.
+const ReasonOutOfMemory = "out_of_memory"
 
 // ReasonWorkflowNotInHarness is the reason qory gives the close of a run with no join
 // whose workflow is not in the harness, failed with exit code -1. It is a caller's

@@ -87,6 +87,23 @@ const (
 	// modeAfterJoin is the program of a session with no runtime that joins after the
 	// last session.
 	modeAfterJoin = "after-join"
+	// modeForgeAfter is the program After's command starts that sends a record of the after
+	// source to the socket at its argument, as a process of After's container can.
+	modeForgeAfter = "forge-after"
+	// modeAttackAfter is the runtime of an enclosure with nested Docker that, as the agent
+	// can, starts a privileged container of the inner daemon with the enclosure's root
+	// bound, and writes a file there that After's command reads.
+	modeAttackAfter = "attack-after"
+	// modePlantPassword is a runtime that writes its proxy password into the workspace.
+	modePlantPassword = "plant-password"
+	// modeAfterRoute is After's command that sends requests to the route to link.QoryHost,
+	// with and without the password the agent planted.
+	modeAfterRoute = "after-route"
+	// modeAfterInspect is After's command that tries to read and trace the helper of
+	// After's container and to take its descriptors.
+	modeAfterInspect = "after-inspect"
+	// modeBlock is a runtime that prints an empty report and waits for a stop signal.
+	modeBlock = "block"
 	// modeSetupRoute is the program a setup command starts in the setup container that
 	// sends requests to the route to link.QoryHost with the session's proxy password
 	// once the agent wrote it into the workspace, [setupRoute].
@@ -244,6 +261,20 @@ func Main() {
 		os.Exit(reach(os.Args[2:]))
 	case modeAfterJoin:
 		os.Exit(afterJoin())
+	case modeLeaveJob:
+		os.Exit(leaveJob())
+	case modeBlock:
+		os.Exit(block())
+	case modeForgeAfter:
+		os.Exit(forgeAfter(os.Args[2:]))
+	case modeAttackAfter:
+		os.Exit(attackAfter())
+	case modePlantPassword:
+		os.Exit(plantPassword())
+	case modeAfterRoute:
+		os.Exit(afterRoute())
+	case modeAfterInspect:
+		os.Exit(afterInspect())
 	case modeSetupRoute:
 		os.Exit(setupRoute())
 	case modeService:
@@ -672,6 +703,7 @@ func Run(t *testing.T, o Options) {
 	setupRemoved(t, o, origin, outside)
 	setupRemovedAfterSession(t, o, origin, outside)
 	afterJoinFreshHome(t, o, origin, outside)
+	afterStep(t, o, origin, outside)
 	runAPIThroughTheWall(t, o, origin, outside)
 	qoryHostThroughTheWall(t, o, origin, outside)
 	qoryHostFromTheSetup(t, o, origin, outside)
@@ -1560,6 +1592,13 @@ type variant struct {
 	// stdout gets the session's standard output too.
 	stdin  io.Reader
 	stdout io.Writer
+	// after and afterTimeout are the session's SessionSpec.After and AfterTimeout.
+	after        []string
+	afterTimeout time.Duration
+	// cancelAfter, when above zero, ends the join's context that long after the
+	// session's start, and cancelledAt, when set, gets the moment it ended.
+	cancelAfter time.Duration
+	cancelledAt *time.Time
 	// home, with Docker, defines the machine's image as Options.HomeImage in place of
 	// Options.Image.
 	home bool
@@ -1719,6 +1758,8 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 			Exec:              o.Exec,
 			SetupRunner:       []string{o.Probe, modeSetupCommand},
 			WorkspaceReadOnly: v.readOnly,
+			After:             v.after,
+			AfterTimeout:      v.afterTimeout,
 		},
 		fetch: v.fetch, setup: v.setup, onSetup: v.onSetup, removeSetup: v.removeSetup, opened: v.opened,
 		runAPICheck: v.runAPICheck,
@@ -1730,6 +1771,15 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 	// the socket crosses into the enclosure.
 	if o.Hooks && !v.readOnly {
 		spec.SessionSpec.Setup = []session.SetupCommand{{Name: "install", Args: append([]string{o.Probe, modePrepare}, preparationWords...)}}
+	}
+	if v.cancelAfter > 0 {
+		timer := time.AfterFunc(v.cancelAfter, func() {
+			if v.cancelledAt != nil {
+				*v.cancelledAt = time.Now()
+			}
+			cancel()
+		})
+		defer timer.Stop()
 	}
 	if v.started != nil {
 		going, stop := context.WithCancel(ctx)

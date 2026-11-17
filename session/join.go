@@ -46,15 +46,20 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 
 // Join runs one session in the open run and returns when the runtime has exited, the
 // session's dev.qory.session.exited is written and the gateway accepted it, within 15
-// seconds, so the next join may follow. It sends the gateway the join request with the
-// names of the variables the session passes a value for and its model key, then checks
+// seconds, so the next join may follow. With SessionSpec.After the 15 seconds do not
+// include After's step, which the session allows AfterTimeout + 66 seconds: the agent's
+// container's removal and the start of After's container (60 s together), the 5 s
+// between SIGTERM and SIGKILL, and 1 s of output. After a stop from outside it allows
+// StopGrace. It sends the gateway the join request with the names of the variables the session passes a value for and its model key, then checks
 // the session's places, prepares the runtime, resolves the variables, writes
 // dev.qory.session.started and the session's dev.qory.run.policy_applied, behind a
 // wall wraps the launch in the wall that [Open] built, and starts the runtime. Behind
 // the Docker wall the wrap writes the docker run of the agent's container, which
 // starts with the launch, after the wall step, and the session's end removes it; the
-// rest of the wall stays until [Run.Close]. Sessions of one run join one after
-// another.
+// rest of the wall stays until [Run.Close]. With SessionSpec.After the session removes
+// the agent's container once the runtime exits, then runs After in a new container of the
+// wall, and writes its after step before dev.qory.session.exited. Sessions of one run
+// join one after another.
 //
 // An error means the session did not start. An error before the join request, of a
 // spec the session refuses or of a run whose setup step of [Run.Setup] failed, writes
@@ -204,6 +209,9 @@ func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) 
 		return runSpec{}, nil, err
 	}
 	if err := checkExec(s); err != nil {
+		return runSpec{}, nil, err
+	}
+	if err := checkAfter(s); err != nil {
 		return runSpec{}, nil, err
 	}
 	rt := spec.Runtime
@@ -565,6 +573,13 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		}
 		insidePairs = append(insidePairs, pathPair{plan.root, workspaceInside})
 	}
+	// After's container binds the workspace and no runtime folder, so After's words get
+	// the workspace's rewrite alone.
+	insideAfter := func(s string) string { return s }
+	if len(insidePairs) > 0 {
+		workspacePairs := slices.Clone(insidePairs)
+		insideAfter = func(s string) string { return replacePaths(s, workspacePairs, argPaths) }
+	}
 	// Behind a wall the installed runtime's folder is at /qory/runtime/<runtime>, so
 	// the program, and any path into the folder Forager puts inside, is written there.
 	// Both rewrites go in one pass, the longer path first, so no text written in a
@@ -782,6 +797,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// come first, then the image and wall steps, so a failure of the wall follows the
 	// session's dev.qory.session.started.
 	var enclosure wall.Enclosure
+	// unwrapAgent removes the agent's container of an enclosure with an Unwrap; nil without one.
+	var unwrapAgent func(context.Context) error
 	var cols, rows int
 	if interactive {
 		cols, rows = terminalSize(spec.Stdin)
@@ -836,11 +853,33 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		}
 		open = r.startStep(event.StepWall, "start the wall")
 		enclosure = r.enclosure
+		if len(spec.After) > 0 {
+			if _, ok := enclosure.(wall.AfterWrapper); !ok {
+				return fail(fmt.Errorf("Use a wall that is a wall.AfterWrapper for SessionSpec.After.\nThe %s wall does not start After's container.", r.open.Wall.Name()))
+			}
+			if _, ok := enclosure.(unwrapper); !ok {
+				return fail(errors.New("Use a wall whose enclosure has an Unwrap for SessionSpec.After.\nAfter starts once the enclosure has removed the agent's container."))
+			}
+		}
 		if u, ok := enclosure.(unwrapper); ok {
-			defer func() {
+			// unwrapAgent removes the agent's container once: before After starts, and
+			// otherwise as the session ends. A removal that fails after its context
+			// ended leaves the container's state unknown: it is not cached or flagged,
+			// and the next call removes again.
+			var tried bool
+			var unwrapErr error
+			unwrapAgent = func(c context.Context) error {
+				if tried {
+					return unwrapErr
+				}
 				// The session's context may be what ended it; the agent's container is
 				// removed regardless.
-				if err := u.Unwrap(context.WithoutCancel(ctx)); err != nil {
+				err := u.Unwrap(c)
+				if err != nil && c.Err() != nil {
+					return err
+				}
+				tried = true
+				if err != nil {
 					r.open.Report("removing the wall: " + accesskey.ShownError(err).Error())
 					// The agent's container may outlive the session: the entry stays, and
 					// is the run's while one of the run's containers exists.
@@ -848,7 +887,10 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 					r.keptBy = n
 					r.wallFailed.Store(true)
 				}
-			}()
+				unwrapErr = err
+				return err
+			}
+			defer func() { unwrapAgent(context.WithoutCancel(ctx)) }()
 		} else if enclosure != nil {
 			// With no Unwrap the agent's container stays until the close, and may still
 			// run and write the run's binds after the session ended.
@@ -886,6 +928,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	var terminalMu sync.Mutex
 	stdout, stderr := &terminalWriter{mu: &terminalMu, w: spec.Stdout}, &terminalWriter{mu: &terminalMu, w: spec.Stderr}
 	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup, setupTerminal(interactive, stdout, stderr), neutral, hidden)
+	afterSteps := r.newAfterSteps(n, len(spec.After) > 0, setupTerminal(interactive, stdout, stderr), neutral, hidden)
 	// The mapper is reached from the socket's goroutine and the output's: it sets
 	// parent_agent_id on a subagent's start, which it may keep back for a while, and
 	// writes every event of the session's runtime in order. Each event is masked first,
@@ -1061,10 +1104,15 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// stop's cause, from the runtime's start until its exit is decided.
 	stoppable, stopRuntime := context.WithCancelCause(runCtx)
 	defer stopRuntime(nil)
-	limited, cancelLimit := context.WithCancel(stoppable)
+	limited, cancelLimitCause := context.WithCancelCause(stoppable)
+	cancelLimit := func() { cancelLimitCause(nil) }
+	// The limit's timer stops once the runtime exits: After's limit is AfterTimeout.
+	stopLimit := func() {}
 	if spec.Timeout > 0 {
-		limited, cancelLimit = context.WithTimeoutCause(stoppable, spec.Timeout, errTimeout)
+		limit := time.AfterFunc(spec.Timeout, func() { cancelLimitCause(errTimeout) })
+		stopLimit = func() { limit.Stop() }
 	}
+	defer stopLimit()
 	r.stops.arm(stopRuntime)
 	// Whether the session was cancelled, and whether it timed out, is decided the moment
 	// the runtime's exit is observed. Cancelled: the caller's context had ended by then,
@@ -1075,10 +1123,13 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// What ends the context later changes nothing. A stop in the gateway's answer to a
 	// batch is decided after the exit, below.
 	var cancelled, timedOut bool
-	proc.exited = func() {
+	decide := sync.OnceFunc(func() {
 		cause := context.Cause(limited)
 		cancelled = ctx.Err() != nil && !errors.Is(cause, errTimeout) && !errors.Is(cause, errRunClosed) && !errors.Is(cause, errModelKeyLimit)
 		timedOut = errors.Is(cause, errTimeout) && proc.stopped.Load()
+	})
+	proc.exited = func() {
+		decide()
 		if exitObserved != nil {
 			exitObserved()
 		}
@@ -1091,6 +1142,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		cause := context.Cause(limited)
 		return errors.Is(cause, errTimeout) || errors.Is(cause, errModelKeyLimit) || ctx.Err() != nil || errors.Is(context.Cause(runCtx), errRunClosed)
 	})
+	afterSteps.start(func() bool { return false })
 	var exit exitStatus
 	// The route to OpenSpec.QoryRoute is open to this session while its launch runs,
 	// and closes before anything of the session's end is written.
@@ -1136,6 +1188,19 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		cancelFlush()
 	}
 	keyLimit := r.stops.end() == event.ReasonModelKeyLimit
+	// After runs in a new container once the runtime exited, whatever ended it: its exit
+	// with any status, 125 included, the time limit, a pause or a stop from outside. Only
+	// a run closed from outside starts none. When the launch failed before any container
+	// existed, After still starts, on the unchanged workspace. The step ends before the
+	// session's dev.qory.session.exited.
+	if len(spec.After) > 0 && !closed {
+		r.runAfter(afterRun{
+			ctx: ctx, runCtx: runCtx, spec: spec, enclosure: enclosure, unwrapAgent: unwrapAgent,
+			steps: afterSteps, dir: shown.Dir, mounts: shown.Mounts, proxy: fwd.Addr(),
+			words: insideAll(spec.After, insideAfter), grace: proc.grace, session: n,
+		})
+		closed = errors.Is(context.Cause(runCtx), errRunClosed)
+	}
 	state, reason := event.StateFailed, ""
 	switch {
 	case closed:
@@ -1173,7 +1238,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		// record.
 		r.lastExit = -1
 	}
-	res := &Result{RunID: r.id, Dir: dir, SessionDir: sessionDir, Session: n, ExitCode: exit.code, Signal: exit.signal, State: state, Reason: reason, TimedOut: timedOut && !closed, Cancelled: cancelled, RunClosed: closed}
+	res := &Result{RunID: r.id, Dir: dir, SessionDir: sessionDir, Session: n, ExitCode: exit.code, Signal: exit.signal, State: state, Reason: reason, TimedOut: timedOut && !closed, Cancelled: cancelled, RunClosed: closed, After: afterSteps.result()}
 	switch {
 	case closed:
 		// The gateway wrote the session's dev.qory.session.exited in its stream when it

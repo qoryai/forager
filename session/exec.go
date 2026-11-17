@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/session/internal/descriptor"
@@ -82,17 +84,24 @@ func withExec(helper, unset []string, command string, args []string) (string, []
 // and a host's cgroup seen without a cgroup namespace. A value it cannot read is left
 // out of the record, and a record with no value is not sent.
 //
-// Its arguments are --unset NAME, any number of times, then -- and the program and
-// its arguments, which no option of its reaches. A NAME is a variable's name: letters,
-// digits and underscores, starting with a letter or an underscore. When a signal ended
+// With --after-only, Exec runs no program: it runs SessionSpec.After in the After
+// container the session starts, as [execAfter] says, and nothing else of the above: it
+// checks no mount of /qory or /qory/runtime, and needs no runtime folder.
+//
+// Its arguments are --unset NAME, any number of times, then -- and the program and its
+// arguments, which no option of its reaches; or --after-only, --after-timeout MS and
+// --after-word WORD once for each word of After, and nothing after them. A NAME is a
+// variable's name: letters, digits and underscores, starting with a letter or an underscore. When a signal ended
 // the program, Exec ends by the same signal once it has sent the measure, so its
 // parent sees the end it saw when Exec executed the program in its place: docker-init
 // exits 128 and the signal's number, and a session without Docker sees the signal.
 // For a signal whose default action does not end a process, or when Exec outlives the
 // signal, it returns 128 and the signal's number. Otherwise it returns the exit
 // status, as a shell does: the program's, 2 for arguments it cannot read, 127 for a
-// program it does not find, or finds only through . or an empty entry of PATH, and
-// 126 for one it cannot execute, its reason written to stderr.
+// program it does not find, or finds only through . or an empty entry of PATH, 126
+// for one it cannot execute. With --after-only it returns 0 once After ran and its
+// exit was sent, and 125 when it cannot make itself not dumpable, connect to the
+// socket or send, its reason written to stderr.
 //
 // On Linux, before it starts the program, Exec returns 125, with a line on stderr that
 // starts with the fix, when /qory or /qory/runtime is a symbolic link, or when it
@@ -103,10 +112,14 @@ func withExec(helper, unset []string, command string, args []string) (string, []
 // image's symbolic link can lead a listed mount over the folder, or the folder's bind
 // away from it.
 func Exec(args []string, stderr io.Writer) int {
-	names, argv, err := parseExec(args)
+	opts, argv, err := parseExec(args)
+	names := opts.names
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
+	}
+	if opts.afterOnly {
+		return execAfter(opts.after, stderr)
 	}
 	// The socket is the session's, whatever names the runtime has unset.
 	addr := os.Getenv(EnvSocket)
@@ -134,7 +147,8 @@ func Exec(args []string, stderr io.Writer) int {
 		return 127
 	}
 	closeInherited()
-	code, sig, err := startAndWait(path, argv)
+	notify := passedOn()
+	code, sig, err := startAndWait(path, argv, notify)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		fmt.Fprintf(stderr, "exec: %s: not found: %v\n", program, accesskey.ShownError(err))
@@ -200,11 +214,8 @@ var forwarded = []os.Signal{
 	syscall.SIGTERM, syscall.SIGCONT, syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU, syscall.SIGWINCH,
 }
 
-// startAndWait starts the program at path with argv and the process's environment and
-// standard streams, passes on each of [forwarded] until it exits, and returns its exit
-// status: its code, or 128 and the number of the signal that ended it, with that
-// signal. The error is that of the start: the program did not run.
-func startAndWait(path string, argv []string) (int, syscall.Signal, error) {
+// passedOn are the signals of [forwarded] the process did not start with ignored.
+func passedOn() []os.Signal {
 	var notify []os.Signal
 	for _, sig := range forwarded {
 		// Go keeps HUP and INT ignored when the process started with them ignored, and
@@ -213,6 +224,15 @@ func startAndWait(path string, argv []string) (int, syscall.Signal, error) {
 			notify = append(notify, sig)
 		}
 	}
+	return notify
+}
+
+// startAndWait starts the program at path with argv and the process's environment and
+// standard streams, passes on each of notify, the signals [passedOn] returns, until it
+// exits, and returns its exit status: its code, or 128 and the number of the signal
+// that ended it, with that signal. The error is that of the start: the program did not
+// run.
+func startAndWait(path string, argv []string, notify []os.Signal) (int, syscall.Signal, error) {
 	sigs := make(chan os.Signal, 32)
 	signal.Notify(sigs, notify...)
 	// The program runs in a separate process group, as a shell's job does and as
@@ -333,30 +353,74 @@ func readMeasure(root string) map[string]any {
 	return m
 }
 
-// parseExec reads [Exec]'s arguments: the names to unset, and the program and its
-// arguments after --. A name outside a variable's grammar is refused without being
-// quoted, since what is not a name may hold a value.
-func parseExec(args []string) ([]string, []string, error) {
-	var names []string
+// execOptions are [Exec]'s options: the names to unset, and with afterOnly
+// SessionSpec.After.
+type execOptions struct {
+	names     []string
+	after     afterLaunch
+	afterOnly bool
+}
+
+// parseExec reads [Exec]'s arguments: its options, and the program and its arguments
+// after --. A name outside a variable's grammar is an error, shown without being quoted, since
+// what is not a name may hold a value.
+func parseExec(args []string) (execOptions, []string, error) {
+	var opts execOptions
+	usage := errors.New("exec: want --unset NAME ... -- program [args], or --after-only with its options")
+	timeout := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--unset":
 			if i+1 == len(args) {
-				return nil, nil, errors.New("exec: --unset needs a name")
+				return opts, nil, errors.New("exec: --unset needs a name")
 			}
 			i++
 			if !variableShape.MatchString(args[i]) {
-				return nil, nil, errors.New("exec: an --unset is not a variable's name: letters, digits and underscores, starting with a letter or an underscore, of at most 128")
+				return opts, nil, errors.New("exec: an --unset is not a variable's name: letters, digits and underscores, starting with a letter or an underscore, of at most 128")
 			}
-			names = append(names, args[i])
+			opts.names = append(opts.names, args[i])
+		case "--after-only":
+			opts.afterOnly = true
+		case "--after-timeout":
+			if i+1 == len(args) {
+				return opts, nil, errors.New("exec: --after-timeout needs milliseconds")
+			}
+			i++
+			ms, err := strconv.ParseInt(args[i], 10, 64)
+			if err != nil || ms <= 0 || ms > math.MaxInt64/int64(time.Millisecond) {
+				return opts, nil, errors.New("exec: --after-timeout is a whole number of milliseconds above 0")
+			}
+			opts.after.timeout, timeout = time.Duration(ms)*time.Millisecond, true
+		case "--after-word":
+			if i+1 == len(args) {
+				return opts, nil, errors.New("exec: --after-word needs a word")
+			}
+			i++
+			opts.after.words = append(opts.after.words, args[i])
 		case "--":
-			if i+1 == len(args) || args[i+1] == "" {
-				return nil, nil, errors.New("exec: want --unset NAME ... -- program [args]: the program is missing")
+			switch {
+			case opts.afterOnly:
+				return opts, nil, errors.New("exec: --after-only runs no program: nothing follows its options")
+			case timeout || len(opts.after.words) > 0:
+				return opts, nil, errors.New("exec: --after-timeout and --after-word go with --after-only")
+			case i+1 == len(args) || args[i+1] == "":
+				return opts, nil, errors.New("exec: want --unset NAME ... -- program [args]: the program is missing")
 			}
-			return names, args[i+1:], nil
+			return opts, args[i+1:], nil
 		default:
-			return nil, nil, errors.New("exec: want --unset NAME ... -- program [args]")
+			return opts, nil, usage
 		}
 	}
-	return nil, nil, errors.New("exec: want --unset NAME ... -- program [args]: -- is missing")
+	if opts.afterOnly {
+		switch {
+		case !timeout || len(opts.after.words) == 0:
+			return opts, nil, errors.New("exec: --after-only needs --after-timeout and --after-word")
+		case opts.after.words[0] == "":
+			return opts, nil, errors.New("exec: the first --after-word, After's program, is empty")
+		case len(opts.names) > 0:
+			return opts, nil, errors.New("exec: --after-only takes no --unset")
+		}
+		return opts, nil, nil
+	}
+	return opts, nil, errors.New("exec: want --unset NAME ... -- program [args]: -- is missing")
 }

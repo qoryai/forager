@@ -91,10 +91,14 @@ func ignore(sigs []os.Signal) {
 	signal.Ignore(sigs...)
 }
 
+// prctl is [unix.Prctl], or a test's stand-in.
+var prctl = unix.Prctl
+
 // undumpable makes the process not dumpable, so a process of the agent's user cannot
-// read its /proc files, trace it or take its descriptors.
-func undumpable() {
-	unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0)
+// read its /proc files, trace it or take its descriptors, and returns the error of
+// prctl when it cannot.
+func undumpable() error {
+	return prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0)
 }
 
 // exited waits until the process pid has exited, leaves it to be reaped, and reports

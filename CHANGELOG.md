@@ -10,8 +10,20 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Send `push_ref` on the apply item of a credential that pushes, such as
+  `refs/heads/qory/wi_01`: from this change the gateway returns `403` for every git push
+  through an item without it, and through a credential the machine defines with `env` or
+  `file`, which has none; an adapter may answer `push_ref` on an item. A gateway built
+  before this change fails a run whose run configuration has `push_ref` with
+  `run_configuration_invalid`, and reads a `{}` segment as the characters `{}`, so a
+  path with one matches no request.
+- Read `after` as a step kind, and `reason` on `dev.qory.run.step_exited`: a gateway
+  built before this change answers a batch that has them with `400`.
+- Remove a stray `{` or `}` from the paths of `egress.paths`, of a credential's `paths`
+  and of an apply item's `paths`: a `{` or `}` outside a segment written exactly `{}`
+  fails validation from this change, where before it was a character of the path.
 - Delete `runtime_version` from each runtime descriptor of yours: the descriptor schema
-  now refuses it, so `descriptor.Parse` returns an error for a descriptor that has it.
+  now fails on it, so `descriptor.Parse` returns an error for a descriptor that has it.
   The version comes from `SessionSpec.RuntimeInstall.Version`.
 - A gateway built before this change fails a run with `run_configuration_invalid` when
   the run configuration's API credential has `resets_at`, `schedule_resets_at` or
@@ -254,6 +266,16 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- An apply item of a host credential, in the run configuration, the secrets answer and
+  an adapter's output, may have `push_ref`, the one branch a git push through it may
+  change (§Credentials, The push branch). A renewal keeps it.
+- The path grammar of `egress.paths` and of a credential's `paths` has a `{}` segment,
+  which matches one non-empty segment: `/repos/example-org/app/pulls/{}` matches
+  `/repos/example-org/app/pulls/12` and not `/repos/example-org/app/pulls/12/merge`. A
+  `{` or `}` anywhere else fails validation.
+- `dev.qory.run.step_started` has the kind `after`, the session's after step, and
+  `dev.qory.run.step_exited` an optional `reason`, `timeout` or `out_of_memory`, which
+  an after step alone has. `record.schema.json` has the source `after`.
 - The route to the caller: a session's program sends plain `http://` requests to
   `http://host.qory.invalid`, read from `QORY_HOST_URL`, and the caller's handler
   answers. `QORY_HOST_URL` is a `fixed` name in every run, with a route or not: behind a
@@ -1170,6 +1192,13 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The proxy reads every git push to a host of a credential before it sends a byte: each
+  ref command must name the credential's `push_ref`. A push to another branch or a tag,
+  a push through a credential with no `push_ref`, a signed push, a push with push
+  options or a capability outside the guard's list, a body with anything but a pack
+  after the commands' flush, and any other form of request that names `receive-pack`
+  get a `403` with a one-line text, recorded as `denied` with the rule
+  `wall:push-ref`.
 - The proxy denies every request to `host.qory.invalid`, a `CONNECT` among them, with a
   `403` and the rule `wall:qory-host`, in either mode and whatever the policy lists. The
   `403`'s body starts with the fix. The link takes a session's `dev.qory.run.egress`
@@ -2009,6 +2038,55 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `SessionSpec.After` and `AfterTimeout`: a command that runs in a new container of the
+  wall once the runtime exits, such as a commit of what the agent left. The session
+  first removes the agent's container (`Unwrap`), so no process of the agent is left,
+  and with nested Docker no inner container, then starts After's container through the
+  new `wall.AfterWrapper` (`WrapAfter`, `UnwrapAfter`), which the Docker wall
+  implements: the run's image under the run's container runtime, as the wall's user with
+  no capability and no nested Docker, on the inside network with the run's proxy, with
+  the mount that holds `Dir`, a socket in a directory that no other container binds, and
+  none of the run's variables. It binds no installed runtime folder, and `Exec`'s
+  `--after-only` mode checks nothing under `/qory/runtime`. After's container has no route to the caller: its proxy
+  URL has no password, so a request to the route gets `403` from the gateway's proxy,
+  and one with the agent's password gets `503`, since that session ended; the handler is
+  called for neither. Forager does not narrow the run's proxy for After: the proxy
+  applies the credentials the run's configuration holds, and the push guard as it is.
+  After runs with git's hooks, fsmonitor, credential helpers, signing, the system's and
+  user's configuration, and remotes other than HTTPS off, an empty `HOME`, no `XDG_*`
+  variable, and a `PATH` without a directory the agent's user owns or may write. A
+  program After's command looks up in `PATH`, and that it could have changed, does not run,
+  and a write into the workspace by that user, while After runs, cannot change which
+  program that lookup finds. It does not change which programs git starts from the
+  workspace's `.git/config`: a filter, `textconv` or merge driver it names still runs as
+  After's user, and on git 2.54.0, which has no setting that turns off every
+  `hook.<name>.command`, so does such a hook. qory's check of `.git/config` fails on unknown keys.
+  The session writes After as an `after` step before `dev.qory.session.exited`, which
+  keeps the runtime's state, and `Result.After` has its outcome. The helper's exec, with
+  the new option `--after-only`, sends the step's records over one connection that it
+  opens before After starts, and the session reads that connection alone
+  (`socket.ListenAfter`, `ServeFirst`): a process After starts cannot write the step. A
+  runtime stopped at `Timeout`, a pause and a stop from the context all get After; after
+  the context's end the removal, the start and After get `StopGrace` together, and a
+  run closed before After starts gets none, and every other exit gets After, `125`
+  included: a launch that failed before any container existed, such as a docker run that
+  exited `125` with no container, still gets After on the unchanged workspace, and
+  `Result.After` is nil only for a spec with no After and a run closed before After
+  starts; a run closed while After runs has it `cancelled` with `-1`. Join returns an
+  error and no result, and runs no After, when the wall's `Wrap` fails, the launch does
+  not start (`ErrNotStarted`), or the wait for the launch returns an error that is no
+  exit status: the runtime exited 0 and a write of its
+  output failed (`SessionSpec.Stdout`, `Stderr` or the run's log), or `Wait` failed. If After's container cannot start for the
+  same cause, the after step ends `failed` with `-1`, after the launch's error line.
+  The session removes the setup container first, when the run has one, as
+  `Run.RemoveSetup` does, with its wall step before the after step; the run is then as
+  one after `RemoveSetup`, and a removal that fails ends After `failed` and leaves
+  `ContainerKept()` true. A failure to remove the agent's container or to start
+  After's ends the step `failed` with `-1`; a removal that the context's end cuts is
+  tried again as the session ends. With After, `Join` may take `AfterTimeout` plus 66
+  seconds more than its 15 seconds. A record of the `after` source on the
+  launch's socket is skipped and reported. Join returns an error for After behind a wall that is no `wall.AfterWrapper` with an
+  `Unwrap`, without an `AfterTimeout`, or without a wall.
 - `OpenSpec.QoryRoute`, an `http.Handler` that serves a session's plain HTTP requests
   to `http://host.qory.invalid/`, walled or not, on one machine or behind a separate
   gateway. The launch of each session with a runtime gets `QORY_HOST_URL`
@@ -2705,6 +2783,14 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The Docker suites check `SessionSpec.After`: a background job the runtime leaves is
+  gone when After runs, After stops at `AfterTimeout`, a process of After's command that
+  writes to After's socket changes none of the step's records, After's container gets
+  nothing from the route to the caller, and the agent's planted proxy password gets
+  `403` and `503` there, After's command cannot read or take the helper's descriptors,
+  and After runs once the join's context ends. With nested Docker, a file the agent writes with the enclosure's root, through a
+  privileged inner container, is not in After's container. The suites need the hook
+  socket to cross into the enclosure: on an engine in a virtual machine they skip it.
 - `TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun` runs Claude Code 2.1.316
   behind the wall with two keys, each with `use_up_to_percent` 90. The stub serves
   each request with the five-hour window at 90 percent: the second request goes with

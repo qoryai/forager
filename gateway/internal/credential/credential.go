@@ -88,6 +88,9 @@ type Use struct {
 	Hosts                    []string
 	Scheme, Username, Header string
 	Paths                    []string
+	// PushRef is the one ref a git push through the use may create, update or delete;
+	// empty means every push gets a 403 (the proxy's branch guard).
+	PushRef string
 	// Stored says the credential is the server's, a run configuration's credentials
 	// entry, whose value Qory Apiary sealed to the access key.
 	Stored bool
@@ -129,11 +132,13 @@ type Stored struct {
 }
 
 // StoredApply is one way a [Stored] value is set: the hosts, the scheme with its
-// username or header, and the paths, nil for every path.
+// username or header, the paths, nil for every path, and the one ref a push through it
+// may change, empty for none.
 type StoredApply struct {
 	Hosts                    []string
 	Scheme, Username, Header string
 	Paths                    []string
+	PushRef                  string
 }
 
 // Token is the token as it is now, of a credential of the machine's; empty for a
@@ -327,7 +332,7 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 		h.set(answer)
 		h.shape = answer.shape()
 		for i, a := range answer.Apply {
-			out.Uses = append(out.Uses, &Use{Name: def.Name, Argument: sel.Argument, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths,
+			out.Uses = append(out.Uses, &Use{Name: def.Name, Argument: sel.Argument, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths, PushRef: a.PushRef,
 				Format: def.Format, Endpoint: def.Endpoint, OAuth: def.OAuth, held: h, index: i})
 		}
 		for _, p := range slices.Concat(def.Placeholders, answer.Placeholders) {
@@ -355,7 +360,7 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 			h.onRejected = s.Rejected
 		}
 		for _, a := range s.Apply {
-			out.Uses = append(out.Uses, &Use{Name: s.Name, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths, Stored: true,
+			out.Uses = append(out.Uses, &Use{Name: s.Name, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths, PushRef: a.PushRef, Stored: true,
 				Renewed: renewed, Format: s.Format, Endpoint: s.Endpoint, OAuth: s.OAuth, held: h})
 		}
 		for _, p := range s.Placeholders {
@@ -495,13 +500,24 @@ func (h *Held) check(mode policy.Mode, allow []string) error {
 	return nil
 }
 
+// checkPaths returns an error for a path of a credential's that is not in the policy's path grammar,
+// a { or a } outside a segment {} among them.
+func checkPaths(name string, paths []string) error {
+	for _, p := range paths {
+		if !policy.ValidPath(p) {
+			return fmt.Errorf("Write each credential path from /, with { and } only as the segment {} and * only at the end.\nThe path %s of credential %s is not in that form.", accesskey.ShownValue(p, true), accesskey.ShownName(name, false))
+		}
+	}
+	return nil
+}
+
 // overlap returns a path of a and a path of b that one request path can match both of,
-// such as /example-org/* and /example-org/harness.git/*, and whether there are any. A
-// path is a prefix ending in * or an exact path, the policy's path grammar.
+// such as /example-org/* and /example-org/harness.git/*, and whether there are any, as
+// [policy.OverlapPaths] decides it in the policy's path grammar.
 func overlap(a, b []string) (string, string, bool) {
 	for _, x := range a {
 		for _, y := range b {
-			if policy.CoversPath(x, y) || policy.CoversPath(y, x) {
+			if policy.OverlapPaths(x, y) {
 				return x, y, true
 			}
 		}
@@ -618,6 +634,9 @@ func (d Definition) Check() error {
 		}
 	}
 	if len(d.Adapter) > 0 {
+		if err := checkPaths(d.Name, d.Paths); err != nil {
+			return err
+		}
 		if d.Scheme != "" || d.Username != "" || d.Header != "" {
 			return fmt.Errorf("credential %s: an adapter says how its token is used; the scheme is not the definition's to give", accesskey.ShownName(d.Name, false))
 		}
@@ -628,6 +647,9 @@ func (d Definition) Check() error {
 	}
 	if len(d.Hosts) == 0 {
 		return fmt.Errorf("credential %s: a token from env or file needs the hosts it is for", accesskey.ShownName(d.Name, false))
+	}
+	if err := checkPaths(d.Name, d.Paths); err != nil {
+		return err
 	}
 	return apply{Hosts: d.Hosts, Scheme: d.Scheme, Username: d.Username, Header: d.Header}.check()
 }
@@ -679,6 +701,7 @@ type apply struct {
 	Header   string   `json:"header"`
 	Token    string   `json:"token"`
 	Paths    []string `json:"paths"`
+	PushRef  string   `json:"push_ref"`
 }
 
 func (a apply) check() error {
@@ -703,7 +726,7 @@ func (a apply) check() error {
 func (a *answer) shape() string {
 	var b strings.Builder
 	for _, u := range a.Apply {
-		fmt.Fprintf(&b, "%q %s %s %s %q\n", u.Hosts, u.Scheme, u.Username, u.Header, u.Paths)
+		fmt.Fprintf(&b, "%q %s %s %s %q %q\n", u.Hosts, u.Scheme, u.Username, u.Header, u.Paths, u.PushRef)
 	}
 	return b.String()
 }

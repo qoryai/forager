@@ -140,8 +140,8 @@ func (r *Run) openWall(ctx context.Context) error {
 
 // ContainerKept reports whether a container of the run that can write the run's binds
 // may still run outside a session: true when removing the agent's container of a
-// session, as the session ended, or the setup container, in [Run.RemoveSetup], failed,
-// and stays true then. In a run whose wall has no Unwrap, it is also true from the end of
+// session, as the session ended, After's container, or the setup container, in
+// [Run.RemoveSetup], failed, and stays true then. In a run whose wall has no Unwrap, it is also true from the end of
 // the first session until Close, since the agent's container stays until the close.
 // During a session it does not count the container of the session that runs. Run work
 // on the binds before Close, such as a push, only after Join returned and RemoveSetup
@@ -474,6 +474,15 @@ func (r *Run) RemoveSetup(ctx context.Context) (err error) {
 	case r.keptBy > 0:
 		return wall.ContainerKeptError(fmt.Errorf("Close the run: the agent's container of session %d could not be removed and may still run, so the setup container stays until the close.", r.keptBy))
 	}
+	return r.removeSetupContainer(ctx)
+}
+
+// removeSetupContainer removes the run's setup container, which the caller checked is
+// there, and writes the wall step "remove the setup container" as [Run.RemoveSetup]
+// does: a success clears setupUp, so the run is as one that never had the container;
+// a failure sets wallFailed and setupFailed, and keeps setupUp for the next try. The
+// caller holds r.joining.
+func (r *Run) removeSetupContainer(ctx context.Context) error {
 	step := r.startStep(event.StepWall, "remove the setup container")
 	// A panic that a caller recovers leaves no step open, and no session joins.
 	defer func() {

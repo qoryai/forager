@@ -1238,7 +1238,7 @@ func ProxyUses(held *credential.Held) []proxy.Credential {
 	}
 	uses := make([]proxy.Credential, 0, len(held.Uses))
 	for _, u := range held.Uses {
-		c := proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths}
+		c := proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths, PushRef: u.PushRef}
 		switch {
 		case slices.Contains(held.Group, u.Name):
 			c.Placeholder = link.KeyPlaceholder(held.Start)

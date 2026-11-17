@@ -69,6 +69,11 @@ func TestMain(m *testing.M) {
 			root = "/nonexistent/cgroup"
 		}
 		session.SetCgroupRoot(root)
+		// A root process, as in CI's container, owns and may write every file: the
+		// program check takes another user as the agent, as a walled one is never root.
+		if os.Getuid() == 0 {
+			session.SetAgentUser(65534)
+		}
 		session.SetExecHooks(listFDs(os.Getenv("FAKE_FDS_OUT")), waitAfter(os.Getenv("FAKE_AFTER_WAIT")))
 		os.Exit(session.Exec(os.Args[2:], os.Stderr))
 	}
@@ -80,6 +85,8 @@ func TestMain(m *testing.M) {
 		os.Exit(fakePreparation())
 	case os.Getenv("FAKE_SETUP_RECORDS") != "":
 		os.Exit(fakeSetupRecords())
+	case os.Getenv("FAKE_SOCKET_RECORDS") != "":
+		os.Exit(fakeSocketRecords())
 	case os.Getenv("QORY_TEST_FORWARD") != "":
 		if err := socket.Forward(context.Background(), os.Getenv(session.EnvSocket), os.Stdin); err != nil {
 			fmt.Fprintln(os.Stderr, err)

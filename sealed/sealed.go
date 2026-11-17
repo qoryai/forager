@@ -142,11 +142,13 @@ type store struct {
 }
 
 // Apply is one item of a value's apply, sealed-plaintext.schema.json: the hosts the
-// value is set on, how, and on which paths, nil for every path.
+// value is set on, how, on which paths, nil for every path, and the one ref a push
+// through it may change, empty for none.
 type Apply struct {
 	Hosts                    []string
 	Scheme, Username, Header string
 	Paths                    []string
+	PushRef                  string
 }
 
 // Value returns the value of a credential and whether the envelope had one. The bytes
@@ -182,7 +184,7 @@ func (v Values) Apply(credential string) ([]Apply, bool) {
 	}
 	out := make([]Apply, len(m.apply))
 	for i, a := range m.apply {
-		out[i] = Apply{Hosts: slices.Clone(a.Hosts), Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: slices.Clone(a.Paths)}
+		out[i] = Apply{Hosts: slices.Clone(a.Hosts), Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: slices.Clone(a.Paths), PushRef: a.PushRef}
 	}
 	return out, true
 }

@@ -94,7 +94,7 @@ func (r *Run) checkHarness() error {
 						"Claim %s in only one harness credential, %s or %s: one has no paths", shown, first, second)
 				}
 				for _, x := range other.paths {
-					if slices.ContainsFunc(u.paths, func(y string) bool { return policy.CoversPath(x, y) || policy.CoversPath(y, x) }) {
+					if slices.ContainsFunc(u.paths, func(y string) bool { return policy.OverlapPaths(x, y) }) {
 						if one {
 							return refusal.New(refusal.RunConfigurationInvalid, names,
 								"Give the apply items of the harness credential %s paths that do not overlap on %s", first, shown)
@@ -128,7 +128,7 @@ func (r *Run) StackUses() []proxy.Credential {
 		}
 		for _, a := range r.applies[name] {
 			out = append(out, proxy.Credential{Name: name, Hosts: slices.Clone(a.Hosts), Scheme: a.Scheme, Username: a.Username, Header: a.Header,
-				Paths: slices.Clone(a.Paths), Value: value, Stored: true, Rejected: r.renew.rejected(name)})
+				Paths: slices.Clone(a.Paths), PushRef: a.PushRef, Value: value, Stored: true, Rejected: r.renew.rejected(name)})
 		}
 	}
 	return out

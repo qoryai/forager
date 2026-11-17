@@ -39,6 +39,7 @@ type plainApply struct {
 	Username string   `json:"username"`
 	Header   string   `json:"header"`
 	Paths    []string `json:"paths"`
+	PushRef  string   `json:"push_ref"`
 }
 
 // meta is what a value has beside its bytes: when it expires, with hasExpires false

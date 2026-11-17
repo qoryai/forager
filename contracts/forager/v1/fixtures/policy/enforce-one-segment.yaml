@@ -1,0 +1,11 @@
+# A {} segment matches one path segment that is not empty.
+version: 1
+egress:
+  mode: enforce
+  allow:
+    - api.git.example
+  paths:
+    api.git.example:
+      - /repos/example-org/app/pulls
+      - /repos/example-org/app/pulls/{}
+      - /repos/example-org/app/pulls/{}/files*

@@ -2,6 +2,7 @@ package session_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -13,8 +14,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/internal/linktest"
@@ -72,6 +77,84 @@ func runtimeShown(r wall.RuntimeFolder) func(string) string {
 	return func(s string) string { return strings.ReplaceAll(s, inside, r.Path) }
 }
 func (w *openWall) Close(context.Context) error { w.closed++; return nil }
+
+// afterWall is an open wall whose enclosure also removes the agent's container and starts
+// After's container, as processes on this machine: Unwrap and UnwrapAfter record that
+// they ran. WrapAfter returns the launch of After's helper, started through a shell that
+// writes the helper's process number to a file, with the environment of the test's
+// process, FAKE_AFTER_SOCKET with the socket's path, and the socket's variable.
+// UnwrapAfter ends the helper when it still runs, as removing a container ends what runs
+// in it.
+type afterWall struct {
+	openWall
+	mu    sync.Mutex
+	order []string
+	after wall.Launch
+	pid   string
+	// failUnwrap and failWrapAfter, when set, are what Unwrap and WrapAfter return.
+	failUnwrap, failWrapAfter error
+	// socket, when set, is the socket WrapAfter points the helper at, in place of the
+	// launch's.
+	socket string
+	// startedAfter is when WrapAfter was called.
+	startedAfter time.Time
+}
+
+func (w *afterWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *afterWall) note(s string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.order = append(w.order, s)
+}
+
+// calls are the calls so far, in order.
+func (w *afterWall) calls() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.order)
+}
+
+func (w *afterWall) Unwrap(context.Context) error {
+	w.note("unwrap")
+	return w.failUnwrap
+}
+
+func (w *afterWall) WrapAfter(_ context.Context, l wall.Launch) (wall.Launch, error) {
+	w.note("wrap after")
+	w.mu.Lock()
+	w.after = l
+	w.startedAfter = time.Now()
+	if w.pid == "" {
+		w.pid = filepath.Join(os.TempDir(), fmt.Sprintf("after-wall-%d-%d", os.Getpid(), time.Now().UnixNano()))
+	}
+	pid := w.pid
+	w.mu.Unlock()
+	if w.failWrapAfter != nil {
+		return wall.Launch{}, w.failWrapAfter
+	}
+	socket := cmp.Or(w.socket, l.Socket)
+	env := append(append(os.Environ(), l.Env...), session.EnvSocket+"="+socket, "FAKE_AFTER_SOCKET="+l.Socket)
+	args := append([]string{"-c", `echo $$ > "$1"; shift; exec "$@"`, "sh", pid, l.Command}, l.Args...)
+	return wall.Launch{Command: "/bin/sh", Args: args, Env: env, Dir: l.Dir}, nil
+}
+
+func (w *afterWall) UnwrapAfter(context.Context) error {
+	w.note("unwrap after")
+	w.mu.Lock()
+	pid := w.pid
+	w.mu.Unlock()
+	if b, err := os.ReadFile(pid); err == nil {
+		if n, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && syscall.Kill(n, 0) == nil {
+			syscall.Kill(n, syscall.SIGKILL)
+		}
+		os.Remove(pid)
+	}
+	return nil
+}
 
 // agentAddr is where the open wall's enclosure reports the agent's container, and where
 // the tests' connections to a walled forwarder come from: loopback.
