@@ -10,6 +10,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- A gateway built before this change returns `405` to the link's host calls, `POST
+  <run.url>/<run_id>/next-session` and `POST <run.url>/<run_id>/pushed-commits`: run
+  `Run.NextSession` and `Run.PushedCommits` against a gateway of this change.
 - A gateway built before this change fails a run whose run configuration has a
   credential with `purpose: push` with `run_configuration_invalid`, and reads a
   `QORY-PUSH` connection on its one address as a request of the link's HTTP. A schema
@@ -272,6 +275,16 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- Two host calls of the gateway's link, `POST <run.url>/<run_id>/next-session` and
+  `POST <run.url>/<run_id>/pushed-commits`, and `Run.NextSession` and
+  `Run.PushedCommits`, which send them: the gateway forwards the body unread to Qory
+  Apiary's run endpoint, signed with its access key, and returns the answer unread.
+  The bodies are at most 4 KiB and 64 KiB, and the answers 1 MiB and 64 KiB. A signed
+  coded refusal of Qory Apiary's passes with its status and `from: apiary`; the
+  gateway's refusals are `413` `payload_too_large` for a body over the limit and `502`
+  `control_plane_unavailable` when no valid answer came. No container reaches either
+  call: they go over the link alone, and the run API's route returns `404` for both
+  paths (§The gateway's link, The host calls).
 - A host credential may have `purpose: push`, for qory's push and the pull request
   calls of its submit step through the run's push proxy (§Credentials, Push
   credentials). The run answer has `push_proxy_secret` on the local link for such a
@@ -1207,6 +1220,16 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The link's host calls, `POST <run.url>/<run_id>/next-session` and `POST
+  <run.url>/<run_id>/pushed-commits`: the gateway reads the body, at most 4 KiB and
+  64 KiB, before it looks up or reopens the run, and sends it unread to Qory Apiary with
+  `server.Client.HostCall`, signed with its access key, once, within 60 seconds. It
+  reads at most 1 MiB of a next-session `200`, 64 KiB of a pushed-commits `2xx`, and
+  64 KiB of any other status, and a longer answer is a `502`
+  `control_plane_unavailable` without the rest of its body read. A run that ends or is
+  suspended while Qory Apiary has the request gets the run's `410` or a `503`, and a
+  caller that hangs up cancels the request to Qory Apiary. A `2xx` admits the
+  connection on the one address.
 - A run whose run configuration has a push credential gets a push proxy, which sets
   the push credentials alone, on their items' hosts and paths, with each item's branch
   guard, and returns a `403` for every other host and path, with the first line "qory:

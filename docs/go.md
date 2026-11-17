@@ -653,6 +653,42 @@ err = push.Run()
 p.Close()                                         // the next Join closes it too
 ```
 
+### The host calls
+
+`(*session.Run).NextSession` and `(*session.Run).PushedCommits` send the run's
+next-session and pushed-commits requests to Qory Apiary, from the host alone. Each goes
+over the gateway's link, which no container reaches, and the run API's route serves
+neither path:
+
+```go
+answer, err := run.NextSession(ctx, []byte(`{"session":1,"state":"succeeded","reason":null}`))
+var ref *accesskey.Refusal
+if errors.As(err, &ref) && ref.From == accesskey.FromApiary && ref.Code == "run_ended" {
+	// Qory Apiary ended the run: start no later session.
+}
+```
+
+Forager reads neither body. The gateway sends the body to Qory Apiary, signed with its
+access key, once, and returns the answer's body as it came: a next-session answer, or the
+empty body of a pushed-commits `204`. A body is at most 4 KiB for next-session and 64 KiB
+for pushed-commits. Call either at any time from `Open` to `Close`, from any goroutine,
+while a `Join` runs too.
+
+No container reaches either call. On one machine, only a gateway started with
+`gateway.Config.NoLinkSocket` keeps them to the process that holds the link in memory:
+with a link socket, any process of the session's user that reaches the socket can send
+them for a run whose id it knows.
+
+Each returns an error that starts with the fix in a closed run and in a run with no
+control plane, with nothing sent. A refusal is an `*accesskey.Refusal`: `From` is
+`apiary` for Qory Apiary's code with its status, such as `409` `run_ended`, and
+`gateway` for the gateway's, such as `413` `payload_too_large` or `502`
+`control_plane_unavailable`. A `410` is the end of the run at the gateway, which
+`server.Ended` reports. A `503` with no code, while the gateway closes or reopens the
+run, is a `*server.StatusError`. Forager sends no request again: send it again after a `5xx` or a
+transport failure, since Qory Apiary returns the same result for a repeated request. The
+contract's README, Â§The gateway's link, The host calls, lists every answer.
+
 ### The run API
 
 `(*session.Run).RunAPI` gives host work a client of Qory Apiary's run API, with no key
@@ -686,7 +722,7 @@ file that fails its signed digest ends in a read error. The contract's README, Â
 API, lists the five requests, each status and the limits. A sixth path of Qory Apiary's
 run API, `GET /resume/transcript`, gets `404` `not_found` through `QORY_RUN_API` and
 from behind a wall, and nothing is sent: the session reads the transcript over the
-gateway's link.
+gateway's link. So do `POST /next-session` and `POST /pushed-commits`, the host calls.
 
 Plan the gateway's memory for the route. A budget of 512 MiB per gateway counts the
 bytes of `POST /artifacts` bodies and of answers other than files, past the first 1 MiB of

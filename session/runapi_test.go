@@ -166,9 +166,9 @@ func TestRunAPIOnOneMachine(t *testing.T) {
 	reachesTheRunAPI(t, sp)
 }
 
-// separateRun starts a separate gateway in front of a fake Qory Apiary, and sets sp to
-// run behind it.
-func separateRun(t *testing.T, sp *runSpec) {
+// separateRun starts a separate gateway in front of a fake Qory Apiary, sets sp to run
+// behind it, and returns the fake, whose reports are the gateway's.
+func separateRun(t *testing.T, sp *runSpec) *apiary {
 	t.Helper()
 	a := newApiary(t)
 	certFile, keyFile, caFile := separateCertificate(t)
@@ -177,7 +177,12 @@ func separateRun(t *testing.T, sp *runSpec) {
 		RunDir: func(id string) string { return dir + "/" + id }, Listen: "127.0.0.1:0", Heartbeat: time.Second, Version: "test",
 		TLS:    &gateway.TLS{CertFile: certFile, KeyFile: keyFile},
 		Server: &gateway.Server{Version: 1, URL: a.srv.URL, AccessKeyID: "ak_f1xt0re00000000g", ApiaryPublicKey: a.pin, AccessKey: a.key, InstanceID: "i_test"},
-		Report: func(l string) { t.Log("the gateway reported:", l) },
+		Report: func(l string) {
+			t.Log("the gateway reported:", l)
+			a.mu.Lock()
+			a.reports = append(a.reports, l)
+			a.mu.Unlock()
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -189,6 +194,8 @@ func separateRun(t *testing.T, sp *runSpec) {
 	})
 	sp.RunID = event.NewRunID()
 	sp.Gateway = session.RemoteGateway{RunKey: a.runKey(t, sp.RunID, "https://"+g.Addr(), a.key), TLS: server.RemoteTLS{CAFile: caFile}}
+	a.oneAddress = g.Addr()
+	return a
 }
 
 // TestRunAPIBehindASeparateGateway pins Run.RunAPI behind a separate gateway.

@@ -827,6 +827,8 @@ func TestEveryRequestCarriesAnAcceptedRunKey(t *testing.T) {
 		{http.MethodPost, "/qory-link/run-configuration"},
 		{http.MethodGet, "/qory-link/run-configuration/" + runID},
 		{http.MethodPost, "/qory-link/events"},
+		{http.MethodPost, "/qory-link/run-configuration/" + runID + "/next-session"},
+		{http.MethodPost, "/qory-link/run-configuration/" + runID + "/pushed-commits"},
 		{http.MethodGet, "/qory-link/nothing"},
 	}
 	send := func(header []string, method, path string) answer {
