@@ -49,6 +49,10 @@ func RelayLine(secret string) string { return RelayPreamble + " " + secret + "\n
 // gateway's one address: [StackPreamble], a space, the run key and a newline.
 func StackLine(runKey string) string { return StackPreamble + " " + runKey + "\n" }
 
+// PushLine is the line that opens a connection to a run's push proxy on a separate
+// gateway's one address: [PushPreamble], a space, the run key and a newline.
+func PushLine(runKey string) string { return PushPreamble + " " + runKey + "\n" }
+
 // ReadRelayPreamble reads the relay's preamble, [RelayPreamble], a space, the secret
 // and a newline, from the start of a connection and reports whether it carries the
 // secret, compared in constant time. It reads exactly the preamble's length and no

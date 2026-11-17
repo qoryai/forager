@@ -79,10 +79,18 @@ func checkService(cfg *Config) (*certFiles, error) {
 	return certs, nil
 }
 
-// maxRelayRunKey is the longest relay preamble with a run key, its newline included:
-// [link.RelayPreamble], a space, a run key of at most [runkey.MaxLength] characters and
-// a newline.
-const maxRelayRunKey = len(link.RelayPreamble) + 1 + runkey.MaxLength + 1
+// relayWords are the words a bound connection's first line may open with, each followed
+// by a space and a run key, and the proxy of the run each opens: the relay's preamble
+// the run's proxy, [link.StackPreamble] its stack proxy and [link.PushPreamble] its push
+// proxy.
+var relayWords = []struct {
+	word string
+	to   relayTo
+}{{link.RelayPreamble, toRunProxy}, {link.StackPreamble, toStackProxy}, {link.PushPreamble, toPushProxy}}
+
+// maxRelayRunKey is the longest line of word with a run key, its newline included:
+// word, a space, a run key of at most [runkey.MaxLength] characters and a newline.
+func maxRelayRunKey(word string) int { return len(word) + 1 + runkey.MaxLength + 1 }
 
 // maxFirstLine is the bound of what the one address reads of a connection before it
 // knows where it goes: its first line, the binding's or a request line, and on a bound
@@ -263,7 +271,8 @@ func (s *service) route(raw net.Conn) {
 // exporter value, then reads the connection's next line within the same deadline. The
 // relay's preamble with a run key goes to that run's proxy ([Gateway.relayRun]), and
 // [link.StackPreamble] with a run key to that run's stack proxy until the run's first
-// join request; any other line is the link's HTTP/1.1. admit lets go of c's count
+// join request, and [link.PushPreamble] with a run key to that run's push proxy; any
+// other line is the link's HTTP/1.1. admit lets go of c's count
 // among the connections whose run keys are not admitted, once its run key is; vouch
 // keeps c from being closed for a newer one, once a run key on it passed; release lets
 // go of c's count of its source and of its /48, once the open of a run request on it
@@ -284,26 +293,26 @@ func (s *service) bind(c *tls.Conn, r *bufio.Reader, admit, vouch, release func(
 	if !ok {
 		return false
 	}
-	for _, word := range []string{link.RelayPreamble, link.StackPreamble} {
-		if !bytes.HasPrefix(line, []byte(word+" ")) {
+	for _, w := range relayWords {
+		if !bytes.HasPrefix(line, []byte(w.word+" ")) {
 			continue
 		}
-		value, ok := relayRunKey(line, word)
+		value, ok := relayRunKey(line, w.word)
 		if !ok {
 			return false
 		}
 		r.Discard(len(line))
-		return s.g.relayRun(c, r, value, admit, release, word == link.StackPreamble)
+		return s.g.relayRun(c, r, value, admit, release, w.to)
 	}
 	c.SetDeadline(time.Time{})
 	return s.edgeQ.deliver(&boundConn{linkConn: linkConn{Conn: c, r: r}, ekm: ekm, admit: admit, vouch: vouch, release: release})
 }
 
-// relayRunKey is the run key of a line of the relay's preamble, or of
-// [link.StackPreamble], word, its newline included, and whether the line is within
-// [maxRelayRunKey]: a longer one has no run key. Both words have the same length.
+// relayRunKey is the run key of a line of word, one of [relayWords], its newline
+// included, and whether the line is within [maxRelayRunKey] of word: a longer one has no
+// run key.
 func relayRunKey(line []byte, word string) (string, bool) {
-	if len(line) > maxRelayRunKey {
+	if len(line) > maxRelayRunKey(word) {
 		return "", false
 	}
 	return strings.TrimSuffix(strings.TrimPrefix(string(line), word+" "), "\n"), true

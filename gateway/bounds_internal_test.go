@@ -453,8 +453,9 @@ func TestTheRelaysBuckets(t *testing.T) {
 }
 
 // TestTheRelayPreamblesRunKey pins the line of the relay's preamble the one address
-// reads a run key from, and the stack preamble's: at most the word, a space, a run key
-// of runkey.MaxLength characters and a newline.
+// reads a run key from, and the stack preamble's and the push preamble's, each bound by
+// its word's length: at most the word, a space, a run key of runkey.MaxLength
+// characters and a newline.
 func TestTheRelayPreamblesRunKey(t *testing.T) {
 	key := strings.Repeat("a", runkey.MaxLength)
 	if v, ok := relayRunKey([]byte(link.RelayPreamble+" "+key+"\n"), link.RelayPreamble); !ok || v != key {
@@ -463,14 +464,13 @@ func TestTheRelayPreamblesRunKey(t *testing.T) {
 	if _, ok := relayRunKey([]byte(link.RelayPreamble+" "+key+"a\n"), link.RelayPreamble); ok {
 		t.Errorf("a run key of %d characters is read", runkey.MaxLength+1)
 	}
-	if len(link.StackPreamble) != len(link.RelayPreamble) {
-		t.Fatalf("%s and %s differ in length: maxRelayRunKey bounds both", link.StackPreamble, link.RelayPreamble)
-	}
-	if v, ok := relayRunKey([]byte(link.StackLine(key)), link.StackPreamble); !ok || v != key {
-		t.Errorf("a stack preamble's run key of %d characters: %v", runkey.MaxLength, ok)
-	}
-	if _, ok := relayRunKey([]byte(link.StackLine(key+"a")), link.StackPreamble); ok {
-		t.Errorf("a stack preamble's run key of %d characters is read", runkey.MaxLength+1)
+	for word, line := range map[string]func(string) string{link.StackPreamble: link.StackLine, link.PushPreamble: link.PushLine} {
+		if v, ok := relayRunKey([]byte(line(key)), word); !ok || v != key {
+			t.Errorf("%s's run key of %d characters: %v", word, runkey.MaxLength, ok)
+		}
+		if _, ok := relayRunKey([]byte(line(key+"a")), word); ok {
+			t.Errorf("%s's run key of %d characters is read", word, runkey.MaxLength+1)
+		}
 	}
 }
 

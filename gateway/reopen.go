@@ -290,6 +290,11 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 	} else if err := lr.openStack(true, ca); err != nil {
 		return fail(true, err)
 	}
+	// The push proxy stays open from the run's open until its close, whether a session
+	// joined or not.
+	if err := lr.openPush(true, ca); err != nil {
+		return fail(true, err)
+	}
 
 	lr.mu.Lock()
 	// A run with a join numbered gives the members of a join, without the harness's.
