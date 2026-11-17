@@ -31,13 +31,13 @@ const (
 	MaxPushedCommitsAnswer = MaxRefusal
 )
 
-// HostCallTime is the most time the gateway gives one host call at Qory Apiary, from
-// its send to the end of the answer: the run API's time for a POST.
+// HostCallTime is the most time one host call has at Qory Apiary, from the gateway's
+// send to the end of the answer: the run API's time for a POST.
 const HostCallTime = 60 * time.Second
 
 // hostCallWait is the most time the session waits for the answer to one host call:
-// [HostCallTime], and the [OpenWait] a reopen of the run behind a separate gateway may
-// add before it, rounded up.
+// [HostCallTime], plus the 120 seconds a reopen of the run behind a separate gateway may
+// take before the gateway sends it, plus a minute for the link, rounded up.
 const hostCallWait = 4 * time.Minute
 
 // NextSession sends the next-session request of the run runID, a POST of body to

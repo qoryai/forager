@@ -65,6 +65,13 @@ func SetCloseWait(c *Config, d time.Duration) { c.closeWait = d }
 // SetRelayWait makes wait how long the relay waits for the server.
 func SetRelayWait(c *Config, wait time.Duration) { c.relayWait = wait }
 
+// SetHostCallTime makes d the most time one host call has at the server, in place of
+// server.HostCallTime.
+func SetHostCallTime(c *Config, d time.Duration) { c.hostCallTime = d }
+
+// HostCallTimeOf is the most time one host call has at the server under c.
+func HostCallTimeOf(c Config) time.Duration { return c.hostCallTimeOf() }
+
 // SetRelayInFlight makes n the most requests the relay has with the server at once.
 func SetRelayInFlight(c *Config, n int) { c.relayInFlight = n }
 

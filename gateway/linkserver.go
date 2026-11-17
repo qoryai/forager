@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/routine"
@@ -296,6 +297,44 @@ func gone(w http.ResponseWriter, end runEnd) {
 		text += ": " + endWords(end)
 	}
 	answerRefusal(w, http.StatusGone, linkRefusal{Error: end.code, Message: message(text), From: end.from, State: end.state, Reason: end.reason})
+}
+
+// linkRunOf is the run runID of a link request for one run, the transcript request or a
+// host call, or nil once w has the refusal: on the local link a run id of no run here is
+// 400 invalid_request; on the one address the run id is the run key's, any other 400
+// run_key_invalid, and a run the gateway does not hold is reopened, or gets a 503 or a
+// 410 ([Gateway.heldRun]); and a run that ended at the gateway is 410.
+func (g *Gateway) linkRunOf(s *side, w http.ResponseWriter, r *http.Request, runID string) *linkRun {
+	var lr *linkRun
+	if s.remote {
+		if p, _ := runKeyOf(r.Context()); runID != p.key.RunID {
+			ref := runKeyInvalid()
+			refuse(w, ref.Status, ref.Code, nil, ref.From, ref.Error())
+			return nil
+		}
+		if lr = g.heldRun(w, r, runID); lr == nil {
+			return nil
+		}
+	} else if lr = g.localRun(runID); lr == nil {
+		invalid(w)
+		return nil
+	}
+	if end, ended := lr.gone(); ended {
+		gone(w, end)
+		return nil
+	}
+	return lr
+}
+
+// callContext is the context of a request of the run lr to the server for the link
+// request r: it ends after d, when the run's context ends, and when r's ends.
+func (lr *linkRun) callContext(r *http.Request, d time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(lr.ctx, d)
+	stop := context.AfterFunc(r.Context(), cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 // readBody reads at most max bytes of a request's body; a longer one is no body.

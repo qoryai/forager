@@ -418,9 +418,10 @@ func bearer(values []string) (string, bool) {
 // run key in the request's context and no Authorization left on it, every answer of
 // it other than a 2xx with Connection: close, once the rest of its body is read within
 // [refusedWait], and the connection closed unanswered when it is not. The connection is
-// admitted once a run request, a reload or a batch is answered 2xx ([forLiveRun]), after
-// the answer; a run request's counts in all only from the start of its open
-// ([Gateway.openRun]). Every answer is signed under the gateway's access key
+// admitted once the gateway sends a 2xx to a run request, a reload, a transcript
+// request, a join, a host call (next-session or pushed-commits) or a batch
+// ([forLiveRun]), after the answer; a run request's counts in all only from the start
+// of its open ([Gateway.openRun]). Every answer is signed under the gateway's access key
 // ([signedWriter]).
 func (g *Gateway) edgeHandler(s *side) http.Handler {
 	next := g.handler(s)
@@ -479,9 +480,9 @@ func (g *Gateway) edgeHandler(s *side) http.Handler {
 	})
 }
 
-// forLiveRun reports whether r is a request of the link a 2xx answers for a live run
+// forLiveRun reports whether r is a request of the link that gets a 2xx for a live run
 // only: the run request, a reload, a transcript request, a join, a host call or a
-// batch. Once one is answered 2xx, its connection is admitted.
+// batch. Once the gateway sends a 2xx to one, its connection is admitted.
 func forLiveRun(r *http.Request) bool {
 	switch {
 	case r.Method == http.MethodPost && (r.URL.Path == remoteRunPath || r.URL.Path == remoteEventsPath):

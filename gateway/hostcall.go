@@ -1,14 +1,15 @@
 package gateway
 
 import (
-	"context"
 	jsonv2 "encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/server"
@@ -60,43 +61,43 @@ const (
 	codeControlPlaneUnavailable = "control_plane_unavailable"
 )
 
+// hostCallTimeOf is the most time one host call has at Qory Apiary under c.
+func (c Config) hostCallTimeOf() time.Duration {
+	if c.hostCallTime > 0 {
+		return c.hostCallTime
+	}
+	return server.HostCallTime
+}
+
 // serveHostCall serves the host call c of the run runID: it forwards the request's body
 // unread to Qory Apiary, POST <run.url>/<run_id> and c's path with its signed client,
 // once, within [server.HostCallTime], and writes what Qory Apiary returned.
 //
-//   - A 2xx passes with its status and body, at most c.answer bytes, a body with
-//     Content-Type: application/json alone.
-//   - A signed coded refusal of Qory Apiary's, 400 to 599 but 401 and 410, passes with
-//     its status, code, names and message, from apiary.
+//   - A 2xx passes with its status and body, a body with Content-Type:
+//     application/json alone. The body of a 200 is at most c.answer bytes, and that of
+//     any other 2xx at most [server.MaxRefusal]; the gateway reads no further.
+//   - A signed coded refusal of Qory Apiary's, 400 to 599 but 410, passes with its
+//     status, code, names and message, from apiary. A 401 is never signed, so it never
+//     passes.
 //   - Every other answer, one that fails verification, and no answer are 502
 //     control_plane_unavailable, the gateway's, with one line in its log. Qory
 //     Apiary's 410 is among them: on the link a 410 ends the session's run, and only
 //     the gateway ends a run there.
+//   - A run that ends or is suspended at the gateway while Qory Apiary has the request
+//     is 410 or 503, as before the send, and a caller that hangs up gets nothing, with
+//     no line in the log.
 //
-// The gateway's other refusals: on the local link a run id of no run here is 400
-// invalid_request; on the one address the run id is the run key's, any other 400
-// run_key_invalid, and a run the gateway does not hold is reopened, or gets a 503
-// or a 410 ([Gateway.heldRun]). A run that ended at the gateway is 410, and a suspended
-// run 503 with no body. A Content-Type other than application/json is 400
-// invalid_request, a body over c.request bytes 413 payload_too_large, and a run with no
-// control plane 404 not_found; Qory Apiary gets nothing for any of them.
+// The gateway's other refusals: those of [Gateway.linkRunOf], and a suspended run's 503
+// with no body. A Content-Type other than application/json is 400 invalid_request, a
+// body over c.request bytes 413 payload_too_large, and a run with no control plane 404
+// not_found; Qory Apiary gets nothing for any of them.
 func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request, runID string, c *hostCall) {
-	var lr *linkRun
-	if s.remote {
-		if p, _ := runKeyOf(r.Context()); runID != p.key.RunID {
-			ref := runKeyInvalid()
-			refuse(w, ref.Status, ref.Code, nil, ref.From, ref.Error())
-			return
-		}
-		if lr = g.heldRun(w, r, runID); lr == nil {
-			return
-		}
-	} else if lr = g.localRun(runID); lr == nil {
-		invalid(w)
-		return
-	}
-	if end, ended := lr.gone(); ended {
-		gone(w, end)
+	// The body is read before the run is looked up, at most one byte over the limit: on
+	// the one address a reopen of the run may take 120 seconds, longer than the one
+	// address's time to read a request.
+	body, readErr := io.ReadAll(io.LimitReader(r.Body, int64(c.request)+1))
+	lr := g.linkRunOf(s, w, r, runID)
+	if lr == nil {
 		return
 	}
 	if lr.isSuspended() {
@@ -106,14 +107,18 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 		return
 	}
 	lr.touch()
-	if !mediaType(r, server.LinkContentType) {
-		invalid(w)
-		return
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, int64(c.request)+1))
 	switch {
-	case err != nil:
-		invalid(w)
+	case !mediaType(r, server.LinkContentType):
+		got := r.Header.Get("Content-Type")
+		if got == "" {
+			got = "(none)"
+		}
+		refuse(w, http.StatusBadRequest, server.CodeInvalidRequest, nil, accesskey.FromGateway,
+			fmt.Sprintf("Send the %s request with Content-Type: application/json: the gateway sent nothing.\nContent-Type: %s", c.name, accesskey.ShownValue(got, false)))
+		return
+	case readErr != nil:
+		refuse(w, http.StatusBadRequest, server.CodeInvalidRequest, nil, accesskey.FromGateway,
+			fmt.Sprintf("Send the %s request again: the gateway did not read its body whole, and sent nothing.\n%v", c.name, accesskey.ShownError(readErr)))
 		return
 	case len(body) > c.request:
 		refuse(w, http.StatusRequestEntityTooLarge, codePayloadTooLarge, nil, accesskey.FromGateway,
@@ -126,52 +131,67 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 		return
 	}
 	conf, _ := g.config()
-	ctx, cancel := context.WithTimeout(lr.ctx, server.HostCallTime)
+	ctx, cancel := lr.callContext(r, g.cfg.hostCallTimeOf())
 	defer cancel()
-	stop := context.AfterFunc(r.Context(), cancel)
-	defer stop()
-	a, err := g.client.RunAPI(ctx, conf.Run.URL, runID, http.MethodPost, c.path, body, false)
+	a, err := g.client.HostCall(ctx, conf.Run.URL, runID, c.path, body, c.answer)
 	if err != nil {
-		if lr.isSuspended() {
+		end, ended := lr.gone()
+		switch {
+		case lr.isSuspended():
 			w.WriteHeader(http.StatusServiceUnavailable)
-			return
+		case ended:
+			gone(w, end)
+		case r.Context().Err() != nil:
+			// The caller hung up: nothing reaches it, and nothing failed at Qory Apiary.
+			panic(http.ErrAbortHandler)
+		case errors.Is(err, server.ErrRunAPITooLarge):
+			g.hostCallFailed(w, runID, c, false, accesskey.ShownError(err).Error())
+		default:
+			g.hostCallFailed(w, runID, c, true, accesskey.ShownError(err).Error())
 		}
-		g.hostCallFailed(w, runID, c, accesskey.ShownError(err).Error())
 		return
 	}
-	switch {
-	case a.Status >= 200 && a.Status <= 299:
-		if len(a.Body) > c.answer {
-			g.hostCallFailed(w, runID, c, fmt.Sprintf("the answer is %d bytes, over the %d the request takes", len(a.Body), c.answer))
-			return
-		}
+	if a.Status >= 200 && a.Status <= 299 {
 		if len(a.Body) > 0 {
 			if t, _, err := mime.ParseMediaType(a.Header.Get("Content-Type")); err != nil || t != "application/json" {
-				g.hostCallFailed(w, runID, c, "the answer's Content-Type is not application/json")
+				g.hostCallFailed(w, runID, c, false, "the answer's Content-Type is not application/json")
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
 		}
 		w.WriteHeader(a.Status)
 		w.Write(a.Body)
-	case a.Status >= 400 && a.Status <= 599 && a.Status != http.StatusUnauthorized && a.Status != http.StatusGone && accesskey.ReadRefusal(a.Status, a.Body) != nil:
-		ref := accesskey.ReadRefusal(a.Status, a.Body)
+		return
+	}
+	var ref *accesskey.Refusal
+	if a.Status >= 400 && a.Status <= 599 && a.Status != http.StatusGone {
+		ref = accesskey.ReadRefusal(a.Status, a.Body)
+	}
+	switch {
+	case ref != nil:
 		var doc struct {
 			Message string `json:"message"`
 		}
 		jsonv2.Unmarshal(a.Body, &doc)
 		answerRefusal(w, a.Status, linkRefusal{Error: ref.Code, Names: shownNames(ref.Names), Message: message(accesskey.ShownValue(doc.Message, false)), From: accesskey.FromApiary})
+	case a.Status == http.StatusGone:
+		g.hostCallFailed(w, runID, c, false, "a signed 410, which only the gateway sends on the link")
 	default:
-		g.hostCallFailed(w, runID, c, fmt.Sprintf("status %d with no code the link passes on", a.Status))
+		g.hostCallFailed(w, runID, c, true, fmt.Sprintf("status %d with no code the link passes on", a.Status))
 	}
 }
 
 // hostCallFailed writes one line of the failure why of the host call c of the run
-// runID to the gateway's log, and writes 502 control_plane_unavailable.
-func (g *Gateway) hostCallFailed(w http.ResponseWriter, runID string, c *hostCall, why string) {
+// runID to the gateway's log, and writes 502 control_plane_unavailable: with again, a
+// text to send the request again, and without it, for an answer that comes back the
+// same, a text to check the control plane.
+func (g *Gateway) hostCallFailed(w http.ResponseWriter, runID string, c *hostCall, again bool, why string) {
 	g.report(fmt.Sprintf("run %s: If this repeats, check the control plane: the %s request got no valid answer: %s", runID, c.name, why))
-	refuse(w, http.StatusBadGateway, codeControlPlaneUnavailable, nil, accesskey.FromGateway,
-		fmt.Sprintf("Send the %s request again: the gateway got no valid answer from the control plane.", c.name))
+	text := fmt.Sprintf("Check the control plane: the gateway does not pass on its answer to the %s request.\n%s", c.name, why)
+	if again {
+		text = fmt.Sprintf("Send the %s request again: the gateway got no valid answer from the control plane.", c.name)
+	}
+	refuse(w, http.StatusBadGateway, codeControlPlaneUnavailable, nil, accesskey.FromGateway, text)
 }
 
 // shownNames are the names of a refusal of Qory Apiary's as the link lists them: each
