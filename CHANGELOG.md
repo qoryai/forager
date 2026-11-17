@@ -838,7 +838,7 @@ release may change what an existing document does, and says so under Upgrading.
   `refusal.Decides`.
 - The link's run request has `images.allow`; its answer has `relay_image`, the image the
   relay starts from, and `reference: true` on an `image` the policy names by reference.
-- A run configuration's `credentials`: at most 8 credentials whose values the server
+- A run configuration's `credentials`: at most 16 credentials whose values the server
   stores for the run, with no value. An API credential, a model key, is `{name,
   format, endpoint, auth, key_prefixes}`: the gateway sets its value on every path of
   the endpoint's host alone. `endpoint` is `https`, with a host, an optional port and
@@ -936,6 +936,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- A run configuration, a secrets request and a sealed plaintext accept up to 16
+  credentials, up from 8, and `sealed.MaxCredentials` is 16; up to 6 of them stay
+  model keys.
 - A run with a run key writes neutral values in its events: `dev.qory.run.started`
   has no `host`, `dir` of `dev.qory.session.started` is `/workspace`, `command` and
   `args` have `<run>`, `<home>` and `<inputs>` at each occurrence of the run

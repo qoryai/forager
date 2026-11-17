@@ -128,6 +128,79 @@ func TestDocumentFixturesValidate(t *testing.T) {
 	}
 }
 
+// TestCredentialCountBounds pins the count of credentials, 1 to 16 with at most 6 API
+// credentials: a run configuration with 16 credentials, 6 of them API credentials,
+// passes, and one with 17, or with 7 API credentials, fails; a secrets request with 16
+// names passes and one with 17 fails; a sealed plaintext with 16 credentials and 16
+// values passes, and one with 17 credentials or 17 values fails.
+func TestCredentialCountBounds(t *testing.T) {
+	s := compile(t, "run-configuration.schema.json", "secrets-request.schema.json", "sealed-plaintext.schema.json")
+	const digest = "sha256=96da611217314d4a1f43ab4212d4e795aab7ba4b59fdc7e3ed587496a40ba124"
+	names := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("cred-%02d", i)
+		}
+		return out
+	}
+	quoted := func(items []string) string {
+		b, _ := json.Marshal(items)
+		return string(b)
+	}
+	// runConfiguration has api API credentials, the first the start key, and then hosts
+	// host credentials, each on the host <name>.git.example.
+	runConfiguration := func(api, hosts int) string {
+		var items []string
+		for i, n := range names(api + hosts) {
+			if i < api {
+				items = append(items, `{"name":"`+n+`","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`)
+				continue
+			}
+			items = append(items, `{"name":"`+n+`","apply":[{"hosts":["`+n+`.git.example"],"scheme":"bearer"}]}`)
+		}
+		start := ""
+		if api > 0 {
+			start = `"model_credential":"cred-00",`
+		}
+		return `{"version":1,` + start + `"credentials":[` + strings.Join(items, ",") + `]}`
+	}
+	request := func(n int) string {
+		return `{"version":1,"run_id":"01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a","run_configuration":"` + digest +
+			`","credentials":` + quoted(names(n)) + `,"timestamp":1700000000}`
+	}
+	plaintext := func(credentials, values int) string {
+		var items []string
+		for _, n := range names(values) {
+			items = append(items, `{"credential":"`+n+`","value":"fixture-value-not-a-real-one"}`)
+		}
+		return `{"version":1,"run_configuration":"` + digest + `","credentials":` + quoted(names(credentials)) +
+			`,"values":[` + strings.Join(items, ",") + `]}`
+	}
+	for name, tc := range map[string]struct {
+		schema, doc string
+		pass        bool
+	}{
+		"a run configuration of 16 host credentials":  {"run-configuration.schema.json", runConfiguration(0, 16), true},
+		"a run configuration of 6 API and 10 host":    {"run-configuration.schema.json", runConfiguration(6, 10), true},
+		"a run configuration of 17 host credentials":  {"run-configuration.schema.json", runConfiguration(0, 17), false},
+		"a run configuration of 6 API and 11 host":    {"run-configuration.schema.json", runConfiguration(6, 11), false},
+		"a run configuration of 7 API and 9 host":     {"run-configuration.schema.json", runConfiguration(7, 9), false},
+		"a secrets request of 16 names":               {"secrets-request.schema.json", request(16), true},
+		"a secrets request of 17 names":               {"secrets-request.schema.json", request(17), false},
+		"a plaintext of 16 credentials and 16 values": {"sealed-plaintext.schema.json", plaintext(16, 16), true},
+		"a plaintext of 17 credentials and 16 values": {"sealed-plaintext.schema.json", plaintext(17, 16), false},
+		"a plaintext of 16 credentials and 17 values": {"sealed-plaintext.schema.json", plaintext(16, 17), false},
+	} {
+		doc, err := jsonschema.UnmarshalJSON(strings.NewReader(tc.doc))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if err := s[tc.schema].Validate(doc); (err == nil) != tc.pass {
+			t.Errorf("%s against %s: %v; want pass %t", name, tc.schema, err, tc.pass)
+		}
+	}
+}
+
 // TestAPIFormatsAreTheFixedList pins api-format.schema.json, which another contract
 // refers to by its $id, one $ref per item: a string schema at that $id, without $defs,
 // whose enum is the four formats in this order.

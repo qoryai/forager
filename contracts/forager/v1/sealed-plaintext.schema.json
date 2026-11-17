@@ -20,7 +20,7 @@
       "description": "The credentials of the request, sorted.",
       "type": "array",
       "minItems": 1,
-      "maxItems": 8,
+      "maxItems": 16,
       "uniqueItems": true,
       "items": {"$ref": "run-configuration.schema.json#/$defs/credential_name"}
     },
@@ -28,7 +28,7 @@
       "description": "The values, one per credential, sorted by credential.",
       "type": "array",
       "minItems": 1,
-      "maxItems": 8,
+      "maxItems": 16,
       "items": {
         "type": "object",
         "additionalProperties": false,

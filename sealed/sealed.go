@@ -67,7 +67,7 @@ const (
 	MaxAnswer = 5 << 20
 	// MaxCredentials is how many credentials a request lists at most, and so how many
 	// values a plaintext has.
-	MaxCredentials = 8
+	MaxCredentials = 16
 	// MaxValueBytes is the largest value, in bytes of UTF-8.
 	MaxValueBytes = 16384
 	// Lifetime is how far after its clock the server sets exp, in seconds.

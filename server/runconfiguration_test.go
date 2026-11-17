@@ -167,13 +167,43 @@ func TestARunConfigurationNamesItsImageByDigest(t *testing.T) {
 // port, an apply item with no scheme or with a token, hosts and auth in place of apply,
 // an API credential with hosts or placeholders, an http endpoint, an
 // endpoint with a user or a query, or key prefixes with a space is
-// run_configuration_invalid at the entry, with an error that quotes no value.
+// run_configuration_invalid at the entry, with an error that quotes no value. It pins
+// the count too: 16 credentials, 6 of them API credentials, are read, and 17
+// credentials, or 7 API credentials, are run_configuration_invalid at the list.
 func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
 	entry := func(extra string) string {
 		return `{"version":1,"credentials":[{"name":"forge","apply":[{"hosts":["api.model.example"],"scheme":"bearer"}]` + extra + `}]}`
 	}
 	api := func(extra string) string {
 		return `{"version":1,"credentials":[{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer"}` + extra + `}]}`
+	}
+	// counted has api API credentials, the first the start key, and then hosts host
+	// credentials, each on the host <name>.git.example.
+	counted := func(api, hosts int) string {
+		var items []string
+		for i := range api + hosts {
+			name := fmt.Sprintf("cred-%02d", i)
+			if i < api {
+				items = append(items, `{"name":"`+name+`","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`)
+				continue
+			}
+			items = append(items, `{"name":"`+name+`","apply":[{"hosts":["`+name+`.git.example"],"scheme":"bearer"}]}`)
+		}
+		start := ""
+		if api > 0 {
+			start = `"model_credential":"cred-00",`
+		}
+		return `{"version":1,` + start + `"credentials":[` + strings.Join(items, ",") + `]}`
+	}
+	for name, doc := range map[string]string{
+		"16 host credentials":           counted(0, 16),
+		"6 API and 10 host credentials": counted(6, 10),
+	} {
+		v := newVerified(t)
+		v.runDoc = doc
+		if _, _, err := v.client().Register(context.Background(), v.srv.URL+"/v1/runs", registration(t)); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 	v := newVerified(t)
 	v.runDoc = `{"version":1,"credentials":[{"name":"model","format":"anthropic-messages","endpoint":"https://10.0.0.5:4443/anthropic","auth":{"scheme":"header","header":"x-api-key"},"key_prefixes":["sk-ant-"]},{"name":"forge","apply":[{"hosts":["git.example","fd00::5"],"scheme":"basic","username":"x-access-token","paths":["/v1/*"]}],"placeholders":["FORGE_TOKEN"]}]}`
@@ -193,7 +223,9 @@ func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
 		"an endpoint with a user":   strings.Replace(api(""), `https://`, `https://`+value+`@`, 1),
 		"an endpoint with a query":  strings.Replace(api(""), `/anthropic`, `/anthropic?key=`+value, 1),
 		"a key prefix with a space": api(`,"key_prefixes":["sk ant"]`),
-		"nine credentials":          `{"version":1,"credentials":[` + strings.Repeat(`{"name":"forge","apply":[{"hosts":["api.model.example"],"scheme":"bearer"}]},`, 8) + `{"name":"forge","apply":[{"hosts":["api.model.example"],"scheme":"bearer"}]}]}`,
+		"17 host credentials":       counted(0, 17),
+		"6 API and 11 host":         counted(6, 11),
+		"7 API and 9 host":          counted(7, 9),
 	} {
 		v := newVerified(t)
 		v.runDoc = doc

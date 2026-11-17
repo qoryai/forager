@@ -27,10 +27,10 @@
       "additionalProperties": {"$ref": "#/$defs/variable"}
     },
     "credentials": {
-      "description": "The credentials whose values the server stores for the run, at most 8, each name once, and at most 6 of them API credentials. The order of the key group's API credentials is the order in which the gateway sets them (model_credential). The document has no value: the server seals the values to the access key in its answer, secrets-answer.schema.json, to the secrets request, secrets-request.schema.json, a POST to the configuration's secrets.url. The gateway sends it when the run starts, for every entry, and again for each entry whose value has expires_at: 5 minutes before it expires, and after a host answers 401 to a request that the value was set on, at most every 30 seconds per entry. It sets each value in place of a credential of the machine's that claims one of its hosts. The entries are fixed for the run: a renewal changes only the value.",
+      "description": "The credentials whose values the server stores for the run, at most 16, each name once, and at most 6 of them API credentials. The order of the key group's API credentials is the order in which the gateway sets them (model_credential). The document has no value: the server seals the values to the access key in its answer, secrets-answer.schema.json, to the secrets request, secrets-request.schema.json, a POST to the configuration's secrets.url. The gateway sends it when the run starts, for every entry, and again for each entry whose value has expires_at: 5 minutes before it expires, and after a host answers 401 to a request that the value was set on, at most every 30 seconds per entry. It sets each value in place of a credential of the machine's that claims one of its hosts. The entries are fixed for the run: a renewal changes only the value.",
       "type": "array",
       "minItems": 1,
-      "maxItems": 8,
+      "maxItems": 16,
       "contains": {"type": "object", "required": ["format"]},
       "minContains": 0,
       "maxContains": 6,

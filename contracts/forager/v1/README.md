@@ -862,7 +862,7 @@ event per request, `method: HTTPS` with `request_method`, `path` without its que
 and no error contains a secret.
 
 **From the server.** A run configuration may have `credentials`, the credentials whose
-values the server stores for the run, at most 8, and `model_credential`
+values the server stores for the run, at most 16, and `model_credential`
 (`run-configuration.schema.json`):
 
 ```json
