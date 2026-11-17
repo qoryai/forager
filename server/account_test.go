@@ -57,7 +57,8 @@ func TestAReservedAccountHeaderIsRefused(t *testing.T) {
 		err := server.CheckCredentials([]server.RunCredential{c}, "")
 		var r *accesskey.Refusal
 		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !slices.Equal(r.Names, []string{"subscription"}) ||
-			!strings.Contains(err.Error(), "Set account_header of the credential \"subscription\" to another header") {
+			!strings.Contains(err.Error(), "Set account_header of the credential \"subscription\" to another header than ") ||
+			!strings.Contains(err.Error(), ".\nThat header frames the request") {
 			t.Errorf("account_header %s: %v", h, err)
 		}
 	}
@@ -68,6 +69,14 @@ func TestAReservedAccountHeaderIsRefused(t *testing.T) {
 			t.Errorf("account_header %s: %v", h, err)
 		}
 	}
+}
+
+// unclearPath reports whether err is the refusal of an unclear path: the fix on its
+// first line, the path's rule and the cause on its second.
+func unclearPath(err error) bool {
+	first, second, _ := strings.Cut(err.Error(), "\n")
+	return strings.HasPrefix(first, "Remove empty, . and .. segments, backslashes, %2F, %5C, %2E, %25 from the path ") &&
+		strings.HasPrefix(second, "Each segment is read up to its first ; or %3B, and %2f counts as %2F. The proxy denies every request whose path has one of these parts, so the path matches no request")
 }
 
 // TestAnUnclearModelKeyPathIsRefused pins that a path of an API credential that the
@@ -87,7 +96,7 @@ func TestAnUnclearModelKeyPathIsRefused(t *testing.T) {
 		c.Paths = []string{"/backend-api/codex/*", p}
 		err := server.CheckCredentials([]server.RunCredential{c}, "")
 		var r *accesskey.Refusal
-		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !strings.Contains(err.Error(), "the proxy denies every request whose path has one") {
+		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !unclearPath(err) {
 			t.Errorf("path %s: %v", p, err)
 		}
 		if !server.UnclearPath(p) {
@@ -134,7 +143,7 @@ func TestAnUnclearHostCredentialPathIsRefused(t *testing.T) {
 		err := server.CheckCredentials([]server.RunCredential{forge("/example-org/app.git/*", p)}, "")
 		var r *accesskey.Refusal
 		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !strings.Contains(err.Error(), `the credential "forge"`) ||
-			!strings.Contains(err.Error(), "the proxy denies every request whose path has one") {
+			!unclearPath(err) {
 			t.Errorf("path %s: %v", p, err)
 		}
 	}
@@ -160,7 +169,7 @@ func TestAnAccountHeaderComesWithItsClaimAndOAuth(t *testing.T) {
 		err := server.CheckCredentials([]server.RunCredential{c}, "")
 		var r *accesskey.Refusal
 		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !slices.Equal(r.Names, []string{"subscription"}) ||
-			!strings.Contains(err.Error(), "Give the credential \"subscription\" both account_header and account_claim, with oauth, or neither") {
+			!strings.Contains(err.Error(), "Give the credential \"subscription\" both account_header and account_claim, with oauth, or neither.\nIt has") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}

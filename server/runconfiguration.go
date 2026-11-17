@@ -116,17 +116,19 @@ func CheckCredentials(creds []RunCredential, model string) error {
 		}
 		if a := c.Auth; (a.AccountHeader != "") != (a.AccountClaim != "") || (a.AccountHeader != "" && !a.OAuth) {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"Give the credential %s both account_header and account_claim, with oauth, or neither: it has one of them, or both without oauth", name)
+				"Give the credential %s both account_header and account_claim, with oauth, or neither.\nIt has one of them, or both without oauth", name)
 		}
 		if h := c.Auth.AccountHeader; h != "" && (ReservedHeader(h) || strings.EqualFold(h, "authorization")) {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"Set account_header of the credential %s to another header than %s: that header frames the request, contains the token, or the proxy sets it", name, accesskey.ShownName(h, true))
+				"Set account_header of the credential %s to another header than %s.\nThat header frames the request, contains the token, or the proxy sets it", name, accesskey.ShownName(h, true))
 		}
 		for _, a := range c.Applies() {
 			for _, p := range a.Paths {
 				if UnclearPath(p) {
 					return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-						"Remove from the path %s of the credential %s every empty, . or .. segment (each segment read up to its first ; or %%3B), every backslash, and every encoded slash, backslash, dot or percent sign: the proxy denies every request whose path has one, so the path would match no request", accesskey.ShownValue(p, true), name)
+						"Remove empty, . and .. segments, backslashes, %%2F, %%5C, %%2E, %%25 from the path %s of the credential %s.\n"+
+							"Each segment is read up to its first ; or %%3B, and %%2f counts as %%2F. "+
+							"The proxy denies every request whose path has one of these parts, so the path matches no request", accesskey.ShownValue(p, true), name)
 				}
 			}
 		}
