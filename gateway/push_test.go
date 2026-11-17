@@ -289,10 +289,12 @@ func TestThePushProxySetsThePushCredentialAlone(t *testing.T) {
 	if d := h.post(exited(a.RunID)); !d.Accepted() {
 		t.Fatalf("the last batch: %+v", d)
 	}
+	// The run's end closes the push proxy while the gateway runs on.
+	eventually(t, "the push proxy secret opens nothing after the run's end", func() bool {
+		_, err := push.Get("https://localhost:" + o.port + "/repos/example-org/app/pulls/12")
+		return err != nil
+	})
 	h.close()
-	if _, err := push.Get("https://localhost:" + o.port + "/repos/example-org/app/pulls/12"); err == nil {
-		t.Error("the push proxy secret opened a connection after the run's end")
-	}
 	var pushed []string
 	for _, l := range h.record(a.RunID) {
 		if l.Type != event.RunEgress {

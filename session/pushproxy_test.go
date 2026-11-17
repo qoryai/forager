@@ -2,6 +2,7 @@ package session_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/internal/linktest"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/mask"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/wall"
@@ -332,5 +334,35 @@ func TestARunAnswerWithAMalformedPushProxySecretIsNoRun(t *testing.T) {
 	const want = "the run request at the gateway: link-run-answer.schema.json refuses /push_proxy_secret (pattern)"
 	if _, err := session.Open(context.Background(), opened(sp)); err == nil || err.Error() != want {
 		t.Errorf("Open: %v, want %q", err, want)
+	}
+}
+
+// TestThePushProxysPasswordIsMasked pins the push proxy forwarder's password in the
+// caller's masker, as the host proxy's: a line with the push proxy's URL is written with
+// the password replaced.
+func TestThePushProxysPasswordIsMasked(t *testing.T) {
+	sp, g := specGateway(t)
+	withPush(g, true)
+	m := maskerOf(t, maskValue)
+	sp.Masker = m
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := r.PushProxy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	password, _ := hostParts(t, h)
+	if _, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	w := mask.NewWriter(&out, m)
+	w.Write([]byte("http://qory:" + password + "@127.0.0.1"))
+	w.Flush()
+	if want := "http://qory:" + mask.ProxyPassword + "@127.0.0.1"; out.String() != want {
+		t.Errorf("the caller's writer wrote %q, want %q", out.String(), want)
 	}
 }
