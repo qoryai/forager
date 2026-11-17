@@ -2068,10 +2068,13 @@ release may change what an existing document does, and says so under Upgrading.
   (`socket.ListenAfter`, `ServeFirst`): a process After starts cannot write the step. A
   runtime stopped at `Timeout`, a pause and a stop from the context all get After; after
   the context's end the removal, the start and After get `StopGrace` together, and a
-  closed run starts none, and every other exit gets After, `125` included: a launch that
-  failed before any container existed, such as a docker run that exited `125` with no
-  container, still gets After on the unchanged workspace, and `Result.After` is nil only
-  for a spec with no After and a closed run. If After's container cannot start for the
+  run closed before After starts gets none, and every other exit gets After, `125`
+  included: a launch that failed before any container existed, such as a docker run that
+  exited `125` with no container, still gets After on the unchanged workspace, and
+  `Result.After` is nil only for a spec with no After and a run closed before After
+  starts; a run closed while After runs has it `cancelled` with `-1`. Join returns an
+  error and no result, and runs no After, when the wall's `Wrap` fails or the launch
+  does not start (`ErrNotStarted`). If After's container cannot start for the
   same cause, the after step ends `failed` with `-1`, after the launch's error line.
   The session removes the setup container first, when the run has one, as
   `Run.RemoveSetup` does, with its wall step before the after step; the run is then as

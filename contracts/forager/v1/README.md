@@ -6541,12 +6541,15 @@ that window it removes After's container, and the step ends `cancelled` with `-1
 reason `timeout`. When the caller's context ends before or while After runs, After
 runs on, and the step, the agent's removal and After's start included, gets no more than
 the stop grace from that moment; the step then ends `cancelled` with `-1` and no reason.
-A run closed from outside starts no After, or cuts it at once, and `(*session.Result).After`
-is nil then and for a session with no After; every other exit gets After, `125`
-included. When the launch failed before any container existed, such as a docker run
+A run closed from outside before After starts gets none, and cuts After at once when it
+closes while After runs; `(*session.Result).After` is nil for a session with no After and
+for a run closed before After starts, and `cancelled` with `-1` for one closed while After
+runs. Every other exit gets After, `125` included. `Join` returns an error and no result,
+and runs no After, when the wall's `Wrap` fails (with the Docker wall, a missing image
+fails there) and when the launch does not start. When the launch failed before any container existed, such as a docker run
 that exited `125` with no container, After still starts on the unchanged workspace; if
 its container cannot start for the same cause, the after step ends `failed` with `-1`.
-The launch's error line, the engine's output as the session's lines carry it, comes
+The launch's error line, the engine's output in the session's stderr lines, comes
 before the after step's failure line in the run's record and on the terminal. A
 removal of the agent's container that the context's end or the run's close cuts is
 tried again as the session ends, and counts as failed only if that removal fails. A run without a wall has no

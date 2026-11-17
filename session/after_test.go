@@ -331,6 +331,9 @@ func TestARunClosedDuringAfterCutsItAtOnce(t *testing.T) {
 	if !res.RunClosed {
 		t.Errorf("result %+v; want a closed run", res)
 	}
+	if res.After == nil || res.After.State != event.StateCancelled || res.After.ExitCode != -1 {
+		t.Errorf("Result.After %+v; want cancelled, -1: a run closed while After runs has an outcome", res.After)
+	}
 	if took := time.Since(start); took > 4*time.Second {
 		t.Errorf("the session took %s after the close; want After cut at once, not at the grace of 8 s", took)
 	}
@@ -546,49 +549,82 @@ func TestAfterRunsWhenTheLaunchFailsBeforeAnyContainer(t *testing.T) {
 	}
 }
 
+// deadAfterWall is a neverStartsWall whose WrapAfter succeeds and whose After container
+// fails as a docker run does that exits 125 with no container: it writes the engine's
+// error line to stderr and exits 125, so the helper never runs and sends no record.
+type deadAfterWall struct{ *neverStartsWall }
+
+const afterFailureLine = "docker: Error response from daemon: cannot start the after container"
+
+func (w *deadAfterWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.afterWall.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *deadAfterWall) WrapAfter(_ context.Context, l wall.Launch) (wall.Launch, error) {
+	w.note("wrap after")
+	return wall.Launch{Command: "/bin/sh", Args: []string{"-c", "echo '" + afterFailureLine + "' >&2; exit 125"}, Dir: l.Dir}, nil
+}
+
 // TestTheLaunchFailureComesBeforeAftersFailure pins the order of two failures: when the
 // launch fails before any container exists and After's container cannot start either,
 // the engine's error line of the launch reaches the terminal and the run's record
-// before the after step's failure line, and the after step ends failed with -1.
+// before the after step's failure line, and the after step ends failed with -1. Two
+// causes of After's failure: the wall cannot set the container up, and the container's
+// docker run exits 125 with no record.
 func TestTheLaunchFailureComesBeforeAftersFailure(t *testing.T) {
-	sp, aw := afterSpec(t, "exit 0", "/bin/sh", "-c", "touch after-ran")
-	aw.failWrapAfter = errors.New("no image")
-	sp.Wall = &neverStartsWall{afterWall: aw}
-	var out syncBuffer
-	sp.Stderr = &out
-	res, err := run(context.Background(), sp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.ExitCode != 125 {
-		t.Errorf("result %+v; want the launch's 125", res)
-	}
-	if res.After == nil || res.After.State != event.StateFailed || res.After.ExitCode != -1 {
-		t.Fatalf("Result.After %+v; want failed, -1", res.After)
-	}
-	text := out.String()
-	launch, after := strings.Index(text, launchFailureLine), strings.Index(text, "After did not run: its container could not be set up")
-	if launch < 0 || after < 0 || launch > after {
-		t.Errorf("the terminal has the launch's line at %d and After's at %d; want the launch's first:\n%s", launch, after, text)
-	}
-	var order []string
-	started := false
-	for _, e := range events(t, res) {
-		d := data(e)
-		switch e["type"] {
-		case event.RunLog:
-			if b, _ := d["bytes"].(string); strings.Contains(b, base64.StdEncoding.EncodeToString([]byte(launchFailureLine))[:20]) && !started {
-				order = append(order, "launch line")
+	for name, c := range map[string]struct {
+		set   func(aw *afterWall) wall.Wall
+		after string
+	}{
+		"the wall cannot set After's container up": {func(aw *afterWall) wall.Wall {
+			aw.failWrapAfter = errors.New("no image")
+			return &neverStartsWall{afterWall: aw}
+		}, "After did not run: its container could not be set up"},
+		"After's docker run exits 125 with no record": {func(aw *afterWall) wall.Wall {
+			return &deadAfterWall{&neverStartsWall{afterWall: aw}}
+		}, "After did not run to its end: the container ended with no exit status for After"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sp, aw := afterSpec(t, "exit 0", "/bin/sh", "-c", "touch after-ran")
+			sp.Wall = c.set(aw)
+			var out syncBuffer
+			sp.Stderr = &out
+			res, err := run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
 			}
-		case event.StepStarted:
-			if d["kind"] == event.StepAfter {
-				started = true
-				order = append(order, "after started")
+			if res.ExitCode != 125 {
+				t.Errorf("result %+v; want the launch's 125", res)
 			}
-		}
-	}
-	if !slices.Equal(order, []string{"launch line", "after started"}) {
-		t.Errorf("the record has %q; want the launch's line before the after step", order)
+			if res.After == nil || res.After.State != event.StateFailed || res.After.ExitCode != -1 {
+				t.Fatalf("Result.After %+v; want failed, -1", res.After)
+			}
+			text := out.String()
+			launch, after := strings.Index(text, launchFailureLine), strings.Index(text, c.after)
+			if launch < 0 || after < 0 || launch > after {
+				t.Errorf("the terminal has the launch's line at %d and After's at %d; want the launch's first:\n%s", launch, after, text)
+			}
+			var order []string
+			started := false
+			for _, e := range events(t, res) {
+				d := data(e)
+				switch e["type"] {
+				case event.RunLog:
+					if b, _ := d["bytes"].(string); strings.Contains(b, base64.StdEncoding.EncodeToString([]byte(launchFailureLine))[:20]) && !started {
+						order = append(order, "launch line")
+					}
+				case event.StepStarted:
+					if d["kind"] == event.StepAfter {
+						started = true
+						order = append(order, "after started")
+					}
+				}
+			}
+			if !slices.Equal(order, []string{"launch line", "after started"}) {
+				t.Errorf("the record has %q; want the launch's line before the after step", order)
+			}
+		})
 	}
 }
 

@@ -1553,9 +1553,12 @@ request asks the gateway for, for this session.
   container for lack of memory, `failed` with `out_of_memory`. A runtime stopped at
   `Timeout`, and a pause, still get After. When the caller's context ends, After still
   runs, and the removal, the start and After together get no more than `StopGrace`; its
-  step then ends `cancelled` with `-1`. A closed run starts no After, and every other
-  exit gets it, `125` included (`Result.After` is nil only for a spec with no `After` and
-  a closed run): when the launch failed before any container existed, such as a docker
+  step then ends `cancelled` with `-1`. A run closed before After starts gets none,
+  and every other exit gets it, `125` included (`Result.After` is nil only for a spec
+  with no `After` and a run closed before After starts; a run closed while After runs
+  has `Result.After` `cancelled` with `-1`). Join returns an error and no `Result`, so
+  runs no After, when the wall's `Wrap` fails (with the Docker wall, a missing image
+  fails there) and when the launch does not start (`ErrNotStarted`). When the launch failed before any container existed, such as a docker
   run that exited `125` with no container, After still starts on the unchanged
   workspace, and if After's container cannot start for the same cause, the after step
   ends `failed` with `-1`, after the launch's error line. A removal of the
