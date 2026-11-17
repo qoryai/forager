@@ -5819,10 +5819,17 @@ setup commands inside the wall (§The wall, Setup inside the wall). Its `record`
 4096 bytes, and `runner: true` on a line the runner writes when it cannot start or
 wait for the command; or `exited`, with `exit_code`, 0 to 255. The helper's exec is a
 third client: just before it starts the runtime's program it writes one record of the
-`launch` source, `{"event": "started"}`, which tells the session the program started in
-the enclosure, so a session with `SessionSpec.After` runs After for a launch that failed
-after it and not for one that failed before it, such as a docker run that exited `125`
-with no container; once the runtime exits it writes a record of the `measure` source
+`launch` source, `{"event": "started"}`, which tells the session the helper started the
+program in the enclosure. The record comes before the runtime's preparation script runs
+the session's setup commands inside the wall, so it means the helper started, not that
+those commands succeeded: a session with `SessionSpec.After` runs After when a setup
+command fails, and not for a launch that failed before the helper started the program,
+such as a docker run that exited `125` with no container. A session with After passes
+the helper `--launch-record`: when the helper cannot send the record, it writes the
+reason to standard error and exits `125` without starting the program, so "the program
+started" holds exactly when the record was sent. Without that option the helper writes
+the error and starts the program. A record of the `launch` source with another `event`
+is skipped and reported. Once the runtime exits it writes a record of the `measure` source
 (§The events, The measure of the enclosure), and for a session with
 `SessionSpec.After`, in After's container, records of the `after` source, as the setup
 runner's without `command` and `started`, whose `exited` may have `reason`, `timeout`
@@ -6548,7 +6555,8 @@ the stop grace from that moment; the step then ends `cancelled` with `-1` and no
 A run closed from outside starts no After, or cuts it at once, and neither does a
 launch whose helper sent no record of the `launch` source, such as a docker run that
 failed, since the workspace is unchanged; `(*session.Result).After` is nil when it
-started none. A runtime that exits `125` by itself sent that record and gets After. A
+started none. A runtime that exits `125` by itself, and a session whose setup command
+failed after the helper started, sent that record and get After. A
 removal of the agent's container that the context's end or the run's close cuts is
 tried again as the session ends, and counts as failed only if that removal fails. A run without a wall has no
 After.

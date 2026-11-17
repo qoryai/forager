@@ -63,7 +63,9 @@ type afterRun struct {
 // runAfter runs the session's After in a new container, once the runtime exited: it
 // removes the setup container, when the run has one, and the agent's container, starts
 // the After container, reads the step's records and removes the container. Every failure
-// ends the after step failed, with a line, and changes nothing else of the session.
+// ends the after step failed, with a line. A failed removal of the setup container also
+// sets the run's wallFailed and setupFailed, so ContainerKept is true and no session
+// joins; nothing else of the session changes.
 //
 // The step starts first, so a failure of the agent's container's removal or of the
 // start is in it; the setup container's wall step comes before it. The whole of it runs

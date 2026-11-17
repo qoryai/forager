@@ -1554,8 +1554,11 @@ request asks the gateway for, for this session.
   `Timeout`, and a pause, still get After. When the caller's context ends, After still
   runs, and the removal, the start and After together get no more than `StopGrace`; its
   step then ends `cancelled` with `-1`. A closed run starts no After, nor does a launch
-  whose helper never said it started the program, such as a docker run that failed
-  (`Result.After` is nil); a runtime that exits `125` by itself still gets After. A removal of the
+  whose helper sent no record that it started the program, such as a docker run that failed
+  (`Result.After` is nil). The helper sends that record before the session's setup commands run inside
+  the wall, so a runtime that exits `125` by itself, and a session whose setup command fails, still get
+  After. With After the session passes the helper `--launch-record`: when the record cannot be
+  sent, the helper exits `125` and starts no program. A removal of the
   agent's container that the context's end cuts is tried again as the session ends.
   With After, `Join` may take `AfterTimeout` plus 66 seconds more than its 15 seconds:
   the removal and the start together get 60 seconds, then 5 seconds between SIGTERM and

@@ -1002,3 +1002,78 @@ func TestAfterReadsEveryRecordBeforeItDecidesTheStepHasNoExit(t *testing.T) {
 		t.Errorf("the after step has the line %q", all[len(all)-1].logs["stderr"])
 	}
 }
+
+// launchWall is an afterWall whose launch is changed after the open wall wraps it: edit
+// gets the wrapped launch.
+type launchWall struct {
+	*afterWall
+	edit func(l *wall.Launch)
+}
+
+func (w *launchWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.afterWall.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *launchWall) Wrap(ctx context.Context, l wall.Launch) (wall.Launch, error) {
+	got, err := w.afterWall.openWall.Wrap(ctx, l)
+	if err == nil {
+		w.edit(&got)
+	}
+	return got, err
+}
+
+// TestNoAfterRunsWhenTheLaunchRecordCannotBeSent pins a helper that cannot reach the
+// run socket: with After the session passes --launch-record, so the helper writes the
+// error and exits 125 without starting the runtime, and the session starts no After:
+// "the program started" holds exactly when the record was sent.
+func TestNoAfterRunsWhenTheLaunchRecordCannotBeSent(t *testing.T) {
+	sp, aw := afterSpec(t, "touch runtime-ran", "/bin/sh", "-c", "touch after-ran")
+	w := &launchWall{afterWall: aw, edit: func(l *wall.Launch) {
+		l.Env = append(l.Env, session.EnvSocket+"="+filepath.Join(os.TempDir(), "no-such-run-socket"))
+	}}
+	sp.Wall = w
+	reports := reportsOf(t, &sp)
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 125 || res.After != nil {
+		t.Errorf("result %+v, After %+v; want the helper's 125 and no After", res, res.After)
+	}
+	for _, f := range []string{"runtime-ran", "after-ran"} {
+		if _, err := os.Stat(filepath.Join(sp.Dir, f)); err == nil {
+			t.Errorf("%s exists: the program or After ran", f)
+		}
+	}
+	if !slices.ContainsFunc(reports(), func(r string) bool {
+		return strings.HasPrefix(r, "Read the launch's output: the helper never started the program")
+	}) {
+		t.Errorf("the reports %q have no line that After did not run", reports())
+	}
+}
+
+// TestAnotherLaunchRecordIsNotTheProgramStarting pins that the session counts a record
+// of the launch source only with event started: a launch whose process sends another
+// event starts no After, and the session reports the record.
+func TestAnotherLaunchRecordIsNotTheProgramStarting(t *testing.T) {
+	sp, aw := afterSpec(t, "exit 0", "/bin/sh", "-c", "touch after-ran")
+	w := &launchWall{afterWall: aw, edit: func(l *wall.Launch) {
+		*l = wall.Launch{Command: os.Args[0], Env: append(slices.Clone(l.Env), `FAKE_SOCKET_RECORDS={"source": "launch", "record": {"event": "other"}}`), Dir: l.Dir}
+	}}
+	sp.Wall = w
+	reports := reportsOf(t, &sp)
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.After != nil {
+		t.Errorf("Result.After %+v; want none", res.After)
+	}
+	if _, err := os.Stat(filepath.Join(sp.Dir, "after-ran")); err == nil {
+		t.Error("After ran")
+	}
+	if !slices.ContainsFunc(reports(), func(r string) bool { return strings.Contains(r, "has no event started") }) {
+		t.Errorf("the reports %q have no line for the record", reports())
+	}
+}

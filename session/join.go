@@ -963,6 +963,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		case runtimes.SourceSetup:
 			return setupSteps.handle(rec)
 		case runtimes.SourceLaunch:
+			if rec.Record["event"] != "started" {
+				return errors.New("a record of the launch source has no event started and is not recorded")
+			}
 			if spec.Wall != nil {
 				launched.Store(true)
 			}
@@ -1055,7 +1058,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		if err := r.listed.update(slices.Concat(again.sources, binds, installBinds, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
 		}
-		inner, innerArgs := withExec(spec.Exec, unset, command, args)
+		inner, innerArgs := withExec(spec.Exec, unset, command, args, len(spec.After) > 0)
 		launch, err = enclosure.Wrap(runCtx, wall.Launch{
 			Command: inner, Args: innerArgs, Dir: shown.Dir, Interactive: interactive,
 			Env:   wrapEnv,

@@ -522,8 +522,10 @@ type SessionSpec struct {
 	// from SIGTERM to SIGKILL, 1 s for After's last output and 1 minute for the removal
 	// and the start; after the context's end it gets StopGrace from that moment, and its
 	// step then ends cancelled with -1. A run closed from outside starts no After, nor
-	// does a launch whose helper never said it started the program, such as a docker run
-	// that failed: Result.After is nil. A runtime that exits 125 by itself gets After. The
+	// does a launch whose helper sent no record that it started the program, such as a
+	// docker run that failed: Result.After is nil. The record comes before the session's
+	// setup commands run inside the wall, so After runs when one of them fails, and when a
+	// runtime exits 125 by itself. The
 	// session first removes the setup container, when the run has one, as Run.RemoveSetup
 	// does, with its wall step before the after step, since it shares the workspace and
 	// the network with After's container; when that fails, After does not run and its step
