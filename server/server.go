@@ -370,9 +370,9 @@ type RunCredential struct {
 	Apply        []Apply  `json:"apply,omitzero"`
 	Placeholders []string `json:"placeholders,omitzero"`
 	// Purpose is a host credential's purpose: [PurposeHarness] for one the stack proxy
-	// sets for the fetch of the harness definition, and [PurposeWork] or empty for one
-	// the run's proxy sets for the run's sessions, host work and setup. Empty for an API
-	// credential.
+	// sets for the fetch of the harness definition, [PurposePush] for one the push proxy
+	// sets for qory's push, and [PurposeWork] or empty for one the run's proxy sets for
+	// the run's sessions, host work and setup. Empty for an API credential.
 	Purpose string `json:"purpose,omitzero"`
 }
 
@@ -380,11 +380,19 @@ type RunCredential struct {
 const (
 	PurposeHarness = "harness"
 	PurposeWork    = "work"
+	PurposePush    = "push"
 )
 
 // Harness reports whether the credential is for the fetch of the harness definition
 // alone, purpose harness: the stack proxy sets it, and the run's proxy never does.
 func (c RunCredential) Harness() bool { return c.Purpose == PurposeHarness }
+
+// Push reports whether the credential is for qory's push alone, purpose push: the push
+// proxy sets it, and the run's proxy never does.
+func (c RunCredential) Push() bool { return c.Purpose == PurposePush }
+
+// Work reports whether the run's proxy sets the credential: purpose work or none.
+func (c RunCredential) Work() bool { return !c.Harness() && !c.Push() }
 
 // Apply is one item of a host credential's apply, run-configuration.schema.json: the
 // hosts its value is set on, the scheme with its username or header, the paths, nil
