@@ -403,10 +403,10 @@ func TestAJoinsRecordListsThePushCredential(t *testing.T) {
 // setup container: while the setup container is up, PushProxy returns the text that
 // starts with RemoveSetup; once RemoveSetup removed it, PushProxy starts; and when the
 // removal failed, so a container may still write the run's binds (ContainerKept),
-// PushProxy returns the text that starts with Close.
+// PushProxy returns the text that starts with ContainerKept.
 func TestThePushProxyWaitsForTheRunsContainers(t *testing.T) {
 	const setupUp = "Call RemoveSetup before PushProxy: the setup container can still write the run's binds."
-	const kept = "Push after Close returns: a container of the run may still run and write the run's binds."
+	const kept = "Push only while ContainerKept is false: a container of the run may still write the run's binds."
 	for _, c := range []struct {
 		name      string
 		removeErr error

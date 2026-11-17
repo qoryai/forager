@@ -626,8 +626,9 @@ before the first one, with no container of the run that can write its binds runn
   - "Exit the copy step before you start the push proxy: a join during it closes the
     push proxy." during a `copy` step;
   - the host proxy's error when a session's wall was kept;
-  - "Push after Close returns: a container of the run may still run and write the
-    run's binds." while `ContainerKept` is true;
+  - "Push only while ContainerKept is false: a container of the run may still write
+    the run's binds." while `ContainerKept` is true. `ContainerKept` stays true, so
+    the run cannot push: wait for `Close` and read `Closed.WallKept`;
   - "Call RemoveSetup before PushProxy: the setup container can still write the run's
     binds." while the setup container is up;
   - the host proxy's bundle error, on a walled run with an authority whose bundle could

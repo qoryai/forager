@@ -71,7 +71,7 @@ func (r *Run) PushProxy() (HostProxy, error) {
 
 // The errors of PushProxy while a container that can write the run's binds may run.
 var (
-	errPushContainerKept = errors.New("Push after Close returns: a container of the run may still run and write the run's binds.")
+	errPushContainerKept = errors.New("Push only while ContainerKept is false: a container of the run may still write the run's binds.")
 	errPushSetupUp       = errors.New("Call RemoveSetup before PushProxy: the setup container can still write the run's binds.")
 )
 
