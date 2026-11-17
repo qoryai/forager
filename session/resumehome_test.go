@@ -68,8 +68,9 @@ func homerSpec(t *testing.T, homeVar, paused string) runSpec {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sp.Runtime, sp.Forwarder = rt, nil
-	sp.Command, sp.Args = installedShell, []string{"-c", homerScript, "sh", "exec", "--json"}
+	// The homer has no installed folder, as Codex without SessionSpec.RuntimeInstall.
+	sp.Runtime, sp.Forwarder, sp.RuntimeInstall = rt, nil, nil
+	sp.Command, sp.Args = "/bin/sh", []string{"-c", homerScript, "sh", "exec", "--json"}
 	sp.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}
 	if homeVar != "-" {
 		sp.LaunchFixed = []string{"HOMER_HOME=" + homeVar}
