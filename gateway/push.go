@@ -32,7 +32,7 @@ func (lr *linkRun) openPush(guarded bool, ca *proxy.CA) error {
 		return nil
 	}
 	if ca == nil {
-		return fmt.Errorf("run %s: its push proxy has no certificate authority, which a run with a push credential always has", lr.id)
+		return fmt.Errorf("Start a new run: the push proxy needs the run's certificate authority.\nRun %s has none.", lr.id)
 	}
 	uses := lr.r.PushUses()
 	var hosts []string

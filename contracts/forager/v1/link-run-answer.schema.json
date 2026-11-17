@@ -122,7 +122,7 @@
       "pattern": "^[A-Za-z0-9_-]{22,256}$"
     },
     "push_proxy_secret": {
-      "description": "The run's push proxy secret, on the local link alone, in the form of proxy_secret: at least 128 bits from the system's random source, made by the gateway for this run. After `QORY-RELAY` on the gateway's proxy address, it opens a connection to the run's push proxy, which reaches the hosts and paths of the run configuration's push credentials alone and sets them there. Present only when the run configuration has a push credential, and refused once the run ends. Compared in constant time and never logged, it never leaves the machine and reaches no wall, relay or container: qory's push goes through it, on the host. Behind a separate gateway the answer has none: `QORY-PUSH` and the run key open those connections.",
+      "description": "The run's push proxy secret, on the local link alone, in the form of proxy_secret: at least 128 bits from the system's random source, made by the gateway for this run. After `QORY-RELAY` on the gateway's proxy address, it opens a connection to the run's push proxy, which reaches the hosts and paths of the run configuration's push credentials alone and sets them there. Present only when the run configuration has a push credential, and it opens nothing once the run ends. Compared in constant time and never logged, it never leaves the machine and reaches no wall, relay or container: qory's push goes through it, on the host. Behind a separate gateway the answer has none: `QORY-PUSH` and the run key open those connections.",
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]{22,256}$"
     },

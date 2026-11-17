@@ -423,3 +423,25 @@ func TestThePushAndWorkValuesAreRenewed(t *testing.T) {
 	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID))
 	h.close()
 }
+
+// TestAWalledRunsPushProxyIsGuarded pins the guard on the push proxy of a walled run, as
+// on the run's proxy: a push credential's host that resolves to the gateway's machine,
+// localhost, which neither the node's policy nor the run's lists by name, gets the
+// guard's 403 and reaches nothing.
+func TestAWalledRunsPushProxyIsGuarded(t *testing.T) {
+	o := newPushOrigin(t, pushRunDoc(true))
+	a := o.h.open(server.LinkRunRequest{Wall: true})
+	// The guard ends the CONNECT with a 403, which the client returns as its error.
+	resp, err := o.client(t, a, a.PushProxySecret).Get("https://localhost:" + o.port + "/repos/example-org/app/pulls/12")
+	if err == nil {
+		resp.Body.Close()
+		t.Errorf("the push proxy of a walled run got %d; want the guard's 403", resp.StatusCode)
+	} else if !strings.Contains(err.Error(), "Forbidden") {
+		t.Errorf("the push proxy of a walled run: %v; want the guard's 403", err)
+	}
+	if got := o.requests(); len(got) != 0 {
+		t.Errorf("the origin got %q", got)
+	}
+	o.h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID))
+	o.h.close()
+}

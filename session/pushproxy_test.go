@@ -366,3 +366,32 @@ func TestThePushProxysPasswordIsMasked(t *testing.T) {
 		t.Errorf("the caller's writer wrote %q, want %q", out.String(), want)
 	}
 }
+
+// TestAJoinsRecordListsThePushCredential pins the session's dev.qory.run.policy_applied
+// of a run whose gateway's applied lists a push credential: the open's record and the
+// join's both list it, with purpose push, since the push proxy stays open through every
+// join.
+func TestAJoinsRecordListsThePushCredential(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	withPush(g, true)
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.Join(ctx, sp.SessionSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Close(ctx, outcomeOf(res, nil)); err != nil {
+		t.Fatal(err)
+	}
+	push := []any{map[string]any{"name": "push-1", "hosts": []any{"git.example"}, "scheme": "basic", "paths": []any{"/example-org/app.git/*"}, "purpose": "push"}}
+	var got []any
+	for _, e := range ofType(g.Events(), event.PolicyApplied) {
+		got = append(got, data(e)["credentials"])
+	}
+	if want := []any{push, push}; !reflect.DeepEqual(got, want) {
+		t.Errorf("the records' credentials %v, want %v", got, want)
+	}
+}
