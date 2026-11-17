@@ -6546,7 +6546,10 @@ closes while After runs; `(*session.Result).After` is nil for a session with no 
 for a run closed before After starts, and `cancelled` with `-1` for one closed while After
 runs. Every other exit gets After, `125` included. `Join` returns an error and no result,
 and runs no After, when the wall's `Wrap` fails (with the Docker wall, a missing image
-fails there) and when the launch does not start. When the launch failed before any container existed, such as a docker run
+fails there), when the launch does not start, and when the wait for the launch returns an
+error that is no exit status: the runtime exited 0 and a
+write of its output failed (`SessionSpec.Stdout`, `Stderr` or the run's log), or `Wait`
+failed; the runtime may have changed the workspace then. When the launch failed before any container existed, such as a docker run
 that exited `125` with no container, After still starts on the unchanged workspace; if
 its container cannot start for the same cause, the after step ends `failed` with `-1`.
 The launch's error line, the engine's output in the session's stderr lines, comes

@@ -2073,8 +2073,10 @@ release may change what an existing document does, and says so under Upgrading.
   exited `125` with no container, still gets After on the unchanged workspace, and
   `Result.After` is nil only for a spec with no After and a run closed before After
   starts; a run closed while After runs has it `cancelled` with `-1`. Join returns an
-  error and no result, and runs no After, when the wall's `Wrap` fails or the launch
-  does not start (`ErrNotStarted`). If After's container cannot start for the
+  error and no result, and runs no After, when the wall's `Wrap` fails, the launch does
+  not start (`ErrNotStarted`), or the wait for the launch returns an error that is no
+  exit status: the runtime exited 0 and a write of its
+  output failed (`SessionSpec.Stdout`, `Stderr` or the run's log), or `Wait` failed. If After's container cannot start for the
   same cause, the after step ends `failed` with `-1`, after the launch's error line.
   The session removes the setup container first, when the run has one, as
   `Run.RemoveSetup` does, with its wall step before the after step; the run is then as

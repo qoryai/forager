@@ -1078,3 +1078,56 @@ func TestAfterReadsEveryRecordBeforeItDecidesTheStepHasNoExit(t *testing.T) {
 		t.Errorf("the after step has the line %q", all[len(all)-1].logs["stderr"])
 	}
 }
+
+// failingWall is an afterWall whose launch fails: with wrapErr set, Wrap returns it;
+// otherwise Wrap returns a command that does not exist, so the process does not start.
+type failingWall struct {
+	*afterWall
+	wrapErr error
+}
+
+func (w *failingWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.afterWall.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *failingWall) Wrap(_ context.Context, l wall.Launch) (wall.Launch, error) {
+	if w.wrapErr != nil {
+		return wall.Launch{}, w.wrapErr
+	}
+	return wall.Launch{Command: filepath.Join(l.Dir, "no-such-helper"), Dir: l.Dir}, nil
+}
+
+// TestJoinRunsNoAfterWhenTheLaunchCannotBeWrappedOrStarted pins the two early returns of
+// a session with After: a wall whose Wrap fails, and a launch whose process does not
+// start (ErrNotStarted). In both, Join returns an error and no Result, and the wall is
+// asked for no After container.
+func TestJoinRunsNoAfterWhenTheLaunchCannotBeWrappedOrStarted(t *testing.T) {
+	for name, c := range map[string]struct {
+		wrapErr error
+		want    func(error) bool
+	}{
+		"the wall's Wrap fails":      {errors.New("no image"), func(err error) bool { return strings.Contains(err.Error(), "no image") }},
+		"the process does not start": {nil, func(err error) bool { return errors.Is(err, session.ErrNotStarted) }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			sp, aw := afterSpec(t, "exit 0", "/bin/sh", "-c", "touch after-ran")
+			w := &failingWall{afterWall: aw, wrapErr: c.wrapErr}
+			sp.Wall = w
+			res, err := run(context.Background(), sp)
+			if err == nil || !c.want(err) {
+				t.Errorf("Join returned %v; want the launch's error", err)
+			}
+			if res != nil {
+				t.Errorf("Join returned the result %+v; want none", res)
+			}
+			if got := w.calls(); slices.Contains(got, "wrap after") {
+				t.Errorf("the wall's calls %q; want no After container", got)
+			}
+			if _, err := os.Stat(filepath.Join(sp.Dir, "after-ran")); err == nil {
+				t.Error("After ran")
+			}
+		})
+	}
+}

@@ -178,7 +178,7 @@ func TestCredentialsWithPathsThatDoNotOverlapShareAHost(t *testing.T) {
 		"one segment under a prefix": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/repos/*"), def("harness", "HARNESS_TOKEN", github, "/repos/{}/app")},
 			"give the credentials product and harness paths that do not overlap on github.com, or claim it in only one of them: their paths /repos/* and /repos/{}/app overlap"},
 		"a stray brace": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/repos/{owner}/app"), def("harness", "HARNESS_TOKEN", github, "/operator-org/*")},
-			"Write the paths of credential product from /, with { and } only as the segment {} and * only at the end.\nThe path \"/repos/{owner}/app\" is not in that form."},
+			"Write each credential path from /, with { and } only as the segment {} and * only at the end.\nThe path \"/repos/{owner}/app\" of credential product is not in that form."},
 		"the second without paths": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/example-org/*"), def("harness", "HARNESS_TOKEN", github)}, alone},
 		"the first without paths":  {[]Definition{def("product", "PRODUCT_TOKEN", github), def("harness", "HARNESS_TOKEN", github, "/operator-org/*")}, alone},
 	} {

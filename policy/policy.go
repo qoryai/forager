@@ -220,7 +220,7 @@ func formed(e Egress) error {
 	for _, host := range slices.Sorted(maps.Keys(e.Paths)) {
 		for _, p := range e.Paths[host] {
 			if !ValidPath(p) {
-				return fmt.Errorf("egress.paths of %s holds %s: write { and } only as a whole segment {}, and * only at the end", host, accesskey.ShownValue(p, true))
+				return fmt.Errorf("Write each egress.paths entry from /, with { and } only as the segment {} and * only at the end.\nThe entry %s of host %s is not in that form.", accesskey.ShownValue(p, true), host)
 			}
 		}
 	}

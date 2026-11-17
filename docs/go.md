@@ -424,7 +424,7 @@ returns and before `Close`. Each error starts with the fix, and writes nothing:
 
 | Call | When | Error |
 |---|---|---|
-| `StartStep` | a kind other than fetch, compose, build, push, machine and copy | `Start a host step of kind fetch, compose, build, push, machine or copy, not "setup".` and, on a second line, `Join writes the join, image, wall, setup and after steps.` |
+| `StartStep` | a kind other than fetch, compose, build, push, machine and copy | `Start a host step of kind fetch, compose, build, push, machine or copy.` and, on a second line, `The kind "setup" is not one of them: Join writes the join, image, wall, setup and after steps.` |
 | `StartStep` | while a `Join` runs | `start the host step after Join returns: a session of the run is still running` |
 | `StartStep` | while step 1 is open | `exit step 1 before the next host step starts: one host step is open at a time` |
 | `StartStep` | after `Close` | `open a new run for the host step: the run is closed` |
@@ -1558,7 +1558,7 @@ request asks the gateway for, for this session.
   with no `After` and a run closed before After starts; a run closed while After runs
   has `Result.After` `cancelled` with `-1`). Join returns an error and no `Result`, so
   runs no After, when the wall's `Wrap` fails (with the Docker wall, a missing image
-  fails there) and when the launch does not start (`ErrNotStarted`). When the launch failed before any container existed, such as a docker
+  fails there) and when the launch does not start (`ErrNotStarted`), and also when the wait for the launch returns an error that is no exit status. That happens when the runtime exited 0 and a write of its output failed (the writer of `SessionSpec.Stdout` or `Stderr`, or the run's log), or when `Wait` itself failed; the runtime may have changed the workspace then, and no After runs. When the launch failed before any container existed, such as a docker
   run that exited `125` with no container, After still starts on the unchanged
   workspace, and if After's container cannot start for the same cause, the after step
   ends `failed` with `-1`, after the launch's error line. A removal of the
@@ -1693,9 +1693,8 @@ request asks the gateway for, for this session.
   `127` for a program the helper did not find, `126` for one it could not start or
   that does not run, and `-1` when the step ended with no status, such as when the agent's
   container could not be removed or After's container did not start; and `Reason`,
-  `timeout`, `out_of_memory` or empty. It is nil when no After ran: the run was closed,
-  the runtime did not start, or the launch exited `125`. A caller that set `After` treats
-  that as a failure.
+  `timeout`, `out_of_memory` or empty. It is nil only for a spec with no `After`, and for a run
+  closed before After starts. A caller that set `After` treats nil as a failure.
 
 `(*session.Run).Close` takes a `session.Outcome`, the `State`, `Reason` and `ExitCode`
 of the run's `dev.qory.run.exited`, and writes that event once. A run no session joined,

@@ -149,7 +149,7 @@ func runAfter(a afterLaunch, line func(stream string, b []byte), failed func(b [
 	cmd.Path, cmd.Err = program, err
 	home, removeHome, err := emptyHome()
 	if err != nil {
-		failed(failureLine(fmt.Errorf("After's empty HOME could not be made: %w", err)))
+		failed(failureLine(fmt.Errorf("Check that the temporary directory is writable and has room.\nAfter's empty HOME could not be made: %w", err)))
 		return setupRunnerFailed, ""
 	}
 	defer removeHome()

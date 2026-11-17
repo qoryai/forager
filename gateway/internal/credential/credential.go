@@ -505,7 +505,7 @@ func (h *Held) check(mode policy.Mode, allow []string) error {
 func checkPaths(name string, paths []string) error {
 	for _, p := range paths {
 		if !policy.ValidPath(p) {
-			return fmt.Errorf("Write the paths of credential %s from /, with { and } only as the segment {} and * only at the end.\nThe path %s is not in that form.", accesskey.ShownName(name, false), accesskey.ShownValue(p, true))
+			return fmt.Errorf("Write each credential path from /, with { and } only as the segment {} and * only at the end.\nThe path %s of credential %s is not in that form.", accesskey.ShownValue(p, true), accesskey.ShownName(name, false))
 		}
 	}
 	return nil

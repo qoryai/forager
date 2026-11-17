@@ -762,7 +762,10 @@ type Result struct {
 	// the spec has no After, and when the run was closed from outside before After
 	// started; a run closed while After runs has it cancelled with ExitCode -1. Join
 	// returns an error and no Result, and runs no After, when the wall's Wrap fails (with
-	// the Docker wall, a missing image fails there) and when the launch does not start. A
+	// the Docker wall, a missing image fails there), when the launch does not start
+	// (ErrNotStarted), and when the wait for the launch returns an error that is no exit
+	// status: the runtime exited 0 and a write of its output failed (Stdout, Stderr or the
+	// run's log), or Wait failed; the runtime may have changed the workspace then. A
 	// launch that failed before any container existed, such as a docker run that exited
 	// 125, still gets After, on the unchanged workspace; if After's container cannot start
 	// for the same cause, After is failed with ExitCode -1.
