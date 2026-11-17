@@ -6787,10 +6787,10 @@ up in its parent, so two binds of one root are allowed:
   `resume.prefix` below the home of the agent's user inside, or at an absolute
   `resume.prefix`. An absolute `resume.prefix` inside a writable mount's place inside is
   read in that mount, with no bind, and one inside a read-only mount's gets no
-  transcript (§The events, A session's
-  transcript). The session makes that directory and checks that it is, contains and lies
-  inside no other bind; the wall fails the session when it overlaps a mount, or when its place
-  inside overlaps another bind's or `/qory`. The workspace is writable, or read-only for a session with
+  transcript (§The events, A session's transcript). The session makes that directory and
+  checks that it is, contains and lies inside no other bind; the wall fails the session
+  when it overlaps a mount, or when its place inside overlaps another bind's or `/qory`.
+  The workspace is writable, or read-only for a session with
   `SessionSpec.WorkspaceReadOnly`, and
   is the working directory inside, through the bind that holds it, or bound at the same
   path as on the machine when no mount holds it; a run whose policy names its image by

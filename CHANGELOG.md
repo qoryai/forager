@@ -421,8 +421,9 @@ release may change what an existing document does, and says so under Upgrading.
   `source: startup`, `turn.completed` to `dev.qory.runtime.turn_finished` and
   `turn.failed` to `dev.qory.runtime.turn_failed`. Its `resume` reads the rollout below
   `${CODEX_HOME}/sessions/` and resumes as `codex exec resume <session id>`. It sets
-  no `install_required`: a session of Codex starts it from the run's image, with no
-  installed folder, and its `dev.qory.session.started` has no `runtime_version`.
+  no `install_required`: a session of Codex without `RuntimeInstall` starts it from the
+  run's image, and its `dev.qory.session.started` has no `runtime_version`; with
+  `RuntimeInstall` it starts from that folder and reports that version.
 - In the runtime descriptor:
   - a rule's `set`, fields with a value of the descriptor's, a string, a number or a
     boolean, and `from_started`, `[session_id]`, copied from the session's last

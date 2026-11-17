@@ -637,8 +637,8 @@ func checkMachine(spec OpenSpec) error {
 // Outcome is how the caller says the run ended, which [Run.Close] writes in
 // dev.qory.run.exited: State, succeeded, failed, cancelled or paused; Reason, empty
 // for none, timeout or interrupted with cancelled, timeout with ExitCode 124,
-// model_key_limit with paused, the one reason paused takes, after a join whose last
-// session ended paused with model_key_limit, image_missing,
+// model_key_limit or model_key_switch with paused, the two reasons paused takes, after
+// a join whose last session ended paused with that reason, image_missing,
 // image_user_root, image_access_denied, image_rate_limited or
 // image_registry_unreachable, failed with -1 for a run no session joined, after
 // [Run.FetchImage] returned that refusal, workflow_not_in_harness, failed with -1 for a run no session

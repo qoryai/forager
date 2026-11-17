@@ -582,6 +582,10 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 					if ok && accountOK {
 						r.Header.Set(name, value)
 						if c.AccountHeader != "" {
+							// The session's Connection header can name this header: the
+							// hop-by-hop removal then drops the value set here, and the request
+							// goes upstream without it. The session cannot put back a value of
+							// its choice, since dropHeader took its value off first.
 							r.Header.Set(c.AccountHeader, account)
 						}
 						r.Header.Set(setBy, c.Name)
