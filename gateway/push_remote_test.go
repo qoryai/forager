@@ -98,9 +98,9 @@ func (p *remotePush) requests() []string {
 // key, is closed unanswered. In the write-no-push run, QORY-PUSH with the run's key is
 // closed unanswered too, the run has no push value, its secrets request is for work-1
 // alone, and its open's dev.qory.run.policy_applied lists no credential with purpose
-// push. A second push through the run's proxy after the session exited, when After and
-// qory's push step run, gets the same 403, and the record has each push through the
-// run's proxy as a dev.qory.run.egress denied by wall:push-ref, with no channel push.
+// push. A second push through the run's proxy after the session exited gets the same
+// 403. The record has each push through the run's proxy as a dev.qory.run.egress
+// denied by wall:push-ref, with no channel push.
 func TestThePushProxyBehindASeparateGateway(t *testing.T) {
 	work := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+workSecret))
 	basic := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+pushSecretWord))

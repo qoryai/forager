@@ -173,10 +173,13 @@ func sessionWrites(t *testing.T, c *http.Client, port string) sent {
 // credential with no push_ref.
 const pushRefused = "qory: push through qory's push step, with a credential that allows a push.\n"
 
-// pushSplit checks the credentials of a run of [pushRunDoc] with push, or without it as
-// a write-no-push run's: applied, the members of the open's dev.qory.run.policy_applied,
-// lists work-1 with no purpose, then push-1's items with purpose push only with push;
-// and each secrets request c got is for work-1, and for push-1 only with push.
+// pushSplit checks the credentials of a run of [pushRunDoc]. Without push, it pins the
+// document of a write-no-push run: applied, the members of the open's
+// dev.qory.run.policy_applied, lists work-1 alone with no purpose, and each secrets
+// request c got is for work-1 alone. With push, applied lists work-1, then push-1's two
+// items with purpose push, and each secrets request is for work-1 and push-1. Behind a
+// separate gateway no other test checks a write run's applied, which a session reads
+// to start its push proxy.
 func pushSplit(t *testing.T, c *control, applied json.RawMessage, push bool) {
 	t.Helper()
 	wantApplied, wantAsked := []string{"work-1 <nil>"}, []string{"work-1"}
@@ -203,8 +206,8 @@ func pushSplit(t *testing.T, c *control, applied json.RawMessage, push bool) {
 	}
 }
 
-// receivePacks are the dev.qory.run.egress records of git pushes among records: each
-// one's channel, decision and path rule.
+// receivePacks returns the channel, decision and path rule of each git push's
+// dev.qory.run.egress among records.
 func receivePacks(records []recorded) []string {
 	var out []string
 	for _, l := range records {
@@ -225,9 +228,8 @@ func receivePacks(records []recorded) []string {
 // push_proxy_secret apart from proxy_secret; a write-no-push run's has none, and the run
 // has no push proxy and no push value: its secrets request is for work-1 alone, and its
 // open's dev.qory.run.policy_applied lists no credential with purpose push. A second push
-// after the session exited, when After and qory's push step run, gets the same 403, and
-// the record has each push as a dev.qory.run.egress denied by wall:push-ref, with no
-// channel push.
+// through the run's proxy after the session exited gets the same 403. The record has
+// each push as a dev.qory.run.egress denied by wall:push-ref, with no channel push.
 func TestASessionsRequestsGetOnlyTheWorkCredential(t *testing.T) {
 	work := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+workSecret))
 	for _, c := range []struct {
