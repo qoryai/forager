@@ -62,7 +62,7 @@ const (
 
 // serveHostCall serves the host call c of the run runID: it forwards the request's body
 // unread to Qory Apiary, POST <run.url>/<run_id> and c's path with its signed client,
-// once, within [server.HostCallTime], and answers with what Qory Apiary returned.
+// once, within [server.HostCallTime], and writes what Qory Apiary returned.
 //
 //   - A 2xx passes with its status and body, at most c.answer bytes, a body with
 //     Content-Type: application/json alone.
@@ -75,7 +75,7 @@ const (
 //
 // The gateway's other refusals: on the local link a run id of no run here is 400
 // invalid_request; on the one address the run id is the run key's, any other 400
-// run_key_invalid, and a run the gateway does not hold is reopened, or answered a 503
+// run_key_invalid, and a run the gateway does not hold is reopened, or gets a 503
 // or a 410 ([Gateway.heldRun]). A run that ended at the gateway is 410, and a suspended
 // run 503 with no body. A Content-Type other than application/json is 400
 // invalid_request, a body over c.request bytes 413 payload_too_large, and a run with no
@@ -122,7 +122,7 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 	}
 	if g.client == nil || lr.r == nil {
 		refuse(w, http.StatusNotFound, codeNotFound, nil, accesskey.FromGateway,
-			fmt.Sprintf("Open the run through a gateway with a control plane to send the %s request: this run has none.", c.name))
+			fmt.Sprintf("Open the run with a control plane to send the %s request: this run has none.", c.name))
 		return
 	}
 	conf, _ := g.config()
@@ -167,7 +167,7 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 }
 
 // hostCallFailed writes one line of the failure why of the host call c of the run
-// runID to the gateway's log, and answers 502 control_plane_unavailable.
+// runID to the gateway's log, and writes 502 control_plane_unavailable.
 func (g *Gateway) hostCallFailed(w http.ResponseWriter, runID string, c *hostCall, why string) {
 	g.report(fmt.Sprintf("run %s: If this repeats, check the control plane: the %s request got no valid answer: %s", runID, c.name, why))
 	refuse(w, http.StatusBadGateway, codeControlPlaneUnavailable, nil, accesskey.FromGateway,

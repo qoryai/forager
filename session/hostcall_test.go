@@ -221,7 +221,7 @@ func TestHostCallsWithNoControlPlane(t *testing.T) {
 	}
 	defer r.Close(ctx, session.Outcome{State: event.StateCancelled})
 	for _, call := range []func(context.Context, []byte) ([]byte, error){r.NextSession, r.PushedCommits} {
-		if got, err := call(ctx, []byte(`{}`)); got != nil || err == nil || !strings.HasPrefix(err.Error(), "Open the run through a gateway with a control plane") {
+		if got, err := call(ctx, []byte(`{}`)); got != nil || err == nil || !strings.HasPrefix(err.Error(), "Open the run with a control plane to send the ") {
 			t.Errorf("%q %v", got, err)
 		}
 	}
@@ -229,8 +229,8 @@ func TestHostCallsWithNoControlPlane(t *testing.T) {
 
 // reachesNoHostCall fails the test unless no request of c, a client of a container's
 // way out, reaches a host call of the run runID: the run API route answers 404 for
-// both paths, and a request for the local link's paths or the one address's gets a
-// refusal or a closed connection.
+// both paths, and the proxy 403 to the local link's paths and the one address's, under
+// a policy that allows neither host.
 func reachesNoHostCall(t *testing.T, what string, c *http.Client, runID, oneAddress string) {
 	t.Helper()
 	urls := []string{link.RunAPIURL(runID) + "/next-session", link.RunAPIURL(runID) + "/pushed-commits"}
@@ -241,29 +241,31 @@ func reachesNoHostCall(t *testing.T, what string, c *http.Client, runID, oneAddr
 		}
 	}
 	for _, u := range urls {
-		route := strings.HasPrefix(u, link.RunAPIURL(runID))
 		resp, err := c.Post(u, "application/json", strings.NewReader(nextBody))
 		if err != nil {
-			// A closed connection reaches nothing; the route answers every request.
-			if route {
+			// An https URL goes through a CONNECT, whose 403 is the client's error.
+			if !strings.HasPrefix(u, "https://") || !strings.Contains(err.Error(), "Forbidden") {
 				t.Errorf("%s: %s: %v", what, u, err)
 			}
 			continue
 		}
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if route && (resp.StatusCode != http.StatusNotFound || !bytes.Contains(b, []byte(`"not_found"`))) {
-			t.Errorf("%s: %s: %d %s, want the route's 404", what, u, resp.StatusCode, b)
-		}
-		if bytes.Contains(b, []byte(`"next":"session"`)) || resp.StatusCode == http.StatusNoContent {
-			t.Errorf("%s: %s reached a host call: %d %s", what, u, resp.StatusCode, b)
+		switch {
+		case strings.HasPrefix(u, link.RunAPIURL(runID)):
+			if resp.StatusCode != http.StatusNotFound || !bytes.Contains(b, []byte(`"not_found"`)) {
+				t.Errorf("%s: %s: %d %s, want the route's 404", what, u, resp.StatusCode, b)
+			}
+		case resp.StatusCode != http.StatusForbidden:
+			t.Errorf("%s: %s: %d %s, want the proxy's 403", what, u, resp.StatusCode, b)
 		}
 	}
 }
 
 // TestNoContainerReachesAHostCallThroughTheSession pins that a program behind a wall,
 // through the wall's relay, and a program on the host through the host proxy, reach
-// neither host call, on one machine and behind a separate gateway: the control plane
+// neither host call, on one machine and behind a separate gateway, each under an
+// enforce policy that allows neither localhost nor the one address: the control plane
 // gets no host call.
 func TestNoContainerReachesAHostCallThroughTheSession(t *testing.T) {
 	for _, separate := range []bool{false, true} {
@@ -283,7 +285,7 @@ func TestNoContainerReachesAHostCallThroughTheSession(t *testing.T) {
 				c := newControl(t)
 				l = &c.hostCalls
 				sp.RunID = event.NewRunID()
-				startGateway(t, &sp, gateway.Config{Server: c.server()})
+				startGateway(t, &sp, gateway.Config{Server: c.server(), Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{}}}})
 			}
 			ctx := context.Background()
 			r, err := session.Open(ctx, opened(sp))

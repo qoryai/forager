@@ -27,7 +27,7 @@ const (
 	// the size Qory Apiary reads.
 	MaxPushedCommitsRequest = 64 << 10
 	// MaxPushedCommitsAnswer is the largest body of a pushed-commits answer, 64 KiB, as
-	// any answer that is not a document: Qory Apiary answers 204 with no body.
+	// any answer that is not a document: Qory Apiary returns 204 with no body.
 	MaxPushedCommitsAnswer = MaxRefusal
 )
 
@@ -51,7 +51,8 @@ const hostCallWait = 4 * time.Minute
 // for every answer other than a 2xx: a 410 is the end of the run, [Ended]; a coded
 // refusal is an [*accesskey.Refusal] whose From is apiary for Qory Apiary's code, which
 // the gateway passes on with its status, and gateway for the gateway's; any other
-// answer is a [*StatusError]. A 2xx body over [MaxNextSessionAnswer] is an error too.
+// answer is a [*StatusError], the gateway's 503 with no body while it closes or reopens
+// the run among them. A 2xx body over [MaxNextSessionAnswer] is an error too.
 func (k *Link) NextSession(ctx context.Context, runURL, runID string, body []byte) ([]byte, error) {
 	return k.hostCall(ctx, "the next-session request", runURL, runID, "/next-session", body, MaxNextSessionAnswer)
 }
@@ -73,7 +74,7 @@ func (k *Link) hostCall(ctx context.Context, what, runURL, runID, path string, b
 		return nil, fmt.Errorf("%s: %w", k.name, accesskey.ShownError(err))
 	}
 	if !runIDShape.MatchString(runID) {
-		return nil, fmt.Errorf("%s: the run id is not a UUID in the canonical lower-case form", what)
+		return nil, fmt.Errorf("Pass the run id as a UUID in the canonical lower-case form: this one has another form.\n%s", what)
 	}
 	if body == nil {
 		body = []byte{}
@@ -93,7 +94,7 @@ func (k *Link) hostCall(ctx context.Context, what, runURL, runID, path string, b
 	}
 	if a.body == nil {
 		// send drops a body over most, and reads an empty one as an empty slice.
-		return nil, fmt.Errorf("%s: the answer is longer than %d bytes", what, most)
+		return nil, fmt.Errorf("Check the gateway and the control plane: the answer is over the call's limit.\n%s: more than %d bytes", what, most)
 	}
 	return a.body, nil
 }

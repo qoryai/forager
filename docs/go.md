@@ -679,8 +679,9 @@ control plane, with nothing sent. A refusal is an `*accesskey.Refusal`: `From` i
 `apiary` for Qory Apiary's code with its status, such as `409` `run_ended`, and
 `gateway` for the gateway's, such as `413` `payload_too_large` or `502`
 `control_plane_unavailable`. A `410` is the end of the run at the gateway, which
-`server.Ended` reports. Forager sends no request again: send it again after a `5xx` or a
-transport failure, since Qory Apiary answers a repeated request the same way. The
+`server.Ended` reports. A `503` with no code, while the gateway closes or reopens the
+run, is a `*server.StatusError`. Forager sends no request again: send it again after a `5xx` or a
+transport failure, since Qory Apiary returns the same result for a repeated request. The
 contract's README, §The gateway's link, The host calls, lists every answer.
 
 ### The run API

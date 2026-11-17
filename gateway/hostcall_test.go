@@ -150,6 +150,19 @@ func TestAHostCallPassesOnTheControlPlanesRefusal(t *testing.T) {
 			t.Errorf("%s: a signed 503 ends the run", path)
 		}
 	}
+	// A refusal whose names and message contain a run key reaches the caller with a
+	// phrase in each place, in a body link-refusal.schema.json takes.
+	key := runKeyFor(t, o.a.RunID, nil)
+	answer(func(w http.ResponseWriter, r *http.Request) {
+		o.f.sign(w, r, http.StatusBadRequest, []byte(`{"error":"invalid_request","names":["repositories[0].`+key+`","repositories[1].path"],"message":"Send a commit id: `+key+` is none."}`))
+	})
+	status, body := rawPost(t, raw(t, o.h.g.LocalLink()), "/v1/run-configuration/"+o.a.RunID+"/pushed-commits", "application/json", "{}")
+	validDocument(t, "link-refusal.schema.json", []byte(body))
+	if status != http.StatusBadRequest || strings.Contains(body, "qrk_") || !strings.Contains(body, `"names":["(a name that contains a run key)","repositories[1].path"]`) ||
+		!strings.Contains(body, `"message":"(a value that contains a run key)"`) || !strings.Contains(body, `"from":"apiary"`) {
+		t.Errorf("a refusal with a run key: %d %s", status, body)
+	}
+
 	unavailable := map[string]func(w http.ResponseWriter, r *http.Request){
 		"an unsigned 409": func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusConflict)
@@ -259,6 +272,15 @@ func TestAHostCallBehindASeparateGateway(t *testing.T) {
 	if got := r.do(t, e.key, http.MethodPost, base+"/pushed-commits", []byte(`{}`)); got.status != http.StatusConflict || got.refusal()["error"] != "not_writable" || got.refusal()["from"] != "apiary" {
 		t.Errorf("a signed 409: %d %s", got.status, got.body)
 	}
+	// An unsigned answer is a 502 with one line in the gateway's log, which the
+	// cleanup of startRemote checks for the run key.
+	f.answers(func(w http.ResponseWriter, _ *http.Request, _ []byte) { w.WriteHeader(http.StatusConflict) })
+	if got := r.do(t, e.key, http.MethodPost, base+"/next-session", []byte(`{}`)); got.status != http.StatusBadGateway || got.refusal()["error"] != "control_plane_unavailable" {
+		t.Errorf("an unsigned 409: %d %s", got.status, got.body)
+	}
+	if !r.reported("the next-session request got no valid answer") {
+		t.Error("no line in the gateway's log for the unsigned 409")
+	}
 
 	f.reset()
 	other := runKeyFor(t, event.NewRunID(), nil)
@@ -278,42 +300,45 @@ func TestAHostCallBehindASeparateGateway(t *testing.T) {
 	}
 }
 
+// enforceNothing is a node policy that allows no host: the proxy refuses every host
+// but the run API's.
+var enforceNothing = &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{}}}
+
 // TestNoContainerReachesAHostCall pins that a program in a container, whose one way out
 // is the run's proxy through the wall's relay, reaches neither host call on one
-// machine: the run API route answers 404 for both paths, the proxy answers 400 to a
-// request with no host, a request for the link's paths at localhost gets no answer of
-// the link, and a connection to the proxy's address with no relay preamble is closed unanswered.
-// The control plane gets nothing.
+// machine: the run API route answers 404 for both paths; the proxy answers 400 to a
+// request with no host and 403 to the link's paths at localhost, which the policy does
+// not allow; and a connection to the proxy's address with no relay preamble is closed
+// unanswered. The control plane gets nothing.
 func TestNoContainerReachesAHostCall(t *testing.T) {
-	o := openRunAPIRun(t)
+	c := newControl(t)
+	f := runAPIOf(c)
+	o := startRunAPIRun(t, start(t, gateway.Config{Server: c.server(), Policy: enforceNothing}), f)
 	hostCallAnswers(o.f)
 	o.f.reset()
 	body := []byte(`{"session":1,"state":"succeeded","reason":null}`)
+	head := "Content-Type: application/json\r\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n"
 	for _, path := range hostCallPaths {
-		resp, b, _ := o.send(line(http.MethodPost, o.url(path))+"Content-Type: application/json\r\nContent-Length: "+strconv.Itoa(len(body))+"\r\n", body)
+		resp, b, _ := o.send(line(http.MethodPost, o.url(path))+head, body)
 		routeError(t, path+" through the run API route", resp, b, http.StatusNotFound, "not_found")
 
 		target := "/v1/run-configuration/" + o.a.RunID + path
-		resp, b, _ = o.send(line(http.MethodPost, target)+"Content-Type: application/json\r\nContent-Length: "+strconv.Itoa(len(body))+"\r\n", body)
-		if resp.StatusCode != http.StatusBadRequest {
+		if resp, b, _ = o.send(line(http.MethodPost, target)+head, body); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s with no host through the proxy: %d %s", path, resp.StatusCode, b)
 		}
-		// The proxy of a run with no wall may reach port 80 of this machine, whatever
-		// listens there: never the link, which is a Unix socket or in memory alone.
-		resp, b, _ = o.send(line(http.MethodPost, server.LocalOrigin+target)+"Content-Type: application/json\r\nContent-Length: "+strconv.Itoa(len(body))+"\r\n", body)
-		if bytes.Contains(b, []byte(`"next":"end"`)) || resp.Header.Get(server.HeaderConfiguration) != "" {
+		if resp, b, _ = o.send(line(http.MethodPost, server.LocalOrigin+target)+head, body); resp.StatusCode != http.StatusForbidden {
 			t.Errorf("%s at localhost through the proxy: %d %s", path, resp.StatusCode, b)
 		}
 
-		c, err := net.Dial("tcp", o.h.g.Addr())
+		conn, err := net.Dial("tcp", o.h.g.Addr())
 		if err != nil {
 			t.Fatal(err)
 		}
-		io.WriteString(c, line(http.MethodPost, target)+"Host: localhost\r\nContent-Type: application/json\r\nContent-Length: "+strconv.Itoa(len(body))+"\r\n\r\n"+string(body))
-		if resp, err := http.ReadResponse(bufio.NewReader(c), nil); err == nil && resp.StatusCode < 400 {
+		io.WriteString(conn, line(http.MethodPost, target)+"Host: localhost\r\n"+head+"\r\n"+string(body))
+		if resp, err := http.ReadResponse(bufio.NewReader(conn), nil); err == nil {
 			t.Errorf("%s to the proxy's address with no preamble: %d", path, resp.StatusCode)
 		}
-		c.Close()
+		conn.Close()
 	}
 	if got := o.f.requests(); len(got) != 0 {
 		t.Errorf("the control plane got %+v", got)
@@ -321,17 +346,19 @@ func TestNoContainerReachesAHostCall(t *testing.T) {
 }
 
 // TestNoContainerReachesAHostCallBehindASeparateGateway pins the same behind a
-// separate gateway, where the run's proxy connections arrive on the one address with
-// the relay's preamble and the run key, as the session's forwarder opens them for a
-// container: the run API route answers 404 for both paths, a request with no host 400,
-// and a request for the link's paths at the one address is refused; the control plane
-// gets nothing.
+// separate gateway. The run's proxy connections arrive on the one address with the
+// relay's preamble and the run key, as the session's forwarder opens them for a
+// container, and never reach the link: the run API route answers 404 for both paths, a
+// request with no host 400, and the link's paths at the one address 403. A link
+// request needs the run key as its bearer, which no container has: a bound request
+// without it is 400 run_key_invalid (TestEveryRequestCarriesAnAcceptedRunKey), and an
+// unbound one an unsigned 404. The control plane gets nothing.
 func TestNoContainerReachesAHostCallBehindASeparateGateway(t *testing.T) {
 	c := gatewayControl(t)
 	f := runAPIOf(c)
 	f.passAttach.Store(true)
 	hostCallAnswers(f)
-	r := startRemote(t, c, gateway.Config{})
+	r := startRemote(t, c, gateway.Config{Policy: enforceNothing})
 	e := r.open(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{})
 	f.reset()
 	client := r.relay(t, e.key)
@@ -344,25 +371,40 @@ func TestNoContainerReachesAHostCallBehindASeparateGateway(t *testing.T) {
 		resp.Body.Close()
 		routeError(t, path+" through the run API route", resp, b, http.StatusNotFound, "not_found")
 
-		for _, u := range []string{"https://gateway.example:8443/qory-link/run-configuration/" + e.a.RunID + path, "http://" + r.g.Addr() + "/qory-link/run-configuration/" + e.a.RunID + path} {
-			if resp, err := client.Post(u, "application/json", strings.NewReader(`{}`)); err == nil {
-				b, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
-				if resp.StatusCode < 400 {
-					t.Errorf("%s through the proxy: %d %s", u, resp.StatusCode, b)
-				}
+		linkPath := "/qory-link/run-configuration/" + e.a.RunID + path
+		for _, u := range []string{"http://gateway.example:8443" + linkPath, "http://" + r.g.Addr() + linkPath} {
+			resp, err := client.Post(u, "application/json", strings.NewReader(`{}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Errorf("%s through the proxy: %d %s", u, resp.StatusCode, b)
 			}
 		}
 
-		b2, err := r.bind(t, gatewayKeys())
+		bc, err := r.bind(t, gatewayKeys())
 		if err != nil {
 			t.Fatal(err)
 		}
-		io.WriteString(b2, link.RelayLine(e.key)+line(http.MethodPost, "/qory-link/run-configuration/"+e.a.RunID+path)+"Host: gateway.example:8443\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
-		if resp, err := http.ReadResponse(bufio.NewReader(b2), nil); err == nil && resp.StatusCode != http.StatusBadRequest {
-			t.Errorf("%s with no host through the proxy: %d", path, resp.StatusCode)
+		io.WriteString(bc, link.RelayLine(e.key)+line(http.MethodPost, linkPath)+"Host: gateway.example:8443\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
+		resp, err = http.ReadResponse(bufio.NewReader(bc), nil)
+		if err != nil || resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s with no host through the proxy: %v %v", path, resp, err)
 		}
-		b2.Close()
+		bc.Close()
+
+		tc := r.dialTLS(t)
+		req, _ := http.NewRequest(http.MethodPost, "https://gateway.example:8443"+linkPath, strings.NewReader(`{}`))
+		req.Header.Set("Authorization", "Bearer "+e.key)
+		req.Header.Set("Content-Type", "application/json")
+		req.Write(tc)
+		resp, err = http.ReadResponse(bufio.NewReader(tc), req)
+		tc.Close()
+		if err != nil || resp.StatusCode != http.StatusNotFound || resp.Header.Get(server.HeaderSignature) != "" {
+			t.Errorf("%s unbound: %v %v", path, resp, err)
+		}
 	}
 	if got := f.requests(); len(got) != 0 {
 		t.Errorf("the control plane got %+v", got)

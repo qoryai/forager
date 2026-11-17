@@ -10,7 +10,7 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
-- A gateway built before this change answers `405` to the link's host calls, `POST
+- A gateway built before this change returns `405` to the link's host calls, `POST
   <run.url>/<run_id>/next-session` and `POST <run.url>/<run_id>/pushed-commits`: run
   `Run.NextSession` and `Run.PushedCommits` against a gateway of this change.
 - A gateway built before this change fails a run whose run configuration has a
@@ -283,7 +283,7 @@ release may change what an existing document does, and says so under Upgrading.
   coded refusal of Qory Apiary's passes with its status and `from: apiary`; the
   gateway's refusals are `413` `payload_too_large` for a body over the limit and `502`
   `control_plane_unavailable` when no valid answer came. No container reaches either
-  call: they go over the link alone, and the run API's route answers `404` to both
+  call: they go over the link alone, and the run API's route returns `404` for both
   paths (§The gateway's link, The host calls).
 - A host credential may have `purpose: push`, for qory's push and the pull request
   calls of its submit step through the run's push proxy (§Credentials, Push

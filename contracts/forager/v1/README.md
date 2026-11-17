@@ -4622,13 +4622,13 @@ once the run's close began or for a run with no control plane. The other answers
 | `413` | `payload_too_large` | `gateway` | the body is over its limit; nothing is sent |
 | `410` | the end's code | `gateway` | the run ended at the gateway; nothing is sent |
 | `502` | `control_plane_unavailable` | `gateway` | no answer of Qory Apiary's, one that fails verification, an unsigned `401` among them, a signed `410`, an answer with no code that is no `2xx`, a `2xx` over its limit, or a `2xx` body without `Content-Type: application/json`; the gateway writes one line to its log |
-| `503` | none | | the gateway closes and suspends the run, or behind a separate gateway the run's reopen goes on: send the request again |
+| `503` | none | | no body: the gateway closes and suspends the run, or behind a separate gateway the run's reopen goes on; send the request again |
 
 A `410` on the link ends the session's run, and only the gateway ends a run there, so
-Qory Apiary's `410` is a `502`. Qory Apiary answers a request it already took the same
-way: a second next-session request for the same session gets the same answer, and a
-second pushed-commits request adds no commit the run already has, so a caller may send
-either again after a `5xx` or a transport failure.
+Qory Apiary's `410` is a `502`. Qory Apiary returns the same result for a request it
+already took: a second next-session request for the same session gets the same answer,
+and a second pushed-commits request adds no commit the run already has, so a caller may
+send either again after a `5xx` or a transport failure.
 
 **Joining a session.** The run answer opens the run; each session then joins it with a
 `POST` to `<run.url>/<run_id>/sessions`, the path of `run.url`, a slash, the `run_id`

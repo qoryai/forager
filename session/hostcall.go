@@ -21,8 +21,9 @@ import (
 // a refusal: From is apiary for Qory Apiary's code, passed on with its status, such as
 // 409 run_ended, and gateway for the gateway's, such as 413 payload_too_large for a
 // body over the limit or 502 control_plane_unavailable when no valid answer came; a 410
-// is the end of the run at the gateway, which [server.Ended] reports. A transport
-// failure and no answer in time are errors too.
+// is the end of the run at the gateway, which [server.Ended] reports. A 503 with no
+// code, while the gateway closes or reopens the run, is a [*server.StatusError]: send
+// the request again. A transport failure and no answer in time are errors too.
 func (r *Run) NextSession(ctx context.Context, body []byte) ([]byte, error) {
 	if err := r.hostCallAllowed("next-session"); err != nil {
 		return nil, err
@@ -53,7 +54,7 @@ func (r *Run) hostCallAllowed(name string) error {
 	case r.runAPIClosed():
 		return fmt.Errorf("Open another run to send the %s request: this run is closed.", name)
 	case r.answer.RunAPI == "":
-		return fmt.Errorf("Open the run through a gateway with a control plane to send the %s request: this run has none.", name)
+		return fmt.Errorf("Open the run with a control plane to send the %s request: this run has none.", name)
 	}
 	return nil
 }

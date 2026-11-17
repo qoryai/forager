@@ -17,7 +17,8 @@ import (
 // <run.url>/<run_id>/next-session or /pushed-commits with Content-Type:
 // application/json and the body as given, whose 2xx body comes back as it came, empty
 // for a 204; a coded refusal is an accesskey.Refusal with its from; a 410 is the end of
-// the run; a 502 with a code is a refusal too; an answer over the most is an error; and
+// the run; a 502 with a code is a refusal too; a 503 with no body is a StatusError; an
+// answer over the most is an error; and
 // a run id of another form or a run URL off the link sends nothing.
 func TestTheLinkSendsTheHostCalls(t *testing.T) {
 	type got struct{ line, contentType, body string }
@@ -57,6 +58,11 @@ func TestTheLinkSendsTheHostCalls(t *testing.T) {
 				t.Errorf("%s: a %d: %v (%+v)", path, status, err, ref)
 			}
 		}
+		reply = func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }
+		var se *server.StatusError
+		if _, err := call(ctx, runURL, runID, []byte(`{}`)); !errors.As(err, &se) || se.Status != http.StatusServiceUnavailable {
+			t.Errorf("%s: a 503 with no body: %v", path, err)
+		}
 		reply = func(w http.ResponseWriter, _ *http.Request) {
 			answer(w, 410, `{"error":"run_closed","from":"gateway"}`)
 		}
@@ -79,7 +85,7 @@ func TestTheLinkSendsTheHostCalls(t *testing.T) {
 	reply = func(w http.ResponseWriter, _ *http.Request) {
 		answer(w, 200, strings.Repeat(" ", server.MaxPushedCommitsAnswer+1))
 	}
-	if _, err := k.PushedCommits(ctx, runURL, runID, []byte(`{}`)); err == nil || !strings.Contains(err.Error(), "longer than") {
+	if _, err := k.PushedCommits(ctx, runURL, runID, []byte(`{}`)); err == nil || !strings.HasPrefix(err.Error(), "Check the gateway and the control plane: ") {
 		t.Errorf("an answer over the most: %v", err)
 	}
 }
