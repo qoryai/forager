@@ -235,10 +235,16 @@ func TestThePushProxyEnds(t *testing.T) {
 // relay sends, with the relay's token, reaches the gateway's proxy with QORY-RELAY and
 // the run's proxy secret or run key, never with the push proxy's preamble; and a
 // connection to the run's forwarder that opens with the push proxy's preamble is closed
-// unanswered and reaches nothing.
+// unanswered and reaches nothing. A run with no push credential, as a write-no-push
+// run's, goes the same way, and after its Join a request through HostProxy reaches the
+// gateway's proxy with the run's preamble too, and PushProxy returns the text that
+// starts with the fix: the gateway's TestASessionsRequestsGetOnlyTheWorkCredential and
+// TestThePushProxyBehindASeparateGateway pin the 403 a push through the run's proxy gets
+// there.
 func TestTheWallReachesNoPushProxy(t *testing.T) {
-	for _, separate := range []bool{false, true} {
-		t.Run(fmt.Sprint("separate ", separate), func(t *testing.T) {
+	for _, c := range []struct{ separate, push bool }{{false, true}, {true, true}, {false, false}, {true, false}} {
+		separate := c.separate
+		t.Run(fmt.Sprintf("separate %v, push %v", separate, c.push), func(t *testing.T) {
 			sp, g := specGateway(t)
 			aw := &afterWall{}
 			sp.Mounts, sp.Forwarder, sp.SetupRunner = []wall.Mount{{Path: sp.Dir}}, nil, setupRunner
@@ -253,7 +259,9 @@ func TestTheWallReachesNoPushProxy(t *testing.T) {
 				sp.Gateway = remoteGateway(g, key)
 				relayed, pushLine, secret = link.RelayPreamble+" "+key, link.PushLine(key), key
 			}
-			withPush(g, !separate)
+			if c.push {
+				withPush(g, !separate)
+			}
 			w := &setupAfterWall{aw: aw}
 			sp.Wall, sp.Image = w, "example.com/agent:1"
 			reports := reportsOf(t, &sp)
@@ -278,6 +286,25 @@ func TestTheWallReachesNoPushProxy(t *testing.T) {
 			}
 			if res.After == nil || res.After.State != event.StateSucceeded {
 				t.Fatalf("Result.After %+v; want succeeded", res.After)
+			}
+			if !c.push {
+				h, err := r.HostProxy()
+				if err != nil {
+					t.Fatal(err)
+				}
+				const discovery = "http://git.example/example-org/app.git/info/refs?service=git-receive-pack"
+				if status, _ := throughHost(t, h.ProxyURL, discovery); status != http.StatusOK {
+					t.Errorf("the request through the host proxy got %d", status)
+				}
+				if got := g.Proxied(); !slices.Contains(got, "GET "+discovery) {
+					t.Errorf("the gateway's proxy answered %q, want the host proxy's request among them", got)
+				}
+				if err := h.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := r.PushProxy(); err == nil || err.Error() != noPushProxy {
+					t.Errorf("PushProxy: %v, want %q", err, noPushProxy)
+				}
 			}
 			if got := g.Preambles(); len(got) == 0 || slices.ContainsFunc(got, func(p string) bool { return p != relayed }) {
 				t.Errorf("the gateway's proxy saw %q, want %q alone", got, relayed)
