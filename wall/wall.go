@@ -16,6 +16,7 @@ package wall
 
 import (
 	"context"
+	"net/netip"
 )
 
 // Wall is one way of building an enclosure: one implementation per container
@@ -153,6 +154,28 @@ type Enclosure interface {
 	Close(ctx context.Context) error
 }
 
+// AfterWrapper is an enclosure that starts a session's After in a new container, once
+// the agent's container of the session is removed: the run's image, the one mount that
+// holds the launch's Dir, a socket directory that no other container binds, the run's proxy
+// and nothing else of the launch. The session removes the agent's container first (Unwrap),
+// so no process of the agent is left when After starts.
+type AfterWrapper interface {
+	// WrapAfter returns the launch that starts l inside the enclosure, as [Enclosure.Wrap]
+	// does, on the pipes of whoever starts it and with no input. Only l.Command, l.Args,
+	// l.Env, l.Dir, l.Proxy, l.CA, l.Socket, l.Mounts and l.Limits are read, and l.Runtime is not:
+	// After runs the caller's command, not the runtime, so the container binds no runtime
+	// folder. The container has
+	// no route to the caller (its proxy URL has no password: a request to the route gets
+	// 403 from the gateway's proxy, and one with the agent's password 503), no hook socket,
+	// no home, no transcript and no nested Docker daemon. With nested Docker it sets no
+	// IPv6 sysctl, as Wrap does not.
+	WrapAfter(ctx context.Context, l Launch) (Launch, error)
+	// UnwrapAfter removes the After container within the adapter's removal limit, as
+	// [Enclosure.Close] would, and returns once the engine removed it. A container that is
+	// gone is not an error; any other failure matches [ErrContainerKept].
+	UnwrapAfter(ctx context.Context) error
+}
+
 // Launch is a command to start. Given to [Enclosure.Wrap] it is the agent's, with what
 // must cross the wall beside it; returned from Wrap it is the adapter's own command,
 // and only Command, Args, Env and Dir are set.
@@ -179,6 +202,20 @@ type Launch struct {
 	// TLS. An adapter gives it to its relay and to nothing inside the enclosure, so the
 	// proxy serves this run's relay alone, whoever else reaches its address.
 	ProxyToken string
+	// ProxyPassword, when not empty, is the password of the agent's proxy URL: given to
+	// Wrap, the proxy variables inside are http://qory:<password>@ and the relay's
+	// address, so every request of the agent carries it in its Proxy-Authorization.
+	// The session sets it for a run with a route to its caller, and the run's forwarder
+	// serves a request to host.qory.invalid only with the password of a session's
+	// launch, from the address of the agent's container ([Launch.ProxyPeer]).
+	// StartSetup does not read it, so no environment of the setup container has it.
+	ProxyPassword string
+	// ProxyPeer, given to the call that starts the relay, has the relay write the
+	// address each connection came from inside the enclosure right after the preamble,
+	// link.RelayPeerLine. The session sets it for a run with a route to its caller,
+	// with an enclosure that is an [AgentAddresser]: the run's forwarder then serves a
+	// request to host.qory.invalid only from an address of the agent's container.
+	ProxyPeer bool
 	// CA, when not empty, is the certificate of the run's authority, PEM: the proxy
 	// answers as some hosts itself, to set a credential the enclosure never holds, and
 	// what runs inside must trust it for those. An adapter shows the enclosure one
@@ -201,6 +238,34 @@ type Launch struct {
 	// Transcript is the session's transcript directory, which the enclosure binds
 	// writable; the zero value binds none.
 	Transcript Transcript
+	// Runtime is the folder a runtime was installed in, which the enclosure binds
+	// read-only; the zero value binds none.
+	Runtime RuntimeFolder
+}
+
+// RuntimeFolder is a folder of this machine that holds a runtime's installed program.
+// An enclosure binds it read-only at /qory/runtime/<Name> for [Docker], and Command
+// names the program at that path. The session checks that no mount is, contains or
+// lies inside it, and that no walled run can write it.
+type RuntimeFolder struct {
+	// Path is the folder on this machine, absolute and clean; empty binds none.
+	Path string
+	// Name is the runtime's name, such as claude: a lowercase letter, then up to 63
+	// lowercase letters, digits or -.
+	Name string
+}
+
+// AgentAddresser is an enclosure that reports where the agent's container of the
+// session that runs is on the enclosure's network, and whose relay writes the peer line
+// for a launch with [Launch.ProxyPeer]. A run with a route to its caller needs such an
+// enclosure behind a wall: the route serves a request only from one of these addresses
+// and with the session's proxy password, so another container of the enclosure, the
+// setup container among them, never reaches it.
+type AgentAddresser interface {
+	// AgentAddrs returns the addresses of the agent's container on the enclosure's
+	// network, as the relay sees a connection from it: an IPv4 address unmapped. It
+	// returns an error when that container does not run, or has no such address.
+	AgentAddrs(ctx context.Context) ([]netip.Addr, error)
 }
 
 // Transcript is a directory of this machine that the session makes for one session,

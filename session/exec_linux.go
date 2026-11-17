@@ -2,6 +2,7 @@ package session
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"runtime"
@@ -11,6 +12,20 @@ import (
 
 	"golang.org/x/sys/unix"
 )
+
+// runtimeMounts checks /qory and /qory/runtime by [checkRuntimeLinks], then the
+// process's mounts by [checkRuntimeMounts] for program, the path of the program Exec
+// starts; a table that cannot be read is an error too.
+func runtimeMounts(program string) error {
+	if err := checkRuntimeLinks("/"); err != nil {
+		return err
+	}
+	b, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return fmt.Errorf("mount /proc in the enclosure: the check of the mounts over the runtime's installed folder cannot read /proc/self/mountinfo: %w", err)
+	}
+	return checkRuntimeMounts(string(b), program)
+}
 
 // closeInherited closes every file descriptor above 2 of the process, apart from the
 // Go runtime's poller, an eventpoll and an eventfd, which reach no file: closing one
@@ -76,10 +91,14 @@ func ignore(sigs []os.Signal) {
 	signal.Ignore(sigs...)
 }
 
+// prctl is [unix.Prctl], or a test's stand-in.
+var prctl = unix.Prctl
+
 // undumpable makes the process not dumpable, so a process of the agent's user cannot
-// read its /proc files, trace it or take its descriptors.
-func undumpable() {
-	unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0)
+// read its /proc files, trace it or take its descriptors, and returns the error of
+// prctl when it cannot.
+func undumpable() error {
+	return prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0)
 }
 
 // exited waits until the process pid has exited, leaves it to be reaped, and reports

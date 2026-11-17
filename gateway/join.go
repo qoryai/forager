@@ -249,6 +249,7 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 		lr.keys.SetActive(model)
 	}
 	digest := lr.reloadDigest
+	reporter := lr.reporter
 	lr.mu.Unlock()
 	if conflict != nil {
 		refuseOpen(w, conflict)
@@ -266,6 +267,9 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 	}
 	// A new join starts with no stop: the proxy sets the active key again.
 	lr.keys.Resume()
+	if reporter != nil {
+		reporter.opened(j.session)
+	}
 	lr.joinAnswer(s, w, r, digest, j.session, model)
 }
 

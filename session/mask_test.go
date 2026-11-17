@@ -161,7 +161,7 @@ func TestAMaskValueIsMaskedInEveryLine(t *testing.T) {
 	}
 	sp.HarnessHome, sp.HarnessHidden = home, true
 	sp.Forwarder = nil
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", maskScript}
+	sp.Command, sp.Args = installedShell, []string{"-c", maskScript}
 	sp.Env = append(sp.Env, "V="+maskValue, "A="+maskValue[:12], "B="+maskValue[12:], "J="+maskForms[1], "S="+maskForms[2], "P="+maskForms[3])
 	ctx := context.Background()
 	r, err := session.Open(ctx, opened(sp))
@@ -470,7 +470,7 @@ func TestSessionStartedIsMasked(t *testing.T) {
 	sp.Masker = maskerOf(t, maskValue, token)
 	sp.Wall, sp.Image, sp.Mounts = &openWall{}, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
 	sp.Forwarder = nil
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", "true", maskValue}
+	sp.Command, sp.Args = installedShell, []string{"-c", "true", maskValue}
 	sp.SetupRunner = setupRunner
 	sp.SessionSpec.Setup = []session.SetupCommand{{Name: "install " + maskValue, Args: []string{"/bin/sh", "-c", "echo set up"}}}
 	sp.Harness = []session.HarnessSource{{Source: "https://git.example/example-org/harness?token=" + token, Commit: strings.Repeat("a1", 20)}}
@@ -542,7 +542,7 @@ func TestTheCopiesOfTheOutputAreMasked(t *testing.T) {
 		sp.Masker = maskerOf(t, maskValue)
 		sp.Interactive = interactive
 		sp.Forwarder = nil
-		sp.Command, sp.Args = "/bin/sh", []string{"-c", maskScript + `printf 'last %s' "$V"`}
+		sp.Command, sp.Args = installedShell, []string{"-c", maskScript + `printf 'last %s' "$V"`}
 		sp.Env = append(sp.Env, "V="+maskValue, "A="+maskValue[:12], "B="+maskValue[12:], "J="+maskForms[1], "S="+maskForms[2], "P="+maskForms[3])
 		var stdout, stderr bytes.Buffer
 		sp.Stdout, sp.Stderr = &stdout, &stderr
@@ -607,6 +607,9 @@ func TestTheErrorsOfOpenAndJoinAreMasked(t *testing.T) {
 	}
 	sp.RunID = ""
 	sp.Forwarder = nil
+	// A program that is not there fails to start only once the join passed its checks:
+	// with no runtime, no installed folder is checked first.
+	sp.Runtime, sp.RuntimeInstall = nil, nil
 	sp.Command, sp.Args = "/nonexistent/"+token, nil
 	_, err = run(context.Background(), sp)
 	if err == nil || !errors.Is(err, session.ErrNotStarted) {
@@ -722,7 +725,7 @@ func TestTheErrorsOfSetupFetchImageAndStepsAreMasked(t *testing.T) {
 		}
 		defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
 		_, err = r.StartStep("fetch "+token+" "+ghp, "fetch github.com/example-org/app")
-		check(t, "StartStep", err, `start a host step of kind fetch, compose, build, push, machine or copy, not "fetch *** ***": Join writes the join, image and wall steps`)
+		check(t, "StartStep", err, "Start a host step of kind fetch, compose, build, push, machine or copy.\nThe kind \"fetch *** ***\" is not one of them: Join writes the join, image, wall, setup and after steps.")
 		step, err := r.StartStep(event.StepFetch, "fetch github.com/example-org/app")
 		if err != nil {
 			t.Fatal(err)

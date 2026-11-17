@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -48,24 +47,10 @@ func isTranscript(path, runs string) bool {
 // transcript_unavailable. A run that ended at the gateway is 410. On the local link a
 // run id of no run here is 400 invalid_request; on the one address the run id is the
 // run key's, any other 400 run_key_invalid, and a run the gateway does not hold is
-// reopened, or answered a 503 or a 410 ([Gateway.heldRun]).
+// reopened, or gets a 503 or a 410 ([Gateway.linkRunOf]).
 func (g *Gateway) transcript(s *side, w http.ResponseWriter, r *http.Request, runID string) {
-	var lr *linkRun
-	if s.remote {
-		if p, _ := runKeyOf(r.Context()); runID != p.key.RunID {
-			ref := runKeyInvalid()
-			refuse(w, ref.Status, ref.Code, nil, ref.From, ref.Error())
-			return
-		}
-		if lr = g.heldRun(w, r, runID); lr == nil {
-			return
-		}
-	} else if lr = g.localRun(runID); lr == nil {
-		invalid(w)
-		return
-	}
-	if end, ended := lr.gone(); ended {
-		gone(w, end)
+	lr := g.linkRunOf(s, w, r, runID)
+	if lr == nil {
 		return
 	}
 	lr.touch()
@@ -75,10 +60,8 @@ func (g *Gateway) transcript(s *side, w http.ResponseWriter, r *http.Request, ru
 		return
 	}
 	conf, _ := g.config()
-	ctx, cancel := context.WithTimeout(lr.ctx, transcriptTime)
+	ctx, cancel := lr.callContext(r, transcriptTime)
 	defer cancel()
-	stop := context.AfterFunc(r.Context(), cancel)
-	defer stop()
 	f, err := g.client.ResumeTranscript(ctx, conf.Run.URL, runID)
 	switch {
 	case errors.Is(err, server.ErrTranscriptNotFound):

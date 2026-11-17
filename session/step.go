@@ -14,8 +14,9 @@ import (
 // Step is one step of the run: one named unit of host work, such as a fetch, a compose,
 // a push or the start of the machine, with a start, an end, an outcome and its lines.
 // [Run.StartStep] starts a step of the caller's host work; [Run.FetchImage] writes the
-// image step of an image by reference; [Run.Join] writes the join, image and wall steps
-// of a session. The steps of a run are numbered from 1 in the order they start.
+// image step of an image by reference; [Run.Join] writes the join, image, wall, setup
+// and after steps of a session. The steps of a run are numbered from 1 in the order
+// they start.
 type Step struct {
 	r      *Run
 	n      int
@@ -57,7 +58,7 @@ type Step struct {
 func (r *Run) StartStep(kind, name string) (_ *Step, err error) {
 	defer func() { err = maskError(r.masker, err) }()
 	if kind != event.StepFetch && kind != event.StepCompose && kind != event.StepBuild && kind != event.StepPush && kind != event.StepMachine && kind != event.StepCopy {
-		return nil, fmt.Errorf("start a host step of kind fetch, compose, build, push, machine or copy, not %s: Join writes the join, image and wall steps", accesskey.ShownValue(kind, true))
+		return nil, fmt.Errorf("Start a host step of kind fetch, compose, build, push, machine or copy.\nThe kind %s is not one of them: Join writes the join, image, wall, setup and after steps.", accesskey.ShownValue(kind, true))
 	}
 	if name == "" {
 		return nil, fmt.Errorf("give the step a name, such as %q: a step's name is never empty", "fetch github.com/example-org/app")
@@ -148,7 +149,10 @@ func (r *Run) startStep(kind, name string) *Step {
 
 // end writes the step's dev.qory.run.step_exited, once. A host step that ends is no
 // longer the run's open one.
-func (s *Step) end(state string, exitCode int) {
+func (s *Step) end(state string, exitCode int) { s.endWith(state, exitCode, "") }
+
+// endWith is end with reason, the step_exited's reason, left out when empty.
+func (s *Step) endWith(state string, exitCode int, reason string) {
 	if s.exited {
 		return
 	}
@@ -156,7 +160,11 @@ func (s *Step) end(state string, exitCode int) {
 	if s.r.hostStep == s {
 		s.r.hostStep = nil
 	}
-	s.r.post(event.StepExited, map[string]any{"step": s.n, "state": state, "exit_code": exitCode, "duration_ms": time.Since(s.start).Milliseconds()})
+	exited := map[string]any{"step": s.n, "state": state, "exit_code": exitCode, "duration_ms": time.Since(s.start).Milliseconds()}
+	if reason != "" {
+		exited["reason"] = reason
+	}
+	s.r.post(event.StepExited, exited)
 }
 
 // stepName is name as a step's dev.qory.run.step_started has it: the run's masker replaces

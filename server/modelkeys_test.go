@@ -45,6 +45,14 @@ func TestPostModelKeys(t *testing.T) {
 	if len(keys) == 0 || keys[0].Credential == "" || keys[0].ObservedAt == "" {
 		t.Errorf("the answer's keys %+v", keys)
 	}
+	// A report made while session 2 is open has its number; one made with none open has
+	// no session member.
+	inSession := rep
+	inSession.Session = 2
+	if _, err := c.PostModelKeys(ctx, a.runURL(), gatewayRunID, inSession); err != nil || !strings.HasPrefix(string(a.body), `{"version":1,"run_id":"`+gatewayRunID+`","time":"2026-11-10T12:00:05Z","session":2,"keys":[{`) {
+		t.Errorf("a report of session 2 sent %s, %v", a.body, err)
+	}
+	validDocument(t, "model-keys-report.schema.json", a.body)
 	// The keys out of use after a 401 go in unauthorized, at most 6.
 	out := server.ModelKeysReport{Time: "2026-11-10T12:00:05Z", Unauthorized: []server.UnauthorizedKey{{Credential: "subscription", At: "2026-11-10T12:00:04Z"}}}
 	if _, err := c.PostModelKeys(ctx, a.runURL(), gatewayRunID, out); err != nil {
@@ -83,10 +91,10 @@ func TestPostModelKeys(t *testing.T) {
 	if _, err := c.PostModelKeys(ctx, a.runURL(), gatewayRunID, rep); !errors.As(err, new(*server.DocumentError)) {
 		t.Errorf("an answer with no version: %v; want a DocumentError", err)
 	}
-	// 66 entries of the longest names and every member fit the 32 KiB, and the schema
-	// takes them.
+	// 66 entries of the longest names and every member, a session among them, fit the
+	// 32 KiB, and the schema takes them.
 	a.answer = func(*http.Request, []byte) (int, http.Header, string) { return 200, nil, string(answer) }
-	full := server.ModelKeysReport{Time: "2026-11-10T12:00:05Z"}
+	full := server.ModelKeysReport{Time: "2026-11-10T12:00:05Z", Session: 999999}
 	for range 66 {
 		full.Keys = append(full.Keys, server.ModelKeyState{Credential: strings.Repeat("k", 64), Window: "seven_day_sonnet", Status: "rejected",
 			ResetsAt: "2026-11-10T14:00:00Z", Utilization: &hundred, CooldownUntil: "2026-11-10T14:00:00Z", Source: "pause_for", ObservedAt: "2026-11-10T12:00:04Z"})

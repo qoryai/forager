@@ -156,7 +156,7 @@ func TestEachSessionsResizeHasItsNumber(t *testing.T) {
 	sp.Stdout = &out
 	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
 	record := filepath.Join(sp.RunsDir, sp.RunID, "session.jsonl")
-	sp.Command = "sh"
+	sp.Command = installedShell
 	ctx := context.Background()
 	r, err := session.Open(ctx, opened(sp))
 	if err != nil {

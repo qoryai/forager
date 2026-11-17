@@ -24,7 +24,6 @@ import (
 // Codex's does.
 const homer = `version: 1
 runtime: homer
-runtime_version: "1"
 sources:
   output: {format: jsonl}
 resume:

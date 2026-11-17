@@ -268,6 +268,12 @@ func Decide(cfg Config) (*Run, error) {
 		if err := r.checkHarness(); err != nil {
 			return nil, err
 		}
+		if err := r.checkPush(); err != nil {
+			return nil, err
+		}
+		if err := r.checkPushHosts(fetched); err != nil {
+			return nil, err
+		}
 		if err := r.checkKeyGroup(r.clock().Now()); err != nil {
 			return nil, err
 		}
@@ -1139,6 +1145,9 @@ func (r *Run) Commit(d *Decision) {
 // credential that claims one of their hosts, and refuses a placeholder the run passes
 // a value for: at the start and at every reload alike.
 func (r *Run) hold(ctx context.Context, pol *policy.Loaded) (*credential.Held, error) {
+	if err := r.checkPushHosts(pol); err != nil {
+		return nil, err
+	}
 	held, err := credential.ResolveWith(ctx, r.defs, pol.Policy.Credentials, r.storedUses(), r.storedModel, pol.Policy.Egress.Mode, pol.Policy.Egress.Listed(), r.cfg.Report)
 	if err != nil {
 		return nil, err
@@ -1252,8 +1261,8 @@ func claimedBy(held *credential.Held) func(string) string {
 
 // storedUses are the run configuration's work credentials the run started with, as the
 // credential package holds them, each set where the start's answer says ([Run.open]).
-// The harness credentials are left out: the run's proxy never sets them
-// ([Run.StackUses]).
+// The harness and push credentials are left out: the run's proxy never sets them
+// ([Run.StackUses], [Run.PushUses]).
 // Each one's Value copies the value under r.mu, as [Run.clearValues] clears it and a
 // renewal replaces it, so a request that is still being served when the run ends copies
 // the value whole or gets none, and never reads bytes while they are overwritten. A
@@ -1261,7 +1270,7 @@ func claimedBy(held *credential.Held) func(string) string {
 func (r *Run) storedUses() []credential.Stored {
 	var out []credential.Stored
 	for _, c := range r.stored {
-		if c.Harness() {
+		if !c.Work() {
 			continue
 		}
 		name := c.Name
@@ -1321,7 +1330,7 @@ func ProxyUses(held *credential.Held) []proxy.Credential {
 	}
 	uses := make([]proxy.Credential, 0, len(held.Uses))
 	for _, u := range held.Uses {
-		c := proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths}
+		c := proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths, PushRef: u.PushRef}
 		switch {
 		case slices.Contains(held.Group, u.Name):
 			c.Placeholder = link.KeyPlaceholder(held.Start)

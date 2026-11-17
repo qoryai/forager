@@ -77,7 +77,7 @@ func relaySend(t *testing.T, f *forwarder, what string) string {
 		return ""
 	}
 	defer c.Close()
-	go io.WriteString(c, link.RelayLine(checkHop)+what)
+	go io.WriteString(c, link.RelayLine(checkHop)+peerLineOf(f)+what)
 	c.SetReadDeadline(time.Now().Add(5 * time.Second))
 	b, _ := io.ReadAll(c)
 	return string(b)

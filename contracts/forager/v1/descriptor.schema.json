@@ -8,7 +8,6 @@
   "required": [
     "version",
     "runtime",
-    "runtime_version",
     "sources",
     "rules"
   ],
@@ -28,18 +27,13 @@
       "minLength": 1,
       "maxLength": 128
     },
-    "runtime_version": {
-      "description": "The version of the runtime the descriptor expects, the one qory image check compares with an image's program. Reported in dev.qory.session.started; Forager never checks the installed version.",
-      "type": "string",
-      "minLength": 1
-    },
     "sources": {
       "description": "How the session attaches. The terminal bytes are always captured and need no source: there is nothing in them to match.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "output": {
-          "description": "Structured output on the runtime's standard output, when the session runs on pipes.",
+          "description": "Structured output on the runtime's standard output, when the session runs on pipes. Output records come from the runtime's standard output only: the local socket refuses a record of the output source.",
           "type": "object",
           "additionalProperties": false,
           "required": [
@@ -136,7 +130,7 @@
               "title": {"description": "What the secret is, for a person choosing one.", "type": "string", "minLength": 1, "maxLength": 128},
               "name": {"description": "The variable the runtime reads the secret from.", "$ref": "#/$defs/key_variable"},
               "hosts": {"description": "The hosts the value is set on: exact DNS names, no wildcard, no IP literal.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/exact_host"}},
-              "paths": {"description": "The paths of those hosts the value is set on, in the policy's path grammar. Absent means every path.", "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^/[^*?#\\s]*\\*?$"}},
+              "paths": {"description": "The paths of those hosts the value is set on, in the policy's path grammar, {} segments included. Absent means every path.", "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^/(?:\\{\\}|[^*?#\\s{}/]*)(?:/(?:\\{\\}|[^*?#\\s{}/]*))*\\*?$"}},
               "auth": {
                 "description": "How the value is set on a request, a scheme from the closed set, without account_header and account_claim, which only an API credential of a run configuration has. A variable that is also a key's in model.keys has the same auth there.",
                 "$ref": "auth.schema.json",
@@ -292,6 +286,10 @@
       "uniqueItems": true,
       "items": {"$ref": "#/$defs/exact_host"}
     },
+    "install_required": {
+      "description": "True when the session starts the runtime only from a folder the caller installed it in, SessionSpec.RuntimeInstall: Join returns an error for a session of the runtime without one. Absent or false, a session may also start the runtime as the caller names it, such as from the run's image, with no installed folder. runtimes.json lists it for every descriptor the contract ships.",
+      "type": "boolean"
+    },
     "resume": {
       "description": "Where the runtime writes the transcript of its session, and how the session starts the runtime again from it. The session reads the transcript as the runtime appends to it and writes it as dev.qory.session.transcript. In a run with resume in its run configuration, it writes the paused run's transcript at the run configuration's resume.path before the runtime starts, and adds args after the argument after, or before the last argument with place, or at the end. Absent, the runtime has no resume: the session writes no dev.qory.session.transcript, and a continuation starts the runtime without a resume.",
       "type": "object",
@@ -382,16 +380,25 @@
             ]
           },
           "data": {
-            "description": "The event's data: each key is a field of the type's data, each value a dotted path into the record whose value is copied there unchanged. A path that does not exist leaves the field out. In a rule with each, a path that starts with each. reads the element. session, line, truncated and summary are the session's to set, and no rule sets them.",
+            "description": "The event's data: each key is a field of the type's data, each value a dotted path into the record whose value is copied there unchanged. A key with dots, such as usage.input, is a member of a nested object of the data, made when a value goes in it. A path that does not exist leaves the field out. In a rule with each, a path that starts with each. reads the element. session, line, truncated and summary are the session's to set, and no rule sets them or a member of them. A rule sets each field once, in data or sum, and sets no member of a field it sets, as usage and usage.input; the session's reader checks this.",
             "type": "object",
             "minProperties": 1,
-            "propertyNames": {
-              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
-              "not": {"enum": ["session", "line", "truncated", "summary"]}
-            },
-            "additionalProperties": {
-              "type": "string",
-              "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+            "propertyNames": {"$ref": "#/$defs/field"},
+            "additionalProperties": {"$ref": "#/$defs/path"}
+          },
+          "sum": {
+            "description": "More fields of the event's data, each the sum of a number over the members of one object of the record, such as the tokens per model of a result line. over is a dotted path to the object; in a rule with each, a path that starts with each. reads the element. Each key of fields is a field of the data, as in data, and each value a dotted path into each member: the field is the sum of the numbers at that path in the members that are objects and have a whole number of at least 0 there, in the order of the members' names, leaving out a member that would take the total past 2^53. A field is left out when no member adds to it: when no member has such a number, or when every member that has one is left out, as 1e308 alone is. Every field is left out when over is no object or does not exist.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["over", "fields"],
+            "properties": {
+              "over": {"$ref": "#/$defs/path"},
+              "fields": {
+                "type": "object",
+                "minProperties": 1,
+                "propertyNames": {"$ref": "#/$defs/field"},
+                "additionalProperties": {"$ref": "#/$defs/path"}
+              }
             }
           },
           "set": {
@@ -454,6 +461,12 @@
       }
     },
     "path": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"},
+    "field": {
+      "description": "A field of an event's data that a rule sets, dotted for a member of a nested object; never session, line, truncated or summary, or a member of one, which the session sets.",
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$",
+      "not": {"pattern": "^(session|line|truncated|summary)(\\.|$)"}
+    },
     "place": {
       "description": "Where a value goes, exactly one of: flag, an argument the runtime is started with, which takes the value; setting, a dotted key in the JSON settings file the launch passes, or with config, a key=value pair of config.flag; variable, an environment variable.",
       "type": "object",

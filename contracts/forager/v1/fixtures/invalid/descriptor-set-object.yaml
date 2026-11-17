@@ -1,7 +1,6 @@
 # A value of set is a string, a number or a boolean.
 version: 1
 runtime: example
-runtime_version: "1.0.0"
 sources:
   output: {format: jsonl}
 rules:

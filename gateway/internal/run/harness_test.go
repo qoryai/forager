@@ -160,6 +160,8 @@ func TestAHarnessCredentialTheStackProxyCannotSetIsRefused(t *testing.T) {
 			`Claim git.example in only one harness credential, "harness-1" or "harness-2": one has no paths`, []string{"harness-1", "harness-2"}},
 		{"two on one host whose paths overlap", doc(`"git.example"`, entry("harness-1", "git.example", `"/example-org/*"`, ""), entry("harness-2", "git.example", `"/example-org/a.git/*"`, "")), nil, nil,
 			`Give the harness credentials "harness-1" and "harness-2" paths that do not overlap on git.example`, []string{"harness-1", "harness-2"}},
+		{"two on one host whose paths overlap on a {} segment", doc(`"git.example"`, entry("harness-1", "git.example", `"/example-org/{}/info"`, ""), entry("harness-2", "git.example", `"/example-org/a.git/*"`, "")), nil, nil,
+			`Give the harness credentials "harness-1" and "harness-2" paths that do not overlap on git.example`, []string{"harness-1", "harness-2"}},
 		{"a host of gateway.stack_hosts alone", doc("", entry("harness-1", "git.example", "", "")), allow("api.example"), []string{"*.example"}, "", nil},
 		{"two on one host with paths apart", doc(`"git.example"`, entry("harness-1", "git.example", `"/example-org/a.git/*"`, ""), entry("harness-2", "git.example", `"/example-org/b.git/*"`, "")), nil, nil, "", nil},
 	} {

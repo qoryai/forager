@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path"
 	"slices"
 	"strings"
 	"testing"
@@ -92,18 +93,21 @@ func TestALaunchWithNoTranscriptDirectoryBindsNone(t *testing.T) {
 }
 
 // TestATranscriptDirectoryThatOverlapsAMountIsRefused pins the refusals: a directory
-// that lies inside a mount, contains one or is not clean, a place below the home with a ..
-// name, an absolute place that is /, is not clean or overlaps a mount's place inside,
-// and a home where the place inside overlaps a mount's place inside. A place at or
-// inside /qory is unbound ([TestATranscriptPlaceInQoryIsUnbound]).
+// that lies inside a mount, the socket's directory or the installed runtime's folder,
+// contains one or is not clean, a place below the home with a .. name, an absolute
+// place that is /, is not clean or overlaps a mount's place inside, and a home where the
+// place inside overlaps a mount's place inside. A place at or inside /qory is unbound
+// ([TestATranscriptPlaceInQoryIsUnbound]).
 func TestATranscriptDirectoryThatOverlapsAMountIsRefused(t *testing.T) {
 	for name, c := range map[string]struct {
 		change func(*Launch)
 		want   string
 	}{
-		"inside the workspace":     {func(l *Launch) { l.Transcript.Path = "/work/.claude" }, `wall docker: the transcript directory "/work/.claude" overlaps the mount "/work"; the session makes it outside every mount`},
-		"contains a mount":         {func(l *Launch) { l.Transcript.Path = "/home/dev" }, `wall docker: the transcript directory "/home/dev" overlaps the mount "/home/dev/.qory/homes/work"; the session makes it outside every mount`},
-		"the socket's directory":   {func(l *Launch) { l.Transcript.Path = "/tmp/qory-run-1" }, `wall docker: the transcript directory "/tmp/qory-run-1" overlaps the mount "/tmp/qory-run-1"; the session makes it outside every mount`},
+		"inside the workspace":   {func(l *Launch) { l.Transcript.Path = "/work/.claude" }, `wall docker: the transcript directory "/work/.claude" overlaps the mount "/work"; the session makes it outside every mount`},
+		"contains a mount":       {func(l *Launch) { l.Transcript.Path = "/home/dev" }, `wall docker: the transcript directory "/home/dev" overlaps the mount "/home/dev/.qory/homes/work"; the session makes it outside every mount`},
+		"the socket's directory": {func(l *Launch) { l.Transcript.Path = "/tmp/qory-run-1" }, `wall docker: the transcript directory "/tmp/qory-run-1" overlaps the mount "/tmp/qory-run-1"; the session makes it outside every mount`},
+		"the runtime's folder": {func(l *Launch) { l.Runtime = RuntimeFolder{Path: path.Dir(l.Transcript.Path), Name: "claude"} },
+			`wall docker: the transcript directory "/home/dev/.qory/runs/` + runID + `/transcripts/1" overlaps the mount "/home/dev/.qory/runs/` + runID + `/transcripts"; the session makes it outside every mount`},
 		"not clean":                {func(l *Launch) { l.Transcript.Path = "/runs/x/../work" }, `wall docker: the transcript directory "/runs/x/../work" is not an absolute, clean path`},
 		"relative":                 {func(l *Launch) { l.Transcript.Path = "runs/x" }, `wall docker: the transcript directory "runs/x" is not an absolute, clean path`},
 		"a .. name below home":     {func(l *Launch) { l.Transcript.Under = "../.ssh" }, `wall docker: set the transcript's place to a clean path below the home or below /: "../.ssh" is not one`},

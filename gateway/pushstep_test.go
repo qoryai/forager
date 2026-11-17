@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -20,10 +21,12 @@ import (
 )
 
 // pushValue is the fake value of the forge credential of the push step's run, which the
-// gateway reads from pushSource.
+// gateway reads from pushSource, or the push credential's adapter answers.
 const (
 	pushValue  = "fake-forge-token-of-the-push-step-test"
 	pushSource = "GATEWAY_TEST_PUSH_VALUE"
+	// pushRef is the branch the push credential allows a push to change.
+	pushRef = "refs/heads/qory/wi_01"
 )
 
 // pushStep is the batch of a push step, numbered step, that succeeded.
@@ -145,7 +148,7 @@ func TestTheProxySetsACredentialAfterTheSessionExited(t *testing.T) {
 	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
 
 	cfg := gateway.Config{
-		Credentials: []gateway.Credential{{Name: "forge", Env: pushSource, Hosts: []string{"localhost"}, Scheme: "basic", Username: "x-access-token"}},
+		Credentials: []gateway.Credential{pushCredential(t)},
 		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost"}},
 			Credentials: []gateway.PolicyCredential{{Name: "forge"}}}}
 	gateway.SetUpstreamRoots(&cfg, roots)
@@ -169,7 +172,8 @@ func TestTheProxySetsACredentialAfterTheSessionExited(t *testing.T) {
 	}
 	client := relay(h.g.Addr(), a.ProxySecret)
 	client.Transport.(*http.Transport).TLSClientConfig = &tls.Config{RootCAs: trusted}
-	resp, err := client.Post("https://localhost:"+port+"/example-org/app.git/git-receive-pack", "application/x-git-receive-pack-request", nil)
+	// A flush alone, git's probe, names no ref: the branch guard passes it.
+	resp, err := client.Post("https://localhost:"+port+"/example-org/app.git/git-receive-pack", "application/x-git-receive-pack-request", strings.NewReader("0000"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,4 +206,13 @@ func TestTheProxySetsACredentialAfterTheSessionExited(t *testing.T) {
 	if !slices.Equal(order, want) {
 		t.Errorf("the record's order %q; want %q", order, want)
 	}
+}
+
+// pushCredential is the forge credential of the push tests: an adapter that answers
+// pushValue as a basic token on localhost with pushRef, so the branch guard lets a push
+// of that branch through.
+func pushCredential(t *testing.T) gateway.Credential {
+	t.Helper()
+	answer := `echo '{"version":1,"token":"` + pushValue + `","apply":[{"hosts":["localhost"],"scheme":"basic","username":"x-access-token","push_ref":"` + pushRef + `"}]}'` + "\n"
+	return gateway.Credential{Name: "forge", Adapter: []string{shell(t, t.TempDir(), "forge-adapter", answer)}, Hosts: []string{"localhost"}}
 }

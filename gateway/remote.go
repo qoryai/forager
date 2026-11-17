@@ -197,17 +197,28 @@ func (g *Gateway) heldRun(w http.ResponseWriter, r *http.Request, runID string) 
 	return nil
 }
 
+// relayTo is the proxy of a run a bound connection's first line opens ([relayWords]).
+type relayTo int
+
+const (
+	toRunProxy relayTo = iota
+	toStackProxy
+	toPushProxy
+)
+
 // relayRun hands a bound connection that opened with the relay's preamble and a run
 // key to the proxy of that run, live at the gateway, as the shared proxy does a local
 // connection with a run's proxy secret, admit called once the run key verifies; with
-// stack, one that opened with [link.StackPreamble] to that run's stack proxy, until the
-// run's first join request. The run a gateway with Listen suspended at its stop is
+// toStackProxy, one that opened with [link.StackPreamble] to that run's stack proxy,
+// until the run's first join request; with toPushProxy, one that opened with
+// [link.PushPreamble] to that run's push proxy. The run a gateway with Listen suspended at its stop is
 // reopened first ([Gateway.reopenRun]), with c's deadline cleared, until the reopen
 // ends or the gateway closes; meanwhile release keeps c counted in all alone, and
 // admit is called once the run is live. A run key [Gateway.admitRunKey] refuses, one
-// of no live run here, or, with stack, one of a run whose stack proxy is closed,
-// closes the connection unanswered. It reports whether c was handed on.
-func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit, release func(), stack bool) bool {
+// of no live run here, with toStackProxy one of a run whose stack proxy is closed, or
+// with toPushProxy one of a run with no push proxy, closes the connection unanswered.
+// It reports whether c was handed on.
+func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit, release func(), to relayTo) bool {
 	k, ref := g.admitRunKey(value, b64token.MatchString(value))
 	if ref != nil {
 		return false
@@ -240,10 +251,14 @@ func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit, rel
 		return false
 	}
 	px := lr.px
-	if stack {
-		if px = lr.stackProxy(); px == nil {
-			return false
-		}
+	switch to {
+	case toStackProxy:
+		px = lr.stackProxy()
+	case toPushProxy:
+		px = lr.pushProxy()
+	}
+	if px == nil {
+		return false
 	}
 	c.SetDeadline(time.Time{})
 	px.ServeConn(&linkConn{Conn: c, r: r})

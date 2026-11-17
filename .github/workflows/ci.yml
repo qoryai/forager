@@ -16,14 +16,10 @@ jobs:
       matrix:
         part: [core, gateway, wall, session, e2e]
     runs-on: ubuntu-latest
-    env:
-      # The image's Go is older than go.mod's 1.27.3 and sets GOTOOLCHAIN=local; remove
-      # this line once the digest below is of a go1.27.3 image.
-      GOTOOLCHAIN: go1.27.3
     container:
-      # Docker Hub's official golang:1.27, copied by digest to qoryai's public package,
-      # and pulled with the job's token.
-      image: ghcr.io/qoryai/ci-images:golang-1.27@sha256:e432b43af23a9328d56a7c499be0476810aa344acbcf65fc7c455d4ff5a40602
+      # Docker Hub's official golang:1.27.4, the Go of go.mod, copied by digest to qoryai's
+      # public package, and pulled with the job's token.
+      image: ghcr.io/qoryai/ci-images:golang-1.27.4@sha256:fe517acaa580cc7915457080f850c37e618b3c1e750f98b58fc6429b605147a1
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -83,7 +79,7 @@ jobs:
         # schema, and the import rules between the parts are checked.
         env:
           DIRS: ${{ steps.part.outputs.dirs }}
-        run: go test $DIRS
+        run: go test -timeout 20m $DIRS
 
       - name: Build
         env:
@@ -152,11 +148,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
-      - name: Fetch Claude Code and build an image with it
-        # The tests of several model keys run Claude Code 2.1.316, the version the
-        # descriptor pins: behind the wall in this image, and without a wall from PATH.
-        # The binary is npm's linux-x64 package, checked against the SHA-512 that qory's
-        # agent image pins for it.
+      - name: Fetch Claude Code and build an image for it
+        # The tests of several model keys run Claude Code 2.1.316 from the folder it is
+        # installed in, QORY_WALL_CLAUDE_INSTALL: behind the wall the session binds the
+        # folder read-only into this image, which has no Claude Code, and without a wall
+        # the session starts it from there. The binary is npm's linux-x64 package,
+        # checked against the SHA-512 that qory's agent image pins for it.
         env:
           CLAUDE_CODE_VERSION: 2.1.316
           CLAUDE_CODE_SHA512_AMD64: 4500cce8ddbce488cd29c9a53d1ae26b2373a5390426b780c39fef054f95d11dea963910e73ebfa526f37155005ef6aca0e96fb9bd112266b7356bd2b9903c0a
@@ -166,17 +163,21 @@ jobs:
           mkdir -p "$dir"
           curl -fsSLo "$RUNNER_TEMP/claude-code.tgz" "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-${CLAUDE_CODE_VERSION}.tgz"
           echo "${CLAUDE_CODE_SHA512_AMD64}  $RUNNER_TEMP/claude-code.tgz" | sha512sum -c -
-          tar -xzf "$RUNNER_TEMP/claude-code.tgz" -C "$dir" --strip-components=1 package/claude
-          printf '%s\n' "FROM $BASE_IMAGE" 'COPY claude /usr/local/bin/claude' \
-            'RUN claude --version && mkdir -p /home/agent && chmod 1777 /home/agent' \
-            'ENV HOME=/home/agent DISABLE_AUTOUPDATER=1' \
-            | docker build --tag "qory-walltest-claude:$CLAUDE_CODE_VERSION" --file - "$dir"
-          echo "$dir" >> "$GITHUB_PATH"
-          echo "QORY_WALL_CLAUDE_IMAGE=qory-walltest-claude:$CLAUDE_CODE_VERSION" >> "$GITHUB_ENV"
+          mkdir -p "$dir/bin"
+          tar -xzf "$RUNNER_TEMP/claude-code.tgz" -C "$dir/bin" --strip-components=1 package/claude
+          chmod 755 "$dir" "$dir/bin" "$dir/bin/claude"
+          "$dir/bin/claude" --version
+          printf '%s\n' "FROM $BASE_IMAGE" \
+            'RUN mkdir -p /home/agent && chmod 1777 /home/agent' \
+            'ENV HOME=/home/agent' \
+            | docker build --tag qory-walltest-claude -
+          echo "QORY_WALL_CLAUDE_IMAGE=qory-walltest-claude" >> "$GITHUB_ENV"
+          echo "QORY_WALL_CLAUDE_INSTALL=$dir" >> "$GITHUB_ENV"
+          echo "QORY_WALL_CLAUDE_VERSION=$CLAUDE_CODE_VERSION" >> "$GITHUB_ENV"
 
       - name: Fetch Codex and build an image with it
-        # The tests of Codex run Codex 0.167.2, the version the descriptor pins, behind
-        # the wall in this image. The binary is npm's linux-x64 package of
+        # The tests of Codex run Codex 0.167.2, the version the descriptor was checked
+        # on, behind the wall in this image. The binary is npm's linux-x64 package of
         # @openai/codex, checked against its SHA-512, npm's dist.integrity. The image
         # makes /var/lib/qory-codex-home, CODEX_HOME in the wall, writable.
         env:
@@ -210,11 +211,11 @@ jobs:
         # of TestDockerConforms, so their names are in this -run too.
         # The tests of several model keys, the walled resume,
         # TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey, and the hook check,
-        # TestDockerClaudeCodeHooksReachTheSessionBehindTheWall, need Docker and the image
-        # of Claude Code, and the tests of Codex need Docker and the image of Codex; they
-        # are listed for the same reason.
+        # TestDockerClaudeCodeHooksReachTheSessionBehindTheWall, need Docker, the image
+        # for Claude Code and the folder Claude Code is installed in, and the tests of
+        # Codex need Docker and the image of Codex; they are listed for the same reason.
         # TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey needs no Docker, but
-        # Claude Code on PATH, which the part job does not have.
+        # Claude Code's installed folder, which the part job does not have.
         env:
           CGO_ENABLED: "0"
           QORY_WALL_REQUIRE: "1"
@@ -251,9 +252,10 @@ jobs:
           echo "QORY_BIN=$RUNNER_TEMP/qory-linux" >> "$GITHUB_ENV"
 
       - name: Run the tests of qory's transcript link
-        # They take Claude Code 2.1.316 from QORY_WALL_CLAUDE_IMAGE, the image the step
-        # "Fetch Claude Code and build an image with it" builds, the version qory's agent
-        # image has. QORY_WALL_REQUIRE turns a skip into a failure, as in the suite's step.
+        # They take Claude Code 2.1.316 from QORY_WALL_CLAUDE_INSTALL, the folder the
+        # step "Fetch Claude Code and build an image for it" installs it in, the version
+        # qory's agent image has. QORY_WALL_REQUIRE turns a skip into a failure, as in
+        # the suite's step.
         if: steps.qory.outputs.commit != ''
         env:
           CGO_ENABLED: "0"
@@ -305,11 +307,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
-      - name: Fetch Claude Code and build an image with it
-        # The tests of several model keys run Claude Code 2.1.316, the version the
-        # descriptor pins: behind the wall in this image, and without a wall from PATH.
-        # The binary is npm's linux-x64 package, checked against the SHA-512 that qory's
-        # agent image pins for it.
+      - name: Fetch Claude Code and build an image for it
+        # The tests of several model keys run Claude Code 2.1.316 from the folder it is
+        # installed in, QORY_WALL_CLAUDE_INSTALL: behind the wall the session binds the
+        # folder read-only into this image, which has no Claude Code, and without a wall
+        # the session starts it from there. The binary is npm's linux-x64 package,
+        # checked against the SHA-512 that qory's agent image pins for it.
         env:
           CLAUDE_CODE_VERSION: 2.1.316
           CLAUDE_CODE_SHA512_AMD64: 4500cce8ddbce488cd29c9a53d1ae26b2373a5390426b780c39fef054f95d11dea963910e73ebfa526f37155005ef6aca0e96fb9bd112266b7356bd2b9903c0a
@@ -319,17 +322,21 @@ jobs:
           mkdir -p "$dir"
           curl -fsSLo "$RUNNER_TEMP/claude-code.tgz" "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-${CLAUDE_CODE_VERSION}.tgz"
           echo "${CLAUDE_CODE_SHA512_AMD64}  $RUNNER_TEMP/claude-code.tgz" | sha512sum -c -
-          tar -xzf "$RUNNER_TEMP/claude-code.tgz" -C "$dir" --strip-components=1 package/claude
-          printf '%s\n' "FROM $BASE_IMAGE" 'COPY claude /usr/local/bin/claude' \
-            'RUN claude --version && mkdir -p /home/agent && chmod 1777 /home/agent' \
-            'ENV HOME=/home/agent DISABLE_AUTOUPDATER=1' \
-            | docker build --tag "qory-walltest-claude:$CLAUDE_CODE_VERSION" --file - "$dir"
-          echo "$dir" >> "$GITHUB_PATH"
-          echo "QORY_WALL_CLAUDE_IMAGE=qory-walltest-claude:$CLAUDE_CODE_VERSION" >> "$GITHUB_ENV"
+          mkdir -p "$dir/bin"
+          tar -xzf "$RUNNER_TEMP/claude-code.tgz" -C "$dir/bin" --strip-components=1 package/claude
+          chmod 755 "$dir" "$dir/bin" "$dir/bin/claude"
+          "$dir/bin/claude" --version
+          printf '%s\n' "FROM $BASE_IMAGE" \
+            'RUN mkdir -p /home/agent && chmod 1777 /home/agent' \
+            'ENV HOME=/home/agent' \
+            | docker build --tag qory-walltest-claude -
+          echo "QORY_WALL_CLAUDE_IMAGE=qory-walltest-claude" >> "$GITHUB_ENV"
+          echo "QORY_WALL_CLAUDE_INSTALL=$dir" >> "$GITHUB_ENV"
+          echo "QORY_WALL_CLAUDE_VERSION=$CLAUDE_CODE_VERSION" >> "$GITHUB_ENV"
 
       - name: Fetch Codex and build an image with it
-        # The tests of Codex run Codex 0.167.2, the version the descriptor pins, behind
-        # the wall in this image. The binary is npm's linux-x64 package of
+        # The tests of Codex run Codex 0.167.2, the version the descriptor was checked
+        # on, behind the wall in this image. The binary is npm's linux-x64 package of
         # @openai/codex, checked against its SHA-512, npm's dist.integrity. The image
         # makes /var/lib/qory-codex-home, CODEX_HOME in the wall, writable.
         env:
@@ -363,11 +370,11 @@ jobs:
         # of TestDockerConforms, so their names are in this -run too.
         # The tests of several model keys, the walled resume,
         # TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey, and the hook check,
-        # TestDockerClaudeCodeHooksReachTheSessionBehindTheWall, need Docker and the image
-        # of Claude Code, and the tests of Codex need Docker and the image of Codex; they
-        # are listed for the same reason.
+        # TestDockerClaudeCodeHooksReachTheSessionBehindTheWall, need Docker, the image
+        # for Claude Code and the folder Claude Code is installed in, and the tests of
+        # Codex need Docker and the image of Codex; they are listed for the same reason.
         # TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey needs no Docker, but
-        # Claude Code on PATH, which the part job does not have.
+        # Claude Code's installed folder, which the part job does not have.
         env:
           CGO_ENABLED: "0"
           QORY_WALL_REQUIRE: "1"

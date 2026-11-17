@@ -198,7 +198,7 @@ func TestAWalledRunsCheckPrintsAPhraseForASecretInAPath(t *testing.T) {
 				t.Fatal(err)
 			}
 			other := bindSource{Path: c.other, Resolved: dir, Writable: true, at: at(t, dir)}
-			if err := shared(binds[0], otherID, other); err == nil || err.Error() != c.want {
+			if err := shared(binds[0], otherID, other, true); err == nil || err.Error() != c.want {
 				t.Errorf("%v, want %q", err, c.want)
 			}
 		}
@@ -234,7 +234,7 @@ func TestAWalledRunsCheckPrintsAPhraseForASecretInAPath(t *testing.T) {
 			}
 			want := "the run directory " + shown + " (read-only) is the run directory " + shown + still +
 				"a run directory is its session's alone"
-			err = shared(run, otherID, other)
+			err = shared(run, otherID, other, true)
 			var r *Refusal
 			if !errors.As(err, &r) || !slices.Equal(r.Names, names) || r.Detail != want {
 				t.Errorf("%v: names %q, want %q and %q", err, r.Names, names, want)

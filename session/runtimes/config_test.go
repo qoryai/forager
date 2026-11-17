@@ -104,7 +104,7 @@ func TestADescriptorSaysHowItTakesSettingsThroughTheOptionalInterface(t *testing
 // and a runtime without config pass.
 func TestALaunchMayNotSetASettingTheSessionPasses(t *testing.T) {
 	const value = "value-not-shown"
-	doc := "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
+	doc := "version: 1\nruntime: amp\nsources: {output: {format: jsonl}}\n" +
 		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n" +
 		"model:\n  formats: [openai-responses]\n  model: {flag: --model}\n  endpoint: {setting: providers.qory.base_url}\n" +
 		"  keys: [{format: openai-responses, auth: {scheme: bearer}, variable: AMP_KEY}]\n" +

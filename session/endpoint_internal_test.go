@@ -18,7 +18,7 @@ import (
 func TestAnEndpointSettingSetsNoVariable(t *testing.T) {
 	described := func(endpoint string) runtimes.Runtime {
 		t.Helper()
-		d := "version: 1\nruntime: r\nruntime_version: \"1\"\nsources:\n  output: {format: jsonl}\n" +
+		d := "version: 1\nruntime: r\nsources:\n  output: {format: jsonl}\n" +
 			"model:\n  formats: [openai-responses]\n  model: {flag: --model}\n  endpoint: " + endpoint + "\n" +
 			"  keys: [{format: openai-responses, auth: {scheme: bearer}, variable: R_API_KEY}]\n" +
 			"rules:\n  - source: output\n    match: {type: start}\n    type: dev.qory.runtime.started\n    data: {session_id: session_id}\n"

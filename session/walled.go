@@ -74,6 +74,10 @@ type walledEntry struct {
 	// it, for another session to ask once the run's session is gone; nil for a wall
 	// without one.
 	Engine *wall.Engine `json:"engine,omitempty"`
+	// Unwalled is true for the entry of a session without a wall, which lists the
+	// folder its runtime was installed in: no container of it outlives its session,
+	// so once its lock is free the entry is removed.
+	Unwalled bool `json:"unwalled,omitempty"`
 }
 
 // UnmarshalJSON reads a bind of an entry in the registry as it is recorded, and takes a
@@ -128,6 +132,8 @@ type registration struct {
 	// run's entry; nil otherwise.
 	docker *wall.Docker
 	f      *os.File
+	// unwalled says the entry is a session's without a wall: [walledEntry.Unwalled].
+	unwalled bool
 	// kept says the entry stays when the run ends.
 	kept bool
 	// release removes the entry, unless it is kept, and frees its lock; it is safe to
@@ -142,9 +148,11 @@ func (r *registration) keep() { r.kept = true }
 // register checks a walled run's binds against every other walled run of this user's
 // still going and, when none conflicts, lists the run among them, all under the
 // registry's lock. engine is the container engine of the run's wall, nil for a wall
-// without one, and docker the run's wall when it is a Docker, nil otherwise.
+// without one, and docker the run's wall when it is a Docker, nil otherwise. unwalled
+// marks the entry of a session without a wall, [walledEntry.Unwalled], which is
+// checked by [checkSharedUnwalled].
 func register(
-	runID string, binds []bindSource, engine *wall.Engine, docker *wall.Docker,
+	runID string, binds []bindSource, engine *wall.Engine, docker *wall.Docker, unwalled bool,
 ) (*registration, error) {
 	dir, err := openRegistry()
 	if err != nil {
@@ -155,7 +163,13 @@ func register(
 		return nil, err
 	}
 	defer unlock()
-	if err := checkShared(docker, dir, runID, binds); err != nil {
+	check := checkSharedUnwalled
+	if !unwalled {
+		check = func(dir, runID string, binds []bindSource) error {
+			return checkShared(docker, dir, runID, binds)
+		}
+	}
+	if err := check(dir, runID, binds); err != nil {
 		return nil, err
 	}
 	if registerPause != nil {
@@ -171,7 +185,7 @@ func register(
 		os.Remove(file)
 		return nil, fmt.Errorf("the registry of walled runs: locking %s: %w", pathShown(file), err)
 	}
-	r := &registration{dir: dir, runID: runID, engine: engine, docker: docker, f: f}
+	r := &registration{dir: dir, runID: runID, engine: engine, docker: docker, f: f, unwalled: unwalled}
 	// The file goes before its lock, so no session takes the lock of a file that is
 	// still there for a run that is over and finds a run that is not.
 	r.release = sync.OnceFunc(func() {
@@ -190,7 +204,7 @@ func register(
 // write puts the run's binds in its entry. The caller holds the registry's lock.
 func (r *registration) write(binds []bindSource) error {
 	b, err := json.Marshal(walledEntry{RunID: r.runID, PID: os.Getpid(), Binds: binds,
-		Engine: r.engine})
+		Engine: r.engine, Unwalled: r.unwalled})
 	if err != nil {
 		return err
 	}
@@ -285,13 +299,57 @@ func checkShared(docker *wall.Docker, dir, runID string, binds []bindSource) err
 					return err
 				}
 				for _, own := range binds {
-					if err := shared(own, other.RunID, ob); err != nil {
+					if err := shared(own, other.RunID, ob, !other.Unwalled); err != nil {
 						return err
 					}
 				}
 			}
 			return nil
 		})
+}
+
+// checkSharedUnwalled is checkShared for a session without a wall, which starts no
+// container: it asks no engine. An entry whose lock is free counts as still going, as
+// for [othersWritable], since its run's containers may still be going; one of those
+// that cannot be read is skipped, and one of a run still going that cannot be read is
+// an error. An entry of a session without a wall whose lock is free is removed, the
+// run's included: that session is over, and the run can then join again after a
+// session that was killed. The caller holds the registry's lock.
+func checkSharedUnwalled(dir, runID string, binds []bindSource) error {
+	names, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("the registry of walled runs: %w", accesskey.ShownError(err))
+	}
+	for _, e := range names {
+		name := e.Name()
+		if CheckRunID(name) != nil {
+			continue
+		}
+		file := filepath.Join(dir, name)
+		other, ok, held, err := readWritten(file)
+		if err != nil {
+			return err
+		}
+		if ok && other.Unwalled && !held {
+			os.Remove(file)
+			continue
+		}
+		if !ok || name == runID {
+			continue
+		}
+		for _, b := range other.Binds {
+			ob, err := resolveOther(other.RunID, b)
+			if err != nil {
+				return err
+			}
+			for _, own := range binds {
+				if err := shared(own, other.RunID, ob, !other.Unwalled); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // goingEntries calls each with the file and the entry of every walled run in the
@@ -640,6 +698,12 @@ func readEntry(
 		r.EntryUnreadable = ask.unreadable
 		return walledEntry{}, false, r
 	}
+	// A session without a wall leaves no container behind: once its lock is free, it
+	// is over.
+	if entry.Unwalled {
+		os.Remove(file)
+		return walledEntry{}, false, nil
+	}
 	if ask.skip != nil && ask.skip(entry) {
 		return walledEntry{}, false, nil
 	}
@@ -709,12 +773,18 @@ func othersWritable(runID string) ([]string, error) {
 // writtenEntry reads one entry of the registry for [othersWritable], and whether it
 // counts: one that is gone, or whose lock is free and that cannot be read, does not.
 func writtenEntry(file string) (walledEntry, bool, error) {
+	entry, ok, _, err := readWritten(file)
+	return entry, ok, err
+}
+
+// readWritten is [writtenEntry] and whether the entry's lock is held.
+func readWritten(file string) (walledEntry, bool, bool, error) {
 	f, err := os.Open(file)
 	if errors.Is(err, fs.ErrNotExist) {
-		return walledEntry{}, false, nil
+		return walledEntry{}, false, false, nil
 	}
 	if err != nil {
-		return walledEntry{}, false, fmt.Errorf("the registry of walled runs: %w", accesskey.ShownError(err))
+		return walledEntry{}, false, false, fmt.Errorf("the registry of walled runs: %w", accesskey.ShownError(err))
 	}
 	defer f.Close()
 	held := false
@@ -722,7 +792,7 @@ func writtenEntry(file string) (walledEntry, bool, error) {
 	case errors.Is(err, syscall.EWOULDBLOCK):
 		held = true
 	case err != nil:
-		return walledEntry{}, false,
+		return walledEntry{}, false, false,
 			fmt.Errorf("the registry of walled runs: locking %s: %w", pathShown(file), err)
 	}
 	b, err := io.ReadAll(io.LimitReader(f, 1<<20))
@@ -735,12 +805,12 @@ func writtenEntry(file string) (walledEntry, bool, error) {
 	}
 	switch {
 	case err != nil && held:
-		return walledEntry{}, false, fmt.Errorf("the registry of walled runs: the "+
+		return walledEntry{}, false, true, fmt.Errorf("the registry of walled runs: the "+
 			"entry %s of a run still going cannot be read", pathShown(file))
 	case err != nil:
-		return walledEntry{}, false, nil
+		return walledEntry{}, false, false, nil
 	}
-	return entry, true, nil
+	return entry, true, held, nil
 }
 
 // engineUnreachable is the refusal of a read of the registry that cannot ask the container
@@ -761,9 +831,12 @@ func engineUnreachable(runID, file, so string, err error) *Refusal {
 	}
 }
 
-// wallKind reports whether a bind is one a wall binds of its own: Forager's helper
-// or another directory of Forager's.
-func wallKind(b bindSource) bool { return b.Kind == kindHelper || b.Kind == kindDir }
+// wallKind reports whether a bind is one a wall binds besides the places a run
+// lists: Forager's helper, another directory of Forager's, or a runtime's installed
+// folder.
+func wallKind(b bindSource) bool {
+	return b.Kind == kindHelper || b.Kind == kindDir || b.Kind == kindRuntime
+}
 
 // inside reports whether a bind lies inside dir, or is dir when orIs is set, by its
 // resolved path, or whether a name on the way to it is looked up in dir or below it,
@@ -779,13 +852,15 @@ func inside(b bindSource, dir splitPath, orIs bool) (string, bool) {
 }
 
 // shared is the error of one bind of this run's against one bind of another run's
-// still going, or nil when they do not conflict.
+// still going, or nil when they do not conflict. otherWalled is false for the entry
+// of a session without a wall, which lists only its runtime's installed folder.
 //
-//   - A wall's own bind, Forager's helper or a directory of Forager's, that is or
-//     lies inside a writable bind of the other run's, or is reached through one, is a
-//     plain error; one of the other run's that a writable bind of this run's is, holds
-//     or reaches is refused, and so is a bind of this run's that is, lies inside or is
-//     reached through a writable one of the other run's. Patterns of the directories
+//   - A wall's bind, Forager's helper, a directory of Forager's or a runtime's
+//     installed folder, that is or lies inside a writable bind of the other run's,
+//     or is reached through one, is a plain error; one of the other run's that a
+//     writable bind of this run's is, holds or reaches is refused, and so is a bind of
+//     this run's that is, lies inside or is reached through a writable one of the
+//     other run's. Patterns of the directories
 //     sessions make are each session's own, and never conflict with each other.
 //   - A run directory is its session's alone: a bind that is, holds or lies inside the
 //     other run's, or that the other run's is, holds or lies inside, whatever their
@@ -795,7 +870,7 @@ func inside(b bindSource, dir splitPath, orIs bool) (string, bool) {
 //     strictly, or when a name on the way to either is looked up inside the writable
 //     one. Two binds of the same root never conflict: each root is looked up in its
 //     parent, and an agent cannot replace its own bind's root.
-func shared(own bindSource, otherID string, other bindSource) error {
+func shared(own bindSource, otherID string, other bindSource, otherWalled bool) error {
 	refuse := func(detail string, a ...any) error {
 		return &Refusal{
 			Code:   refusal.MountSharedWithRun,
@@ -804,6 +879,9 @@ func shared(own bindSource, otherID string, other bindSource) error {
 		}
 	}
 	still := " of the walled run " + otherID + ", which is still going: "
+	if !otherWalled {
+		still = " of the run " + otherID + ", which is still going: "
+	}
 	switch {
 	case wallKind(own) && wallKind(other) && (own.Pattern || other.Pattern):
 		// Each session makes its private directories its own; the pattern stands for
@@ -817,8 +895,11 @@ func shared(own bindSource, otherID string, other bindSource) error {
 		return nil
 	case wallKind(other):
 		what := "Forager's directory "
-		if other.Kind == kindHelper {
+		switch other.Kind {
+		case kindHelper:
 			what = "Forager's helper "
+		case kindRuntime:
+			what = "the runtime's installed folder "
 		}
 		if entry, ok := inside(other, own.at, true); ok && own.Writable {
 			if entry != "" {

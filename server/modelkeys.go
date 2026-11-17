@@ -35,11 +35,13 @@ type ModelKeyState struct {
 const MaxUnauthorized = 6
 
 // ModelKeysReport is a model keys report: the time it is sent, RFC 3339 in UTC with
-// whole seconds, empty for the clock's now, every window the gateway has of the run's
-// key group, and the keys the gateway no longer sets after a 401 of the model provider,
-// none for an empty list.
+// whole seconds, empty for the clock's now; the number of the session open when the
+// gateway made it, 0 for none; every window the gateway has of the run's key group;
+// and the keys the gateway no longer sets after a 401 of the model provider, none for
+// an empty list.
 type ModelKeysReport struct {
 	Time         string
+	Session      int
 	Keys         []ModelKeyState
 	Unauthorized []UnauthorizedKey
 }
@@ -52,12 +54,13 @@ type UnauthorizedKey struct {
 	At         string `json:"at"`
 }
 
-// modelKeysBody is a report's bytes: the version, the run's id, the time, the keys
-// and, when there is one, the keys after a 401.
+// modelKeysBody is a report's bytes: the version, the run's id, the time, the session
+// when one is open, the keys and, when there is one, the keys after a 401.
 type modelKeysBody struct {
 	Version      int               `json:"version"`
 	RunID        string            `json:"run_id"`
 	Time         string            `json:"time"`
+	Session      int               `json:"session,omitempty"`
 	Keys         []ModelKeyState   `json:"keys"`
 	Unauthorized []UnauthorizedKey `json:"unauthorized,omitempty"`
 }
@@ -101,7 +104,7 @@ func (c *Client) PostModelKeys(ctx context.Context, runURL, runID string, rep Mo
 	if len(rep.Unauthorized) > MaxUnauthorized {
 		return nil, fmt.Errorf("tell the Forager maintainers about this bug in the gateway's model keys report; the report lists %d unauthorized keys, and a report lists at most %d", len(rep.Unauthorized), MaxUnauthorized)
 	}
-	body, err := json.Marshal(modelKeysBody{Version: 1, RunID: runID, Time: t, Keys: keys, Unauthorized: rep.Unauthorized})
+	body, err := json.Marshal(modelKeysBody{Version: 1, RunID: runID, Time: t, Session: rep.Session, Keys: keys, Unauthorized: rep.Unauthorized})
 	if err != nil {
 		return nil, err
 	}

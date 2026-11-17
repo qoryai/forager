@@ -70,7 +70,7 @@ func startPushRun(t *testing.T, first string, hold chan struct{}, rest string) *
 	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
 
 	cfg := gateway.Config{
-		Credentials: []gateway.Credential{{Name: "forge", Env: pushSource, Hosts: []string{"localhost"}, Scheme: "basic", Username: "x-access-token"}},
+		Credentials: []gateway.Credential{pushCredential(t)},
 		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost"}},
 			Credentials: []gateway.PolicyCredential{{Name: "forge"}}}}
 	gateway.SetUpstreamRoots(&cfg, roots)

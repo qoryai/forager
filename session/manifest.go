@@ -313,7 +313,8 @@ func (r *Run) realmCredentials() heldCredentials {
 	r.emitMu.Unlock()
 	for _, e := range creds {
 		m, _ := e.(map[string]any)
-		if m == nil || m["purpose"] == server.PurposeHarness {
+		// No session gets a harness or a push credential.
+		if m == nil || m["purpose"] == server.PurposeHarness || m["purpose"] == server.PurposePush {
 			continue
 		}
 		u := credentialUse{hosts: jsonStrings(m["hosts"])}

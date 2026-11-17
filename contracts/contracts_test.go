@@ -130,6 +130,79 @@ func TestDocumentFixturesValidate(t *testing.T) {
 	}
 }
 
+// TestCredentialCountBounds pins the count of credentials, 1 to 16 with at most 6 API
+// credentials: a run configuration with 16 credentials, 6 of them API credentials,
+// passes, and one with 17, or with 7 API credentials, fails; a secrets request with 16
+// names passes and one with 17 fails; a sealed plaintext with 16 credentials and 16
+// values passes, and one with 17 credentials or 17 values fails.
+func TestCredentialCountBounds(t *testing.T) {
+	s := compile(t, "run-configuration.schema.json", "secrets-request.schema.json", "sealed-plaintext.schema.json")
+	const digest = "sha256=96da611217314d4a1f43ab4212d4e795aab7ba4b59fdc7e3ed587496a40ba124"
+	names := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("cred-%02d", i)
+		}
+		return out
+	}
+	quoted := func(items []string) string {
+		b, _ := json.Marshal(items)
+		return string(b)
+	}
+	// runConfiguration has api API credentials, the first the start key, and then hosts
+	// host credentials, each on the host <name>.git.example.
+	runConfiguration := func(api, hosts int) string {
+		var items []string
+		for i, n := range names(api + hosts) {
+			if i < api {
+				items = append(items, `{"name":"`+n+`","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`)
+				continue
+			}
+			items = append(items, `{"name":"`+n+`","apply":[{"hosts":["`+n+`.git.example"],"scheme":"bearer"}]}`)
+		}
+		start := ""
+		if api > 0 {
+			start = `"model_credential":"cred-00",`
+		}
+		return `{"version":1,` + start + `"credentials":[` + strings.Join(items, ",") + `]}`
+	}
+	request := func(n int) string {
+		return `{"version":1,"run_id":"01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a","run_configuration":"` + digest +
+			`","credentials":` + quoted(names(n)) + `,"timestamp":1700000000}`
+	}
+	plaintext := func(credentials, values int) string {
+		var items []string
+		for _, n := range names(values) {
+			items = append(items, `{"credential":"`+n+`","value":"fixture-value-not-a-real-one"}`)
+		}
+		return `{"version":1,"run_configuration":"` + digest + `","credentials":` + quoted(names(credentials)) +
+			`,"values":[` + strings.Join(items, ",") + `]}`
+	}
+	for name, tc := range map[string]struct {
+		schema, doc string
+		pass        bool
+	}{
+		"a run configuration of 16 host credentials":  {"run-configuration.schema.json", runConfiguration(0, 16), true},
+		"a run configuration of 6 API and 10 host":    {"run-configuration.schema.json", runConfiguration(6, 10), true},
+		"a run configuration of 17 host credentials":  {"run-configuration.schema.json", runConfiguration(0, 17), false},
+		"a run configuration of 6 API and 11 host":    {"run-configuration.schema.json", runConfiguration(6, 11), false},
+		"a run configuration of 7 API and 9 host":     {"run-configuration.schema.json", runConfiguration(7, 9), false},
+		"a secrets request of 16 names":               {"secrets-request.schema.json", request(16), true},
+		"a secrets request of 17 names":               {"secrets-request.schema.json", request(17), false},
+		"a plaintext of 16 credentials and 16 values": {"sealed-plaintext.schema.json", plaintext(16, 16), true},
+		"a plaintext of 17 credentials and 16 values": {"sealed-plaintext.schema.json", plaintext(17, 16), false},
+		"a plaintext of 16 credentials and 17 values": {"sealed-plaintext.schema.json", plaintext(16, 17), false},
+	} {
+		doc, err := jsonschema.UnmarshalJSON(strings.NewReader(tc.doc))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if err := s[tc.schema].Validate(doc); (err == nil) != tc.pass {
+			t.Errorf("%s against %s: %v; want pass %t", name, tc.schema, err, tc.pass)
+		}
+	}
+}
+
 // TestAPIFormatsAreTheFixedList pins api-format.schema.json, which another contract
 // refers to by its $id, one $ref per item: a string schema at that $id, without $defs,
 // whose enum is the four formats in this order.
@@ -334,7 +407,9 @@ const beyondLinkSchema = "-beyond-schema-"
 // a run.exited without state, with a state other than the four, with a reason that is
 // not a code, with gateway_lost and a state other than failed, with quiet and no
 // quiet_seconds or with quiet_seconds and another reason, a run.refused with a code outside the list and no
-// status, a descriptor with an expression, a descriptor whose model section has a
+// status, a descriptor with an expression, a descriptor rule that maps a member of
+// session, or whose sum sets summary, has no over or fields or an over that is no
+// dotted path, a descriptor whose model section has a
 // format outside the list, a place of two kinds or of none, an empty list of values,
 // no formats, a member it does not define, an endpoint that is no variable,
 // overrides that are empty, list a name twice or list something other than a
@@ -371,9 +446,10 @@ const beyondLinkSchema = "-beyond-schema-"
 // 257 runs or with a run in upper case, a model keys report whose entry has a
 // utilization over 100, a status, a source or a window outside the grammar, rejected
 // without cooldown_until or cooldown_until with another status, or no observed_at, or
-// whose time has a fraction, a model keys answer without version, a link batch answer
-// whose stop has no reason or another one, a session.exited or a session's run.exited
-// failed or cancelled with model_key_limit, a session.exited paused with no reason or
+// whose time has a fraction or whose session is 0, a model keys answer without
+// version, a link batch answer whose stop has no reason or another one, a
+// session.exited or a session's run.exited failed or cancelled with model_key_limit, a
+// session.exited paused with no reason or
 // with stopped and exit code -1, a session's run.exited paused with no reason, a session.transcript numbered 0, with a negative offset,
 // without its session id or over 32 KiB, a descriptor whose resume has no args, a
 // prefix outside the home or a path without {session_id}, a descriptor rule whose set
@@ -575,7 +651,7 @@ func TestRecordedRunValidates(t *testing.T) {
 					if stepped[n] != "started" {
 						t.Errorf("%s: line %d: a run.log of step %d, whose state is %q, not started", dir, i+1, n, stepped[n])
 					}
-					if _, ok := m["data"].(map[string]any)["session"]; ok && kinds[n] != "image" && kinds[n] != "wall" && kinds[n] != "setup" {
+					if _, ok := m["data"].(map[string]any)["session"]; ok && kinds[n] != "image" && kinds[n] != "wall" && kinds[n] != "setup" && kinds[n] != "after" {
 						t.Errorf("%s: line %d: a run.log of a session in %s step %d", dir, i+1, kinds[n], n)
 					}
 				}
@@ -678,7 +754,7 @@ func (o *openSteps) breaks(m map[string]any) string {
 	case "dev.qory.run.step_started":
 		kind, _ := m["data"].(map[string]any)["kind"].(string)
 		o.steps[n] = kind
-		inCopy := kind == "join" || kind == "image" || kind == "wall" || kind == "setup"
+		inCopy := kind == "join" || kind == "image" || kind == "wall" || kind == "setup" || kind == "after"
 		for _, other := range numbers {
 			if o.steps[other] != "copy" || !inCopy {
 				return fmt.Sprintf("%s step %d starts inside %s step %d", kind, n, o.steps[other], other)
@@ -1324,15 +1400,18 @@ func TestEveryTypeHasASchemaAndTheReadmeNamesIt(t *testing.T) {
 	}
 }
 
-// TestAMeasureRecordValidates pins the record the helper's exec sends to the session's
+// TestAMeasureRecordValidates pins the records the helper's exec sends to the session's
 // socket as the runtime exits: the source measure with peak_memory_bytes and
-// cpu_time_ms, either, or neither.
+// cpu_time_ms, either, or neither, and the after source's records.
 func TestAMeasureRecordValidates(t *testing.T) {
 	s := compile(t, "record.schema.json")["record.schema.json"]
 	for _, rec := range []map[string]any{
 		{"source": "measure", "record": map[string]any{"peak_memory_bytes": 734003200, "cpu_time_ms": 4210}},
 		{"source": "measure", "record": map[string]any{"cpu_time_ms": 0}},
 		{"source": "measure", "record": map[string]any{}},
+		{"source": "after", "record": map[string]any{"event": "started"}},
+		{"source": "after", "record": map[string]any{"event": "line", "stream": "stdout", "bytes": "Y29tbWl0dGVkCg=="}},
+		{"source": "after", "record": map[string]any{"event": "exited", "exit_code": 143, "reason": "timeout"}},
 	} {
 		b, _ := json.Marshal(rec)
 		doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(b))
@@ -1359,6 +1438,23 @@ func TestAccountHeaderIsNoReservedHeader(t *testing.T) {
 		err := s.Validate(map[string]any{"scheme": "bearer", "oauth": true, "account_header": h, "account_claim": claim})
 		if reserved != (err != nil) {
 			t.Errorf("account_header %s: schema error %v; server.ReservedHeader or Authorization: %v", h, err, reserved)
+		}
+	}
+}
+
+// TestTheAfterSourceHasNoKey pins the texts of the after source: After's records carry no
+// key, and the launch's socket does not accept the source. The schemas and the README
+// are read as text, since no validator reads their descriptions.
+func TestTheAfterSourceHasNoKey(t *testing.T) {
+	for _, name := range []string{"record.schema.json", "events/run.step_started.schema.json", "events/run.step_exited.schema.json", "README.md"} {
+		b, err := fs.ReadFile(contracts.FS, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, banned := range []string{"event: key", "hexadecimal characters, in the socket's first record", "every other process of the agent's container", "the sources hooks, setup, measure and after", `"source": "after", "record": {"event": "exited", "exit_code": 143, "reason": "timeout", "key"`} {
+			if strings.Contains(string(b), banned) {
+				t.Errorf("%s has %q: After's records carry no key, and After's container is not the agent's", name, banned)
+			}
 		}
 	}
 }

@@ -20,8 +20,11 @@ func TestCodexIsARuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rt.Name() != codex.Name || rt.Version() != "0.167.2" || !rt.ReadsOutput() || rt.Stop().Signal != "SIGINT" {
-		t.Errorf("name %q, version %q, reads output %v, stop %+v", rt.Name(), rt.Version(), rt.ReadsOutput(), rt.Stop())
+	if rt.Name() != codex.Name || !rt.ReadsOutput() || rt.Stop().Signal != "SIGINT" {
+		t.Errorf("name %q, reads output %v, stop %+v", rt.Name(), rt.ReadsOutput(), rt.Stop())
+	}
+	if r, ok := rt.(runtimes.InstallRequired); !ok || r.InstallRequired() {
+		t.Error("Codex requires an installed folder; want a session that starts it from the image")
 	}
 	runtimetest.Conforms(t, rt)
 	runtimetest.Replays(t, rt, contracts.FS, "runtimes/codex/fixtures")

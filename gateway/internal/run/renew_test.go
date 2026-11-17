@@ -486,6 +486,8 @@ func TestTheStartsAnswerIsCheckedAgainstItsEntry(t *testing.T) {
 	pathsDoc := strings.Replace(renewDoc, `"username":"x-access-token"}]}`, `"username":"x-access-token","paths":["/example-org/*"]}]}`, 1)
 	twoDoc := strings.Replace(renewDoc, `{"hosts":["git.example","api.git.example"],"scheme":"basic","username":"x-access-token"}`,
 		`{"hosts":["git.example"],"scheme":"basic","username":"x-access-token"},{"hosts":["api.git.example"],"scheme":"basic","username":"x-access-token"}`, 1)
+	// pushDoc has forge's item with the push_ref of the run's branch.
+	pushDoc := strings.Replace(renewDoc, `"username":"x-access-token"}]}`, `"username":"x-access-token","push_ref":"refs/heads/qory/wi_01"}]}`, 1)
 	item := func(hosts []string, scheme, username, header string, paths ...string) answer {
 		return answer{value: "forge-0", expires: start.Add(time.Hour), apply: []sealed.Apply{{Hosts: hosts, Scheme: scheme, Username: username, Header: header, Paths: paths}}}
 	}
@@ -508,6 +510,12 @@ func TestTheStartsAnswerIsCheckedAgainstItsEntry(t *testing.T) {
 			`Tell whoever runs the control plane: credential "forge" sets git.example on other paths`},
 		"every path": {pathsDoc, item(git, "basic", "x-access-token", ""),
 			`Tell whoever runs the control plane: credential "forge" sets git.example on other paths`},
+		"a push_ref the entry has not": {renewDoc, answer{value: "forge-0", expires: start.Add(time.Hour), apply: []sealed.Apply{{Hosts: git, Scheme: "basic", Username: "x-access-token", PushRef: "refs/heads/qory/wi_01"}}},
+			`Tell whoever runs the control plane: credential "forge" sets git.example with another push_ref`},
+		"no push_ref beside the entry's": {pushDoc, item(git, "basic", "x-access-token", ""),
+			`Tell whoever runs the control plane: credential "forge" sets git.example with another push_ref`},
+		"another push_ref": {pushDoc, answer{value: "forge-0", expires: start.Add(time.Hour), apply: []sealed.Apply{{Hosts: git, Scheme: "basic", Username: "x-access-token", PushRef: "refs/heads/main"}}},
+			`Tell whoever runs the control plane: credential "forge" sets git.example with another push_ref`},
 		"two items in one": {twoDoc, item([]string{"git.example", "api.git.example"}, "basic", "x-access-token", ""),
 			`Tell whoever runs the control plane: credential "forge" merges two apply items of its entry`},
 	} {

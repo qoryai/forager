@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/events/runtime.result.schema.json",
   "title": "dev.qory.runtime.result",
-  "description": "The result a non-interactive session printed on its standard output: outcome, turns, cost.",
+  "description": "The result a non-interactive session printed on its standard output: outcome, turns, cost and tokens.",
   "type": "object",
   "additionalProperties": false,
   "required": ["session_id", "outcome", "is_error"],
@@ -15,6 +15,17 @@
     "turns": {"type": "integer", "minimum": 0},
     "duration_ms": {"type": "integer", "minimum": 0},
     "cost_usd": {"type": "number", "minimum": 0},
-    "result": {"description": "The final response text, when the runtime printed one.", "type": "string"}
+    "result": {"description": "The final response text, when the runtime printed one.", "type": "string"},
+    "usage": {
+      "description": "The tokens of the runtime's launch so far, subagents included: Claude Code's modelUsage, summed over the models. A launch can write several result lines, and each has the launch's total up to it. The four counts do not overlap; their sum is the launch's total. Absent when the record has no token counts: unknown, never 0.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "input": {"description": "Input tokens neither read from nor written to the cache.", "type": "integer", "minimum": 0},
+        "output": {"description": "Output tokens, thinking included.", "type": "integer", "minimum": 0},
+        "cache_read": {"description": "Input tokens read from the cache.", "type": "integer", "minimum": 0},
+        "cache_write": {"description": "Input tokens written to the cache, of every cache lifetime.", "type": "integer", "minimum": 0}
+      }
+    }
   }
 }

@@ -65,6 +65,13 @@ func SetCloseWait(c *Config, d time.Duration) { c.closeWait = d }
 // SetRelayWait makes wait how long the relay waits for the server.
 func SetRelayWait(c *Config, wait time.Duration) { c.relayWait = wait }
 
+// SetHostCallTime makes d the most time one host call has at the server, in place of
+// server.HostCallTime.
+func SetHostCallTime(c *Config, d time.Duration) { c.hostCallTime = d }
+
+// HostCallTimeOf is the most time one host call has at the server under c.
+func HostCallTimeOf(c Config) time.Duration { return c.hostCallTimeOf() }
+
 // SetRelayInFlight makes n the most requests the relay has with the server at once.
 func SetRelayInFlight(c *Config, n int) { c.relayInFlight = n }
 
@@ -337,4 +344,17 @@ func Swept(g *Gateway, runID string) bool {
 // tick gets the sweep's interval and returns the ticker's channel.
 func SetSweepTicker(c *Config, tick func(every time.Duration) <-chan time.Time) {
 	c.sweepTicker = func(every time.Duration) (<-chan time.Time, func()) { return tick(every), func() {} }
+}
+
+// PushTokens are the values of the push credentials that g's push proxy of the run of
+// runID sets now, by the credential's name, and whether the run has a push proxy.
+func PushTokens(g *Gateway, runID string) (map[string]string, bool) {
+	g.mu.Lock()
+	lr := g.runs[runID]
+	g.mu.Unlock()
+	out := map[string]string{}
+	for _, u := range lr.r.PushUses() {
+		out[u.Name] = string(u.Value())
+	}
+	return out, lr.pushProxy() != nil
 }

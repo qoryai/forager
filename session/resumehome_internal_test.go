@@ -12,7 +12,7 @@ import (
 // environment is env resolves it.
 func homeResume(t *testing.T, tail, below string, env []string) *sessionResume {
 	t.Helper()
-	d := "version: 1\nruntime: r\nruntime_version: \"1\"\nsources:\n  output: {format: jsonl}\n" +
+	d := "version: 1\nruntime: r\nsources:\n  output: {format: jsonl}\n" +
 		"resume:\n  home_var: AMP_HOME\n  path: '${AMP_HOME}/" + tail + below + "'\n  prefix: '${AMP_HOME}/" + tail + "'\n  args: [resume, '{session_id}']\n" +
 		"rules:\n  - source: output\n    match: {type: start}\n    type: dev.qory.runtime.started\n    data: {session_id: session_id}\n"
 	rt, err := runtimes.Described("r.yaml", []byte(d), nil)
@@ -107,7 +107,7 @@ func TestAPausedRunsPathMovesBelowThisRunsHome(t *testing.T) {
 // describedRuntime is a runtime written as data with Claude Code's resume.
 func describedRuntime(t *testing.T) runtimes.Runtime {
 	t.Helper()
-	d := "version: 1\nruntime: r\nruntime_version: \"1\"\nsources:\n  output: {format: jsonl}\n" +
+	d := "version: 1\nruntime: r\nsources:\n  output: {format: jsonl}\n" +
 		"resume:\n  path_from: transcript_path\n  path: '~/.claude/projects/{cwd_slug}/{session_id}.jsonl'\n  prefix: ~/.claude/projects/\n  args: [--resume, '{session_id}']\n" +
 		"rules:\n  - source: output\n    match: {type: start}\n    type: dev.qory.runtime.started\n    data: {session_id: session_id}\n"
 	rt, err := runtimes.Described("r.yaml", []byte(d), nil)

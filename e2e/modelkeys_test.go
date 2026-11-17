@@ -441,7 +441,7 @@ type keysWall struct {
 }
 
 // newKeysWall skips the test without an engine, without a Linux build of the test binary
-// off Linux, and without an image with Claude Code in QORY_WALL_CLAUDE_IMAGE; each skip
+// off Linux, and without an image for Claude Code in QORY_WALL_CLAUDE_IMAGE; each skip
 // fails under QORY_WALL_REQUIRE. It points this machine's roots at the suite's
 // authority.
 func newKeysWall(t *testing.T) keysWall {
@@ -456,7 +456,7 @@ func newKeysWall(t *testing.T) keysWall {
 	helper := Helper(t)
 	image := os.Getenv("QORY_WALL_CLAUDE_IMAGE")
 	if image == "" {
-		Skip(t, "QORY_WALL_CLAUDE_IMAGE is empty: it selects an image with Claude Code 2.1.316")
+		Skip(t, "QORY_WALL_CLAUDE_IMAGE is empty: it selects an image for Claude Code 2.1.316")
 	}
 	if err := trustRecorders(t); err != nil {
 		t.Fatalf("this machine's roots are not the suite's authority: %v", err)
@@ -523,11 +523,11 @@ type keysSession struct {
 	dir     string
 	walled  *keysWall
 	timeout time.Duration
-	// qory, when set, is a folder that [qoryFolder] makes: the launch starts Claude Code
-	// through qory run agent-env with CLAUDE_CONFIG_DIR at qory's agent home, as a
-	// dispatched walled run of qory does. link are the verb's words between the kept
-	// file and --.
-	qory string
+	// qory, when set, is what [qoryFolder] makes: the wall's helper is the qory build,
+	// and the launch starts Claude Code as a dispatched walled run of qory does,
+	// through the helper's qory run agent-env with CLAUDE_CONFIG_DIR at qory's agent
+	// home. link are the verb's words between the kept file and --.
+	qory *qoryRun
 	link []string
 	// joinFails, when set, expects the join to return an error: run returns it in
 	// keysOutcome.joined in place of failing the test.
@@ -577,13 +577,14 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 	open := session.OpenSpec{RunsDir: runs, Gateway: g, RunID: s.runID, ForagerVersion: "walltest", Report: report}
 	join := session.SessionSpec{
 		Runtime: rt,
-		Command: "claude",
 		Args:    append([]string{"-p", s.prompt, "--output-format", "stream-json", "--verbose"}, s.args...),
 		Env:     s.env,
 		Dir:     dir,
 		Stdin:   strings.NewReader(""),
 	}
 	if s.codex != "" {
+		// Codex's descriptor sets no install_required: the session starts it as the
+		// launch names it, with no installed folder.
 		join.Command = filepath.Join(s.codex, codexRun)
 		launch := codexArgs
 		if s.codexArgs != nil {
@@ -592,11 +593,16 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 		join.Args = slices.Concat(launch, s.args, []string{s.prompt})
 		join.Mounts = append(join.Mounts, wall.Mount{Path: s.codex, ReadOnly: true})
 		join.LaunchFixed = []string{"CODEX_HOME=" + codexHome}
+	} else {
+		join.RuntimeInstall = claudeInstall(t)
+		join.Command = claudeProgram(join.RuntimeInstall)
 	}
-	if s.qory != "" {
-		join.Args = append(append(append([]string{"run", "agent-env", filepath.Join(s.qory, "kept")}, s.link...), "--", join.Command), join.Args...)
-		join.Command = filepath.Join(s.qory, "qory")
-		join.Mounts = append(join.Mounts, wall.Mount{Path: s.qory, ReadOnly: true})
+	if s.qory != nil {
+		// qory starts the agent at the helper's path with the program after --, as
+		// qory's cmd/agentenv.go writes it: the session checks that program.
+		join.Args = slices.Concat(qoryAgentEnvArgs, []string{filepath.Join(s.qory.folder, "kept")}, s.link, []string{"--", join.Command}, join.Args)
+		join.Command = wall.HelperPath
+		join.Mounts = append(join.Mounts, wall.Mount{Path: s.qory.folder, ReadOnly: true})
 		join.LaunchFixed = slices.Clone(qoryLaunchFixed)
 	}
 	if s.walled != nil {
@@ -604,6 +610,12 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 		open.Image = s.walled.image
 		join.Forwarder = []string{wall.HelperPath, "forward"}
 		join.Exec = append([]string{wall.HelperPath}, ExecArgs...)
+		if s.qory != nil {
+			// The helper is the qory build, with qory's verbs, as qory run binds it.
+			open.Wall = &wall.Docker{Command: s.walled.command, Helper: s.qory.helper, RelayArgs: qoryRelayArgs, NestArgs: qoryNestArgs}
+			join.Forwarder = append([]string{wall.HelperPath}, qoryForwardArgs...)
+			join.Exec = append([]string{wall.HelperPath}, qoryExecArgs...)
+		}
 	} else {
 		exe, err := os.Executable()
 		if err != nil {
@@ -727,9 +739,11 @@ type keysControl struct {
 	// docs are the run configurations by run id; values the credentials' values by name.
 	docs   map[string][]byte
 	values map[string]string
-	// answer is the keys of the answer to every report; reports the bodies received,
-	// and invalid the schema's refusal of each that failed it.
+	// answer is the keys of the answer to every report, or, when answers is set, to
+	// each report it returns true for, the others getting no key; reports the bodies
+	// received, and invalid the schema's refusal of each that failed it.
 	answer  []server.ModelKeyState
+	answers func(report []byte) bool
 	reports [][]byte
 	invalid []string
 	// transcripts are the transcripts by the id of the run that reads them; asked the
@@ -807,6 +821,9 @@ func startKeysControl(t *testing.T) *keysControl {
 				c.invalid = append(c.invalid, err.Error())
 			}
 			keys := c.answer
+			if c.answers != nil && !c.answers(body) {
+				keys = nil
+			}
 			c.mu.Unlock()
 			if keys == nil {
 				keys = []server.ModelKeyState{}
@@ -1132,9 +1149,10 @@ func TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun(t *testing.T) {
 // stub caps A, and serves B's first request with a Bash call after 3 seconds. The
 // gateway reports A's refusal with POST <run.url>/<run_id>/model-keys, and the fake
 // control plane returns that model-b is rejected in its five_hour window until an hour
-// from now. Every report is valid against model-keys-report.schema.json, and one has
-// model's five_hour window rejected, from the provider, with cooldown_until. After the
-// Bash call Claude Code's next request goes with C: the answer's cooldown keeps the
+// from now; to the session's start report, made at the join before A's refusal, it
+// returns no key. Every report is valid against model-keys-report.schema.json, and one
+// has model's five_hour window rejected, from the provider, with cooldown_until. After
+// the Bash call Claude Code's next request goes with C: the answer's cooldown keeps the
 // proxy from setting B.
 func TestDockerModelKeysReportAndTakeTheControlPlanesCooldown(t *testing.T) {
 	k := newKeysWall(t)
@@ -1146,6 +1164,7 @@ func TestDockerModelKeysReportAndTakeTheControlPlanesCooldown(t *testing.T) {
 	ctl.answer = []server.ModelKeyState{{Credential: "model-b", Window: "five_hour", Status: "rejected",
 		ResetsAt: server.RegistrationTime(now.Add(time.Hour)), CooldownUntil: server.RegistrationTime(now.Add(time.Hour)),
 		Source: "provider", ObservedAt: server.RegistrationTime(now)}}
+	ctl.answers = func(report []byte) bool { return bytes.Contains(report, []byte(`"status":"rejected"`)) }
 	ctl.mu.Unlock()
 	o := s.run(t)
 	log := k.stubLog(t, name)

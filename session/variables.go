@@ -221,11 +221,12 @@ func resolve(spec runSpec, rt runtimes.Runtime, served map[string]string, creden
 // foragerNames are the names Forager and the runtime's preparation set for a session
 // of spec, which win over every source of a variable: QORY_RUN_ID, QORY_RUN_SOCKET,
 // QORY_RUN_API, set for a run with a control plane and left out of every other,
+// QORY_HOST_URL, set for a run with a route and left out of every other,
 // QORY_HARNESS_HOME when spec has a harness home, the proxy's variables, the names of
 // prepared.Env, bundle and the start key's endpoint variable. The wall's names are not
 // among them.
 func foragerNames(spec runSpec, prepared runtimes.Launch, bundle []string, key keyed) []string {
-	own := []string{EnvRunID, EnvSocket, EnvRunAPI}
+	own := []string{EnvRunID, EnvSocket, EnvRunAPI, EnvQoryHost}
 	if spec.HarnessHome != "" {
 		own = append(own, EnvHarnessHome)
 	}

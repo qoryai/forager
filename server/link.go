@@ -206,8 +206,8 @@ type LinkCredentialHosts struct {
 
 // LinkRunAnswer is what the gateway answers a run request it accepts,
 // contracts/forager/v1/link-run-answer.schema.json. A member Forager does not know is
-// ignored. Its ProxySecret and StackProxySecret are never printed: fmt, log/slog and
-// encoding/json show each as [redacted].
+// ignored. Its ProxySecret, StackProxySecret and PushProxySecret are never printed:
+// fmt, log/slog and encoding/json show each as [redacted].
 type LinkRunAnswer struct {
 	Version int    `json:"version"`
 	RunID   string `json:"run_id"`
@@ -227,6 +227,11 @@ type LinkRunAnswer struct {
 	// first join request. A separate gateway gives none: [link.StackPreamble] and the
 	// run key open those connections.
 	StackProxySecret string `json:"stack_proxy_secret,omitempty"`
+	// PushProxySecret is the run's push proxy secret on the local link, which opens a
+	// connection to the run's push proxy after the relay's preamble, from the run's open
+	// until its close. Empty for a run with no push credential. A separate gateway gives
+	// none: [link.PushPreamble] and the run key open those connections.
+	PushProxySecret string `json:"push_proxy_secret,omitempty"`
 	// CertificateAuthority is the run's certificate authority, PEM, when the gateway
 	// reads inside HTTPS for the run, with or without a wall.
 	CertificateAuthority string `json:"certificate_authority,omitempty"`
@@ -296,6 +301,9 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 	if s.StackProxySecret != "" {
 		s.StackProxySecret = redactedSecret
 	}
+	if s.PushProxySecret != "" {
+		s.PushProxySecret = redactedSecret
+	}
 	// A name or a value that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or
 	// qecd_ in any case prints its phrase.
 	s.Labels = ShownLabels(a.Labels)
@@ -351,7 +359,7 @@ func shownDocument(d json.RawMessage) json.RawMessage {
 }
 
 // Format prints a as fmt prints a struct, under every verb and flag, with its
-// ProxySecret and StackProxySecret redacted.
+// ProxySecret, StackProxySecret and PushProxySecret redacted.
 func (a LinkRunAnswer) Format(f fmt.State, verb rune) {
 	out := fmt.Sprintf(fmt.FormatString(f, verb), a.shown())
 	if verb == 'v' && f.Flag('#') {
@@ -360,15 +368,17 @@ func (a LinkRunAnswer) Format(f fmt.State, verb rune) {
 	io.WriteString(f, out)
 }
 
-// String is a as %v prints it, its ProxySecret and StackProxySecret redacted.
+// String is a as %v prints it, its ProxySecret, StackProxySecret and PushProxySecret
+// redacted.
 func (a LinkRunAnswer) String() string { return fmt.Sprintf("%v", a) }
 
-// GoString is a as %#v prints it, its ProxySecret and StackProxySecret redacted.
+// GoString is a as %#v prints it, its ProxySecret, StackProxySecret and PushProxySecret
+// redacted.
 func (a LinkRunAnswer) GoString() string { return fmt.Sprintf("%#v", a) }
 
 // LogValue is a as log/slog logs it: its run id, digest and the names it carries,
-// never a variable's value, the proxy secret, the stack proxy secret or the
-// certificate.
+// never a variable's value, the proxy secret, the stack proxy secret, the push proxy
+// secret or the certificate.
 func (a LinkRunAnswer) LogValue() slog.Value {
 	names := slices.Sorted(maps.Keys(a.Variables))
 	return slog.GroupValue(
@@ -377,13 +387,14 @@ func (a LinkRunAnswer) LogValue() slog.Value {
 		slog.Any("variables", accesskey.ShownNames(names)),
 		slog.String("proxy_secret", a.shown().ProxySecret),
 		slog.String("stack_proxy_secret", a.shown().StackProxySecret),
+		slog.String("push_proxy_secret", a.shown().PushProxySecret),
 		slog.Any("placeholders", accesskey.ShownNames(a.Placeholders)),
 		slog.Any("reserved", accesskey.ShownNames(a.Reserved)),
 	)
 }
 
-// MarshalJSON is a as encoding/json writes a struct, with its ProxySecret and
-// StackProxySecret redacted, for a log or a dump that writes it so. The gateway writes
+// MarshalJSON is a as encoding/json writes a struct, with its ProxySecret,
+// StackProxySecret and PushProxySecret redacted, for a log or a dump that writes it so. The gateway writes
 // the run answer from a struct in package gateway, not through this method; reading
 // one back is as encoding/json reads a struct.
 func (a LinkRunAnswer) MarshalJSON() ([]byte, error) { return json.Marshal(a.shown()) }
@@ -392,7 +403,7 @@ func (a LinkRunAnswer) MarshalJSON() ([]byte, error) { return json.Marshal(a.sho
 // contracts/forager/v1/link-reload-answer.schema.json: the policy in force for the run
 // now, its digest and the run's variables, placeholders, reserved names, image and the
 // members of policy_applied the gateway decides. It never has the proxy secret, the
-// stack proxy secret or the certificate authority.
+// stack proxy secret, the push proxy secret or the certificate authority.
 type LinkReloadAnswer struct {
 	Version      int                 `json:"version"`
 	Policy       json.RawMessage     `json:"policy,omitzero"`

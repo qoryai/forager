@@ -28,9 +28,6 @@ import (
 type Runtime interface {
 	// Name is the runtime's name as events report it: claude, codex.
 	Name() string
-	// Version is the version of the program the adapter expects, reported in
-	// session.started and not checked against what is installed. Empty when the adapter expects none.
-	Version() string
 	// Prepare makes a launch one the session can follow: it installs the forwarder as
 	// the program's hook, writes what that takes into the session's directory, and returns
 	// the launch to start in place of the one given, command and arguments. A program
@@ -275,6 +272,16 @@ type Resume = descriptor.Resume
 // argument after resume.after, or before the first -- after it.
 const PlaceBeforeLast = descriptor.PlaceBeforeLast
 
+// InstallRequired is implemented by a runtime that can say whether the session starts
+// it only from a folder the caller installed it in, a descriptor's install_required. It
+// is optional and checked by type assertion, so [Runtime] keeps its methods: a session
+// of a runtime without it may leave SessionSpec.RuntimeInstall unset.
+type InstallRequired interface {
+	// InstallRequired reports whether a session of the runtime needs
+	// SessionSpec.RuntimeInstall.
+	InstallRequired() bool
+}
+
 // Parents is implemented by a runtime that reports which tool call started a subagent.
 // It is optional and checked by type assertion, so [Runtime] keeps its methods: the
 // session sets no parent_agent_id for a runtime without it.
@@ -296,13 +303,14 @@ type Summaries interface {
 
 // The sources of a record. A runtime maps records of SourceOutput and SourceHooks;
 // the session reads the records of SourceSetup, a setup command's, and of
-// SourceMeasure, the helper's measure of the enclosure, and passes none of them to a
-// runtime.
+// SourceMeasure, the helper's measure of the enclosure, and of SourceAfter,
+// SessionSpec.After's, and passes none of them to a runtime.
 const (
 	SourceOutput  = descriptor.SourceOutput
 	SourceHooks   = descriptor.SourceHooks
 	SourceSetup   = descriptor.SourceSetup
 	SourceMeasure = descriptor.SourceMeasure
+	SourceAfter   = descriptor.SourceAfter
 )
 
 // Stop is how a program is asked to leave: Signal, one [CheckStopSignal] passes, and
@@ -326,9 +334,6 @@ type bare string
 
 // Name is the name it was given.
 func (b bare) Name() string { return string(b) }
-
-// Version is empty: a bare runtime expects no version.
-func (bare) Version() string { return "" }
 
 // Prepare returns the launch as it is.
 func (bare) Prepare(a Attach) (Launch, error) { return a.Launch, nil }
@@ -395,9 +400,6 @@ type described struct {
 
 // Name is the descriptor's runtime.
 func (r *described) Name() string { return r.d.Runtime }
-
-// Version is the descriptor's runtime_version.
-func (r *described) Version() string { return r.d.RuntimeVersion }
 
 // ReadsOutput reports whether the descriptor has an output source.
 func (r *described) ReadsOutput() bool { return r.d.Sources.Output != nil }
@@ -501,6 +503,9 @@ func (r *described) Secrets() Declarations {
 	}
 	return out
 }
+
+// InstallRequired is the descriptor's install_required.
+func (r *described) InstallRequired() bool { return r.d.InstallRequired }
 
 // Resume is the descriptor's resume, a copy, and true; the zero Resume and false when
 // it has none.

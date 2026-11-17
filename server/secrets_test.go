@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"slices"
@@ -145,7 +146,8 @@ func TestTheSecretsRequestIsSignedAndItsAnswerVerified(t *testing.T) {
 	}
 }
 
-// TestASecretsRequestOutsideItsFormIsNotSent pins Body's checks.
+// TestASecretsRequestOutsideItsFormIsNotSent pins Body's checks, and that a request of
+// 16 credentials passes them.
 func TestASecretsRequestOutsideItsFormIsNotSent(t *testing.T) {
 	ok := server.SecretsRequest{Version: 1, RunID: runID, RunConfiguration: "sha256=" + strings.Repeat("a", 64), Credentials: []string{"model"}}
 	for name, c := range map[string]struct {
@@ -157,9 +159,9 @@ func TestASecretsRequestOutsideItsFormIsNotSent(t *testing.T) {
 		"another digest": {func(r *server.SecretsRequest) { r.RunConfiguration = "" },
 			"report this bug in the gateway's secrets request to the Forager maintainers; the digest is not sha256= and 64 hex digits"},
 		"no credential": {func(r *server.SecretsRequest) { r.Credentials = nil },
-			"report this bug in the gateway's secrets request to the Forager maintainers; the request lists 0 credentials, and a request lists 1 to 8"},
-		"nine": {func(r *server.SecretsRequest) { r.Credentials = []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"} },
-			"report this bug in the gateway's secrets request to the Forager maintainers; the request lists 9 credentials, and a request lists 1 to 8"},
+			"report this bug in the gateway's secrets request to the Forager maintainers; the request lists 0 credentials, and a request lists 1 to 16"},
+		"17": {func(r *server.SecretsRequest) { r.Credentials = credentialNames(17) },
+			"report this bug in the gateway's secrets request to the Forager maintainers; the request lists 17 credentials, and a request lists 1 to 16"},
 		"a name twice": {func(r *server.SecretsRequest) { r.Credentials = []string{"a", "a"} },
 			"report this bug in the gateway's secrets request to the Forager maintainers; the request lists a credential twice"},
 		"before 1970": {func(r *server.SecretsRequest) { r.Timestamp = -1 },
@@ -207,6 +209,11 @@ func TestASecretsRequestOutsideItsFormIsNotSent(t *testing.T) {
 		if err := schema.Validate(doc); err != nil {
 			t.Errorf("the schema refuses %s: %v", b, err)
 		}
+	}
+	sixteen := ok
+	sixteen.Credentials = credentialNames(16)
+	if _, err := sixteen.Body(); err != nil {
+		t.Errorf("16 credentials: %v", err)
 	}
 }
 
@@ -260,6 +267,15 @@ func TestTheSecretsRequestWaits30Seconds(t *testing.T) {
 			t.Errorf("a client with Timeout %v: deadlines %v; want %v, then %v", c.timeout, got, c.secrets, c.rest)
 		}
 	}
+}
+
+// credentialNames returns n credential names in the grammar: cred-00, cred-01 and on.
+func credentialNames(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("cred-%02d", i)
+	}
+	return out
 }
 
 // TestARefusedCredentialShowsNoSecretInItsName pins a refusal of a credential whose

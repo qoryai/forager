@@ -24,8 +24,9 @@ const MaxRunAPIAnswer = 16 << 20
 var ErrRunAPIUnverified = errors.New("the answer failed verification under the pin")
 
 // ErrRunAPITooLarge is the error of an answer of the run API over the bound the gateway
-// reads: [MaxRunAPIAnswer] for a 200, [MaxRefusal] otherwise. The gateway dropped it
-// unverified. A file has no bound.
+// reads: [MaxRunAPIAnswer] for a 200, or the call's limit for a host call
+// ([Client.HostCall]), and [MaxRefusal] otherwise. The gateway dropped it unverified. A
+// file has no bound.
 var ErrRunAPITooLarge = errors.New("the answer is over the bound the gateway reads")
 
 // RunAPIAnswer is a verified answer of the run API: its status and headers, and Body, or
@@ -80,6 +81,21 @@ func (f *runAPIFile) Close() error { return f.body.Close() }
 // is a transport failure: no answer. A POST
 // goes out once: net/http does not send it again on a connection that failed.
 func (c *Client) RunAPI(ctx context.Context, runURL, runID, method, path string, body []byte, file bool) (*RunAPIAnswer, error) {
+	return c.runAPI(ctx, runURL, runID, method, path, body, file, MaxRunAPIAnswer, MaxRunAPIAnswer)
+}
+
+// HostCall sends one host call of the link, a POST of body to the run endpoint runURL
+// followed by a slash, the run's id and path, as [Client.RunAPI] sends a POST, and reads
+// at most most bytes of a 200's body and at most [MaxRefusal] of any other: a longer
+// body is [ErrRunAPITooLarge], and no byte past the bound is read.
+func (c *Client) HostCall(ctx context.Context, runURL, runID, path string, body []byte, most int) (*RunAPIAnswer, error) {
+	return c.runAPI(ctx, runURL, runID, http.MethodPost, path, body, false, most, MaxRefusal)
+}
+
+// runAPI is [Client.RunAPI] with the bounds of the bytes it reads of a body other than
+// a file: max for a 200, and other for any other status, which [Client.read] then
+// bounds to [MaxRefusal].
+func (c *Client) runAPI(ctx context.Context, runURL, runID, method, path string, body []byte, file bool, max, other int) (*RunAPIAnswer, error) {
 	var set func(http.Header)
 	if method == http.MethodPost {
 		set = func(h http.Header) { h.Set("Content-Type", "application/json") }
@@ -105,7 +121,10 @@ func (c *Client) RunAPI(ctx context.Context, runURL, runID, method, path string,
 		}}}, nil
 	}
 	defer resp.Body.Close()
-	a, err := c.read(resp, sig, MaxRunAPIAnswer)
+	if resp.StatusCode != http.StatusOK {
+		max = other
+	}
+	a, err := c.read(resp, sig, max)
 	if err != nil {
 		return nil, err
 	}

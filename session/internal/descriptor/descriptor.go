@@ -13,7 +13,8 @@
 // source whose match holds produces one event, type and data, by copying values out of
 // the record. A rule with each produces one event per element of an array in the record
 // that a rule with that each matches, each by the first such rule it matches. It matches
-// and copies; it never computes, and there is nothing to configure that would make it.
+// and copies, and computes one thing alone: a rule's sum adds named numbers over the
+// members of an object, such as the token counts per model of a result line.
 // [Descriptor.Link] reads the descriptor's parent member: which tool call started a
 // subagent, for the session to set the subagent's parent.
 //
@@ -22,16 +23,18 @@
 // writes a run's model id, effort value and model endpoint, and the variables it reads
 // a model key from. Its Fixed is the variables the session sets for the runtime in
 // every launch, over every other source, its [Config] how the session passes
-// settings to a runtime that reads them as TOML, and its EgressHosts the hosts the
-// runtime needs to reach. [Runtimes] renders the secrets, the model section, the fixed
-// variables, the egress hosts and the resume's prefix and path, for every descriptor
-// the contract ships, as runtimes.json, the file a server vendors.
+// settings to a runtime that reads them as TOML, its EgressHosts the hosts the runtime
+// needs to reach, and its InstallRequired whether a session of it needs the caller's
+// installed folder. [Runtimes] renders the secrets, the model section, the fixed
+// variables, the egress hosts, install_required and the resume's prefix and path, for
+// every descriptor the contract ships, as runtimes.json, the file a server vendors.
 package descriptor
 
 import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -45,16 +48,15 @@ import (
 
 // Descriptor is one runtime's descriptor.
 type Descriptor struct {
-	Version        int       `yaml:"version" json:"version"`
-	Runtime        string    `yaml:"runtime" json:"runtime"`
-	Title          string    `yaml:"title" json:"title,omitempty"`
-	RuntimeVersion string    `yaml:"runtime_version" json:"runtime_version"`
-	Sources        Sources   `yaml:"sources" json:"sources"`
-	Stop           *Stop     `yaml:"stop" json:"stop,omitempty"`
-	Headless       *Headless `yaml:"headless" json:"headless,omitempty"`
-	Secrets        *Secrets  `yaml:"secrets" json:"secrets,omitempty"`
-	Model          *Model    `yaml:"model" json:"model,omitempty"`
-	Tools          *Tools    `yaml:"tools" json:"tools,omitempty"`
+	Version  int       `yaml:"version" json:"version"`
+	Runtime  string    `yaml:"runtime" json:"runtime"`
+	Title    string    `yaml:"title" json:"title,omitempty"`
+	Sources  Sources   `yaml:"sources" json:"sources"`
+	Stop     *Stop     `yaml:"stop" json:"stop,omitempty"`
+	Headless *Headless `yaml:"headless" json:"headless,omitempty"`
+	Secrets  *Secrets  `yaml:"secrets" json:"secrets,omitempty"`
+	Model    *Model    `yaml:"model" json:"model,omitempty"`
+	Tools    *Tools    `yaml:"tools" json:"tools,omitempty"`
 	// Fixed is the variables the session sets for the runtime in every launch, by name,
 	// walled or not: no other source's value of one applies. Nil when the descriptor
 	// sets none.
@@ -67,6 +69,11 @@ type Descriptor struct {
 	// server to allow for a run. No code of this module applies them to a run's policy.
 	// Nil when the descriptor has none.
 	EgressHosts []string `yaml:"egress_hosts" json:"egress_hosts,omitempty"`
+	// InstallRequired is true when the session starts the runtime only from a folder
+	// the caller installed it in: Join returns an error for a session of it without
+	// SessionSpec.RuntimeInstall. False starts it also as the caller names it, such as
+	// from the run's image.
+	InstallRequired bool `yaml:"install_required" json:"install_required,omitempty"`
 	// Resume is where the runtime writes the transcript of its session, and how the
 	// session starts the runtime again from it. Nil when the runtime has no resume.
 	Resume *Resume `yaml:"resume" json:"resume,omitempty"`
@@ -315,6 +322,7 @@ type Rule struct {
 	Match map[string]any `yaml:"match" json:"match"`
 	Type  string         `yaml:"type" json:"type"`
 	// Data holds the event's fields and the record paths their values are copied from.
+	// A field with dots, such as usage.input, is a member of a nested object.
 	Data map[string]string `yaml:"data" json:"data"`
 	// Set maps event fields to values of the descriptor's, a string, a number or a
 	// bool, for a field the record has no member for, such as source: startup.
@@ -323,6 +331,18 @@ type Rule struct {
 	// dev.qory.runtime.started of the main agent, for a record that does not contain
 	// them, such as session_id. Only a rule of the output source has it.
 	FromStarted []string `yaml:"from_started" json:"from_started,omitempty"`
+	// Sum, when set, adds more fields, each a sum over the members of an object.
+	Sum *Sum `yaml:"sum" json:"sum,omitempty"`
+}
+
+// Sum is a rule's fields that add numbers over the members of the object at the path
+// Over: each field of Fields is the sum of the number at its path in every member that
+// is an object and has a whole number of at least 0 there, in the order of the members'
+// names, leaving out a member that would take the total past 2^53. A field no member
+// adds to is left out, and so is every field when Over is no object.
+type Sum struct {
+	Over   string            `yaml:"over" json:"over"`
+	Fields map[string]string `yaml:"fields" json:"fields"`
 }
 
 // Event is one event a rule produces: its type, its data, and FromStarted, the rule's
@@ -335,9 +355,9 @@ type Event struct {
 
 // Record is one unit of runtime output as a descriptor reads it.
 type Record struct {
-	// Source is "output" or "hooks"; "setup" for a setup command's record, or "measure"
-	// for the enclosure's peak memory and CPU time, which the session reads and no
-	// descriptor's rule maps.
+	// Source is "output" or "hooks"; "setup" for a setup command's record, "measure"
+	// for the enclosure's peak memory and CPU time, or "after" for SessionSpec.After's
+	// record, which the session reads and no descriptor's rule maps.
 	Source string `json:"source"`
 	// Record is the JSON object the runtime produced, decoded with encoding/json.
 	Record map[string]any `json:"record"`
@@ -349,12 +369,14 @@ type Record struct {
 }
 
 // The sources of a record. A descriptor's rules map records of SourceOutput and
-// SourceHooks; the session reads the records of SourceSetup and SourceMeasure.
+// SourceHooks; the session reads the records of SourceSetup, SourceMeasure and
+// SourceAfter.
 const (
 	SourceOutput  = "output"
 	SourceHooks   = "hooks"
 	SourceSetup   = "setup"
 	SourceMeasure = "measure"
+	SourceAfter   = "after"
 )
 
 // Parse validates a descriptor document against the schema and decodes it. name is
@@ -447,23 +469,44 @@ func member(node *yaml.Node, key string) *yaml.Node {
 	return nil
 }
 
-// checkRules checks what the schema cannot express of the rules: a field of an event
-// comes from one of data, set and from_started.
+// checkRules checks what the schema cannot express of each rule's fields. Those of data
+// and of sum together are set once each, and none is the object of another, as usage
+// is of usage.input. A field also comes from one of data, sum, set and from_started,
+// and no field of one of them is the object of a field of another.
 func (d *Descriptor) checkRules() error {
-	for i, rule := range d.Rules {
+	for i, r := range d.Rules {
+		fields := slices.Collect(maps.Keys(r.Data))
+		var sum []string
+		if r.Sum != nil {
+			sum = slices.Sorted(maps.Keys(r.Sum.Fields))
+			fields = append(fields, sum...)
+		}
+		slices.Sort(fields)
+		for j := 1; j < len(fields); j++ {
+			if a, b := fields[j-1], fields[j]; a == b || strings.HasPrefix(b, a+".") {
+				return fmt.Errorf("rules[%d]: set %s once, and set no member of it: a rule's data and sum write each field once", i, a)
+			}
+		}
 		seen := map[string]string{}
 		for _, m := range []struct {
 			member string
 			fields []string
 		}{
-			{"data", slices.Sorted(maps.Keys(rule.Data))},
-			{"set", slices.Sorted(maps.Keys(rule.Set))},
-			{"from_started", rule.FromStarted},
+			{"data", slices.Sorted(maps.Keys(r.Data))},
+			{"sum", sum},
+			{"set", slices.Sorted(maps.Keys(r.Set))},
+			{"from_started", r.FromStarted},
 		} {
 			for _, f := range m.fields {
 				if other, ok := seen[f]; ok {
-					return fmt.Errorf("rules[%d]: set the field %s in one of data, set or from_started, not in %s and %s",
+					return fmt.Errorf("rules[%d]: set the field %s in one of data, sum, set or from_started, not in %s and %s",
 						i, accesskey.ShownName(f, false), other, m.member)
+				}
+				for g, other := range seen {
+					if strings.HasPrefix(f, g+".") || strings.HasPrefix(g, f+".") {
+						return fmt.Errorf("rules[%d]: set %s in %s or %s in %s, not both: one is a member of the other",
+							i, accesskey.ShownName(g, false), other, accesskey.ShownName(f, false), m.member)
+					}
 				}
 				seen[f] = m.member
 			}
@@ -785,24 +828,66 @@ func (d *Descriptor) Link(r Record) (agentID, toolUseID string, ok bool) {
 const eachPrefix = "each."
 
 // event is the rule's event for the record, or for the element when it is not nil:
-// the fields of Data whose path exists, with their values, and the fields of Set.
+// the fields of Data whose path exists, with their values, each field of Sum that has a
+// sum, and the fields of Set.
 func (rule *Rule) event(record map[string]any, element *any) Event {
-	data := copied(rule.Data, record, element)
+	data := rule.data(record, element)
 	for field, v := range rule.Set {
 		data[field] = v
 	}
 	return Event{Type: rule.Type, Data: data, FromStarted: slices.Clone(rule.FromStarted)}
 }
 
-// copied is the data of a rule's event: each field whose path exists, with its value.
-func copied(data map[string]string, record map[string]any, element *any) map[string]any {
+// data is the data of a rule's event: each field of Data whose path exists, with its
+// value, and each field of Sum that has a sum.
+func (rule *Rule) data(record map[string]any, element *any) map[string]any {
 	out := map[string]any{}
-	for field, path := range data {
+	for field, path := range rule.Data {
 		if v, ok := read(record, element, path); ok {
-			out[field] = v
+			set(out, field, v)
+		}
+	}
+	if rule.Sum == nil {
+		return out
+	}
+	over, _ := read(record, element, rule.Sum.Over)
+	members, _ := over.(map[string]any)
+	names := slices.Sorted(maps.Keys(members))
+	for field, path := range rule.Sum.Fields {
+		total, found := 0.0, false
+		for _, name := range names {
+			obj, ok := members[name].(map[string]any)
+			if !ok {
+				continue
+			}
+			v, _ := lookup(obj, path)
+			if n, ok := number(v); ok && n >= 0 && n == math.Trunc(n) && n <= maxSum-total {
+				total, found = total+n, true
+			}
+		}
+		if found {
+			set(out, field, total)
 		}
 	}
 	return out
+}
+
+// maxSum is the largest total of a sum, 2^53: every whole number up to it is exact in a
+// float64.
+const maxSum = 1 << 53
+
+// set writes v at the dotted field in out, making each object on the way.
+func set(out map[string]any, field string, v any) {
+	keys := strings.Split(field, ".")
+	for _, k := range keys[:len(keys)-1] {
+		next, ok := out[k].(map[string]any)
+		if !ok {
+			next = map[string]any{}
+			out[k] = next
+		}
+		out = next
+	}
+	out[keys[len(keys)-1]] = v
 }
 
 // matches reports whether the record matches every entry of match, or the element for a

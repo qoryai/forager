@@ -72,6 +72,10 @@ type Credential struct {
 	// to the key's hosts, so the session's value of it never passes. Empty for none.
 	AccountHeader string
 	Account       func(value []byte) (string, error)
+	// PushRef is the one ref a git push through the credential may create, update or
+	// delete, such as refs/heads/qory/wi_01: a push to its hosts whose ref commands
+	// name any other gets a 403 from the branch guard, and so does every push when it is empty.
+	PushRef string
 }
 
 // Tool is a program of the machine's that serves hosts: the proxy hands every request
@@ -597,8 +601,20 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 				fmt.Fprintf(w, "qory: %s %s%s denied by the gateway: the path could be read two ways\n", accesskey.ShownValue(r.Method, false), d.Host, accesskey.ShownValue(clean, false))
 				return
 			}
+			if body := t.p.pathless.Load(); body != nil {
+				io.WriteString(w, (*body)(accesskey.ShownValue(r.Method, false), d.Host, accesskey.ShownValue(clean, false)))
+				return
+			}
 			fmt.Fprintf(w, "qory: %s %s%s denied by policy (mode %s): no path rule of the run's covers it\n", accesskey.ShownValue(r.Method, false), d.Host, accesskey.ShownValue(clean, false), req.Mode)
 			return
+		}
+		// The branch guard reads a push's ref commands before anything is sent, on every
+		// host a credential is for, whether or not the credential is set on the request.
+		if len(creds) > 0 {
+			if err := guardPush(w, r, d.Host, clean, c); err != nil {
+				t.p.refusePush(w, req, err)
+				return
+			}
 		}
 		if tl != nil {
 			t.toTool(w, r, req, tl)

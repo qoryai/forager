@@ -149,8 +149,9 @@ Stated so a receiver reads the record for what it is.
   and the egress record come from Forager and are always there. In an image by
   reference the image can change or forge the runtime events, and the runtime's
   settings and hooks are no boundary (§Images).
-- A descriptor matches and copies. It never computes, so a mapping that needs a program
-  is a Forager change, never a configuration change.
+- A descriptor matches and copies. The one thing it computes is a rule's `sum`, which
+  adds named numbers over the members of one object. A mapping that needs any other
+  program is a Forager change, never a configuration change.
 - A continuation resumes the runtime's session from the transcript as Forager masked it.
   A secret or a hidden harness's text in the transcript reaches the resumed runtime as
   its replacement; how much that changes the resumed session has not been measured. The
@@ -207,7 +208,9 @@ One run, on a developer machine, with a server configured:
    alone, which the forwarder checks (§The gateway's link, Agent traffic). It opens the
    local socket and sets `QORY_RUN_SOCKET` to its path, `QORY_RUN_ID` to the run id,
    `QORY_RUN_API` to the run API's base URL for a run with a control plane (§The run API),
-   and `QORY_HARNESS_HOME` to the harness's home when the launch spec has one. Nothing else
+   `QORY_HOST_URL` to `http://host.qory.invalid` for a run with a route to its caller
+   (§The route to the caller), and `QORY_HARNESS_HOME` to the harness's home when the
+   launch spec has one. Nothing else
    of Forager's enters the environment but the variables (§Variables) and the
    placeholders; in a walled run the runtime's declared, reserved and denied variables
    and the node's denied ones that nothing sets are unset inside (§The wall).
@@ -458,7 +461,7 @@ egress:
 | `egress.allow` | lower-case host names, or `*.` followed by a name for every host below it. No ports, no paths, no schemes. An entry that names a host, not a `*.` suffix, is a host name or an IPv4 address in canonical form, four decimal parts with no leading zero; a document with any other is refused as one the schema refuses. Absent is empty, and `enforce` with an empty list reaches only the hosts `allow_first` lists |
 | `egress.allow_first` | hosts the session may reach in either mode, checked before `deny` and `allow`: a lower-case host name or an IPv4 address in canonical form, with no `*.` pattern, at most 64 entries. A host an entry matches is allowed, and the entry is the rule reported; a host below an entry is not matched. The guard of a walled proxy (§The wall), `wall:host-form`, `wall:plain-request`, the run limits and `paths` still apply. A document with any other entry is refused. Absent is empty |
 | `egress.deny` | hosts the session may not reach, in `allow`'s grammar, in either mode: a host an entry covers is denied before `allow` and the mode are consulted, unless `allow_first` lists the host, whatever `allow` contains, and the entry is the rule reported. Absent is empty |
-| `egress.paths` | by host, in `allow`'s grammar, the paths the session may request on it: a path matched whole, or up to a final `*` as a prefix. A host listed is terminated, which needs a wall; a host not listed is reached on every path. A host several entries cover is held to the most specific one: its name itself, else the `*.` entry with the longest suffix. An empty list is no path at all |
+| `egress.paths` | by host, in `allow`'s grammar, the paths the session may request on it: a path matched whole, or up to a final `*` as a prefix, in the path grammar (§The policy, The path grammar). A host listed is terminated, which needs a wall; a host not listed is reached on every path. A host several entries cover is held to the most specific one: its name itself, else the `*.` entry with the longest suffix. An empty list is no path at all |
 | `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, such as a repository, of at most 4096 characters. A policy defines none (§Credentials) |
 | `tools` | the tools of the machine's the run may reach: `name`, and an `argument` when the definition takes one, of at most 4096 characters. A policy defines none (§Tools) |
 | `image` | the image the run starts in: the machine's name for one of its images, or a reference pinned by digest, `NAME@sha256:` and 64 lower-case hexadecimal digits, under one of the machine's `images.allow` prefixes; absent is the machine's default. A policy defines no image (§Images) |
@@ -528,6 +531,18 @@ walled proxy (§The wall) decides before every list. In each list the first entr
 matches is the rule reported. A denial
 is a `403 Forbidden` with a one-line text body containing the host and the mode; a tunnel
 is never opened for it.
+
+**The path grammar.** An entry of `egress.paths`, of a credential's `paths` and of an
+apply item's `paths` starts with `/` and contains no `?`, `#` or white space. A final
+`*` makes the entry a prefix: `/repos/example-org/app/*` matches every path that starts
+with `/repos/example-org/app/`. A segment written exactly `{}` matches one segment that
+is not empty and contains no `/`: `/repos/example-org/app/pulls/{}` matches
+`/repos/example-org/app/pulls/12`, and neither `/repos/example-org/app/pulls/12/merge`
+nor `/repos/example-org/app/pulls/`. A `{}` may stand at any segment, and beside a final
+`*`: `/repos/{}/app/*` matches `/repos/example-org/app/pulls`. A `*` anywhere but at
+the end, and a `{` or `}` anywhere but in a `{}` segment, fails validation when the entry
+is loaded. So a list can allow a repository's pull requests and leave out their merge:
+`/repos/example-org/app/pulls/{}` and no entry for `/repos/example-org/app/pulls/{}/merge`.
 
 **Matching a path.** On a terminated host every request is decided by the policy's
 paths for the host and by the paths of the host's credentials. It passes when every
@@ -746,7 +761,8 @@ fails, `placeholder_conflict`, and the run stays open.
 
 **Several credentials on one host.** Two credentials may claim one host when each has
 `paths` and no path of one overlaps a path of the other: two paths overlap when one
-request path can match both, such as `/example-org/*` and `/example-org/harness.git/*`.
+request path can match both, such as `/example-org/*` and `/example-org/harness.git/*`,
+or `/repos/{}/app` and `/repos/example-org/{}`. A `{}` segment overlaps every segment.
 The proxy sets the credential whose paths match the request, and a request that no
 credential's paths match gets none. A credential without `paths` stays alone on its
 hosts. Every answer from the host has the value of each of its credentials replaced
@@ -804,6 +820,40 @@ file, and a value from before a renewal are not replaced. Nor is anything from a
 name or address of the same server that no credential is for: the proxy replaces the
 value only in answers from a host a credential is for. A tool's answers are the tool's.
 
+**The push branch.** On a host of a credential the gateway sets, the proxy reads every
+git push before it sends a byte of it, in either mode. A push is a request whose path
+or `Content-Type` contains `receive-pack`, in any case. Only `POST` to a path that ends
+in `/git-receive-pack`, with `Content-Type` `application/x-git-receive-pack-request`
+and no content coding other than `identity`, is read; any other form of push gets
+`403`. The credential the proxy sets on the push must have `push_ref` (§From the
+server): a push with no credential set, or with one that has no `push_ref`, gets `403`.
+A credential the machine defines with `env` or `file` has no `push_ref`, so no push
+goes through it; an adapter's answer may have `push_ref` on an item, as a run
+configuration's may. The proxy reads the request's `shallow` lines,
+then its ref commands up to their flush, each `<old id> <new id> <ref>`: every command
+must name `push_ref`, so the push creates, updates or deletes that branch alone. The
+first command may ask only for the capabilities `report-status`, `report-status-v2`,
+`side-band`, `side-band-64k`, `quiet`, `atomic`, `ofs-delta`, `delete-refs`, `agent`,
+`object-format` and `session-id`: a push with push options (`push-options`), which
+ask some hosts to act on another branch, such as a merge into the default branch, gets
+`403`, and so does any other capability, and a capability list with a tab or
+another control character. After the flush the body ends, or a pack
+(`PACK`) follows: anything else gets `403`. A signed push (`push-cert`), a line of
+another form, and commands longer than 64 KiB (65536 bytes) or slower than 10 seconds
+get `403`. A request body of a flush alone, git's probe before a large push, names
+no ref and passes; a flush followed by more bytes gets `403`. A push that passes goes
+on as it came. A push that gets `403` has a two-line text body before anything reaches
+the host, and its `dev.qory.run.egress` is `denied` with the `path_rule`
+`wall:push-ref`; it has no `dev.qory.run.target_write`. Such texts are
+`qory: push only refs/heads/qory/wi_01.` with the line `The push of "refs/heads/main" to
+git.example/example-org/app.git/git-receive-pack was not sent: it creates, updates or
+deletes that ref.` and `qory: push through qory's push step, with a credential that
+allows a push.` with the line `The run's credential for git.example allows no push, so
+the push was not sent.`. git shows the status alone: `The requested URL returned error: 403`. A push through a tunnel the proxy does
+not terminate is not read; a host of a credential is always terminated. The guard
+covers git's push over HTTP alone: a host's API that changes a ref, such as a merge, is
+left out by the item's `paths` (§The policy, The path grammar).
+
 **The record.** `dev.qory.run.policy_applied` contains each use, `name`, `argument`,
 `hosts`, `scheme` and `paths`, and the `terminated` hosts. Its `credential_variables` lists the
 variables each credential's placeholder is in (§Variables, The record of the
@@ -820,7 +870,7 @@ event per request, `method: HTTPS` with `request_method`, `path` without its que
 and no error contains a secret.
 
 **From the server.** A run configuration may have `credentials`, the credentials whose
-values the server stores for the run, at most 8, and `model_credential`
+values the server stores for the run, at most 16, and `model_credential`
 (`run-configuration.schema.json`):
 
 ```json
@@ -841,7 +891,7 @@ An entry is one of two kinds. An API credential, with `format`, is a model key, 
 `name`, `format`, `endpoint`, `auth` and optionally `paths` and `key_prefixes`, beside
 the members of several model keys (Several model keys, below). A host credential,
 with `apply`, is any other secret, and has `name`, `apply`, and optionally
-`placeholders` and `purpose` (Harness credentials, below). An entry has no member beside those of its kind, and no
+`placeholders` and `purpose` (Harness credentials and Push credentials, below). An entry has no member beside those of its kind, and no
 value: the server seals each value to the access key in the answer to the secrets
 request (§The server, Secrets).
 
@@ -888,6 +938,10 @@ request (§The server, Secrets).
   path. A path with a part the proxy denies in a request's path, such as the `..;`
   segment of `/a/..;/b`, is `run_configuration_invalid`, as for an API credential's
   `paths` (Paths and an account header of a model key, below).
+- An item's `push_ref`, optional, is the one branch a git push through the item may
+  change, `refs/heads/` and a name, at most 255 characters, such as
+  `refs/heads/qory/wi_01` (§Credentials, The push branch). Absent, the item allows no
+  push.
 - `placeholders` are variables for the enclosure to get with the placeholder value.
 
 Forager checks a run configuration's `credentials` against the schema, then refuses a
@@ -957,7 +1011,7 @@ credentials as before.
 **Renewal.** A value of the answer may have `expires_at`, when it stops working, and
 `apply`, where it is set (`sealed-plaintext.schema.json`). Each `apply` item is within
 one of its entry's items: its hosts among that item's hosts, the same `scheme`,
-`username` and `header`, and paths that the item's paths cover. An API credential's
+`username`, `header` and `push_ref`, and paths that the item's paths cover. An API credential's
 item is its endpoint's host with its `auth`. The items may narrow the entry and never
 widen it. The gateway sets the value on the answer's items, or on the entry's when the
 answer has none.
@@ -1402,8 +1456,9 @@ hosts: a run's stack_hosts are fixed when it starts`, and the policy in force st
 
 **Harness credentials.** A host credential may have `purpose`: `harness` for qory's
 fetch of the run's harness definition through the stack proxy, before the first session
-joins, or `work`, the same as no `purpose`, for the run's work. An API credential has no
-`purpose`.
+joins, `push` for qory's push and the calls of its submit step through the push proxy
+(Push credentials, below), or `work`, the same as no `purpose`, for the run's work. An
+API credential has no `purpose`.
 
 ```json
 {"name": "harness-1", "purpose": "harness",
@@ -1443,6 +1498,61 @@ not see, such as one of another organisation. The open's `dev.qory.run.policy_ap
 then lists each harness credential by `name` and `purpose` alone, and the stack proxy's
 `dev.qory.run.egress` records have no `path` and no `path_rule`. It is fixed when the
 run starts: a reload's `harness_hidden` is ignored.
+
+**Push credentials.** A host credential with `purpose: push` is for qory's push of the
+work item's branch and the pull request calls of its submit step. Forager has no access
+level: Qory Apiary sends a push credential only for a `write` run, beside a read work
+credential, and a run with no push credential opens no push proxy.
+
+```json
+{"name": "push-1", "purpose": "push",
+ "apply": [{"hosts": ["git.example"], "scheme": "basic", "username": "x-access-token",
+            "paths": ["/example-org/app.git/*"], "push_ref": "refs/heads/qory/wi_01"},
+           {"hosts": ["api.git.example"], "scheme": "bearer",
+            "paths": ["/repos/example-org/app/pulls", "/repos/example-org/app/pulls/{}"]}]}
+```
+
+The run's push proxy sets a push credential on its hosts and paths, with the branch
+guard of each item's `push_ref`, and the run's proxy never does: the run answer's
+`credential_hosts` and `placeholders` have no entry for one, and no session, setup step,
+After, image step or host proxy gets its value. A push from any of them through the
+run's proxy gets the branch guard's `403`, `wall:push-ref`, when no work credential
+there has a `push_ref`. The push proxy allows the push credentials' hosts alone, in
+`enforce` mode, and returns a `403` for every other host and for every path of those
+hosts that no item covers. It checks paths, not methods: on a path an item covers, every
+method gets the push value, so under the item `/repos/example-org/app/pulls/{}` a
+`PATCH` of `/repos/example-org/app/pulls/12` passes, while
+`/repos/example-org/app/pulls/12/merge` gets a `403`. The branch guard limits each git
+push to the item's `push_ref`. The paths of the push items pin the repository: an item
+with no paths covers every path on its hosts. Its decisions are `dev.qory.run.egress` records with `channel:
+push`. It opens with the run and stays open until the run closes, through every join,
+since qory pushes after each session. A run with a push credential has a certificate
+authority, and the push proxy ends TLS with it on every host. The gateway fetches and
+renews the value as any other credential's from the server.
+
+Each of these is `run_configuration_invalid`, with the credential's name in `names`.
+At the start: a push credential with `placeholders`, `Remove placeholders from push
+credentials: no session gets a push credential.`, with the credential's name on a
+second line; two items of push credentials on one host when one has no paths, `Give
+paths to every apply item of a push credential on a host that another push item is
+for.`; and two whose paths overlap on one host, `Change the paths of push credential
+items on one host so that they do not overlap.` At the start, and at every reload, where
+the reload fails and the policy in force stays: a host of one that the policy in force
+does not allow under `enforce`, `Add each push credential's host to the run's egress
+allow list.`; one a deny entry covers, `Remove each push credential's host from the
+egress deny lists.`; and one a path rule of the node's covers, `Remove the node's path
+rules for each push credential's host: the push proxy checks none.` The texts of hosts
+and of items have a second line with the credentials' names and the host. A work credential on a push credential's host and paths is
+no conflict, since no proxy sets both. Every `dev.qory.run.policy_applied`, the open's
+and each join's, lists each item of a push credential in `credentials`, with `purpose:
+push`.
+
+On the local link the run answer's `push_proxy_secret` opens the push proxy, after
+`QORY-RELAY` on the proxy's address; behind a separate gateway, `QORY-PUSH` and the run
+key open it on the one address. A run with no push credential has no push proxy: its
+answer has no `push_proxy_secret`, and the gateway closes a `QORY-PUSH` connection for
+it unanswered. The push proxy's secret and the run key stay in qory's process: no wall,
+relay or container gets them.
 
 ## Tools
 
@@ -1552,7 +1662,7 @@ of the highest source that sets it:
 
 | Source, highest first | What it is | In the launch spec, Go |
 |---|---|---|
-| `fixed` | Forager's names, `QORY_RUN_ID`, `QORY_RUN_SOCKET`, `QORY_RUN_API` and `QORY_HARNESS_HOME`; the proxy's (§Sequence step 5); the names the wall sets (§The wall); the runtime's preparation (§The runtime), a descriptor's `fixed` among them (§The descriptor); the placeholders (§Credentials, §Tools); the start key's endpoint in the runtime's model endpoint variable (§Credentials, The variable of a model key); and the values the harness computes itself | `SessionSpec.HarnessHome`, `SessionSpec.LaunchFixed` |
+| `fixed` | Forager's names, `QORY_RUN_ID`, `QORY_RUN_SOCKET`, `QORY_RUN_API`, `QORY_HOST_URL` and `QORY_HARNESS_HOME`; the proxy's (§Sequence step 5); the names the wall sets (§The wall); the runtime's preparation (§The runtime), a descriptor's `fixed` among them (§The descriptor); the placeholders (§Credentials, §Tools); the start key's endpoint in the runtime's model endpoint variable (§Credentials, The variable of a model key); and the values the harness computes itself | `SessionSpec.HarnessHome`, `SessionSpec.LaunchFixed` |
 | `apiary` | the server's: the run configuration's `variables` | |
 | `run` | the run's variables, `qory run --env` | `SessionSpec.Variables.Run` |
 | `machine` | the machine's variables, the `wall.env` of `forager.yaml` | `SessionSpec.Variables.Machine` |
@@ -1641,7 +1751,7 @@ lists.
 | `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY` | they choose the daemon the agent's Docker client reaches under nested Docker (a Docker daemon inside the wall, separate from the machine's), and how |
 | `DOCKER_CONFIG` | the wall sets it for nested Docker |
 | `PATH` | the enclosure resolves the launch's program through it, and which program runs is the node's choice (§Images) |
-| `NODE_OPTIONS`, `LD_PRELOAD`, `BASH_ENV` | they load code into node, into any dynamically linked program, or into bash before the launch's program starts |
+| `NODE_OPTIONS`, `BUN_OPTIONS`, `LD_PRELOAD`, `BASH_ENV` | they load code into node, into Bun, as in a runtime built with Bun such as Claude Code's native binary, into any dynamically linked program, or into bash before the launch's program starts |
 | `HOME` | the image sets it to a writable place (§Images), and the agent and its tools read their configuration under it |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, and every variable a runtime descriptor reads a model key from | a model key passed in is the agent's to read and send anywhere; the gateway holds it and the session sets the variable to its placeholder (§Credentials) |
 | `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITLAB_TOKEN`, `GL_TOKEN`, `BITBUCKET_TOKEN` | a forge token passed in is the agent's; a credential's placeholder takes the variable instead |
@@ -1867,14 +1977,14 @@ The types, one namespace. Forager's:
 |---|---|---|
 | `dev.qory.run.registered` | the server accepted the run's registration, or behind a separate gateway its attach: the gateway writes it as the first event of its record, sequence 1, before the runtime starts; in the record alone, never posted to the server, which has its values from the access key and the registration; absent when the run has no server | `workspace`, the one id discovery's `workspaces` lists, and `node_id`, discovery's; `instance_id`, the instance id the registration was signed with, as its `X-Qory-Instance-Id` contained it; `forager_version`, `events`, `contract_version`, `interval_seconds`, the registration's. Behind a separate gateway `workspace`, `node_id` and `instance_id` are the run key's, the other four the attach's, and `labels` and `about` the attach answer's, each absent when the starter's registration had none |
 | `dev.qory.run.started` | the run is open: the open wrote it, before the run's host work and before any session; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after `dev.qory.run.registered`, heartbeats aside | `opened_by`, `forager_version`, `host` apart from a run with a run key, behind a wall `wall`; `machine` when the caller passes it, and `setup` when the run has setup commands (§The events, Where the run and its setup ran); and `labels` when the caller passes any, and `about` when the caller passes one |
-| `dev.qory.session.started` | a session joined the run: its runtime is about to start; one per join that starts | `session`, `runtime`, `runtime_version`, `bare` when the session started with no runtime (§The events, A session with no runtime), `command`, `args`, `dir`, `interactive`, on a pseudo-terminal `terminal`, behind a wall `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `setup_commands` when the session has setup commands inside the wall (§The wall); and `harness` when the caller passes the harness sources the session's compose used, apart from a run with a run key |
+| `dev.qory.session.started` | a session joined the run: its runtime is about to start; one per join that starts | `session`, `runtime`, `runtime_version` when the session has `SessionSpec.RuntimeInstall`, the version the caller installed (§The runtime, The installed program), `bare` when the session started with no runtime (§The events, A session with no runtime), `command`, `args`, `dir`, `interactive`, on a pseudo-terminal `terminal`, behind a wall `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `setup_commands` when the session has setup commands inside the wall (§The wall); and `harness` when the caller passes the harness sources the session's compose used, apart from a run with a run key |
 | `dev.qory.run.policy_applied` | right after `dev.qory.run.started`, with an empty `variables`; right after each `dev.qory.session.started` and before the session's wall starts, also for a session whose wall then fails to start, with that session's `variables`, `credential_variables` and `harness_hosts`; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `allow_first`, `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated`, `stack_hosts` |
 | `dev.qory.run.step_started` | a step of the run's host work started, such as a fetch or a compose; after `dev.qory.run.started`, numbered from 1 in the order the steps start (Steps, below) | `step`, `name`, `kind` |
 | `dev.qory.run.step_exited` | a step ended; one per step, after its `dev.qory.run.step_started` and after every `dev.qory.run.log` of the step | `step`, `state`, `exit_code`, `duration_ms` |
 | `dev.qory.run.built` | the run's caller wrote the result of a build of an image of an environment (`(*session.Run).Built`); at most one per run, after `dev.qory.run.started` and before `dev.qory.run.exited`, outside every session and every step. Forager checks the form of each member, and `Built` returns an error for an image, an environment image or a base image that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` in any case | `image`, the image by its digest, `NAME@sha256:` and 64 lower-case hexadecimal digits; `size`, its size in bytes, 1 or more; `commit`, the full commit id the image was built from, 40 or 64 lower-case hexadecimal characters; `environment_ref`, the caller's reference to the environment the image is for, 1 character or more, with `qory-proxy-password` in place of a forwarder's password, and a phrase in place of a reference that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_`, as in a step's `name`; and, when the caller reports them, `environment_image`, the environment image the build pushed or started from, and `base`, the base image the build pulled, each by its digest, of the form of `image` |
 | `dev.qory.run.log` | one per chunk of a session's output, with the session's number as `session`, or of the run's host work outside every session, which the caller writes with `stream: stderr` and no `session`, and with the step's number as `step` inside a step: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes`, `session`, `step` |
 | `dev.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size takes effect; never on pipes | `cols`, `rows`, `session` |
-| `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request, and on a host a tool serves one per tool invocation; the same for the stack proxy, with `channel: stack`; one per request of the route to the run API, with `channel: run_api` (§The run API) | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_id`, `status`, `request_method`, `path`, `path_rule`, `credential`, `tool`; `channel` on the stack proxy's and the run API's |
+| `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request, and on a host a tool serves one per tool invocation; the same for the stack proxy, with `channel: stack`, and for the push proxy, with `channel: push`; one per request of the route to the run API, with `channel: run_api` (§The run API); one per request a session's forwarder serves for the route to `host.qory.invalid`, with `channel: qory_host`, which the session writes, of its refusals with `400`, `429` and `503` at most one each a second (§The route to the caller) | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_id`, `status`, `request_method`, `path`, `path_rule`, `credential`, `tool`; `channel` on the stack proxy's, the push proxy's and the run API's |
 | `dev.qory.run.target_write` | a request the proxy reads counts as a write to a place in another system, a git push over HTTP: one when the write begins, and one when it ends, before `dev.qory.run.exited` (§The events, Writes to a target) | `system`, `path`, `state`, and `request_id`, that of the request's `dev.qory.run.egress` |
 | `dev.qory.run.heartbeat` | every `interval_seconds` from the accepted registration until the final event, or from `dev.qory.run.started` when the run has no server; `elapsed_seconds` counts since the open's discovery of its gateway's link | `elapsed_seconds`, `interval_seconds` |
 | `dev.qory.session.exited` | a session ended: its runtime exited or was stopped, its join was refused, or the run ended while it ran, when the gateway's or the resend's `dev.qory.session.exited` comes right before the run's `dev.qory.run.exited`; one per join, the last event of the session's | `session`, `state`, `exit_code`, `signal`, `reason`, `duration_ms`, `peak_memory_bytes`, `cpu_time_ms` |
@@ -1900,7 +2010,7 @@ The runtime's, produced by a descriptor from what the runtime reports:
 | `dev.qory.runtime.text` | the runtime printed a text or thinking block, of the main conversation or of a subagent, on its standard output | `session_id`, `text`, `kind`, `role`, `agent_id`, `agent_type`, `message_id`, `truncated` |
 | `dev.qory.runtime.notification` | the runtime notified its user: waiting for a permission, idle | `session_id`, `kind`, `message`, `title` |
 | `dev.qory.runtime.ended` | the runtime closed its session | `session_id`, `reason` |
-| `dev.qory.runtime.result` | a non-interactive session printed its result | `session_id`, `outcome`, `is_error`, `turns`, `duration_ms`, `cost_usd`, `result` |
+| `dev.qory.runtime.result` | a non-interactive session printed its result | `session_id`, `outcome`, `is_error`, `turns`, `duration_ms`, `cost_usd`, `result`, `usage` |
 
 **Work in the background.** A runtime that starts a command or a subagent in the
 background reports it where it reports everything else: the start is a tool call,
@@ -1936,6 +2046,21 @@ from the runtime unchanged: `input`, `response` and `content` have the tool's sh
 `reason`, `kind`, `outcome` are the runtime's words. Four members are the session's to
 set, and the descriptor schema refuses a rule that maps one: `session`, `line`,
 `truncated` and `summary` (below).
+
+**A result's tokens.** `dev.qory.runtime.result` contains `usage`, the tokens of the
+runtime's launch so far, subagents included: `input`, the input tokens neither read
+from nor written to the cache; `output`, the output tokens, thinking included;
+`cache_read`, the input tokens read from the cache; and `cache_write`, the input tokens
+written to the cache, of every cache lifetime. The four counts do not overlap, and each
+is optional: an absent count is unknown, never 0. A launch can write several result
+lines, so a session can have several `dev.qory.runtime.result` events, each with the
+launch's total up to it: Claude Code 2.1.325 writes one more when a subagent in the
+background hands back and one when its notification arrives. For Claude Code, `usage`
+is the line's `modelUsage` summed over the models (`inputTokens`, `outputTokens`,
+`cacheReadInputTokens`, `cacheCreationInputTokens`), and `cost_usd` is the launch's
+total too. The line's `usage` counts neither the subagents nor the lines before, and
+`turns` counts the turns since the line before. A line with no `modelUsage` gives no
+`usage`.
 
 **A subagent's parent.** `dev.qory.runtime.subagent_started` contains `parent_agent_id`
 when another subagent started this one and the runtime reported it. Claude Code 2.1.292
@@ -2048,7 +2173,10 @@ readable name such as `fetch github.com/example-org/app`, and `kind`, then a
 `dev.qory.run.exited`'s `state` but `paused`. `exit_code` is the exit status of the step's process,
 and `-1` when no process exit status exists, the rule of `dev.qory.run.exited`'s
 `exit_code`. `duration_ms` is the time from the step's start to its end. Each member of
-the two events is required.
+the two events is required, apart from `reason` on `dev.qory.run.step_exited`, which an
+`after` step alone has: `timeout`, cancelled at `SessionSpec.AfterTimeout`, or
+`out_of_memory`, failed when the kernel killed a process of After's container for
+lack of memory while the step ran.
 
 | `kind` | The step |
 |---|---|
@@ -2062,6 +2190,7 @@ the two events is required.
 | `push` | host work that sends the run's commits |
 | `machine` | the start of the machine the run runs on |
 | `copy` | host work that copies the session's work out of the wall |
+| `after` | the command `SessionSpec.After` runs inside the wall once the runtime exits (§The wall, After) |
 
 The steps come after `dev.qory.run.started`, numbered from 1 in the order they start,
 one at a time, apart from one case: a session with no runtime, `bare: true` in its
@@ -2076,7 +2205,13 @@ number as `step`, between its `dev.qory.run.step_started` and its
 `dev.qory.run.step_exited`. A host line outside every step has no `step`. `step` is
 optional on `dev.qory.run.log`, so a record with no steps validates. `setup` is the
 kind of a setup command wherever it runs. Forager writes a `setup` step for each
-command of `(*session.Run).Setup` and of `SessionSpec.Setup`.
+command of `(*session.Run).Setup` and of `SessionSpec.Setup`, and an `after` step,
+named `after`, for a session with `SessionSpec.After`: it lies inside the session, after
+the runtime's exit, and ends before the session's `dev.qory.session.exited`, which
+keeps the runtime's `state` and `exit_code`. Its lines are `dev.qory.run.log` events with
+`session` and `step`. No runtime event follows the after step's
+`dev.qory.run.step_started`: the session has read the runtime's output to its end and
+closed its events before it starts After's container.
 
 The caller writes the steps of its host work, `fetch`, `compose`, `build`, `push`,
 `machine` and `copy`, before the first join, between joins, or after the last join and
@@ -2586,9 +2721,11 @@ read run is a run whose workspace qory binds read-only for the agent,
 with `read_needs_wall`, a read run whose setup is set to run inside the agent's
 container with `read_needs_setup_outside`, a read run whose image runs nested Docker
 with `read_needs_no_nested_docker`, and a read run whose setup container could not be
-removed with `read_needs_setup_removed`, each `failed` with `exit_code` `-1`.
-`(*session.Run).Close` returns an error for each of the ten codes with another state or
-exit code, or after a join, and the gateway returns `400` `invalid_request` to a batch
+removed with `read_needs_setup_removed`, each `failed` with `exit_code` `-1`. qory
+closes a run with no join whose access is not read and that has no wall with
+`write_needs_wall`, `failed` with `exit_code` `-1`.
+`(*session.Run).Close` returns an error for each of the eleven codes with another state
+or exit code, or after a join, and the gateway returns `400` `invalid_request` to a batch
 with such a `dev.qory.run.exited` and ends the run `failed` with `batch_refused`. The
 state of each of Forager's endings:
 
@@ -2612,6 +2749,7 @@ state of each of Forager's endings:
 | the run was closed with no join, by qory, because the run is a read run and its setup is set to run inside the agent's container; `exit_code` is `-1` | `failed` | `read_needs_setup_outside` |
 | the run was closed with no join, by qory, because the run is a read run and its image runs nested Docker; `exit_code` is `-1` | `failed` | `read_needs_no_nested_docker` |
 | the run was closed with no join, by qory, because the run is a read run and its setup container could not be removed; `exit_code` is `-1` | `failed` | `read_needs_setup_removed` |
+| the run's access is not read, so the agent may change the checkout, and the machine has no wall, so the agent would run as the machine's user; qory closed the run before any session joined; `exit_code` is `-1` | `failed` | `write_needs_wall` |
 | the gateway heard nothing from the session for 3 × its heartbeat interval | `failed` | `session_lost` |
 | the gateway was lost before the run's exit was recorded, because Forager died; written when the record is sent again, `duration_ms` to the last event recorded | `failed` | `gateway_lost` |
 | the gateway refused a batch from the run's session (§The gateway's link) | `failed` | `batch_refused` |
@@ -3703,11 +3841,19 @@ cap rises with each window the list gains, in the report and in the answer:
 
 ```json
 {"version": 1, "run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9e", "time": "2026-11-10T12:00:05Z",
+ "session": 2,
  "keys": [{"credential": "model", "window": "five_hour", "status": "rejected",
    "resets_at": "2026-11-10T14:00:00Z", "utilization": 100,
    "cooldown_until": "2026-11-10T14:00:00Z", "source": "provider",
    "observed_at": "2026-11-10T12:00:04Z"}]}
 ```
+
+`session` is the number of the session that was open when the gateway made the report,
+as in `dev.qory.session.started`. A session is open from the gateway's `200` to its join
+until the gateway numbers its `dev.qory.session.exited`, or until the run ends at the
+gateway while its join is open, with or without its `dev.qory.session.started`. A
+report made while no session is open, before the first join, between sessions or after
+the last, has no `session`. A refused join opens no session.
 
 Each entry of `keys` is one key and one limit window:
 
@@ -3775,9 +3921,31 @@ the gateway has of the run's keys, so it replaces the report before. A run has a
 one report in flight and one a second; the changes in between go into the next report.
 A burst of changes therefore makes one report, and once a report is accepted or dropped,
 no report goes until a window changes again: a change that a sent report already
-contains makes no second report. When the run ends while a change waits for its report,
-or a report waits for its next try, the gateway sends the newest state once more,
-within 10 seconds, and takes nothing of the answer.
+contains makes no second report.
+
+Each session also makes two boundary reports, with every window the gateway has, also
+when nothing changed: its start report at the join's `200`, and its end report when the
+gateway numbers its `dev.qory.session.exited`, or when the run ends at the gateway while
+its join is open. A join sent again that gets its `200` again makes no second start
+report. A boundary report waits for the gap of a
+second after the report before, and keeps the session and the windows it was made with
+across its tries, with a new `time` for each try. So the end report of session 2 never
+has the state or the number of session 3, and reports reach the server in the order the
+gateway made them, each with a later `time` than the one before. A boundary report that
+waits takes the place of the next try of a report of changes, and contains its changes.
+The first report with a session's number is its start report, and the last is its end
+report, with two exceptions. A gateway that restarts while a session is open makes no
+start report for it when it reopens the run, and a start report made before the
+restart that had not gone may be lost: the stopping gateway sends it once more, within
+10 seconds, only while its process still runs. A boundary report that has not gone
+within the 10 seconds after the run's end is lost.
+
+When the run ends while a change waits for its report, a boundary report waits to go,
+or a report waits for its next try, the gateway sends each waiting boundary report and
+then the newest state once more, a second apart and within 10 seconds, and takes
+nothing of the answers. It writes one line to its log with the count of those reports
+that were not sent or not accepted. After a `404` or a signed `410` the gateway makes
+no more reports of the run, boundary reports included.
 An API key's windows are per minute, so its `utilization` can change by a whole percent
 up to 100 times a minute.
 
@@ -4030,9 +4198,10 @@ what a run request and its answer carry.
 | The session knows the gateway | the socket's peer is the session's user, by its uid | the certificate chain, for the host name of `gateway_url`, against the system's roots or the authorities of the run's CA file, and the pin of the certificate's public key when one is set (below); and on every connection the binding, the gateway's proof that it holds a key the run key names, and every answer signed under one (below) |
 | The gateway knows the session | the socket's peer is the gateway's user, by its uid; a batch names its run in `X-Qory-Run-Id` | the run key, sent only once the connection is bound: `Authorization: Bearer` on every request, and the relay's preamble of every proxy connection |
 | The run's labels | the session's | the run's registration's; the run request carries none |
-| Paths | `/.well-known/qory-configuration`, `/v1/run-configuration`, the join's `/v1/run-configuration/<run_id>/sessions`, the transcript request's `/v1/run-configuration/<run_id>/transcript` and `/v1/events` | under `/qory-link/`: `/qory-link/configuration`, `/qory-link/run-configuration`, the join's `/qory-link/run-configuration/<run_id>/sessions`, the transcript request's `/qory-link/run-configuration/<run_id>/transcript` and `/qory-link/events` |
+| Paths | `/.well-known/qory-configuration`, `/v1/run-configuration`, the join's `/v1/run-configuration/<run_id>/sessions`, the transcript request's `/v1/run-configuration/<run_id>/transcript`, the host calls' `/v1/run-configuration/<run_id>/next-session` and `/v1/run-configuration/<run_id>/pushed-commits`, and `/v1/events` | under `/qory-link/`: `/qory-link/configuration`, `/qory-link/run-configuration`, the join's `/qory-link/run-configuration/<run_id>/sessions`, the transcript request's `/qory-link/run-configuration/<run_id>/transcript`, the host calls' `/qory-link/run-configuration/<run_id>/next-session` and `/qory-link/run-configuration/<run_id>/pushed-commits`, and `/qory-link/events` |
 | Answers | unsigned | signed under the gateway's access key, a key the run key names |
 | The run answer's `labels`, `proxy_secret` and `stack_proxy_secret` | present | absent |
+| The run answer's `push_proxy_secret` | present for a run with a push credential | absent |
 | `narrowing` | refused | accepted |
 
 `gateway.tls.certificate` and `gateway.tls.key` are names of `qory`'s configuration,
@@ -4053,10 +4222,11 @@ preamble and no secret of the link. The directory, mode `0700`, and the socket, 
 
 The socket's peer uid is the whole of the local link's trust. A process of the same
 user that reaches the socket is served as a session is: knowing a local run's id, it can
-post a batch into that run, fetch the run's configuration again, or end the run: with a
-batch that carries its `dev.qory.run.exited`, or with any batch of that run the link
-refuses with `400` `invalid_request` once its body has arrived whole, which ends the
-run `failed` with `batch_refused` (Events, below).
+post a batch into that run, fetch the run's configuration again, send the run's host
+calls, next-session and pushed-commits, to Qory Apiary (The host calls, below), or end
+the run: with a batch that carries its `dev.qory.run.exited`, or with any batch of that
+run the link refuses with `400` `invalid_request` once its body has arrived whole, which
+ends the run `failed` with `batch_refused` (Events, below).
 
 **In one process.** When the session and the gateway share one process, as `qory` runs
 them on one machine, the session reaches the gateway's link in memory and never dials
@@ -4248,7 +4418,7 @@ output open, and a server that returns nothing to a flush's last try, are not wi
 these bounds.
 
 The gateway that starts again reopens a suspended run at the first request of it whose
-run key verifies: a batch, a reload, a join, a transcript request, or a connection to
+run key verifies: a batch, a reload, a join, a transcript request, a host call, or a connection to
 the run's proxy or stack proxy. One reopen of a run runs at a time. Every request of the
 run waits for that reopen while its connection stays open; a request whose connection
 closes first, such as one of a session whose client stopped waiting after 10 seconds,
@@ -4625,7 +4795,8 @@ document:
   `apply` item, the answer's items when its value has `apply`, in their order: each
   with the item's hosts and its `scheme`, `username` and `header` as `auth`, and the
   credential's `placeholders` on the first entry alone, empty on the others. A harness
-  credential (§Credentials, Harness credentials) has no entry. A model key, from the server or
+  credential (§Credentials, Harness credentials) and a push credential (§Credentials,
+  Push credentials) have no entry. A model key, from the server or
   the machine, also has `format` and `endpoint`; its `hosts` are the endpoint's host
   alone, and its `placeholders` are empty. An entry with `format` has `auth` and
   `endpoint`, and one with `endpoint` has `format`. The session adds the variable it
@@ -4667,6 +4838,14 @@ document:
   in constant time and never logged, it never leaves the machine. The session refuses
   a run answer on the local link without one. Behind a separate gateway the answer has
   none: `QORY-STACK` and the run key open those connections.
+- `push_proxy_secret`, on the local link, for a run whose run configuration has a push
+  credential: the run's push proxy secret (The push proxy, below), in the form of
+  `proxy_secret`, made by the gateway for this run. After `QORY-RELAY` on the gateway's
+  proxy address, it opens a connection to the run's push proxy, which sets the push
+  credentials alone. It opens nothing once the run closes. It is compared in constant
+  time and never logged, and it never leaves the machine. Absent for a run with no push
+  credential. Behind a separate gateway the answer has none: `QORY-PUSH` and the run key
+  open those connections.
 - `certificate_authority`: the certificate of the run's certificate authority, PEM,
   present, with or without a wall, when the gateway reads inside HTTPS for the run: for
   a credential it holds, a tool it starts or a path rule, the policy's or the node's,
@@ -4699,6 +4878,55 @@ comes and the connection closes. The other answers:
 | `404` | `not_found` | `apiary` | Qory Apiary answered a signed `404` |
 | `502` | `transcript_unavailable` | `gateway` | any other answer of Qory Apiary, one that fails verification, or none; the gateway writes one line to its log |
 | `410` | the end's code | `gateway` | the run ended at the gateway |
+
+**The host calls.** Two requests of the link reach Qory Apiary for the run's host work,
+and no container reaches them: the link's socket and the run key never enter one, and
+the run API's route serves neither path (§The run API). `qory` sends them from the
+host, as `Run.NextSession` and `Run.PushedCommits` in Go:
+
+| Request | Qory Apiary's | Largest body | Largest `2xx` body |
+|---|---|---|---|
+| `POST <run.url>/<run_id>/next-session` | `POST <run.url>/<run_id>/next-session` | 4 KiB | a `200` of 1 MiB, the run documents' limit, and any other `2xx` of 64 KiB |
+| `POST <run.url>/<run_id>/pushed-commits` | `POST <run.url>/<run_id>/pushed-commits` | 64 KiB | 64 KiB |
+
+Qory Apiary returns a next-session answer with `200`. The gateway reads at most one
+byte over the limit of the answer's status, so a `201` of more than 64 KiB is a `502`,
+as any answer over its limit.
+
+Only a gateway with no link socket, `gateway.Config.NoLinkSocket` as `qory run` starts
+it, keeps the host calls to the process that holds the link in memory. With a socket,
+any process of the session's user that reaches the socket can send them for a local
+run whose id it knows (The local link, above).
+
+Each is a `POST` to the path of `run.url`, a slash, the `run_id` and the call's name,
+with `Content-Type: application/json`; behind a separate gateway with the run key, as
+on the join. The bodies are qoryai/integrations' documents, such as
+`next-session-request.schema.json` and `next-session-answer.schema.json`: Forager reads
+neither, and checks only the media type and the size. The gateway sends the body as it
+came to Qory Apiary's run endpoint, `run.url` of the discovery, signed with its access
+key as every request of the run API (§The run API, What Qory Apiary gets), once, within
+60 seconds, and sends nothing again after a failure. A `2xx` of Qory Apiary's that
+verifies under the pin passes with its status and its body, with `Content-Type:
+application/json` when it has one: a next-session answer's `200`, a pushed-commits
+answer's `204` with no body. The session waits 4 minutes at most, and sends nothing
+once the run's close began or for a run with no control plane. The other answers:
+
+| Status | `error` | `from` | When |
+|---|---|---|---|
+| Qory Apiary's | Qory Apiary's | `apiary` | a signed answer of Qory Apiary's with a code and a status from `400` to `599` but `401` and `410`, such as `409` `run_ended` or `503` `unavailable`, with its `names` and its `message`; a name that contains a secret is a phrase in its place |
+| `400` | `invalid_request` | `gateway` | a `Content-Type` other than `application/json`; on the local link, a run id of no run there; nothing is sent |
+| `400` | `run_key_invalid` | `gateway` | behind a separate gateway, a run id that is not the run key's; nothing is sent |
+| `404` | `not_found` | `gateway` | the run has no control plane; nothing is sent |
+| `413` | `payload_too_large` | `gateway` | the body is over its limit; nothing is sent |
+| `410` | the end's code | `gateway` | the run ended at the gateway: nothing is sent, or the gateway cancels the request it sent |
+| `502` | `control_plane_unavailable` | `gateway` | no answer of Qory Apiary's, one that fails verification, an unsigned `401` among them, a signed `410`, an answer with no code that is no `2xx`, a `2xx` over its limit, or a `2xx` body without `Content-Type: application/json`; the gateway writes one line to its log |
+| `503` | none | | no body: the gateway closes and suspends the run, before the send or while Qory Apiary has the request, or behind a separate gateway the run's reopen goes on; send the request again |
+
+A `410` on the link ends the session's run, and only the gateway ends a run there, so
+Qory Apiary's `410` is a `502`. Qory Apiary returns the same result for a request it
+already took: a second next-session request for the same session gets the same answer,
+and a second pushed-commits request adds no commit the run already has, so a caller may
+send either again after a `5xx` or a transport failure.
 
 **Joining a session.** The run answer opens the run; each session then joins it with a
 `POST` to `<run.url>/<run_id>/sessions`, the path of `run.url`, a slash, the `run_id`
@@ -4854,14 +5082,21 @@ the runtime as after a `410` and records `dev.qory.run.exited`, `failed` with `r
 batch_refused`, only in the session's record. Anything else but a `2xx`, that `400` or a
 `410` is retried.
 
-A session writes no event the gateway decides. The gateway
-refuses a batch with a `400` `invalid_request`, and numbers nothing of it, when any of
-its events:
+A session writes no event the gateway decides, but the decisions of the route to
+`host.qory.invalid`, which the session's forwarder serves (§The route to the caller).
+The gateway refuses a batch with a `400` `invalid_request`, and numbers nothing of it,
+when any of its events:
 
 - has a `subject` that is not the batch's run, the one its `X-Qory-Run-Id` names on the
   local link, or its run key's behind a separate gateway;
-- has a type the gateway writes, `dev.qory.run.registered`, `dev.qory.run.egress` or
+- has a type the gateway writes, `dev.qory.run.registered` or
   `dev.qory.run.target_write`;
+- is a `dev.qory.run.egress` that is not a decision of the route to
+  `host.qory.invalid`: the gateway takes one only with `channel: qory_host`,
+  `rule: wall:qory-host`, `host: host.qory.invalid`, `port: 80` and `method: HTTP`,
+  and with no `credential`, `tool` or `path_rule`. Its report line contains the first
+  field that differs and its value, such as `a run.egress from the session whose port
+  is 443, not 80`;
 - is a `dev.qory.run.started` whose `opened_by` is not `run`, or whose `labels`
   differ from the run's labels as the gateway holds them, none behind a separate
   gateway;
@@ -4874,29 +5109,30 @@ its events:
   `timeout`, `interrupted`, `no_session`, `model_key_limit`, `image_missing`,
   `image_user_root`, `image_access_denied`, `image_rate_limited`,
   `image_registry_unreachable`, `workflow_not_in_harness`, `read_needs_wall`,
-  `read_needs_setup_outside`, `read_needs_no_nested_docker` and
-  `read_needs_setup_removed`; one with `no_session`, `image_missing`, `image_user_root`,
-  `image_access_denied`, `image_rate_limited`, `image_registry_unreachable`,
-  `workflow_not_in_harness`, `read_needs_wall`, `read_needs_setup_outside`,
-  `read_needs_no_nested_docker` or `read_needs_setup_removed` after the gateway numbered
-  a join of the run; or one with `image_missing`, `image_user_root`,
-  `image_access_denied`, `image_rate_limited`, `image_registry_unreachable`,
-  `workflow_not_in_harness`, `read_needs_wall`, `read_needs_setup_outside`,
-  `read_needs_no_nested_docker` or `read_needs_setup_removed` that is not `failed` with
-  `exit_code` `-1`; or one with `model_key_limit` that is not `paused`, before the
-  gateway numbered a join of the run, or after a last `dev.qory.session.exited` with
-  another reason. A session's batch contains only the close's `dev.qory.run.exited`,
-  with the caller's outcome, its time limit, its stop from where it was started, its
-  pause after a limit refusal, a close with no join, a close with no join after the
-  fetch of an image its registry, or the registry's mirror, does not have, or whose user
-  is root, a close with no join after the check of an image its registry refused,
-  rate-limited or did not reach, a close with no join of a run whose workflow is not in
-  the harness, or a close with no join of a read run that has no wall, whose setup is
-  set to run inside the agent's container, whose image runs nested Docker or whose setup
-  container could not be removed, and the gateway writes the event of every other reason
-  itself (The end of a run at the gateway, below); or is a `dev.qory.run.exited` while a
-  join is open, from the gateway's `200` to it until the gateway numbers its
-  `dev.qory.session.exited`;
+  `read_needs_setup_outside`, `read_needs_no_nested_docker`,
+  `read_needs_setup_removed` and `write_needs_wall`; one with `no_session`,
+  `image_missing`, `image_user_root`, `image_access_denied`, `image_rate_limited`,
+  `image_registry_unreachable`, `workflow_not_in_harness`, `read_needs_wall`,
+  `read_needs_setup_outside`, `read_needs_no_nested_docker`, `read_needs_setup_removed`
+  or `write_needs_wall` after the gateway numbered a join of the run; or one with
+  `image_missing`, `image_user_root`, `image_access_denied`, `image_rate_limited`,
+  `image_registry_unreachable`, `workflow_not_in_harness`, `read_needs_wall`,
+  `read_needs_setup_outside`, `read_needs_no_nested_docker`, `read_needs_setup_removed`
+  or `write_needs_wall` that is not `failed` with `exit_code` `-1`; or one with
+  `model_key_limit` that is not `paused`, before the gateway numbered a join of the run,
+  or after a last `dev.qory.session.exited` with another reason. A session's batch
+  contains only the close's `dev.qory.run.exited`, with the caller's outcome, its time
+  limit, its stop from where it was started, its pause after a limit refusal, a close
+  with no join, a close with no join after the fetch of an image its registry, or the
+  registry's mirror, does not have, or whose user is root, a close with no join after
+  the check of an image its registry refused, rate-limited or did not reach, a close
+  with no join of a run whose workflow is not in the harness, or a close with no join of
+  a read run that has no wall, whose setup is set to run inside the agent's container,
+  whose image runs nested Docker or whose setup container could not be removed, or a
+  close with no join of a run whose access is not read and that has no wall, and the
+  gateway writes the event of every other reason itself (The end of a run at the
+  gateway, below); or is a `dev.qory.run.exited` while a join is open, from the
+  gateway's `200` to it until the gateway numbers its `dev.qory.session.exited`;
 - is a `dev.qory.session.started` whose `session` is not the number of a join the
   gateway answered `200`, or the second of one number, or one after the
   `dev.qory.session.exited` of its number; or a `dev.qory.session.exited`
@@ -4925,7 +5161,9 @@ its events:
   `<member>=<value>`, a member being `labels.<key>` or `about.details.<key>`, the form
   only those old refusals carried.
 
-`link-batch.schema.json` states what a schema can: neither type the gateway writes, an
+`link-batch.schema.json` states what a schema can: neither type the gateway writes, and
+a `dev.qory.run.egress` as `events/run.egress.schema.json` has it, whose values the
+gateway checks so that its report line contains the field; an
 `opened_by` of `run`, `timeout`, `interrupted`, `no_session`, `model_key_limit`,
 `model_key_switch` and `model_key_unauthorized` as the only ones of Forager's reasons of
 a `dev.qory.run.exited`, `cancelled` as the state of `timeout` and `interrupted`,
@@ -5154,7 +5392,12 @@ without one, opens every connection to the gateway's one address over TLS 1.3, w
 the link is (The binding, above), and with `QORY-RELAY`, a space, the run key and a
 newline. Behind a wall the forwarder takes the relay's connection, which opens with
 `QORY-RELAY` and a value the session makes for the run's forwarder alone, and takes that
-line off before anything reaches the gateway. After any failed dial to the gateway's one
+line off before anything reaches the gateway. Behind a wall, in a run with a route to
+the caller, the relay writes a second line right after the first: `QORY-PEER`, a space,
+the 16 bytes of the address the connection came from on the enclosure's network in
+lower-case hex, an IPv4 address in its IPv4-mapped form, and a newline. The run's
+forwarder reads that line and takes it off, on one machine as behind a separate
+gateway, so the gateway never gets it. After any failed dial to the gateway's one
 address, such as a connection refused or reset, a TLS handshake cut short or a binding
 that fails, the forwarder keeps the connection it took open, writes nothing to it, and
 dials again for up to 120 seconds, waiting 250 ms after the first failed dial and twice
@@ -5258,6 +5501,30 @@ of its `403`. The gateway closes the stack proxy at the run's first
 join request, so no session reaches it. qory also writes the fetch in the run machine's
 log.
 
+**The push proxy.** For a run with a push credential, qory pushes the work item's
+branch and makes the pull request calls of its submit step through the push proxy. This
+is a forwarder on loopback that `Run.PushProxy` starts, with a password made for it
+alone and checked as the host proxy's is. On one machine it opens every connection to
+the gateway's proxy with `QORY-RELAY` and the run's `push_proxy_secret`. Behind a
+separate gateway it opens them with `QORY-PUSH` and the run key, over TLS, bound. The
+gateway serves these connections through the run's push proxy: enforce mode, the hosts
+of the push credentials' items alone, with the run's certificate authority on each, and
+the push credentials alone set, on their items' paths, with the branch guard of each
+item's `push_ref` (§Credentials, Push credentials). Behind a wall or a separate gateway
+it is guarded as the run's proxy is. Each decision is one `dev.qory.run.egress` with
+`channel: push`. A host that no push credential is for gets a `403` whose first line is
+`qory: send only the push and its pull request calls through the push proxy.` and whose
+second ends `no push credential of the run is for this host`; a path that no item
+covers gets one with the same first line and a second that ends `no push credential of
+the run covers this path`. The push proxy stays open from the run's open until its
+close, and a reopened run on a separate gateway opens it again. `Run.PushProxy` returns
+an error for a run with no push credential, during a `Join`, during a `copy` step, with
+a session's wall kept, while a container that can write the run's binds may still run
+or the setup container is up, on a walled run whose bundle could not be written, and
+on a closed run; its forwarder ends at the next `Join`, at `Setup` before
+the setup container starts, and at `Run.Close`. No wall, relay or container gets the push proxy secret or the run key, so
+a session, the setup step and After reach the run's proxy alone.
+
 ## The run API
 
 The run API is how a run reads and writes its work item's artifacts in Qory Apiary, with
@@ -5294,7 +5561,9 @@ URL, and no other:
 
 The gateway decodes each segment of the path and escapes it again. It sends nothing and
 signs nothing for a request outside the five, `GET /resume/transcript` among them
-(The transcript of a paused run, below): another path of the run, such as `attach`,
+(The transcript of a paused run, below), and `POST /next-session` and `POST
+/pushed-commits`, which the host sends over the gateway's link (§The gateway's link,
+The host calls): another path of the run, such as `attach`,
 `outcome`, `reload` or `diagnostics`, the run's path with nothing after it, another
 run's id, another method, an HTTP/1.0 request that reaches the proxy, a target over
 4 KiB as sent, a path after the run's id over 1 KiB once escaped, a query, even an empty
@@ -5320,7 +5589,7 @@ with the fix.
 
 | Status | `error` | When |
 |---|---|---|
-| `404` | `not_found` | the request is outside the five, `GET /resume/transcript` among them, which the session reads over the gateway's link (The transcript of a paused run, below) |
+| `404` | `not_found` | the request is outside the five, `GET /resume/transcript` among them, which the session reads over the gateway's link (The transcript of a paused run, below), and `POST /next-session` and `POST /pushed-commits`, the link's host calls |
 | `413` | `payload_too_large` | a POST's body is over its limit; nothing is sent |
 | `429` | `rate_limited` | a limit below, or a body or answer over 1 MiB while the gateway's 512 MiB are full; with `Retry-After: 1` |
 | `502` | `answer_unverified` | the answer fails verification under the pin, an unsigned `401` among them; its body does not reach the caller |
@@ -5500,24 +5769,113 @@ control plane, denies a `CONNECT` or a plain request to the host the same way, a
 `403`'s body contains `this proxy has no route to the run API`. Where the policy would
 not allow the host, the denial is the proxy's ordinary one.
 
+## The route to the caller
+
+The route to the caller lets a program in a session send a request to the program that
+started the run, such as qory, and get its answer back: a script sends a request to qory
+to start a test suite and reads the reply. The caller passes an `http.Handler` in
+`OpenSpec.QoryRoute` (docs/go.md); a run with none has no route. A session's program
+reaches the handler at one base URL, read from `QORY_HOST_URL`:
+
+```text
+http://host.qory.invalid
+```
+
+Send each request as a plain `http://` request through `HTTP_PROXY`, any method and any
+path. `NO_PROXY` does not list the host. The launch of each session with a runtime gets
+`QORY_HOST_URL`, its setup commands among them; a session with no runtime, such as a
+host step's, and a run's setup get neither the variable nor the route. The route is open
+while a session's launch runs, and closed before the first session, between sessions
+and after the last. `QORY_HOST_URL` is a `fixed` name in every run, with a route or
+not: behind a wall a value from the caller is `variable_reserved`.
+
+**Where it is served.** The session's forwarder, in the process that runs the session,
+serves the route, walled or not, with a gateway on the machine or a separate one.
+Nothing of a request reaches the gateway, and the route sets no credential and reaches
+nothing of the machine but the handler. If the process ends during a request, the
+program's connection closes with no answer.
+
+**Which program reaches it.** Without a wall, each session has a forwarder that serves
+that session alone, whose proxy URL has a password. Behind a wall, each session's launch gets a proxy URL
+with a password of that session alone, `http://qory:<password>@qory-proxy:3128`. The
+wall's relay writes the address each connection comes from on the enclosure's network
+before the request, and the forwarder serves a request to the route only when its one
+`Proxy-Authorization` carries that password and it comes from the address of the
+session's agent container, which the wall reports. Any other request goes to the
+gateway's proxy, which denies the host with `403` and rule `wall:qory-host`: a request
+of the setup container, which shares the wall's relay, never reaches the handler, also
+when it carries the session's password, such as one a program read from the workspace.
+A container of an earlier session that the wall leaves running has that session's
+password, and gets `503` `session_not_running` while a later session runs. The
+forwarder takes every `Proxy-Authorization` off a request before anything of it
+reaches the gateway. A run with a route behind a wall that does not report the agent's
+address does not open.
+
+**What the handler gets.** The method, the path, the query, `Content-Type`, the body,
+read whole first, and `Qory-Session`, the number of the session that sent the request.
+The forwarder takes every other header off. The handler's context ends after 30
+seconds, at the session's end or at the run's close; a program that goes away does not
+end it. The program gets the answer's status, `Content-Type` and body after the handler
+returns, with `Connection: close`. The answer to a `HEAD` has the `Content-Length` of
+the handler's body and no body; a `204` and a `304` have neither; a `1xx` other than
+`101` that the handler writes first is dropped.
+
+**Limits and codes.** The forwarder answers these itself, with a JSON body
+`{"error":<code>,"message":<text>}`:
+
+| Status | `error` | When |
+|---|---|---|
+| `400` | `bad_request` | the request line is not `<method> http://host.qory.invalid/<path> HTTP/1.1`, with the host in lower case, no port and no trailing dot; the head has not exactly one `Host: host.qory.invalid`, in any case and with no port, or has a line that does not end in CRLF; the body has more than one `Content-Length` or a `Transfer-Encoding`; or the body does not arrive whole within 30 seconds of the head. The handler is not called |
+| `413` | `payload_too_large` | the body is over 1 MiB; the handler is not called |
+| `429` | `rate_limited` | the run sends over 10 requests in a second, or 4 calls of the handler have not returned, those that outlast their context among them; the handler is not called |
+| `503` | `session_not_running` | the request's session does not run, it ends while the body arrives, or it or the run ends before the handler returns |
+| `504` | `timeout` | the handler does not return within 30 seconds |
+| `502` | `bad_answer` | the answer is over 1 MiB, its status is outside 200 to 599 or is `407`, or the handler panics, which is a report line too |
+
+**Keep-alive.** Behind a wall, once the run has a route, the run's forwarder reads one
+plain request per connection, as it does once `Run.SetRunAPICheck` sets a check:
+plain-HTTP keep-alive ends after each request, and the program opens a new connection
+for the next one. A `CONNECT` tunnel does not change. A program that ends its side of
+the connection before the answer to a request that goes to the gateway's proxy gets no
+answer.
+
+**The record.** Each request the forwarder serves is one `dev.qory.run.egress` with
+`host: host.qory.invalid`, `port: 80`, `method: HTTP`, `channel: qory_host` and
+`rule: wall:qory-host`: `allowed` once the handler is called, `denied` for a request the
+forwarder answers itself, with the status the program got. Of the refusals with `400`,
+`429` and `503`, at most one each a second is recorded, as the gateway's proxy records
+its limits. The run's masker replaces a secret of the run in the path. The session
+writes the record in its link batch, and the gateway takes a session's
+`dev.qory.run.egress` only with those values of `channel`, `rule`, `host`, `port` and
+`method`, and with no `credential`, `tool` or `path_rule` (§The gateway's link batch
+rules).
+
+**No tunnel, no other path.** The gateway's proxy denies every request to
+`host.qory.invalid` that reaches it with a `403` and the rule `wall:qory-host`, in
+either mode, whatever the policy lists: a `CONNECT` to the host, a request through a
+host proxy, the stack proxy or the engine proxy, one without a session's password
+behind a wall, and any request in a run with no route. The name in upper case or with a
+trailing dot is the same host. The `403`'s body contains the fix: send plain `http://`
+requests to `QORY_HOST_URL` from a session of a run with a route.
+
 ## The runtime
 
 The session starts a program, records it and stops it, and contains nothing specific to
 one. What is
 particular to one is behind an interface, `runtimes.Runtime` in the Go module, as an
 enclosure is behind `wall.Wall`, and Claude Code is one implementation of it. A runtime
-defines seven things: its name and the version of the program it expects,
-reported in `dev.qory.session.started`; how a launch is prepared so the program reports
-to the session and runs with the run's placeholders, which may change the command and
-arguments, add variables and write into the run directory, and nothing else (a script it
-writes there may record an approval where the program reads it, then start the program);
-whether the program's standard output is records to read; what events, if any, one record
-is; how the program is stopped, a signal and a grace; whether the arguments it is
-started with mean it runs without an interface, so the session is on pipes whatever the
-caller has; and the secrets it declares, a descriptor's `secrets` (below), which a
-runtime in Go defines through the optional interface `runtimes.Secrets`, checked by type
-assertion: a runtime without it declares nothing. Behind a wall, the preparation
-receives the variables the enclosure gets the placeholder value in.
+defines seven things: its name, reported in `dev.qory.session.started`; how a launch is
+prepared so the program reports to the session and runs with the run's placeholders,
+which may change the command and arguments, add variables and write into the run
+directory, and nothing else (a script it writes there may record an approval where the
+program reads it, then start the program); whether the program's standard output is
+records to read; what events, if any, one record is; how the program is stopped, a
+signal and a grace; whether the arguments it is started with mean it runs without an
+interface, so the session is on pipes whatever the caller has; and the secrets it
+declares, a descriptor's `secrets` (below), which a runtime in Go defines through the
+optional interface `runtimes.Secrets`, checked by type assertion: a runtime without it
+declares nothing. Behind a wall, the preparation receives the variables the enclosure
+gets the placeholder value in.
 
 There are three ways to a runtime, and a name resolves to the first that applies:
 
@@ -5535,6 +5893,70 @@ There are three ways to a runtime, and a name resolves to the first that applies
    needs what a descriptor cannot express. It is set in `session.SessionSpec.Runtime` like any
    other.
 
+**The installed program.** When the caller passes an installed folder, the session
+starts a runtime's program from that folder of the machine, never from the run's image.
+The caller installs the program on the machine and passes, with a session of the
+runtime, the folder it installed it in and the version it installed, `session.SessionSpec.RuntimeInstall`, such
+as `Dir` `/opt/runtimes/claude/2.1.320` and `Version` `2.1.320`. A session of a runtime
+whose descriptor sets `install_required`, such as Claude Code, needs it, and a session
+with no runtime passes none; `Run.Join` returns an error before the join request for
+either mistake. A session of another runtime, such as Codex, may pass none: the session
+then starts the command as the caller names it, from the run's image behind a wall, with
+no folder bound and no `runtime_version` in `dev.qory.session.started`. A
+`RuntimeInstall` the caller passes has every check below, for any runtime. The program
+is a file inside `Dir`: the command, or, behind a wall, the argument after the first
+`--` when the command is Forager's helper at `/qory/qory`, which the caller starts the
+program through, as `qory run agent-env … -- <program>`. Without a wall the command
+itself is the program. In the helper's form the session checks only the program after
+the first `--`; the caller decides the words before it. `Run.Join` returns an error that
+starts with the fix, before the join request, for:
+
+- a `Dir` that is not absolute and clean, does not exist, is not a folder, or is a
+  folder that others cannot read and enter. `Dir` may itself be a symbolic link: the
+  session uses the folder it leads to. Behind a wall, a `Dir` that is, contains or lies
+  inside `/qory` on the machine, as given or as it leads, is refused too: inside, one
+  path would stand for two;
+- a program path that is not clean, with a `.` or `..` name or a repeated or trailing
+  `/`; a program outside `Dir`; a program reached through a symbolic link below `Dir`;
+  and a program that is not a regular file that others can read and execute, or that
+  has a second hard link;
+- a `Dir`, a folder between `Dir` and the program, or the program, that its group or
+  others may write, or whose owner is neither root nor the user that runs Forager;
+- a `Version` that is empty, has more than 64 bytes, starts with a character other
+  than a letter or a digit, or has a character other than a letter, a digit, `.`, `+`
+  or `-`;
+- a runtime whose name is not a lowercase letter followed by up to 63 lowercase
+  letters, digits or `-`, the name of its folder in `/qory/runtime`, with or without
+  a wall.
+
+The session does not check the folders above `Dir`. The caller installs the runtime
+under folders that only root or the user that runs Forager can write, as qory does, so
+that no other user can replace `Dir` or a name on the way to it.
+
+No walled agent can change the program: a `Dir` that is, contains or lies in a place a
+walled run can write fails the session before the runtime starts. Those places are
+`SessionSpec.Written` and the writable binds of the other walled runs still going, and
+behind a wall also the workspace and the run's writable binds. A session without a
+wall lists the folder `Dir` leads to, read-only, among the walled runs still going
+until it ends, so a walled run that starts meanwhile and binds it writable is
+`mount_shared_with_run`. Behind a wall, the
+enclosure binds the folder `Dir` leads to read-only at `/qory/runtime/<runtime>`,
+`/qory/runtime/claude` for Claude Code, and the session writes `Dir` as that path in
+the command, in each argument and in each variable value it prepares. In a walled run
+the folder is one of Forager's files (§The wall), so no mount and no workspace is,
+contains or lies inside it. An image's symbolic link can lead a mount the run lists
+to another path inside, and one at `/qory` or `/qory/runtime` leads the folder's bind
+away. So on Linux, before it starts the program, the helper's exec exits 125 when
+`/qory` or `/qory/runtime` is a symbolic link. It reads `/proc/self/mountinfo` and
+exits 125 too when a mount lies at `/qory`, at `/qory/runtime`, or at or below
+`/qory/runtime/<runtime>` beside the folder's bind and a shiftfs mount on that bind,
+which Sysbox in shiftfs mode adds, and when the program lies below
+`/qory/runtime/<runtime>` and no mount lies there.
+`dev.qory.session.started` reports `Version` as `runtime_version`, and without a wall
+in a run with a run key shows the program at `/qory/runtime/<runtime>` too; Forager
+does not run the program to check it. The caller keeps the folder unchanged until the
+run ends.
+
 `session/runtimes/runtimetest` is what any of them is tested against: `Conforms`, that a
 runtime leaves alone what doesn't belong to it, and `Replays`, that its records produce
 exactly the recorded events and that each passes this contract's schema.
@@ -5547,7 +5969,9 @@ and dashes, and an optional `title`, the name a person reads: `Claude Code`.
 
 **Sources**: how the session attaches. The terminal bytes always, with nothing to match
 in them and so no source. `output`: JSON lines on the runtime's standard output, when
-the session runs on pipes; a line that is not a JSON object is not a record. `hooks`:
+the session runs on pipes; a line that is not a JSON object is not a record. Output
+records come from the runtime's standard output only: the local socket refuses a record
+of the `output` source (§The local socket). `hooks`:
 the runtime's hook events, for each of which the session installs its forwarder as a
 command hook, the way `install` selects among the installers the binary has: a
 descriptor selects an installer and never contains one, so a program that takes hooks
@@ -5573,7 +5997,22 @@ it is the first rule that matches, each element, in order, produces one event: t
 the first rule from this one on with the same `source` and `each` that the element
 matches. One line's elements may so produce events of different rules, such as a
 thinking block's and then a text block's; an element no such rule matches produces
-nothing.
+nothing. A field of `data` with dots, such as `usage.input`, is a member of a nested
+object of the event's data.
+
+A rule's `sum`, optional, adds more fields: `over` is a dotted path to an object, and
+`fields` maps each field to a dotted path inside each member of that object. The field
+is the sum of the numbers at that path in the members that are objects and have a
+whole number of at least 0 there, taken in the order of the members' names; a member
+that would take the total past 2^53 is left out of it. A field is left out when no
+member adds to it: when no member has such a number, or when every member that has one
+is left out, as `1e308` alone is. Every field is left out when `over` is no object or
+does not exist. Claude Code's result rule has `over:
+modelUsage` and `usage.input: inputTokens`, so `{"model-a": {"inputTokens": 10},
+"model-b": {"inputTokens": 3}}` gives `usage.input` 13. A rule sets each field once, in
+`data` or `sum`, and sets no member of a field it sets; the session refuses a
+descriptor that does, `rules[3]: set usage.output once, and set no member of it: a
+rule's data and sum write each field once`.
 
 A rule gives its event at least one field, each from one of three members. `data`
 copies from the record. `set` is a map of fields to values of the descriptor's, a
@@ -5793,6 +6232,15 @@ literal. `runtimes.json` lists them for a server to allow for a run, and a machi
 policy can still block them. No Forager code applies this list to a run's policy.
 `secrets.declares[].hosts` is a different list: the hosts a secret's value is set on.
 
+**Install required**, optional: `install_required`, `true` when the session starts the
+runtime only from a folder the caller installed it in,
+`session.SessionSpec.RuntimeInstall` (§The runtime, The installed program). `Run.Join`
+then returns an error for a session of the runtime without one: `set
+SessionSpec.RuntimeInstall for a session of the runtime claude: the session starts a
+runtime only from the folder it was installed in`. Absent or `false`, a session of the
+runtime may pass no folder and starts the command as the caller names it, such as from
+the run's image. `runtimes.json` lists it for every runtime.
+
 **Resume**, optional: where the runtime writes the transcript of its session, and how
 the session starts the runtime again from it. `path_from`, optional, is the member of a
 hook's input that contains the transcript's path, `transcript_path` for Claude Code;
@@ -5843,20 +6291,18 @@ per event the rules produce from them, in order. A descriptor without fixtures i
 accepted. The tests validate every record and every expected event against the schemas;
 `runtimetest.Replays` replays the records through the runtime and compares.
 
-`runtimes/claude/descriptor.yaml` is the Claude Code descriptor for version 2.1.316. Its
-rules were written against 2.1.273 as installed and its published hooks reference, and
-checked against 2.1.316 and that version's published reference. Its hooks are the canonical
-source in both modes; its standard output adds what only the output reports: the result
-line, the text and thinking blocks, each tool's result and each denied tool call (§The
-events). Its `tools.summary` lists `Bash: command`, `Read: file_path`,
-`Write: file_path`, `Edit: file_path`, `Glob: pattern`, `Grep: pattern`, `WebFetch: url`,
-`WebSearch: query`, `Skill: skill`, and both `Agent: description` and
-`Task: description`, because the 2.1.316 binary has both names for the tool that starts
-a subagent and the init line of a recorded 2.1.316 run lists `Task`.
-`runtime_version` is the version of the runtime the descriptor expects, the one
-`qory image check` compares with an image's program; Forager reports that version and
-does not check the installed one. Its `secrets` declare no
-secret, reserve no variable and have no `one_of` group: the run's model key is a model
+`runtimes/claude/descriptor.yaml` is the Claude Code descriptor. It pins no version: the
+session starts the Claude Code the caller installed and reports that version (§The
+runtime, The installed program). Its rules were written against 2.1.273 as installed and
+its published hooks reference, and checked against 2.1.316 and that version's published
+reference. Its hooks are the canonical source in both modes; its standard output adds
+what only the output reports: the result line, the text and thinking blocks, each tool's
+result and each denied tool call (§The events). Its `tools.summary` lists
+`Bash: command`, `Read: file_path`, `Write: file_path`, `Edit: file_path`,
+`Glob: pattern`, `Grep: pattern`, `WebFetch: url`, `WebSearch: query`, `Skill: skill`,
+and both `Agent: description` and `Task: description`, because the 2.1.316 binary has
+both names for the tool that starts a subagent and the init line of a recorded 2.1.316
+run lists `Task`. Its `secrets` declare no secret, reserve no variable and have no `one_of` group: the run's model key is a model
 key from the server or the machine (§Credentials). Its `model` lists
 `anthropic-messages`; it places the model id as `--model`, the run's effort value as
 `--effort` and an agent's effort value in the `effort` frontmatter, each of the two
@@ -5871,8 +6317,10 @@ each for `anthropic-messages`; and its `overrides` are `ANTHROPIC_MODEL`,
 `CLAUDE_CODE_SUBAGENT_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`,
 `CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL`, `CLAUDE_CODE_AUTO_MODE_MODEL`,
 `CLAUDE_CODE_EFFORT_LEVEL`, `CLAUDE_CODE_SUBAGENT_EFFORT` and `CLAUDE_CODE_EXTRA_BODY`.
-Its `egress_hosts` lists `api.anthropic.com`.
-Its `fixed` sets two variables to `1` and `CLAUDE_CODE_MAX_RETRIES` to `15`. With
+Its `egress_hosts` lists `api.anthropic.com`, and its `install_required` is `true`.
+Its `fixed` sets three variables to `1` and `CLAUDE_CODE_MAX_RETRIES` to `15`. With
+`DISABLE_AUTOUPDATER`, Claude Code does not update itself, so the session runs the
+version the caller installed, from a folder that is read-only behind a wall. With
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, Claude Code 2.1.316 sends no log lines to
 Datadog, does not call `/api/claude_cli/bootstrap`, and makes no other request that its environment-variable
 reference lists as nonessential. With
@@ -5894,7 +6342,7 @@ Claude Code 2.1.316 applies the `env` of its settings sources in the order user,
 project, local, `--settings`, managed, each over the ones before, so the copy's value
 wins over a workspace's `.claude/settings.json` or `.claude/settings.local.json`. A
 managed settings file, which the image or the machine provides, can still set any of
-the three variables to another value.
+the four variables to another value.
 
 On a pseudo-terminal, Claude Code with `ANTHROPIC_API_KEY` set waits for a person to
 approve the key, unless the configuration it reads lists the key's last 20 characters,
@@ -5930,8 +6378,8 @@ directory, `preparation.sh`, which then starts the launch as the runtime prepare
 **`runtimes.json`** lists, for a server to vendor, every descriptor this contract ships,
 in name order: `version`, 1, and `runtimes`, each with its `name`, `title`, `reserves`,
 `denies`, `credential_files`, `fixed`, the descriptor's fixed variables by name,
-`egress_hosts`, the hosts the runtime needs to reach, `declares` with `id`, `title`,
-`name`, `hosts`, `auth`
+`egress_hosts`, the hosts the runtime needs to reach, `install_required`, `true` or
+`false`, `declares` with `id`, `title`, `name`, `hosts`, `auth`
 (`scheme`, and `header` for the `header` scheme, `username` for the `basic` scheme and
 `oauth` when it is set), `paths` when the declaration has some, `one_of` with `id`,
 `required` and `of`, and `model`, the descriptor's model section in the same shape,
@@ -5971,21 +6419,35 @@ and closes; the session reads until end of file, one connection at a time in the
 they arrive, so two hook calls in a row keep their order. There is no answer and no
 framing beyond the newline. The forwarder the session installs as a hook is one such
 client; a harness that reports something itself writes the same shape with
-`source: hooks`. A record of the `hooks` or the `output` source reaches a receiver only
-through the descriptor's rules. The setup runner is another client: it writes records
+`source: hooks`. A record of the `hooks` source reaches a receiver only through the
+descriptor's rules. The launch's socket accepts records of the `hooks`, `setup`
+and `measure` sources and skips a record of the `output` source, writing no
+event for it. Output records come from the runtime's standard output only, which the
+session reads on the host, while any process in the agent's container can write to the
+socket. The setup runner is another client: it writes records
 of the `setup` source, which the session writes as the setup steps of a session with
 setup commands inside the wall (§The wall, Setup inside the wall). Its `record` has
 `command`, the command's number from 1, and `event`: `started`; `line`, with `stream`,
 `stdout` or `stderr`, and `bytes`, the line in standard base64, a long line in parts of
 4096 bytes, and `runner: true` on a line the runner writes when it cannot start or
-wait for the command; or `exited`, with `exit_code`, 0 to 255. The session cuts off a connection
-that stays open longer than 5 seconds, so the runner opens a connection for each batch
-of records. The socket is removed when the run ends.
+wait for the command; or `exited`, with `exit_code`, 0 to 255. The helper's exec is a
+third client: once the runtime exits it writes a record of the `measure` source
+(§The events, The measure of the enclosure), and for a session with
+`SessionSpec.After`, in After's container, records of the `after` source, as the setup
+runner's without `command` and `started`, whose `exited` may have `reason`, `timeout`
+or `out_of_memory`. The `after` source has a socket in a directory that no other
+container binds, in After's container alone (§The wall, After), which accepts records of
+that source only, over the first connection it accepts. A record of the `after` source on the
+launch's socket is skipped. The session cuts
+off a connection of the launch's socket that stays open longer than 5 seconds, so the
+runner opens a connection for each batch of records. Each socket is removed when its
+session ends.
 
 ```json
 {"source": "setup", "record": {"command": 1, "event": "started"}}
 {"source": "setup", "record": {"command": 1, "event": "line", "stream": "stdout", "bytes": "YWRkZWQgMjE0IHBhY2thZ2VzCg=="}}
 {"source": "setup", "record": {"command": 1, "event": "exited", "exit_code": 0}}
+{"source": "after", "record": {"event": "exited", "exit_code": 143, "reason": "timeout"}}
 ```
 
 ## Images
@@ -5996,7 +6458,9 @@ credentials and tools, or names one by its reference pinned by digest, which the
 runs only when the reference starts with one of its allowed prefixes, `images.allow`. A
 policy defines no image, so a repository chooses what it runs under only among what the
 machine allows. A run whose policy selects none starts in the machine's default. Images
-need a wall: without one the runtime is a process on the machine.
+need a wall: without one the runtime is a process on the machine. An image needs no
+runtime's program: the wall binds the folder the caller installed it in, read-only
+(§The runtime, The installed program).
 
 | Definition | Meaning |
 |---|---|
@@ -6181,8 +6645,8 @@ pinned digest. For a run with a certificate authority, the Docker wall writes th
 certificate as `qory-run-<id>.crt` in `<CertsDir>/<host>/`, `/etc/docker/certs.d` by
 default, for the reference's registry host and for each host of `credential_hosts`, and
 removes the files when the step ends, also when the pull fails or its context ends.
-The agent's container, the setup container, and the container the wall reads the image's
-files from, are created with `--pull=never`, so the engine pulls the image in the image
+The agent's container, After's container, the setup container, and the container the
+wall reads the image's files from, are created with `--pull=never`, so the engine pulls the image in the image
 step alone. Docker Engine reads that directory at each pull. On its classic image store it reads
 none for `docker.io`, so an image there comes only through a blind relay, with no
 credential; on its containerd image store this is unverified. Without
@@ -6294,7 +6758,11 @@ Forager's files are:
   `/etc/docker/certs.d` by default, where a certificate an agent wrote would be one the
   engine trusts for a registry;
 - the runs directory, where the session makes the run directories;
-- the session's registry of walled runs (below).
+- the session's registry of walled runs (below);
+- the runtime's installed folder, `SessionSpec.RuntimeInstall.Dir`, which the enclosure
+  binds read-only at `/qory/runtime/<runtime>` and nowhere else (§The runtime, The
+  installed program): a place that is, contains or lies inside it would bind it again,
+  writable or at another path.
 
 An agent that can change a program Forager starts outside the wall, or read a file a
 credential is read from, has left the wall.
@@ -6308,19 +6776,23 @@ up in its parent, so two binds of one root are allowed:
 
 - the enclosure binds the outermost of the places the run lists, the mounts and the
   workspace, each once, and the session's directory, `sessions/<n>/` in the run
-  directory, read-only. For a runtime with `resume` it also binds the session's
+  directory, read-only. For a session with `SessionSpec.RuntimeInstall` it binds the
+  folder `SessionSpec.RuntimeInstall.Dir` leads to, read-only, at
+  `/qory/runtime/<runtime>` (§The runtime, The installed program). For a runtime with `resume` it also binds the session's
   transcript directory, `transcripts/<n>/` in the run directory, writable, at
   `resume.prefix` below the home of the agent's user inside, or at an absolute
   `resume.prefix`. An absolute `resume.prefix` inside a writable mount's place inside is
   read in that mount, with no bind, and one inside a read-only mount's gets no
-  transcript (§The events, A session's transcript). The session makes that directory and checks that it is, contains and lies
+  transcript (§The events, A session's
+  transcript). The session makes that directory and checks that it is, contains and lies
   inside no other bind; the wall fails the session when it overlaps a mount, or when its place
   inside overlaps another bind's or `/qory`. The workspace is writable, or read-only for a session with
   `SessionSpec.WorkspaceReadOnly`, and
   is the working directory inside, through the bind that holds it, or bound at the same
   path as on the machine when no mount holds it; a run whose policy names its image by
   reference sees the bind that holds it at `/workspace` (§Images), and a wall binds a
-  mount at the path the session gives it inside, never one that overlaps `/qory`. The
+  mount at the path the session gives it inside, its target or else its path on the machine, and refuses a mount whose path
+  inside is, contains or lies under `/qory`. The
   session passes the wall every bind,
   each path clean, and the working directory lies in one of them by its names, or the
   run fails; a wall binds nothing of the caller's the launch does not list;
@@ -6404,9 +6876,10 @@ up in its parent, so two binds of one root are allowed:
   to one of Forager's files is looked up in is `mount_contains_forager_files`;
 - the session keeps a registry of the walled runs still going on the machine, per user,
   with each run's binds: the places, the run directory and the wall's extra binds, for
-  `docker` its helper, the hook socket's directory, the session's transcript directory and
-  the private directory that contains the run's environment files and, with a CA, the bundle the enclosure binds. The wall's
-  are listed when the run starts, those it makes later as their patterns, which never
+  `docker` its helper, the hook socket's directory, the session's transcript directory,
+  the runtime's installed folder and the private directory that contains the run's
+  environment files and, with a CA, the bundle the enclosure binds. The wall's are
+  listed when the run starts, those it makes later as their patterns, which never
   conflict with another session's. A run is no run, `mount_shared_with_run`, when one of
   its binds lies inside a writable bind of another run's or is reached through one, when
   one of its writable binds holds a bind of another run's or a directory a name on the
@@ -6415,8 +6888,9 @@ up in its parent, so two binds of one root are allowed:
   of the same root never conflict otherwise, and neither do two read-only ones. Its
   names are the path of this run's, the other run's id and the other run's path. A place
   that lies inside a writable directory among another run's extra binds is refused too.
-  A run whose helper, or another directory of Forager's its wall binds, lies inside a
-  writable bind of another run's, or is reached through one, does not start. The session
+  A run whose helper, another directory of Forager's its wall binds, or the runtime's
+  installed folder lies inside a writable bind of another run's, or is reached through
+  one, does not start. The session
   checks and lists the run in one step, before it contacts the server, and the run
   leaves the registry when it ends, however it ends, unless its wall could not be
   removed. A run is still going while its session holds its entry, or, once its session
@@ -6604,7 +7078,8 @@ command and sends records of the `setup` source to `QORY_RUN_SOCKET` (§The loca
 socket): that it started, each line of its output, and its exit status. The session
 writes the command's `setup` step from them (§The events, Steps): it takes a record in
 order alone, and reports one out of order, or one after the setup ended, and records
-nothing of it. The session writes each line of a step, masked as the step's line is,
+nothing of it; these reports count against the run socket's cap of 10 bad lines per
+connection. The session writes each line of a step, masked as the step's line is,
 to the user's terminal too, where the runtime's output goes: on pipes to standard
 output or standard error as its stream is, and on a pseudo-terminal to standard
 output, each line break as `\r\n`. A runner that cannot reach the socket exits `125` and runs nothing; the
@@ -6624,7 +7099,126 @@ wall has no setup commands inside.
 
 The setup's records come from inside the enclosure, as the runtime's hook records do:
 code in the working folder can write records of the `setup` source to the socket, and
-so forge a setup step's lines or its exit status, as it can forge the runtime's events.
+so forge a setup step's lines or its exit status, as it can forge the events of the
+runtime's hooks. It cannot send records of the `output` source through the socket,
+which refuses them. It can still write a line to the runtime's standard output, which
+the session reads as output: a tool command runs as the same user as the runtime, so it
+can open `/proc/<pid>/fd/1` of the runtime's process. Only the helper's `/proc` files
+are out of its reach, because the helper makes itself not dumpable.
+
+**After.** A walled session may have `SessionSpec.After`, a program and its arguments,
+such as a commit of what the agent left in the workspace, with `AfterTimeout`, how long
+it may run, above zero. It needs a wall whose enclosure removes the agent's container
+and starts After's (`wall.AfterWrapper`); the Docker wall does. Once the runtime exits
+for any reason but the run's close, the session removes the agent's container, which
+ends every process in it, a `nohup` or a `setsid` job and, with nested Docker, the inner
+daemon and every inner container. It then starts After's container with the helper's
+exec in its `--after-only` mode, and no program of the agent's has run in it.
+
+After's container is a new container of the run's image, under the run's container
+runtime, started as the wall's user with no capability and none to gain, with no nested
+Docker, daemon or store volume, on the inside network. It binds the mount that holds
+the working directory, as the agent had it, a directory with After's socket at
+`/qory/hooks`, the helper and the bundle, and none of the agent's other mounts, the
+agent's hook socket or its transcript. Its environment is the image's, the proxy
+variables with no password, the bundle's variables and `QORY_RUN_SOCKET`, and none of
+the run's variables. Its proxy URL has no password, so it has no route to the caller
+(§The route to the caller): a request without the password gets `403` from the
+gateway's proxy, which denies the route's host, and one with the agent's password gets
+`503`, since that session ended; the handler is called for neither. Forager does not
+narrow the run's proxy for After: the proxy applies the credentials the run's
+configuration holds, and its push guard as it is. A setup
+container shares the workspace and the inside network with After's container, and could
+change the workspace or `.git` between After's checks and its commit, so the session
+removes it first, as `(*session.Run).RemoveSetup` does: the wall step "remove the setup
+container" comes before the after step, and the run is then as one after `RemoveSetup`.
+When that removal fails, After does not run: the wall step ends `failed`, the after step
+ends `failed` with `-1` and a line, and `ContainerKept()` is true.
+
+After runs in the working directory, as the runtime's user, with no input, in a new
+process group, with the container's environment less `GIT_DIR`, `GIT_WORK_TREE`,
+`GIT_INDEX_FILE`, `GIT_EXEC_PATH`, `GIT_OBJECT_DIRECTORY`,
+`GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_COMMON_DIR`, `GIT_NAMESPACE`, every name that
+starts with `GIT_CONFIG`, `GIT_SSH` or `XDG_`, `GIT_ASKPASS`, `GIT_PROXY_COMMAND`,
+`GIT_EXTERNAL_DIFF`, `GIT_SEQUENCE_EDITOR`, `BASH_ENV`, `ENV`, `LD_PRELOAD`,
+`LD_LIBRARY_PATH`, `LD_AUDIT` and `QORY_RUN_SOCKET`. Its `HOME` is a new, empty
+directory of mode `0500` under the system's temporary directory, removed once After
+exits. It gets `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`,
+`GIT_TERMINAL_PROMPT=0`, `GIT_PAGER=cat`, `GIT_EDITOR=:`, and through
+`GIT_CONFIG_COUNT`, which wins over every configuration file, `.git/config` included:
+`core.hooksPath=/dev/null`, `core.fsmonitor=false`, `core.attributesFile=/dev/null`,
+`protocol.allow=never`, `protocol.https.allow=always`, `protocol.ext.allow=never`,
+`submodule.recurse=false`, `core.useReplaceRefs=false`, `core.commitGraph=false`, an
+empty `credential.helper`, `commit.gpgSign=false`, `tag.gpgSign=false`, and
+`hook.<event>.enabled=false` for each hook event of githooks(5). So git reaches a remote
+over HTTPS alone: a remote with a local path or a `file://` URL, whose `receivepack` or
+`uploadpack` setting git would run, and one over ssh, whose `core.sshCommand` git would
+run, fail the push. Git 2.55 and later run no hook of `.git/config`'s
+`hook.<name>.command` with these settings; git 2.54 runs such a hook whatever they are,
+so the caller's check of `.git/config` must fail on `hook.*` keys before it sets After. Other keys of
+`.git/config` that name a program, such as a filter, also still apply: the caller checks
+them first. The workspace is the one input After shares with the agent; a program a key
+of `.git/config` or a `.gitattributes` names runs in After's container, as its user, with
+no root, capability or key, and with the run's credentials as the proxy applies them.
+
+After's `PATH` keeps the absolute directories that exist and that the agent's user
+could not have changed, nor any directory above them: a directory the agent's user
+owns, which it may make writable again, and one its group or other users may write,
+but a directory with the sticky bit such as `/tmp`, is left out, and so is one the
+agent's user may write. A directory on a read-only mount counts as unchanged.
+`/usr/bin:/bin` is the `PATH` when none is left. The program After runs, found in that
+`PATH` or given as a path, with every link followed, does not run under the same rule:
+the step ends `failed` with `126` and the reason as its line. The workspace is on no
+such `PATH`, so a write into it by the agent's user, also while After runs, cannot
+change which program After's command finds there. It does not change which programs git
+starts from `.git/config`, described above. At `AfterTimeout` the group gets `SIGTERM`, and `SIGKILL` 5
+seconds later. When the helper's exec ends, the container ends, and with it every
+process After left.
+
+The helper reports After on `QORY_RUN_SOCKET` in After's container as records of the
+`after` source (§The local socket), and the session writes them as the session's `after`
+step (§The events, Steps): `succeeded` on 0, `failed` otherwise, `cancelled` with
+`reason` `timeout` at `AfterTimeout`, and `failed` with `out_of_memory` when `oom_kill`
+in the cgroup's `memory.events` rose while After ran. The session writes the step's
+start itself, before it removes the agent's container, so a failure to remove it or to
+start After's container is in the step: `failed` with `-1` and the reason as its line.
+After's socket is in a new directory of the session's, made after the agent's container
+was removed, so no process of the agent knew its path. The helper makes itself not
+dumpable, closes the descriptors it inherited, and opens one connection to the socket
+before After starts; the descriptor is close-on-exec, and no other process of the
+container can take it through `/proc`. The session reads the first connection it
+accepts and no other, and closes a later one unread, so a process After starts, git's
+filter or hook say, cannot add a record to the step. When the helper cannot connect, it
+exits `125` with the reason on standard error, After does not run, and the step ends
+`failed` with `-1`, that output as its line. When After's container ends with no `exited`
+record, the step ends `failed` with `-1`.
+
+The step lies between the runtime and `dev.qory.session.exited`, which keeps the
+runtime's `state` and `exit_code`. The session decides whether the runtime timed out
+when it exits, as it does without After, and then starts the step; a pause, a runtime
+stopped at the time limit and a runtime stopped by the caller's context all get After.
+The session allows the step `AfterTimeout`, 5 seconds from `SIGTERM` to `SIGKILL`, 1
+second for After's last output and 1 minute for the removal and the start. At the end of
+that window it removes After's container, and the step ends `cancelled` with `-1` and
+reason `timeout`. When the caller's context ends before or while After runs, After
+runs on, and the step, the agent's removal and After's start included, gets no more than
+the stop grace from that moment; the step then ends `cancelled` with `-1` and no reason.
+A run closed from outside before After starts gets none, and cuts After at once when it
+closes while After runs; `(*session.Result).After` is nil for a session with no After and
+for a run closed before After starts, and `cancelled` with `-1` for one closed while After
+runs. Every other exit gets After, `125` included. `Join` returns an error and no result,
+and runs no After, when the wall's `Wrap` fails (with the Docker wall, a missing image
+fails there), when the launch does not start, and when the wait for the launch returns an
+error that is no exit status: the runtime exited 0 and a
+write of its output failed (`SessionSpec.Stdout`, `Stderr` or the run's log), or `Wait`
+failed; the runtime may have changed the workspace then. When the launch failed before any container existed, such as a docker run
+that exited `125` with no container, After still starts on the unchanged workspace; if
+its container cannot start for the same cause, the after step ends `failed` with `-1`.
+The launch's error line, the engine's output in the session's stderr lines, comes
+before the after step's failure line in the run's record and on the terminal. A
+removal of the agent's container that the context's end or the run's close cuts is
+tried again as the session ends, and counts as failed only if that removal fails. A run without a wall has no
+After.
 
 **Nested Docker.** *Experimental.* Under the nested runtime the enclosure has a root,
 and whether that root reaches the mounts the run lists as the machine's root is
@@ -6707,7 +7301,7 @@ the option experimental.
 
 | Directory | Contains | Validated against |
 |---|---|---|
-| `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list, enforce with a tool, a credential and a tool each with an argument of 4096 characters, the most one may have, and enforce with an image named by its reference pinned by digest | `policy.schema.json` |
+| `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list, enforce with a tool, a credential and a tool each with an argument of 4096 characters, the most one may have, and enforce with an image named by its reference pinned by digest, and enforce with paths that have a `{}` segment | `policy.schema.json` |
 | `fixtures/server/` | server documents that are accepted, with the fixture access key id and the fixture signing key as the pin, one of them with `via`, its `ca_file` and its pin | `server.schema.json` |
 | `fixtures/configuration/` | configuration documents a server returns: with its events and run endpoints, with a section this revision does not define, with `secrets` and two keys of a rotation, a gateway key's, with no `workspaces` | `configuration.schema.json` |
 | `fixtures/run-registration/` | registration bodies: one without labels or `about`, and one with labels and an `about` of every member; and in the gateway shape, one with labels, `about` and `attach_seconds`, and one with `version`, `run_id` and `time` alone | `run-registration.schema.json` |
@@ -6716,16 +7310,16 @@ the option experimental.
 | `fixtures/batch-answer/` | bodies of a signed `2xx` to a batch: an `end` with a reason, one without, and none | `batch-answer.schema.json` |
 | `fixtures/api-format/` | each API format of the list, one per file | `api-format.schema.json` |
 | `fixtures/descriptor/` | descriptors that are accepted: one whose `model` places the model id in a setting, the run's effort in a variable and an agent's in the frontmatter, with two formats, a key for each, one of them in two auths, and two `overrides`, one whose `model` has no `effort`, and one with `resume`; one of a runtime that reads its settings as TOML, `config.yaml`, with its endpoint in a setting, `config` with `--config` and fixed settings of each value type, and a `resume` with `*` in its path, an absolute `prefix`, no `path_from` and `after` | `descriptor.schema.json` |
-| `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, with neither, which leaves the node's policy in force, and with an image named by its reference pinned by digest and no policy; `credentials.json`, with `model_credential`, an API credential with `key_prefixes` and `pause_for_s`, an API credential whose endpoint has an IPv6 host and a port, and a host credential on an IPv4 host and a name; `credentials-forge.json`, with an API credential with `oauth` and `pause_for_s` and a forge's host credential with two `apply` items and a placeholder; `stack-hosts.json`, with `stack_hosts` of two names, a `*.` suffix and an IPv4 address; `harness.json`, with `harness_hidden`, a harness credential and a work credential on one host; `model-keys.json`, a key group of three API credentials with `resets_at`, `schedule_resets_at` and `pause_for_s`, and a host credential; `model-keys-cooling.json`, a key group whose start key has `chosen` and whose third key has `cooldown_until`; `model-keys-no-pause-for.json`, a key group of two subscription keys whose second key has no `pause_for_s`; `model-keys-use-up-to.json`, a key group of two subscription keys, each with `use_up_to_percent` and `use_up_to_windows`, the second with `cooldown_until`; `resume.json`, with `resume`; `model-keys-openai.json`, two keys of the `openai-responses` format with `paths`, one a subscription whose `auth` has `oauth`, `account_header` and `account_claim`; `resume-runs.json`, with `resume` and its `runs` of three runs | `run-configuration.schema.json` |
-| `fixtures/model-keys-report/` | model keys reports: windows of two keys, one `rejected` with its cooldown, one `allowed_warning` and one `allowed`; cooldowns from `schedule` and `pause_for` with the windows `key` and `spend_limit`; and one with no window; one with `unauthorized` | `model-keys-report.schema.json` |
+| `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, with neither, which leaves the node's policy in force, and with an image named by its reference pinned by digest and no policy; `credentials.json`, with `model_credential`, an API credential with `key_prefixes` and `pause_for_s`, an API credential whose endpoint has an IPv6 host and a port, and a host credential on an IPv4 host and a name; `credentials-forge.json`, with an API credential with `oauth` and `pause_for_s` and a forge's host credential with two `apply` items and a placeholder; `credentials-forge-push.json`, a forge's host credential whose `apply` item has `push_ref` and paths with a `{}` segment; `stack-hosts.json`, with `stack_hosts` of two names, a `*.` suffix and an IPv4 address; `harness.json`, with `harness_hidden`, a harness credential and a work credential on one host; `push.json`, with a read work credential and a push credential on the same git paths, the push credential's items with a `push_ref` and with pull request paths; `model-keys.json`, a key group of three API credentials with `resets_at`, `schedule_resets_at` and `pause_for_s`, and a host credential; `model-keys-cooling.json`, a key group whose start key has `chosen` and whose third key has `cooldown_until`; `model-keys-no-pause-for.json`, a key group of two subscription keys whose second key has no `pause_for_s`; `model-keys-use-up-to.json`, a key group of two subscription keys, each with `use_up_to_percent` and `use_up_to_windows`, the second with `cooldown_until`; `resume.json`, with `resume`; `model-keys-openai.json`, two keys of the `openai-responses` format with `paths`, one a subscription whose `auth` has `oauth`, `account_header` and `account_claim`; `resume-runs.json`, with `resume` and its `runs` of three runs | `run-configuration.schema.json` |
+| `fixtures/model-keys-report/` | model keys reports: windows of two keys, one `rejected` with its cooldown, one `allowed_warning` and one `allowed`; cooldowns from `schedule` and `pause_for` with the windows `key` and `spend_limit`; one with no window; one with `unauthorized`; and one made while session 2 is open | `model-keys-report.schema.json` |
 | `fixtures/model-keys-answer/` | answers to a model keys report: the windows of three keys, and none | `model-keys-answer.schema.json` |
 | `fixtures/secrets-request/` | secrets requests: one when the run starts, and the renewal of a model key after a `401`, with `unauthorized` | `secrets-request.schema.json` |
-| `fixtures/batch/` | delivery bodies: a first batch, with the open's `dev.qory.run.started` and `dev.qory.run.policy_applied` and the first `dev.qory.session.started`, the `dev.qory.run.refused` of a run whose run configuration was refused, `run_configuration_invalid`; the gateway's `dev.qory.session.exited` and `dev.qory.run.exited` of a session's run whose starter gave no outcome while its session ran, each `cancelled` with `stopped` and `exit_code` `-1`, `session-stopped.json`; and the `dev.qory.run.refused` of the server's `not_found` with its `status` `404`, `refused-not-found.json`, and of a code of the server's the schema's list does not hold, with its `status`, `refused-unlisted-server-code.json`; and the `dev.qory.run.policy_applied` of a walled run whose policy file was put under a ceiling with path rules, with its `ceiling_paths`, `policy-applied-ceiling-paths.json`; and the `dev.qory.run.built` of an image built from a commit of 64 characters, `built-sha256-commit.json`, and one with `environment_image` and `base`, `built-environment-image-base.json`; and the open's `dev.qory.run.policy_applied` with a harness credential and the stack proxy's `dev.qory.run.egress` of a request and of a tunnel, `harness.json`, and the same under `harness_hidden`, `harness-hidden.json`; and the `dev.qory.run.egress` of a request of the route to the run API and of a request outside its six shapes, `run-api.json`; and the `dev.qory.run.target_write` events of two pushes, one `changed` and one `cut` at the run's end, `target-write.json` | `batch.schema.json` |
+| `fixtures/batch/` | delivery bodies: a first batch, with the open's `dev.qory.run.started` and `dev.qory.run.policy_applied` and the first `dev.qory.session.started`, the `dev.qory.run.refused` of a run whose run configuration was refused, `run_configuration_invalid`; the gateway's `dev.qory.session.exited` and `dev.qory.run.exited` of a session's run whose starter gave no outcome while its session ran, each `cancelled` with `stopped` and `exit_code` `-1`, `session-stopped.json`; and the `dev.qory.run.refused` of the server's `not_found` with its `status` `404`, `refused-not-found.json`, and of a code of the server's the schema's list does not hold, with its `status`, `refused-unlisted-server-code.json`; and the `dev.qory.run.policy_applied` of a walled run whose policy file was put under a ceiling with path rules, with its `ceiling_paths`, `policy-applied-ceiling-paths.json`; and the `dev.qory.run.built` of an image built from a commit of 64 characters, `built-sha256-commit.json`, and one with `environment_image` and `base`, `built-environment-image-base.json`; and the open's `dev.qory.run.policy_applied` with a harness credential and the stack proxy's `dev.qory.run.egress` of a request and of a tunnel, `harness.json`, and the same under `harness_hidden`, `harness-hidden.json`; the open's `dev.qory.run.policy_applied` with a work credential and a push credential's items, and the push proxy's `dev.qory.run.egress` of an allowed push and of a refused merge, `push.json`; and the `dev.qory.run.egress` of a request of the route to the run API and of a request outside its six shapes, `run-api.json`; and the `dev.qory.run.target_write` events of two pushes, one `changed` and one `cut` at the run's end, `target-write.json` | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal: discovery, batches, registrations and a reload | the receiver, replaying each in the order of their names with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each, each run opened and joined by one session, or by two where this row states it: four closed, one on a developer machine, with a line of host work, which has no `session`, `session` `1` on each `dev.qory.run.log`, `dev.qory.run.resized` and runtime event of its session, and a `harness` of a 40-character commit, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints, and one behind a wall in an image its policy names by reference, with its workspace at `/workspace`, its `join`, `image` and `wall` steps, a `harness` of a 64-character commit and a `dev.qory.session.exited` with `peak_memory_bytes` and `cpu_time_ms`, and one with two steps of host work, a `fetch` and a `compose`, each with its `dev.qory.run.log` lines with `step`, then the `join` step of its session; and one whose starter ended it with no outcome while its session ran, with the gateway's `dev.qory.session.exited` and `dev.qory.run.exited`, each `cancelled` with `stopped` and `exit_code` `-1`; and one joined by two sessions behind a wall, the second with no runtime and `bare: true`, whose `join` and `wall` steps lie inside a `copy` step | `event.schema.json` per line, plus the sequence, source and concatenation rules, that every `dev.qory.run.exited` contains `state` and `exit_code`, and that the sessions are numbered from 1, each `dev.qory.session.started` followed by its `dev.qory.session.exited` before the next one and before `dev.qory.run.exited`, and that a `dev.qory.run.log`, `dev.qory.run.resized` or runtime event with `session` lies inside that session, and that the steps are numbered from 1 after `dev.qory.run.started`, each `dev.qory.run.step_exited` once after its `dev.qory.run.step_started`, a `dev.qory.run.log` with `step` between the two, every step ended before a `dev.qory.run.exited` the close wrote, a `join` step outside every session with no session starting during it, an `image` or `wall` step inside a session, a session's `dev.qory.run.log` with `step` in an `image` or `wall` step only, and one step open at a time, apart from a `join`, `image`, `wall` or `setup` step that starts and ends inside an open `copy` step, a session inside a `copy` step with `bare: true`, and no session running when a `copy` step exits |
 | `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |
-| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall, one with a wall and its `images`, and one with a narrowing as well, one with `images.allow` and a policy that sets its image by reference, a run answer with a wall, its labels, `placeholders`, `reserved`, `credential_hosts`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one with an image by reference, its `reference` and `relay_image`, one whose `credential_hosts` has an API credential from the server with its `auth`, `format` and `endpoint`, with `model_credential`, one without a wall, with its `stack_proxy_secret`, and one without a policy, each with its `applied`, one without a wall whose gateway holds a credential, with its `placeholders`, `credential_hosts` and `certificate_authority` and no `image`, one of a run with a control plane, with its `run_api`, one that continues a paused run, with its `resume`, one behind a separate gateway, without labels, `proxy_secret` and `stack_proxy_secret`, a reload answer with and without a policy, each with its `applied`, and one whose `applied` has `ceiling_paths`, a batch of a session's events without `sequence`, its `dev.qory.run.started` and `dev.qory.session.started` first, a batch of the `dev.qory.run.refused` of a session's code, a batch of a `dev.qory.session.exited` and a `dev.qory.run.exited` with `timeout`, `cancelled`, the run's with exit code `124`, two with `interrupted`, `cancelled`, one with the runtime's exit status and one with its signal, one of a refused join, `mount_mode_conflict`, one of a failure at the join after `dev.qory.session.started`, `failed` with `exit_code` `-1` and no reason, one of the wall's refusal at the join after `dev.qory.session.started`, `failed` with `exit_code` `-1` and `image_user_root`, one with `image_missing`, one each with `image_access_denied`, `image_rate_limited` and `image_registry_unreachable`, and one of a run closed with `no_session` after a line of host work, one of a run closed with `no_session` after a `fetch` step that failed with exit status `128`, `link-batch-step-failed.json`, one of a run closed with `no_session` after a `build` step and its `dev.qory.run.built` with `environment_image` and `base`, `link-batch-built.json`, one of a `push` step after a `dev.qory.session.exited`, before the `dev.qory.run.exited`, `link-batch-push-step.json`, one of a `machine` step, `start machine`, with the machine's start lines, right after `dev.qory.run.started`, `link-batch-machine-step.json`, one of a `copy` step after a `dev.qory.session.exited`, before the `dev.qory.run.exited`, `link-batch-copy-step.json`, one of a session with no runtime, with `bare`, `link-batch-session-bare.json`, a join request with `passes` and `model_key`, with `model_credential` too, and with `model_key` false, a join answer with `model_credential` and one of a run with no model key, a batch answer with `stop` and one with no member, a batch of a `dev.qory.session.exited` with `model_key_limit`, a `push` step and the run's `dev.qory.run.exited`, each `paused` with `model_key_limit`, `link-batch-exited-model-key-limit.json`, one of a `dev.qory.session.exited` `paused` with `model_key_limit` and the runtime's exit status, and one of two `dev.qory.session.transcript` chunks, `link-batch-session-transcript.json`, and refusals: `run_closed`, `session_lost` with its `state` and `reason`, `stopped` with `cancelled` and `stopped` and with the starter's `failed` and `checks_failed`, `batch_refused` with its `state` and `reason`, `placeholder_conflict`, `image_unknown`, `image_not_allowed`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, `run_key_invalid` and `run_attached`, from `gateway`, each with today's text as its `message` but `run_closed`, which shows it optional, and the signed `409` `instance_limit` to the registration and `run_key_expired` to the attach from `apiary` with Qory Apiary's `run.url` in its `message`, each the body alone; a batch answer with `stop` `model_key_switch` and one with `model_key_unauthorized`; a batch of a `dev.qory.session.exited`, a `push` step and the run's `dev.qory.run.exited`, each `paused` with `model_key_switch`, and the same `failed` with `model_key_unauthorized`, and one of a `dev.qory.session.exited` alone with each | the `link-*.schema.json` its name starts with |
-| `fixtures/invalid/` | documents that fail their schema, whose name is `<schema>-<reason>`, a session's `dev.qory.run.exited` with `timeout` and `succeeded`, one with `timeout` and an exit code other than `124`, and one with `interrupted` and `failed`, a `dev.qory.run.started` opened by a session or with a runtime member, a `dev.qory.run.log` whose `session` is `0` or whose `step` is `0` and a `dev.qory.runtime.started` whose `session` is text, a `dev.qory.run.step_started` with a `kind` outside the list, with no `name` or numbered `0`, a `dev.qory.run.step_exited` with no `state`, with a `state` outside the three, `paused` among them, with an `exit_code` of `-2` or with no `duration_ms`, a `dev.qory.session.started` whose `bare` is `false`, one whose `harness` is empty, has a member it does not define or a commit of 39 characters, a `dev.qory.session.exited` `cancelled` with no reason, `succeeded` with exit status 1, of a refused join with exit status 1, with `stopped` and an exit status, `cancelled` with `gateway_lost`, with `peak_memory_bytes` on a refused join, with a `cpu_time_ms` of `-1`, with a `peak_memory_bytes` of `1.5` and with one of 2^53, and, in a session's batch, with `stopped`, `succeeded` with no exit status and `cancelled` with a refusal's code, a run configuration whose `image` has a tag, one whose `image` is the machine's name for one, and one whose `stack_hosts` entry is a URL, a run configuration with an API credential that has `purpose`, with a `purpose` outside the two, and with a `harness_hidden` of text, a `dev.qory.run.egress` with a `channel` other than `stack` and `run_api`, and a `dev.qory.run.policy_applied` whose credential has `hosts` and no `scheme`, or `name` alone, a descriptor rule whose `data` maps `session`, `line`, `truncated` or `summary`, a descriptor rule whose `set` sets `session` or a field to an object, whose `from_started` lists `agent_id`, is on a rule of the hooks source or on one of `dev.qory.runtime.started`, and a rule with none of `data`, `set` and `from_started`, a descriptor with the type `dev.qory.runtime.message`, a descriptor whose `tools` has no `summary` or a member it does not define, whose `tools.summary` is a list, is empty, has an empty tool name, or has a path that is a number or not a dotted path, a `dev.qory.runtime.text` with no `kind`, a `kind` outside the list, `truncated: false` or a `text` over 64 KiB, a `dev.qory.runtime.tool_result` with no `content`, a `content` that is an object or text over 64 KiB, `truncated: false` or an `agent_type`, a `dev.qory.runtime.tool_denied` with no `tool_use_id` or with a `summary`, a `dev.qory.runtime.tool_started` whose `summary` is a list or over 1 KiB, a runtime event whose `line` is `0` or text, and a `dev.qory.runtime.message`, a run configuration whose API credential has a `pause_for_s` of `0` or of `604801`, a `resets_at` or a `cooldown_until` that is no time, `chosen: false`, a `use_up_to_percent` of `0` or of `100`, `use_up_to_percent` without `use_up_to_windows`, `use_up_to_windows` without `use_up_to_percent`, an empty `use_up_to_windows`, or one with 12 windows, a window twice or a window in upper case, a host credential with `chosen`, with seven API credentials, with a host credential that has `pause_for_s` or `use_up_to_percent` with `use_up_to_windows`, and whose `resume` has no `session_id`, a `run_id` in upper case, or `runs` that are empty, list a run twice, list 257 runs or list a run in upper case, a model keys report whose entry has a `utilization` of `101`, a `status` or a `source` outside the list, a `window` in upper case, `rejected` with no `cooldown_until`, `cooldown_until` with another status, or no `observed_at`, or whose `time` has a fraction, a model keys answer with no `version`, a link batch answer whose `stop` has no reason or `timeout`, a `dev.qory.session.exited` `failed` or `cancelled` with `model_key_limit`, in an event and in a session's batch, a `dev.qory.session.exited` `paused` with no reason or with `stopped` and exit code `-1`, a session's `dev.qory.run.exited` `failed` or `cancelled` with `model_key_limit` or `paused` with no reason, a run outcome and a batch answer's `end` `paused`, a link refusal whose `state` is `paused`, a `dev.qory.session.transcript` numbered `0`, with an `offset` of `-1`, with no `session_id` or with `bytes` over 32 KiB, and a descriptor whose `resume` has no `args`, a relative `prefix` or a `path` without `{session_id}`, a `dev.qory.run.target_write` with a `state` outside the four, with no `path`, with an empty `system`, with a `ref` or with a `request_id` in upper case, and a link batch with a `dev.qory.run.target_write`, among them; and, named `<schema>-beyond-schema-<reason>`, documents that break a rule only the gateway checks and pass the schema: a session's `dev.qory.run.exited` with a reason of the starter's, a run configuration whose harness credential has `placeholders`, a run configuration whose start key has a `cooldown_until` in 2099, one with two keys with `chosen`, and one whose `resume.runs` ends in another run than `resume.run_id`; for model keys of another format, an API credential whose `account_header` or `account_claim` comes alone, without `oauth`, with `oauth` false or beside a header scheme, or is out of its grammar, an `account_header` that is a reserved header or `Authorization`, an `account_claim` of `/` alone or with a control character, and whose `paths` are empty, 33, twice, with an inner `*` or relative; a secrets request and a model keys report whose `unauthorized` is empty, of 7 or out of its grammar; a `dev.qory.session.exited` and a `dev.qory.run.exited`, in an event and in a link batch, with `model_key_switch` and another state than `paused`, or with `model_key_unauthorized` and another state than `failed`; and a descriptor whose endpoint is a flag or two places, whose `config` breaks its grammar or its limits, whose model key or declared secret has an `account_header`, or whose `resume` has a `prefix` with `*` or an empty `after` | the schema the name starts with, expecting a failure, and a pass for each one the name marks beyond the schema |
+| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall, one with a wall and its `images`, and one with a narrowing as well, one with `images.allow` and a policy that sets its image by reference, a run answer with a wall, its labels, `placeholders`, `reserved`, `credential_hosts`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one with an image by reference, its `reference` and `relay_image`, one whose `credential_hosts` has an API credential from the server with its `auth`, `format` and `endpoint`, with `model_credential`, one without a wall, with its `stack_proxy_secret`, and one without a policy, each with its `applied`, one of a run with a push credential, with its `push_proxy_secret` and the push credential's items in `applied` with `purpose: push`, one without a wall whose gateway holds a credential, with its `placeholders`, `credential_hosts` and `certificate_authority` and no `image`, one of a run with a control plane, with its `run_api`, one that continues a paused run, with its `resume`, one behind a separate gateway, without labels, `proxy_secret` and `stack_proxy_secret`, a reload answer with and without a policy, each with its `applied`, and one whose `applied` has `ceiling_paths`, a batch of a session's events without `sequence`, its `dev.qory.run.started` and `dev.qory.session.started` first, a batch of the `dev.qory.run.refused` of a session's code, a batch of a `dev.qory.session.exited` and a `dev.qory.run.exited` with `timeout`, `cancelled`, the run's with exit code `124`, two with `interrupted`, `cancelled`, one with the runtime's exit status and one with its signal, one of a refused join, `mount_mode_conflict`, one of a failure at the join after `dev.qory.session.started`, `failed` with `exit_code` `-1` and no reason, one of the wall's refusal at the join after `dev.qory.session.started`, `failed` with `exit_code` `-1` and `image_user_root`, one with `image_missing`, one each with `image_access_denied`, `image_rate_limited` and `image_registry_unreachable`, and one of a run closed with `no_session` after a line of host work, one of a run closed with `no_session` after a `fetch` step that failed with exit status `128`, `link-batch-step-failed.json`, one of a run closed with `no_session` after a `build` step and its `dev.qory.run.built` with `environment_image` and `base`, `link-batch-built.json`, one of a `push` step after a `dev.qory.session.exited`, before the `dev.qory.run.exited`, `link-batch-push-step.json`, one of a `machine` step, `start machine`, with the machine's start lines, right after `dev.qory.run.started`, `link-batch-machine-step.json`, one of a `copy` step after a `dev.qory.session.exited`, before the `dev.qory.run.exited`, `link-batch-copy-step.json`, one with a session's two decisions of the route to `host.qory.invalid`, a request the handler answered with `202` and one with no session running, `503`, `link-batch-qory-host.json`, one of a session with no runtime, with `bare`, `link-batch-session-bare.json`, a join request with `passes` and `model_key`, with `model_credential` too, and with `model_key` false, a join answer with `model_credential` and one of a run with no model key, a batch answer with `stop` and one with no member, a batch of a `dev.qory.session.exited` with `model_key_limit`, a `push` step and the run's `dev.qory.run.exited`, each `paused` with `model_key_limit`, `link-batch-exited-model-key-limit.json`, one of a `dev.qory.session.exited` `paused` with `model_key_limit` and the runtime's exit status, and one of two `dev.qory.session.transcript` chunks, `link-batch-session-transcript.json`, and refusals: `run_closed`, `session_lost` with its `state` and `reason`, `stopped` with `cancelled` and `stopped` and with the starter's `failed` and `checks_failed`, `batch_refused` with its `state` and `reason`, `placeholder_conflict`, `image_unknown`, `image_not_allowed`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, `run_key_invalid` and `run_attached`, from `gateway`, each with today's text as its `message` but `run_closed`, which shows it optional, and the signed `409` `instance_limit` to the registration and `run_key_expired` to the attach from `apiary` with Qory Apiary's `run.url` in its `message`, each the body alone; a batch answer with `stop` `model_key_switch` and one with `model_key_unauthorized`; a batch of a `dev.qory.session.exited`, a `push` step and the run's `dev.qory.run.exited`, each `paused` with `model_key_switch`, and the same `failed` with `model_key_unauthorized`, and one of a `dev.qory.session.exited` alone with each | the `link-*.schema.json` its name starts with |
+| `fixtures/invalid/` | documents that fail their schema, whose name is `<schema>-<reason>`, a session's `dev.qory.run.exited` with `timeout` and `succeeded`, one with `timeout` and an exit code other than `124`, and one with `interrupted` and `failed`, a `dev.qory.run.started` opened by a session or with a runtime member, a `dev.qory.run.log` whose `session` is `0` or whose `step` is `0` and a `dev.qory.runtime.started` whose `session` is text, a `dev.qory.run.step_started` with a `kind` outside the list, with no `name` or numbered `0`, a `dev.qory.run.step_exited` with no `state`, with a `state` outside the three, `paused` among them, with an `exit_code` of `-2` or with no `duration_ms`, a `dev.qory.session.started` whose `bare` is `false`, one whose `harness` is empty, has a member it does not define or a commit of 39 characters, a `dev.qory.session.exited` `cancelled` with no reason, `succeeded` with exit status 1, of a refused join with exit status 1, with `stopped` and an exit status, `cancelled` with `gateway_lost`, with `peak_memory_bytes` on a refused join, with a `cpu_time_ms` of `-1`, with a `peak_memory_bytes` of `1.5` and with one of 2^53, and, in a session's batch, with `stopped`, `succeeded` with no exit status and `cancelled` with a refusal's code, a run configuration whose `image` has a tag, one whose `image` is the machine's name for one, and one whose `stack_hosts` entry is a URL, a run configuration with an API credential that has `purpose`, with a `purpose` outside the three, and with a `harness_hidden` of text, a `dev.qory.run.egress` with a `channel` other than `stack`, `push`, `run_api` and `qory_host`, a run answer whose `push_proxy_secret` is too short, a reload answer with a `push_proxy_secret`, and a `dev.qory.run.policy_applied` whose credential has `hosts` and no `scheme`, or `name` alone, a descriptor rule whose `data` maps `session`, `line`, `truncated` or `summary`, or a member of `session`, a descriptor rule whose `set` sets `session` or a field to an object, whose `from_started` lists `agent_id`, is on a rule of the hooks source or on one of `dev.qory.runtime.started`, and a rule with none of `data`, `set` and `from_started`, a descriptor rule whose `sum` sets `summary`, has no `over`, an `over` that is no dotted path or no `fields`, a descriptor with the type `dev.qory.runtime.message`, a descriptor whose `tools` has no `summary` or a member it does not define, whose `tools.summary` is a list, is empty, has an empty tool name, or has a path that is a number or not a dotted path, a `dev.qory.runtime.text` with no `kind`, a `kind` outside the list, `truncated: false` or a `text` over 64 KiB, a `dev.qory.runtime.tool_result` with no `content`, a `content` that is an object or text over 64 KiB, `truncated: false` or an `agent_type`, a `dev.qory.runtime.tool_denied` with no `tool_use_id` or with a `summary`, a `dev.qory.runtime.tool_started` whose `summary` is a list or over 1 KiB, a runtime event whose `line` is `0` or text, and a `dev.qory.runtime.message`, a run configuration whose API credential has a `pause_for_s` of `0` or of `604801`, a `resets_at` or a `cooldown_until` that is no time, `chosen: false`, a `use_up_to_percent` of `0` or of `100`, `use_up_to_percent` without `use_up_to_windows`, `use_up_to_windows` without `use_up_to_percent`, an empty `use_up_to_windows`, or one with 12 windows, a window twice or a window in upper case, a host credential with `chosen`, with seven API credentials, with a host credential that has `pause_for_s` or `use_up_to_percent` with `use_up_to_windows`, and whose `resume` has no `session_id`, a `run_id` in upper case, or `runs` that are empty, list a run twice, list 257 runs or list a run in upper case, a model keys report whose entry has a `utilization` of `101`, a `status` or a `source` outside the list, a `window` in upper case, `rejected` with no `cooldown_until`, `cooldown_until` with another status, or no `observed_at`, or whose `time` has a fraction or whose `session` is `0`, a model keys answer with no `version`, a link batch answer whose `stop` has no reason or `timeout`, a `dev.qory.session.exited` `failed` or `cancelled` with `model_key_limit`, in an event and in a session's batch, a `dev.qory.session.exited` `paused` with no reason or with `stopped` and exit code `-1`, a session's `dev.qory.run.exited` `failed` or `cancelled` with `model_key_limit` or `paused` with no reason, a run outcome and a batch answer's `end` `paused`, a link refusal whose `state` is `paused`, a `dev.qory.session.transcript` numbered `0`, with an `offset` of `-1`, with no `session_id` or with `bytes` over 32 KiB, and a descriptor whose `resume` has no `args`, a relative `prefix` or a `path` without `{session_id}`, a `dev.qory.run.target_write` with a `state` outside the four, with no `path`, with an empty `system`, with a `ref` or with a `request_id` in upper case, and a link batch with a `dev.qory.run.target_write`, among them; and, named `<schema>-beyond-schema-<reason>`, documents that break a rule only the gateway checks, or for a descriptor the session, and pass the schema: a session's `dev.qory.run.exited` with a reason of the starter's, a link batch with a `dev.qory.run.egress` of the gateway's, a CONNECT with no channel, and one each of the route to `host.qory.invalid` with another channel, rule, host or port, a run configuration whose harness credential has `placeholders`, a run configuration whose push credential has `placeholders`, a run configuration whose start key has a `cooldown_until` in 2099, one with two keys with `chosen`, one whose `resume.runs` ends in another run than `resume.run_id`, and a descriptor rule that sets a field in both `data` and `sum`, or a field and a member of it; for model keys of another format, an API credential whose `account_header` or `account_claim` comes alone, without `oauth`, with `oauth` false or beside a header scheme, or is out of its grammar, an `account_header` that is a reserved header or `Authorization`, an `account_claim` of `/` alone or with a control character, and whose `paths` are empty, 33, twice, with an inner `*` or relative; a secrets request and a model keys report whose `unauthorized` is empty, of 7 or out of its grammar; a `dev.qory.session.exited` and a `dev.qory.run.exited`, in an event and in a link batch, with `model_key_switch` and another state than `paused`, or with `model_key_unauthorized` and another state than `failed`; and a descriptor whose endpoint is a flag or two places, whose `config` breaks its grammar or its limits, whose model key or declared secret has an `account_header`, or whose `resume` has a `prefix` with `*` or an empty `after` | the schema the name starts with, expecting a failure, and a pass for each one the name marks beyond the schema |
 | `fixtures/enrolment/` | enrolment requests with a node's code, `qecn_`, one carrying one fingerprint and one carrying two, and a gateway's request with a gateway's code, `qecg_`, under the fixture gateway key, the answer, the answer to the gateway's request, the answer for an adapter's key, `answer-adapter.json`, and for a diagnostics key, `answer-diagnostics.json`, both unsigned, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, the gateway's under the fixture gateway key, each answer's and refusal's signature under the fixture signing key, `answer-adapter.json` and `answer-diagnostics.json` being checked against the schema alone |
 | `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, a registration among the requests, and its answer and the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `registration.json` and `registration-answer.json`, the registration's body and its answer's; `small-order.json`, the public keys enrolment refuses; `keys.json`'s fixture gateway key, the seed being bytes 97 to 128, with its id `ak_f1xt0re00000000g`; `through-gateway.json`, the run key of `run-key-payload.json` and the requests and answers of a run through a gateway, line by line with their signatures, over `registration-gateway.json`, `registration-gateway-answer.json`, `attach.json`, `attach-answer.json`, `attach-run-configuration.json`, `discovery-gateway.json`, `outcome.json` and `outcome-answer.json`, and, for a fixed exporter value, a binding and an answer of the gateway on its link, signed under the fixture gateway key (Known answers of a run through a gateway, §The server) | `configuration.schema.json` for `discovery.json`, `run-registration.schema.json` for `registration.json` and `run-configuration.schema.json` for `registration-answer.json`, and each file of a run through a gateway against its schema, `run-key.schema.json` for the payload; each key recomputed from its seed, the files of a run through a gateway written again by `go generate ./runkey` and compared, each signature verified and signed again, each point checked with integer arithmetic |
 | `fixtures/sealed/` | the secrets request's fixture: `run-configuration.json`, a run configuration with two credentials; `secrets-request.json`, the request for them; `secrets-answer.json`, its envelope, sealed to the fixture access key with a fixed ephemeral key, bytes 33 to 64, and signed under the fixture signing key; `sealed-plaintext.json`, what it opens to; `vectors.json`, its `info`, `aad`, lengths and hashes and the refused cases; and under `invalid/` envelopes each refused at one step, a wrong `aad`, a wrong `info`, a bad signature, an `exp` past the window, an `exp` too far ahead, another digest, another run id, an unknown suite and a value for a credential not requested, and `plaintext-other-digest.json` and `plaintext-not-requested.json`, the plaintexts the cases of another digest and of a value not requested were sealed from | each file against its schema, and `invalid/` against `secrets-answer.schema.json`, which refuses only the unknown suite; each envelope sealed again with the standard library, its signature verified and signed again, and opened with `crypto/hpke`; each refused one at its step and at no step before |

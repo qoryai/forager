@@ -199,8 +199,8 @@ func TestACopyStepRunsAfterTheLastJoinWithNoPush(t *testing.T) {
 // bareSession is s as a session with no runtime that runs sh and exits 0, as the
 // caller's copy of the work out of the wall.
 func bareSession(s session.SessionSpec) session.SessionSpec {
-	s.Runtime, s.Forwarder = nil, nil
-	s.Command, s.Args = "sh", []string{"-c", "exit 0"}
+	s.Runtime, s.RuntimeInstall, s.Forwarder = nil, nil, nil
+	s.Command, s.Args = installedShell, []string{"-c", "exit 0"}
 	return s
 }
 
@@ -587,11 +587,13 @@ func TestAStepsErrorsStartWithTheFix(t *testing.T) {
 		}
 	}
 	_, err = r.StartStep(event.StepSetup, "make setup")
-	refused("a setup step", err, "start a host step of kind fetch, compose, build, push, machine or copy, not \"setup\"")
+	refused("a setup step", err, "Start a host step of kind fetch, compose, build, push, machine or copy.\nThe kind \"setup\" is not one of them")
+	_, err = r.StartStep(event.StepAfter, "after")
+	refused("an after step", err, "Start a host step of kind fetch, compose, build, push, machine or copy.\nThe kind \"after\" is not one of them")
 	_, err = r.StartStep(event.StepJoin, "join")
-	refused("a join step", err, "start a host step of kind fetch, compose, build, push, machine or copy, not \"join\"")
+	refused("a join step", err, "Start a host step of kind fetch, compose, build, push, machine or copy.\nThe kind \"join\" is not one of them")
 	_, err = r.StartStep("checkout", "checkout the work")
-	refused("an unknown kind", err, "start a host step of kind fetch, compose, build, push, machine or copy, not \"checkout\"")
+	refused("an unknown kind", err, "Start a host step of kind fetch, compose, build, push, machine or copy.\nThe kind \"checkout\" is not one of them")
 	_, err = r.StartStep(event.StepFetch, "")
 	refused("an empty name", err, "give the step a name")
 	s, err := r.StartStep(event.StepFetch, "fetch github.com/example-org/app")

@@ -343,16 +343,22 @@ func TestAPathWithADotDotIsNotReadable(t *testing.T) {
 	}
 }
 
-// TestARunWithoutASettingsFileLeavesTheRegistryAlone pins that the places are worked
-// out only when a file is to be read: a run that passes no settings file, or passes
-// them as a document, never reads the registry of walled runs, and starts where the
-// registry cannot be opened; one that passes a file does not.
-func TestARunWithoutASettingsFileLeavesTheRegistryAlone(t *testing.T) {
+// TestOnlyASessionWithNoRuntimeLeavesTheRegistryAlone pins that the places are worked
+// out only when a file or folder is to be checked: a session with no runtime reads no
+// registry of walled runs and starts where the registry cannot be opened; a runtime's
+// session checks its installed folder, with or without a settings file, so the
+// registry is read and the session refused.
+func TestOnlyASessionWithNoRuntimeLeavesTheRegistryAlone(t *testing.T) {
 	notDir := filepath.Join(t.TempDir(), "state")
 	if err := os.WriteFile(notDir, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("XDG_STATE_HOME", notDir)
+	sp := spec(t)
+	sp.SessionSpec = bareSession(sp.SessionSpec)
+	if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
+		t.Errorf("a session with no runtime: %+v, %v", res, err)
+	}
 	for name, args := range map[string][]string{
 		"no settings":            {"-p", "hi"},
 		"settings in a document": {"--settings", `{"permissions":{}}`},
@@ -360,12 +366,12 @@ func TestARunWithoutASettingsFileLeavesTheRegistryAlone(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			sp := spec(t, "FAKE_EXIT=0")
 			sp.Args = args
-			if res, err := runWithSettingsEnv(t, sp); err != nil || res.ExitCode != 0 {
-				t.Errorf("the run: %+v, %v", res, err)
+			if _, err := runWithSettingsEnv(t, sp); err == nil || !strings.Contains(err.Error(), "SessionSpec.RuntimeInstall.Dir") || !strings.Contains(err.Error(), "the registry of walled runs") {
+				t.Errorf("the run: %v", err)
 			}
 		})
 	}
-	sp := spec(t, "FAKE_EXIT=0")
+	sp = spec(t, "FAKE_EXIT=0")
 	if err := runErr(sp); err == nil || !strings.Contains(err.Error(), "the registry of walled runs") {
 		t.Errorf("a run with a settings file: %v", err)
 	}

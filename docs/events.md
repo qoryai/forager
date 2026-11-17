@@ -302,7 +302,9 @@ contract's §The events, How a run ends) with no session that has no wall with
 `read_needs_wall`, a read run whose setup is set to run inside the agent's container
 with `read_needs_setup_outside`, a read run whose image runs nested Docker with
 `read_needs_no_nested_docker`, and a read run whose setup container could not be removed
-with `read_needs_setup_removed`, each `failed` with exit code `-1`. A run whose last
+with `read_needs_setup_removed`, each `failed` with exit code `-1`. qory closes a run
+with no session whose access is not read and that has no wall with `write_needs_wall`,
+`failed` with exit code `-1`. A run whose last
 session ended `paused` with `model_key_limit`, after the gateway's answer to a batch
 had `stop` because no model key of the run's key group was left out of cooldown, closes
 `paused` with `model_key_limit` after its host work; the gateway returns an error for that reason

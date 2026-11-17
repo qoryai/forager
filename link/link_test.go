@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -114,6 +115,38 @@ func TestTheRelayPreamble(t *testing.T) {
 		if err := link.CheckSecret(s); err == nil {
 			t.Errorf("%q is a preamble's secret", s)
 		}
+	}
+}
+
+// TestTheRelayPeerLine pins the line the wall's relay writes after its preamble when
+// told to: one length for IPv4 and IPv6, read in exactly that length, an IPv4 address
+// unmapped, and an error for anything else.
+func TestTheRelayPeerLine(t *testing.T) {
+	v4, v6 := netip.MustParseAddr("172.18.0.3"), netip.MustParseAddr("fd8a:1b2c:3d4e:5f60::3")
+	if got := link.RelayPeerLine(v4); got != "QORY-PEER 00000000000000000000ffffac120003\n" {
+		t.Errorf("the peer line of %s: %q", v4, got)
+	}
+	for _, a := range []netip.Addr{v4, v6} {
+		r := bufio.NewReader(strings.NewReader(link.RelayPeerLine(a) + "GET / HTTP/1.1\r\n"))
+		got, err := link.ReadRelayPeer(r)
+		rest, _ := io.ReadAll(r)
+		if err != nil || got != a || string(rest) != "GET / HTTP/1.1\r\n" {
+			t.Errorf("%s read as %s, %v, then %q", a, got, err, rest)
+		}
+	}
+	line := link.RelayPeerLine(v4)
+	for name, in := range map[string]string{
+		"another word":    "QORY-PEEX" + line[len("QORY-PEER"):],
+		"no newline":      line[:len(line)-1] + " ",
+		"not hex":         "QORY-PEER " + strings.Repeat("zz", 16) + "\n",
+		"an HTTP request": "GET http://host.qory.invalid/ HTTP/1.1\r\nHost: x\r\n\r\n",
+	} {
+		if _, err := link.ReadRelayPeer(strings.NewReader(in)); err == nil {
+			t.Errorf("%s was read as a peer line", name)
+		}
+	}
+	if _, err := link.ReadRelayPeer(strings.NewReader(line[:10])); err == nil {
+		t.Error("a line cut short was read")
 	}
 }
 

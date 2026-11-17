@@ -27,10 +27,10 @@
       "additionalProperties": {"$ref": "#/$defs/variable"}
     },
     "credentials": {
-      "description": "The credentials whose values the server stores for the run, at most 8, each name once, and at most 6 of them API credentials. The order of the key group's API credentials is the order in which the gateway sets them (model_credential). The document has no value: the server seals the values to the access key in its answer, secrets-answer.schema.json, to the secrets request, secrets-request.schema.json, a POST to the configuration's secrets.url. The gateway sends it when the run starts, for every entry, and again for each entry whose value has expires_at: 5 minutes before it expires, and after a host answers 401 to a request that the value was set on, at most every 30 seconds per entry. It sets each value in place of a credential of the machine's that claims one of its hosts. The entries are fixed for the run: a renewal changes only the value.",
+      "description": "The credentials whose values the server stores for the run, at most 16, each name once, and at most 6 of them API credentials. The order of the key group's API credentials is the order in which the gateway sets them (model_credential). The document has no value: the server seals the values to the access key in its answer, secrets-answer.schema.json, to the secrets request, secrets-request.schema.json, a POST to the configuration's secrets.url. The gateway sends it when the run starts, for every entry, and again for each entry whose value has expires_at: 5 minutes before it expires, and after a host answers 401 to a request that the value was set on, at most every 30 seconds per entry. It sets each value in place of a credential of the machine's that claims one of its hosts. The entries are fixed for the run: a renewal changes only the value.",
       "type": "array",
       "minItems": 1,
-      "maxItems": 8,
+      "maxItems": 16,
       "contains": {"type": "object", "required": ["format"]},
       "minContains": 0,
       "maxContains": 6,
@@ -109,8 +109,8 @@
       "properties": {
         "name": {"description": "The credential's name, unique among the entries.", "$ref": "#/$defs/credential_name"},
         "apply": {"description": "Where and how the value is set: 1 to 16 items. The value in the answer to the secrets request may have narrower items (sealed-plaintext.schema.json); without them the gateway sets these.", "type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "#/$defs/apply"}},
-        "placeholders": {"description": "Variables the enclosure gets with a value that is no credential, for a program that needs one set to start. A placeholder goes only into a variable for a credential: one that the run's runtime's descriptor denies, lists in its model overrides or reserves, reads its model endpoint or a model key from is run_configuration_invalid. A harness credential with placeholders is run_configuration_invalid: no session gets it.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}},
-        "purpose": {"description": "What the value is for. work: the run's proxy sets it, for the run's sessions, its host work and its setup. harness: the run's stack proxy sets it, for qory's fetch of the harness definition before the run's first session joins, and the run's proxy never does; the gateway overwrites the value with zeros at the run's first join request. Each host of a harness credential's items must be one the stack proxy allows: in gateway.stack_hosts, or in stack_hosts and allowed by the node's policy with no path rule for it. Two harness credentials may claim one host as two work credentials may; a harness credential and a work credential on one host do not conflict, since no proxy sets both. Absent, work.", "enum": ["harness", "work"]}
+        "placeholders": {"description": "Variables the enclosure gets with a value that is no credential, for a program that needs one set to start. A placeholder goes only into a variable for a credential: one that the run's runtime's descriptor denies, lists in its model overrides or reserves, reads its model endpoint or a model key from is run_configuration_invalid. A harness or push credential with placeholders is run_configuration_invalid: no session gets it.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}},
+        "purpose": {"description": "What the value is for. work: the run's proxy sets it, for the run's sessions, its host work and its setup. harness: the run's stack proxy sets it, for qory's fetch of the harness definition before the run's first session joins, and the run's proxy never does; the gateway overwrites the value with zeros at the run's first join request. Each host of a harness credential's items must be one the stack proxy allows: in gateway.stack_hosts, or in stack_hosts and allowed by the node's policy with no path rule for it. push: the run's push proxy sets it, for qory's push and the calls of its submit step, from the run's open until its close, and the run's proxy never does; the push proxy reaches only the hosts and paths of the push credentials' items. Under enforce, the run's egress allow list must cover each host of a push credential's items, at the start and at every reload. Two harness credentials, or two push credentials, may be for one host as two work credentials may; credentials of different purposes on one host do not conflict, since no proxy sets two purposes. A harness or push credential with placeholders is run_configuration_invalid: no session gets it. Absent, work.", "enum": ["harness", "work", "push"]}
       }
     },
     "apply": {
@@ -123,7 +123,8 @@
         "scheme": {"description": "bearer sets Authorization: Bearer and the value. basic sets Authorization: Basic with username and the value as the password. header sets the header in header to the value.", "enum": ["bearer", "basic", "header"]},
         "username": {"description": "With basic alone.", "type": "string", "minLength": 1, "pattern": "^[^:\\s]+$"},
         "header": {"description": "With header alone.", "type": "string", "maxLength": 64, "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"},
-        "paths": {"description": "The paths of those hosts the value is set on. Absent means every path.", "$ref": "#/$defs/credential_paths"}
+        "paths": {"description": "The paths of those hosts the value is set on. Absent means every path.", "$ref": "#/$defs/credential_paths"},
+        "push_ref": {"description": "The one ref a git push through this item may create, update or delete, in full, such as refs/heads/qory/wi_01. The gateway reads the ref commands of every git-receive-pack to the item's hosts before it sends anything, and returns 403, without sending the push, for a push that names any other ref. For an item without push_ref, every push gets 403. An answer to the secrets request that narrows the item keeps its push_ref, or its absence.", "type": "string", "maxLength": 255, "pattern": "^refs/heads/[^\\s]+$"}
       },
       "allOf": [
         {"if": {"properties": {"scheme": {"const": "header"}}}, "then": {"required": ["header"]}, "else": {"not": {"required": ["header"]}}},
@@ -131,12 +132,12 @@
       ]
     },
     "credential_paths": {
-      "description": "The paths a credential's value is set on, in the policy's path grammar: 1 to 32, none twice, each a path from the root, matched whole, or up to a final * matched as a prefix, such as /backend-api/codex/*. No other wildcard, no query.",
+      "description": "The paths a credential's value is set on, in the policy's path grammar: 1 to 32, none twice, each a path from the root, matched whole, or up to a final * matched as a prefix, such as /backend-api/codex/*, where a segment written exactly {} matches one segment that is not empty: /repos/example-org/app/pulls/{} matches /repos/example-org/app/pulls/12 and not /repos/example-org/app/pulls/12/merge. A { or } anywhere else fails validation. No other wildcard, no query.",
       "type": "array",
       "minItems": 1,
       "maxItems": 32,
       "uniqueItems": true,
-      "items": {"type": "string", "pattern": "^/[^*?#\\s]*\\*?$"}
+      "items": {"type": "string", "pattern": "^/(?:\\{\\}|[^*?#\\s{}/]*)(?:/(?:\\{\\}|[^*?#\\s{}/]*))*\\*?$"}
     },
     "endpoint": {
       "description": "A model API's base URL: https, a host, an optional port and path, and no user information, query or fragment, at most 2048 characters. Forager refuses, run_configuration_invalid, one whose host policy.EndpointHost does not read.",

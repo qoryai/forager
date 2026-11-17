@@ -76,7 +76,36 @@ func fakeSetupRecords() int {
 		}
 		recs = append(recs, runtimes.Record{Source: runtimes.SourceSetup, Record: m})
 	}
-	if err := socket.Send(context.Background(), os.Getenv(session.EnvSocket), recs); err != nil {
+	addr := os.Getenv(session.EnvSocket)
+	if forged := os.Getenv("FAKE_AFTER_SOCKET"); forged != "" {
+		// A process of After's container that is told where the socket is.
+		addr = forged
+	}
+	if err := socket.Send(context.Background(), addr, recs); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 82
+	}
+	return 0
+}
+
+// fakeSocketRecords sends the records of FAKE_SOCKET_RECORDS, one per line, each with
+// its source, to the run socket over one connection, as a process of the agent's can.
+func fakeSocketRecords() int {
+	var recs []runtimes.Record
+	for _, line := range strings.Split(strings.TrimSpace(os.Getenv("FAKE_SOCKET_RECORDS")), "\n") {
+		var rec runtimes.Record
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 81
+		}
+		recs = append(recs, rec)
+	}
+	addr := os.Getenv(session.EnvSocket)
+	if forged := os.Getenv("FAKE_AFTER_SOCKET"); forged != "" {
+		// A process of After's container that is told where the socket is.
+		addr = forged
+	}
+	if err := socket.Send(context.Background(), addr, recs); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 82
 	}
@@ -93,7 +122,7 @@ func preparedSpec(t *testing.T, line string, env ...string) runSpec {
 	sp := spec(t, env...)
 	sp.Wall, sp.Image, sp.Mounts = &openWall{}, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
 	sp.Forwarder = nil
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", line}
+	sp.Command, sp.Args = installedShell, []string{"-c", line}
 	sp.SetupRunner = setupRunner
 	return sp
 }
@@ -152,7 +181,7 @@ func TestSetupCommandsRunBeforeTheRuntime(t *testing.T) {
 	// connection with the run's proxy secret, as the wall's relay does.
 	sp.Wall, sp.Image, sp.Mounts = &relayWall{}, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
 	sp.Forwarder = nil
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", `cp prepared.json runtime-saw.json && cat > runtime-input; exit 5`}
+	sp.Command, sp.Args = installedShell, []string{"-c", `cp prepared.json runtime-saw.json && cat > runtime-input; exit 5`}
 	sp.Stdin = strings.NewReader("for the runtime\n")
 	sp.Variables.Run = []string{"PREP_VARIABLE=from the run"}
 	sp.SetupRunner = setupRunner
@@ -196,7 +225,7 @@ func TestSetupCommandsRunBeforeTheRuntime(t *testing.T) {
 	evs := events(t, res)
 	started := sessionStarted(t, evs)
 	script := filepath.Join(res.SessionDir, session.PreparationScript)
-	if started["command"] != "/bin/sh" || started["args"].([]any)[0] != script || started["args"].([]any)[1] != "/bin/sh" {
+	if started["command"] != "/bin/sh" || started["args"].([]any)[0] != script || started["args"].([]any)[1] != "/qory/runtime/claude/bin/sh" {
 		t.Errorf("session.started command %v args %v", started["command"], started["args"])
 	}
 	if got, _ := started["setup_commands"].([]any); !slices.Equal(got, []any{"install", "start services"}) {
@@ -451,15 +480,15 @@ func TestSetupRecordsOutOfOrderAreNotRecorded(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	want := []string{
-		"a setup record for step 3 arrived out of order and is not recorded",
-		"a setup record for step 5 arrived out of order and is not recorded",
-		"a setup record for step 4 arrived out of order and is not recorded",
-		"a setup record for step 11 arrived out of order and is not recorded",
+		"socket: a setup record for step 3 arrived out of order and is not recorded",
+		"socket: a setup record for step 5 arrived out of order and is not recorded",
+		"socket: a setup record for step 4 arrived out of order and is not recorded",
+		"socket: a setup record for step 11 arrived out of order and is not recorded",
 		"socket: not a setup record: its command is not a number from 1",
 		"socket: not a setup record: a line has stream stdout or stderr and its bytes in base64",
-		"a setup record for step 3 arrived out of order and is not recorded",
-		"a setup record for step 3 arrived out of order and is not recorded",
-		"a setup record arrived after the setup ended and is not recorded",
+		"socket: a setup record for step 3 arrived out of order and is not recorded",
+		"socket: a setup record for step 3 arrived out of order and is not recorded",
+		"socket: a setup record arrived after the setup ended and is not recorded",
 	}
 	var got []string
 	for _, l := range reports {
@@ -469,6 +498,95 @@ func TestSetupRecordsOutOfOrderAreNotRecorded(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("the reports %q, want %q", got, want)
+	}
+}
+
+// TestBadSetupRecordsOfOneConnectionAreCapped pins that a connection that writes many
+// setup records the session does not record gives at most socket.MaxBadLines reports and
+// one more with the count of the rest, as a connection of lines that are not records
+// does, for each of the three ways a setup record is not recorded: it is not a setup
+// record, it is out of order, or it comes after the setup ended.
+func TestBadSetupRecordsOfOneConnectionAreCapped(t *testing.T) {
+	const extra = 25
+	lines := func(line string) string {
+		return strings.TrimSpace(strings.Repeat(line+"\n", socket.MaxBadLines+extra))
+	}
+	for name, c := range map[string]struct {
+		line string
+		// fromRuntime sends the records from the runtime, which starts after the setup
+		// ended; otherwise the setup command sends them while its step is open.
+		fromRuntime bool
+		want        func(string) bool
+	}{
+		"not a setup record": {
+			line: `{"command": "one", "event": "started"}`,
+			want: func(l string) bool {
+				return l == "socket: not a setup record: its command is not a number from 1"
+			},
+		},
+		"out of order": {
+			line: `{"command": 2, "event": "started"}`,
+			want: func(l string) bool {
+				return strings.HasPrefix(l, "socket: a setup record for step ") && strings.HasSuffix(l, " arrived out of order and is not recorded")
+			},
+		},
+		"after the setup ended": {
+			line:        `{"command": 1, "event": "started"}`,
+			fromRuntime: true,
+			want: func(l string) bool {
+				return l == "socket: a setup record arrived after the setup ended and is not recorded"
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			forged := lines(c.line)
+			var sp runSpec
+			setup := session.SetupCommand{Name: "install", Args: []string{os.Args[0]}}
+			if c.fromRuntime {
+				sp = preparedSpec(t, `FAKE_SETUP_RECORDS='`+forged+`' "$0"`)
+				sp.Args = append(sp.Args, os.Args[0])
+				setup.Args = []string{"true"}
+			} else {
+				sp = preparedSpec(t, "exit 0", "FAKE_SETUP_RECORDS="+forged)
+			}
+			var reports []string
+			var mu sync.Mutex
+			sp.Report = func(l string) {
+				mu.Lock()
+				defer mu.Unlock()
+				reports = append(reports, l)
+			}
+			sp.SessionSpec.Setup = []session.SetupCommand{setup}
+			res, err := run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			all := steps(t, events(t, res))
+			var kinds []string
+			for _, s := range all {
+				kinds = append(kinds, fmt.Sprint(s.started["kind"], " ", s.started["name"], " ", s.exited["state"]))
+			}
+			if want := []string{"join join session 1 succeeded", "wall start the wall succeeded", "setup install succeeded"}; !slices.Equal(kinds, want) {
+				t.Errorf("the steps %q, want %q", kinds, want)
+			}
+			summary := fmt.Sprintf("socket: skipped %d more lines on one connection that were not recorded", extra)
+			var got []string
+			mu.Lock()
+			defer mu.Unlock()
+			for _, l := range reports {
+				if strings.Contains(l, "setup record") || strings.Contains(l, "skipped") {
+					got = append(got, l)
+				}
+			}
+			if len(got) != socket.MaxBadLines+1 || got[socket.MaxBadLines] != summary {
+				t.Fatalf("the reports %q, want %d of this kind and then %q", got, socket.MaxBadLines, summary)
+			}
+			for _, l := range got[:socket.MaxBadLines] {
+				if !c.want(l) {
+					t.Errorf("report %q", l)
+				}
+			}
+		})
 	}
 }
 
@@ -512,7 +630,7 @@ func TestSetupCommandsNeedAWallARunnerANameAndAProgram(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := sessionStarted(t, events(t, res))
-	if _, ok := started["setup_commands"]; ok || started["command"] != "/bin/sh" || started["args"].([]any)[0] != "-c" {
+	if _, ok := started["setup_commands"]; ok || started["command"] != "/qory/runtime/claude/bin/sh" || started["args"].([]any)[0] != "-c" {
 		t.Errorf("session.started %v", started)
 	}
 	if _, err := os.Stat(filepath.Join(res.SessionDir, session.PreparationScript)); err == nil {

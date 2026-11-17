@@ -46,6 +46,9 @@ type linkRun struct {
 	// keys is the run's key group, nil when the run has none: the start key's, from the
 	// run configuration's credentials.
 	keys *modelkey.Group
+	// reporter sends the key group's reports, nil when the run has no key group or no
+	// control plane. Set under mu.
+	reporter *keyReporter
 	// writes numbers the git pushes the run's proxy reads, nil until the proxy is made.
 	writes *writeLog
 	// secret is the run's proxy secret, held so that no print of the run shows it.
@@ -65,6 +68,12 @@ type linkRun struct {
 	// on, under mu ([linkRun.closeStack]).
 	stack       *proxy.Proxy
 	stackSecret secretValue
+
+	// push is the run's push proxy, and pushSecret its secret on the local link, held so
+	// that no print of the run shows it; both nil for a run with no push credential and
+	// once [linkRun.closePush] closed the push proxy and cleared its secret, under mu.
+	push       *proxy.Proxy
+	pushSecret secretValue
 
 	// batch takes one batch of the session's at a time.
 	batch sync.Mutex
@@ -564,6 +573,9 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	if err := lr.openStack(req.Wall || remote, ca); err != nil {
 		return fail(err)
 	}
+	if err := lr.openPush(req.Wall || remote, ca); err != nil {
+		return fail(err)
+	}
 	lr.mu.Lock()
 	given := lr.refresh()
 	lr.opened = true
@@ -737,6 +749,13 @@ func (lr *linkRun) decide(ctx, steps context.Context, d decision, authority func
 				conf, _ := g.config()
 				return g.client.PostModelKeys(ctx, conf.Run.URL, runID, m)
 			}, g.report, lr.logLine)
+			lr.mu.Lock()
+			// A run that a gateway reopens may have a session open.
+			if j := lr.openJoin(); j != nil {
+				rep.session = j.session
+			}
+			lr.reporter = rep
+			lr.mu.Unlock()
 			routine.Go(routine.ForRun(g.report, runID), func() { rep.run(ctx) })
 		}
 	}
@@ -819,12 +838,13 @@ func (lr *linkRun) arm() {
 func (lr *linkRun) serverEnd(end server.ServerEnd) { lr.end(stoppedBy(end)) }
 
 // release lets go of what the run holds on the gateway's side: its stack proxy, its
-// secret and proxy first, so an ended run's secrets are refused at once, even while a
-// reload in flight winds down; then its reload, its tools and its credentials. Each may
+// push proxy, its secret and proxy first, so an ended run's secrets are refused at once,
+// even while a reload in flight winds down; then its reload, its tools and its credentials. Each may
 // be absent.
 func (lr *linkRun) release() {
 	lr.cancel()
 	lr.closeStack()
+	lr.closePush()
 	if lr.secret != nil {
 		lr.g.proxies.Unregister(lr.secret.reveal())
 	}
@@ -1097,6 +1117,11 @@ func (lr *linkRun) end(e ending) {
 	if lr.timer != nil {
 		lr.timer.Stop()
 	}
+	if j := lr.openJoin(); j != nil && lr.reporter != nil {
+		// The run's end ends the open join's reports, with or without its
+		// session.started: its end report is made before release ends the reporter.
+		lr.reporter.closed(j.session)
+	}
 	startedAt := lr.startedAt
 	discarded := lr.discarded
 	lr.mu.Unlock()
@@ -1207,7 +1232,7 @@ func ended(e ending, session int, from time.Time) map[string]any {
 
 // runAnswerDoc is the run answer as the gateway writes it,
 // contracts/forager/v1/link-run-answer.schema.json: on the one address without the
-// labels, the proxy secret and the stack proxy secret.
+// labels, the proxy secret, the stack proxy secret and the push proxy secret.
 type runAnswerDoc struct {
 	Version              int                          `json:"version"`
 	RunID                string                       `json:"run_id"`
@@ -1217,6 +1242,7 @@ type runAnswerDoc struct {
 	Variables            map[string]server.Variable   `json:"variables,omitempty"`
 	ProxySecret          string                       `json:"proxy_secret,omitempty"`
 	StackProxySecret     string                       `json:"stack_proxy_secret,omitempty"`
+	PushProxySecret      string                       `json:"push_proxy_secret,omitempty"`
 	CertificateAuthority string                       `json:"certificate_authority,omitempty"`
 	Placeholders         []string                     `json:"placeholders,omitempty"`
 	Reserved             []string                     `json:"reserved,omitempty"`
@@ -1275,6 +1301,12 @@ func (lr *linkRun) compute() refreshed {
 	var given []map[string]any
 	pol := lr.r.Policy()
 	applied := appliedOf(pol, lr.r.Beside(), lr.r.Held(), lr.r.Chosen(), lr.px.Terminated())
+	if push := pushApplied(lr.r.PushUses()); len(push) > 0 {
+		// Every record lists the push credentials, which the push proxy sets from the
+		// run's open until its close.
+		listed, _ := applied["credentials"].([]any)
+		applied["credentials"] = append(slices.Clone(listed), push...)
+	}
 	if hosts := lr.r.StackHosts(); !lr.opened && len(hosts) > 0 {
 		// The open's record lists the run configuration's stack_hosts, which the stack
 		// proxy allows until the run's first join request, in JSON's types as the rest.
@@ -1335,7 +1367,7 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 	doc, digest := policyDocument(pol)
 	a := runAnswerDoc{
 		Version: 1, RunID: lr.id, Labels: lr.labels, Policy: doc, Digest: digest, Variables: variables(lr.r.Variables()),
-		ProxySecret: lr.secret.reveal(), StackProxySecret: lr.stackSecret.reveal(), CertificateAuthority: string(authority), Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(),
+		ProxySecret: lr.secret.reveal(), StackProxySecret: lr.stackSecret.reveal(), PushProxySecret: lr.pushSecret.reveal(), CertificateAuthority: string(authority), Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(),
 		CredentialHosts: credentialHosts(lr.r.Held()), Image: lr.image(), Applied: lr.given[len(lr.given)-1],
 	}
 	if held := lr.r.Held(); held != nil {
@@ -1535,13 +1567,19 @@ func harnessApplied(uses []proxy.Credential, hidden bool) []any {
 			}
 			continue
 		}
-		e := map[string]any{"name": name, "hosts": anyOf(shownValues(u.Hosts)), "scheme": u.Scheme, "purpose": server.PurposeHarness}
-		if u.Paths != nil {
-			e["paths"] = anyOf(shownValues(u.Paths))
-		}
-		out = append(out, e)
+		out = append(out, appliedItem(u, server.PurposeHarness))
 	}
 	return out
+}
+
+// appliedItem is the entry of dev.qory.run.policy_applied's credentials of u, an item of
+// a harness or a push credential, with purpose: its name, hosts, scheme and paths.
+func appliedItem(u proxy.Credential, purpose string) map[string]any {
+	e := map[string]any{"name": accesskey.ShownName(u.Name, false), "hosts": anyOf(shownValues(u.Hosts)), "scheme": u.Scheme, "purpose": purpose}
+	if u.Paths != nil {
+		e["paths"] = anyOf(shownValues(u.Paths))
+	}
+	return e
 }
 
 // anyOf is values in JSON's types, as an event's data decodes.
@@ -1598,6 +1636,10 @@ func (lr *linkRun) apply(next *policy.Loaded) error {
 	// step under its record's lock.
 	hold := lr.st.Hold()
 	refused := lr.px.SetPolicyOpening(in.Mode, in.AllowFirst, in.Allow, in.Deny, d.Guard, in.Paths, d.Uses)
+	// A guarded push proxy opens the names the run's proxy opens under the new policy.
+	if push := lr.pushProxy(); push != nil && push.Guarded() {
+		push.Guard(d.Guard)
+	}
 	lr.r.Commit(d)
 	lr.posts.SetRunDigest(d.Policy.RunConfiguration)
 	lr.mu.Lock()

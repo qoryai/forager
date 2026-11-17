@@ -5,7 +5,6 @@
 # arguments follow exec: codex exec --json becomes codex exec resume <id> --json.
 version: 1
 runtime: codex
-runtime_version: "0.167.2"
 sources:
   output:
     format: jsonl

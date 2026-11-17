@@ -47,15 +47,20 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 
 // Join runs one session in the open run and returns when the runtime has exited, the
 // session's dev.qory.session.exited is written and the gateway accepted it, within 15
-// seconds, so the next join may follow. It sends the gateway the join request with the
-// names of the variables the session passes a value for and its model key, then checks
+// seconds, so the next join may follow. With SessionSpec.After the 15 seconds do not
+// include After's step, which the session allows AfterTimeout + 66 seconds: the agent's
+// container's removal and the start of After's container (60 s together), the 5 s
+// between SIGTERM and SIGKILL, and 1 s of output. After a stop from outside it allows
+// StopGrace. It sends the gateway the join request with the names of the variables the session passes a value for and its model key, then checks
 // the session's places, prepares the runtime, resolves the variables, writes
 // dev.qory.session.started and the session's dev.qory.run.policy_applied, behind a
 // wall wraps the launch in the wall that [Open] built, and starts the runtime. Behind
 // the Docker wall the wrap writes the docker run of the agent's container, which
 // starts with the launch, after the wall step, and the session's end removes it; the
-// rest of the wall stays until [Run.Close]. Sessions of one run join one after
-// another.
+// rest of the wall stays until [Run.Close]. With SessionSpec.After the session removes
+// the agent's container once the runtime exits, then runs After in a new container of the
+// wall, and writes its after step before dev.qory.session.exited. Sessions of one run
+// join one after another.
 //
 // An error means the session did not start. An error before the join request, of a
 // spec the session refuses or of a run whose setup step of [Run.Setup] failed, writes
@@ -135,12 +140,18 @@ func (r *Run) join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// AgentEnv starts no program, so the installed runtime is checked here and not in
+	// checkSession.
+	if s.install, err = checkInstall(s.SessionSpec, spec.Runtime, r.open.Wall != nil); err != nil {
+		return nil, err
+	}
 	// The session may reach the run's forwarder from here on.
 	r.shutCheck(errCheckAfterJoin, false)
 	// The run's host proxies and its engine proxy end before the join request and the
 	// wall's start, so their passwords open nothing while the session runs. The join
 	// request closes the run's stack proxy at the gateway.
 	r.hosts.closeAll()
+	r.pushes.closeAll()
 	r.closeEngine()
 	r.joinAsked.Store(true)
 
@@ -200,6 +211,9 @@ func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) 
 		return runSpec{}, nil, err
 	}
 	if err := checkExec(s); err != nil {
+		return runSpec{}, nil, err
+	}
+	if err := checkAfter(s); err != nil {
 		return runSpec{}, nil, err
 	}
 	rt := spec.Runtime
@@ -528,8 +542,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		return fail(err)
 	}
 	markSetup(plan.sources, r.setupUp != nil)
+	// The installed runtime's folder, bound read-only, is checked against the walled
+	// runs still going with the places: no walled agent of another run may change it.
+	installBinds, err := runtimeBinds(spec)
+	if err != nil {
+		return fail(err)
+	}
 	if r.listed != nil {
-		if err := r.listed.update(slices.Concat(plan.sources, r.wallOwn, r.setupBinds)); err != nil {
+		if err := r.listed.update(slices.Concat(plan.sources, installBinds, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
 		}
 		defer func() {
@@ -548,10 +568,30 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// as the enclosure sees it. What the server, the session or the machine set is
 	// theirs, and left as it is. Any other run sees each place at its path.
 	shown, inside := plan, func(s string) string { return s }
+	var insidePairs []pathPair
 	if r.byReference {
-		if shown, inside, err = plan.atWorkspace(); err != nil {
+		if shown, _, err = plan.atWorkspace(); err != nil {
 			return fail(err)
 		}
+		insidePairs = append(insidePairs, pathPair{plan.root, workspaceInside})
+	}
+	// After's container binds the workspace and no runtime folder, so After's words get
+	// the workspace's rewrite alone.
+	insideAfter := func(s string) string { return s }
+	if len(insidePairs) > 0 {
+		workspacePairs := slices.Clone(insidePairs)
+		insideAfter = func(s string) string { return replacePaths(s, workspacePairs, argPaths) }
+	}
+	// Behind a wall the installed runtime's folder is at /qory/runtime/<runtime>, so
+	// the program, and any path into the folder Forager puts inside, is written there.
+	// Both rewrites go in one pass, the longer path first, so no text written in a
+	// path's place is rewritten again.
+	if spec.Wall != nil && spec.install != nil {
+		insidePairs = append(insidePairs, spec.install.pairs()...)
+	}
+	if len(insidePairs) > 0 {
+		slices.SortStableFunc(insidePairs, func(a, b pathPair) int { return len(b.from) - len(a.from) })
+		inside = func(s string) string { return replacePaths(s, insidePairs, argPaths) }
 	}
 	// Without a wall the session inherits the starting process's environment, which may
 	// contain the variables the machine's credentials are read from: their values stay
@@ -610,6 +650,27 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	written := sync.OnceValues(func() ([]string, error) {
 		return writtenPlaces(spec, r.id, plan, slices.Concat(r.wallOwn, r.setupBinds))
 	})
+	// The program of a walled agent's making is no runtime's: the installed folder
+	// lies in no place a walled run can write, and holds none.
+	if spec.install != nil {
+		if _, err := readableDir(written)(spec.install.dir); err != nil {
+			return fail(fmt.Errorf("install the runtime in a folder no walled run can write: SessionSpec.RuntimeInstall.Dir %s: %w", pathShown(spec.install.dir), err))
+		}
+	}
+	// A run without a wall has no entry among the walled runs still going: the session
+	// lists the installed runtime's folder there, read-only, until it ends, so no
+	// walled run that starts meanwhile binds the folder writable.
+	if spec.Wall == nil && installBinds != nil {
+		listed, err := register(r.id, installBinds, nil, nil, true)
+		if err != nil {
+			var refused *Refusal
+			if !errors.As(err, &refused) {
+				err = fmt.Errorf("install the runtime in a folder no walled run can write: SessionSpec.RuntimeInstall.Dir %s: %w", pathShown(spec.install.dir), err)
+			}
+			return fail(err)
+		}
+		defer listed.release()
+	}
 	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
 	denied, err := deniedVariables(rt, spec.Wall != nil)
 	if err != nil {
@@ -661,11 +722,20 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// replaces it, and a run with no control plane has none. Behind a wall the value is
 	// variable_reserved, when the variables are resolved.
 	if spec.Wall == nil {
-		spec.Env = withoutNames(spec.Env, []string{EnvRunAPI})
+		spec.Env = withoutNames(spec.Env, []string{EnvRunAPI, EnvQoryHost})
 	}
 	ownEnv := []string{EnvRunID + "=" + r.id}
 	if r.answer.RunAPI != "" {
 		ownEnv = append(ownEnv, EnvRunAPI+"="+r.answer.RunAPI)
+	}
+	// The route to OpenSpec.QoryRoute is a runtime's launch's alone: the run's setup
+	// and a session with no runtime, such as a host step's, never get it.
+	route := r.route
+	if spec.Runtime == nil {
+		route = nil
+	}
+	if route != nil {
+		ownEnv = append(ownEnv, EnvQoryHost+"="+link.QoryHostURL)
 	}
 	if spec.HarnessHome != "" {
 		ownEnv = append(ownEnv, EnvHarnessHome+"="+inside(spec.HarnessHome))
@@ -686,7 +756,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// value.
 	var transcriptAt transcriptRoot
 	if spec.Wall != nil {
-		if transcriptAt, err = makeTranscriptDir(resume, dir, n, spec.Dir, slices.Concat(plan.sources, r.wallOwn, r.setupBinds), shown.Mounts); err != nil {
+		if transcriptAt, err = makeTranscriptDir(resume, dir, n, spec.Dir, slices.Concat(plan.sources, installBinds, r.wallOwn, r.setupBinds), shown.Mounts); err != nil {
 			return fail(err)
 		}
 	}
@@ -714,8 +784,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	}
 	prepared.Command, prepared.Args = inside(prepared.Command), insideAll(prepared.Args, inside)
 	if r.remote != nil {
-		neutral = r.neutralPaths(spec.HarnessHome, spec.InputsDir, "", inside)
-		neutralText = r.neutralPaths(spec.HarnessHome, spec.InputsDir, spec.Dir, inside)
+		// The installed runtime's folder is shown at /qory/runtime/<runtime>, walled
+		// or not, so no path of this machine's is in the event.
+		var installPairs []pathPair
+		if spec.install != nil {
+			installPairs = spec.install.pairs()
+		}
+		neutral = r.neutralPaths(spec.HarnessHome, spec.InputsDir, "", inside, installPairs...)
+		neutralText = r.neutralPaths(spec.HarnessHome, spec.InputsDir, spec.Dir, inside, installPairs...)
 	}
 	if err := checkModelKey(harness, rt, credentialHosts, vars, prepared, placeholderNames); err != nil {
 		return fail(err)
@@ -739,6 +815,18 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		}
 		r.addPassword(password)
 	}
+	// routePassword, behind a wall with the route, is the password of the agent's proxy
+	// URL, which the wall writes into the proxy variables inside: the run's forwarder
+	// serves a request to the route only with it, and only from the address of the
+	// agent's container, so the setup container, which shares the relay, never reaches
+	// the handler.
+	var routePassword string
+	if spec.Wall != nil && route != nil {
+		if routePassword, err = newForwarderSecret(); err != nil {
+			return fail(err)
+		}
+		r.addPassword(routePassword)
+	}
 	// The session masks with the run's masker even while it is empty: a reload may add
 	// a server's variable value to it while the session runs.
 	masker := r.masker
@@ -748,6 +836,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// come first, then the image and wall steps, so a failure of the wall follows the
 	// session's dev.qory.session.started.
 	var enclosure wall.Enclosure
+	// unwrapAgent removes the agent's container of an enclosure with an Unwrap; nil without one.
+	var unwrapAgent func(context.Context) error
 	var cols, rows int
 	if interactive {
 		cols, rows = terminalSize(spec.Stdin)
@@ -807,11 +897,33 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		}
 		open = r.startStep(event.StepWall, "start the wall")
 		enclosure = r.enclosure
+		if len(spec.After) > 0 {
+			if _, ok := enclosure.(wall.AfterWrapper); !ok {
+				return fail(fmt.Errorf("Use a wall that is a wall.AfterWrapper for SessionSpec.After.\nThe %s wall does not start After's container.", r.open.Wall.Name()))
+			}
+			if _, ok := enclosure.(unwrapper); !ok {
+				return fail(errors.New("Use a wall whose enclosure has an Unwrap for SessionSpec.After.\nAfter starts once the enclosure has removed the agent's container."))
+			}
+		}
 		if u, ok := enclosure.(unwrapper); ok {
-			defer func() {
+			// unwrapAgent removes the agent's container once: before After starts, and
+			// otherwise as the session ends. A removal that fails after its context
+			// ended leaves the container's state unknown: it is not cached or flagged,
+			// and the next call removes again.
+			var tried bool
+			var unwrapErr error
+			unwrapAgent = func(c context.Context) error {
+				if tried {
+					return unwrapErr
+				}
 				// The session's context may be what ended it; the agent's container is
 				// removed regardless.
-				if err := u.Unwrap(context.WithoutCancel(ctx)); err != nil {
+				err := u.Unwrap(c)
+				if err != nil && c.Err() != nil {
+					return err
+				}
+				tried = true
+				if err != nil {
 					r.open.Report("removing the wall: " + accesskey.ShownError(err).Error())
 					// The agent's container may outlive the session: the entry stays, and
 					// is the run's while one of the run's containers exists.
@@ -819,7 +931,10 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 					r.keptBy = n
 					r.wallFailed.Store(true)
 				}
-			}()
+				unwrapErr = err
+				return err
+			}
+			defer func() { unwrapAgent(context.WithoutCancel(ctx)) }()
 		} else if enclosure != nil {
 			// With no Unwrap the agent's container stays until the close, and may still
 			// run and write the run's binds after the session ended.
@@ -833,10 +948,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// inside TLS, bound, opened with the run key.
 	fwd := r.wallFwd
 	if spec.Wall == nil {
+		// The session's forwarder serves the run's route for this session alone.
 		if r.remote == nil {
-			fwd, err = listenForwarder(link.Loopback, r.disc.Proxy.Address, r.answer.ProxySecret, password)
+			fwd, err = listenForwarding(link.Loopback, forwarding{dial: dialTCP(r.disc.Proxy.Address), secret: r.answer.ProxySecret, password: password, route: route, session: n})
 		} else {
-			fwd, err = listenForwarding(link.Loopback, forwarding{dial: r.link.DialProxy, hold: gatewayHold, password: password})
+			fwd, err = listenForwarding(link.Loopback, forwarding{dial: r.link.DialProxy, hold: gatewayHold, password: password, route: route, session: n})
 		}
 		if err != nil {
 			return fail(err)
@@ -856,6 +972,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	var terminalMu sync.Mutex
 	stdout, stderr := &terminalWriter{mu: &terminalMu, w: spec.Stdout}, &terminalWriter{mu: &terminalMu, w: spec.Stderr}
 	setupSteps := r.newSetupSteps(n, spec.SessionSpec.Setup, setupTerminal(interactive, stdout, stderr), neutral, hidden)
+	afterSteps := r.newAfterSteps(n, len(spec.After) > 0, setupTerminal(interactive, stdout, stderr), neutral, hidden)
 	// The mapper is reached from the socket's goroutine and the output's: it sets
 	// parent_agent_id on a subagent's start, which it may keep back for a while, and
 	// writes every event of the session's runtime in order. Each event is masked first,
@@ -893,23 +1010,25 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// is drained counts, and only behind a wall: without one there is no enclosure.
 	var measureMu sync.Mutex
 	var measure map[string]any
-	records := func(rec runtimes.Record) {
+	// records returns an error for a setup record that is not recorded; Serve counts it
+	// against the cap on a connection's bad lines.
+	records := func(rec runtimes.Record) error {
 		switch rec.Source {
 		case runtimes.SourceSetup:
-			setupSteps.handle(rec)
-			return
+			return setupSteps.handle(rec)
 		case runtimes.SourceMeasure:
 			if spec.Wall != nil {
 				measureMu.Lock()
 				measure = measured(rec.Record)
 				measureMu.Unlock()
 			}
-			return
+			return nil
 		}
 		if tr != nil {
 			tr.record(rec)
 		}
 		mapper.Handle(rec)
+		return nil
 	}
 	go sock.Serve(records, func(err error) { r.open.Report("socket: " + accesskey.ShownError(err).Error()) })
 	closeSocket := sync.OnceFunc(func() { sock.Close() })
@@ -984,7 +1103,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			return fail(err)
 		}
 		r.listed.askID(runCtx, spec.Wall)
-		if err := r.listed.update(slices.Concat(again.sources, binds, r.wallOwn, r.setupBinds)); err != nil {
+		if err := r.listed.update(slices.Concat(again.sources, binds, installBinds, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
 		}
 		inner, innerArgs := withExec(spec.Exec, unset, command, args)
@@ -993,8 +1112,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			Env:   wrapEnv,
 			CA:    r.authority,
 			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: shown.Mounts, Limits: spec.Limits,
-			ProxyToken: r.relayToken,
+			ProxyToken: r.relayToken, ProxyPassword: routePassword, ProxyPeer: r.route != nil,
 			Transcript: transcriptAt.wallTranscript(),
+			Runtime:    runtimeFolder(spec, rt),
 		})
 		if err != nil {
 			return fail(accesskey.ShownError(err))
@@ -1043,10 +1163,15 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// stop's cause, from the runtime's start until its exit is decided.
 	stoppable, stopRuntime := context.WithCancelCause(runCtx)
 	defer stopRuntime(nil)
-	limited, cancelLimit := context.WithCancel(stoppable)
+	limited, cancelLimitCause := context.WithCancelCause(stoppable)
+	cancelLimit := func() { cancelLimitCause(nil) }
+	// The limit's timer stops once the runtime exits: After's limit is AfterTimeout.
+	stopLimit := func() {}
 	if spec.Timeout > 0 {
-		limited, cancelLimit = context.WithTimeoutCause(stoppable, spec.Timeout, errTimeout)
+		limit := time.AfterFunc(spec.Timeout, func() { cancelLimitCause(errTimeout) })
+		stopLimit = func() { limit.Stop() }
 	}
+	defer stopLimit()
 	r.stops.arm(stopRuntime)
 	// Whether the session was cancelled, and whether it timed out, is decided the moment
 	// the runtime's exit is observed. Cancelled: the caller's context had ended by then,
@@ -1061,11 +1186,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// the runtime's exit was observed, -1 until then.
 	var postingAtExit atomic.Int64
 	postingAtExit.Store(-1)
-	proc.exited = func() {
+	decide := sync.OnceFunc(func() {
 		postingAtExit.Store(int64(r.posts.Posting()))
 		cause := context.Cause(limited)
 		cancelled = ctx.Err() != nil && !errors.Is(cause, errTimeout) && !errors.Is(cause, errRunClosed) && !errors.Is(cause, errModelKeyStop)
 		timedOut = errors.Is(cause, errTimeout) && proc.stopped.Load()
+	})
+	proc.exited = func() {
+		decide()
 		if exitObserved != nil {
 			exitObserved()
 		}
@@ -1078,12 +1206,18 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		cause := context.Cause(limited)
 		return errors.Is(cause, errTimeout) || errors.Is(cause, errModelKeyStop) || ctx.Err() != nil || errors.Is(context.Cause(runCtx), errRunClosed)
 	})
+	afterSteps.start(func() bool { return false })
 	var exit exitStatus
+	// The route to OpenSpec.QoryRoute is open to this session while its launch runs,
+	// and closes before anything of the session's end is written.
+	closeRoute := route.open(n, routePassword)
+	defer closeRoute()
 	if interactive {
 		exit, err = proc.runPTY(limited)
 	} else {
 		exit, err = proc.runPipes(limited)
 	}
+	closeRoute()
 	// A run closed from outside has nothing further posted, whatever the runtime's
 	// status.
 	closed := errors.Is(context.Cause(runCtx), errRunClosed)
@@ -1126,6 +1260,19 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		cancelFlush()
 	}
 	stopReason := r.stops.end()
+	// After runs in a new container once the runtime exited, whatever ended it: its exit
+	// with any status, 125 included, the time limit, a pause or a stop from outside. Only
+	// a run closed from outside starts none. When the launch failed before any container
+	// existed, After still starts, on the unchanged workspace. The step ends before the
+	// session's dev.qory.session.exited.
+	if len(spec.After) > 0 && !closed {
+		r.runAfter(afterRun{
+			ctx: ctx, runCtx: runCtx, spec: spec, enclosure: enclosure, unwrapAgent: unwrapAgent,
+			steps: afterSteps, dir: shown.Dir, mounts: shown.Mounts, proxy: fwd.Addr(),
+			words: insideAll(spec.After, insideAfter), grace: proc.grace, session: n,
+		})
+		closed = errors.Is(context.Cause(runCtx), errRunClosed)
+	}
 	state, reason := event.StateFailed, ""
 	switch {
 	case closed:
@@ -1164,7 +1311,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		// record.
 		r.lastExit = -1
 	}
-	res := &Result{RunID: r.id, Dir: dir, SessionDir: sessionDir, Session: n, ExitCode: exit.code, Signal: exit.signal, State: state, Reason: reason, TimedOut: timedOut && !closed, Cancelled: cancelled, RunClosed: closed}
+	res := &Result{RunID: r.id, Dir: dir, SessionDir: sessionDir, Session: n, ExitCode: exit.code, Signal: exit.signal, State: state, Reason: reason, TimedOut: timedOut && !closed, Cancelled: cancelled, RunClosed: closed, After: afterSteps.result()}
 	switch {
 	case closed:
 		// The gateway wrote the session's dev.qory.session.exited in its stream when it
@@ -1223,8 +1370,8 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 		"session": n, "runtime": accesskey.ShownName(rt.Name(), false), "command": accesskey.ShownValue(command, false), "args": shownValues(args),
 		"dir": accesskey.ShownValue(dir, false), "interactive": interactive,
 	}
-	if v := rt.Version(); v != "" {
-		started["runtime_version"] = accesskey.ShownValue(v, false)
+	if spec.install != nil {
+		started["runtime_version"] = accesskey.ShownValue(spec.install.version, false)
 	}
 	// rt is a bare runtime for a nil Runtime and for a bare one the caller set. A session
 	// whose runtime the caller set has no bare.
@@ -1276,9 +1423,10 @@ func (r *Run) sessionStarted(spec runSpec, rt runtimes.Runtime, n int, prepared 
 // and, when it differs, at their path inside the enclosure. Of two paths where one
 // contains the other, the longer is replaced, and the text written in its place is not
 // replaced again. Join refuses / as the home or the inputs of a run with a run key
-// (checkNeutral).
-func (r *Run) neutralPaths(home, inputs, dir string, inside func(string) string) func(string) string {
-	pairs := []pathPair{{r.dir, "<run>"}}
+// (checkNeutral). extra are more paths, each with the text written in its place, such
+// as the installed runtime's folder.
+func (r *Run) neutralPaths(home, inputs, dir string, inside func(string) string, extra ...pathPair) func(string) string {
+	pairs := append([]pathPair{{r.dir, "<run>"}}, extra...)
 	for _, p := range []pathPair{{home, "<home>"}, {inputs, "<inputs>"}, {dir, workspaceInside}} {
 		if p.from == "" {
 			continue

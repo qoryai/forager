@@ -2,17 +2,24 @@ package session_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"io"
 	"io/fs"
 	"net"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/internal/linktest"
@@ -24,8 +31,10 @@ import (
 )
 
 // openWall is a wall with nothing in it: it records what the session sends it
-// and starts the launch as it is, pointed at the proxy and the socket by their own
-// addresses.
+// and starts the launch as it is, pointed at the proxy, with the launch's proxy
+// password, and at the socket by their addresses, and with the installed runtime's
+// folder, which an enclosure sees at /qory/runtime/<runtime>, at its path on this
+// machine.
 type openWall struct {
 	req     wall.Request
 	got     wall.Launch
@@ -41,10 +50,119 @@ func (w *openWall) Prepare(_ context.Context, req wall.Request) (wall.Enclosure,
 func (w *openWall) ProxyAddr() string { return "127.0.0.1:0" }
 func (w *openWall) Wrap(_ context.Context, l wall.Launch) (wall.Launch, error) {
 	w.got, w.wrapped = l, true
-	env := append(append([]string(nil), l.Env...), "HTTP_PROXY=http://"+l.Proxy, session.EnvSocket+"="+l.Socket)
-	return wall.Launch{Command: l.Command, Args: l.Args, Env: env, Dir: l.Dir}, nil
+	proxy := url.URL{Scheme: "http", Host: l.Proxy}
+	if l.ProxyPassword != "" {
+		proxy.User = url.UserPassword(link.ProxyUser, l.ProxyPassword)
+	}
+	env := append(append([]string(nil), l.Env...), "HTTP_PROXY="+proxy.String(), session.EnvSocket+"="+l.Socket)
+	shown := runtimeShown(l.Runtime)
+	args := make([]string, len(l.Args))
+	for i, a := range l.Args {
+		args[i] = shown(a)
+	}
+	for i, kv := range env {
+		env[i] = shown(kv)
+	}
+	return wall.Launch{Command: shown(l.Command), Args: args, Env: env, Dir: l.Dir}, nil
+}
+
+// runtimeShown writes /qory/runtime/<runtime>, where an enclosure sees the installed
+// runtime's folder, as the folder's path on this machine, for a wall that starts the
+// launch on this machine.
+func runtimeShown(r wall.RuntimeFolder) func(string) string {
+	if r.Path == "" {
+		return func(s string) string { return s }
+	}
+	inside := wall.RuntimeDir + "/" + r.Name
+	return func(s string) string { return strings.ReplaceAll(s, inside, r.Path) }
 }
 func (w *openWall) Close(context.Context) error { w.closed++; return nil }
+
+// afterWall is an open wall whose enclosure also removes the agent's container and starts
+// After's container, as processes on this machine: Unwrap and UnwrapAfter record that
+// they ran. WrapAfter returns the launch of After's helper, started through a shell that
+// writes the helper's process number to a file, with the environment of the test's
+// process, FAKE_AFTER_SOCKET with the socket's path, and the socket's variable.
+// UnwrapAfter ends the helper when it still runs, as removing a container ends what runs
+// in it.
+type afterWall struct {
+	openWall
+	mu    sync.Mutex
+	order []string
+	after wall.Launch
+	pid   string
+	// failUnwrap and failWrapAfter, when set, are what Unwrap and WrapAfter return.
+	failUnwrap, failWrapAfter error
+	// socket, when set, is the socket WrapAfter points the helper at, in place of the
+	// launch's.
+	socket string
+	// startedAfter is when WrapAfter was called.
+	startedAfter time.Time
+}
+
+func (w *afterWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *afterWall) note(s string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.order = append(w.order, s)
+}
+
+// calls are the calls so far, in order.
+func (w *afterWall) calls() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.order)
+}
+
+func (w *afterWall) Unwrap(context.Context) error {
+	w.note("unwrap")
+	return w.failUnwrap
+}
+
+func (w *afterWall) WrapAfter(_ context.Context, l wall.Launch) (wall.Launch, error) {
+	w.note("wrap after")
+	w.mu.Lock()
+	w.after = l
+	w.startedAfter = time.Now()
+	if w.pid == "" {
+		w.pid = filepath.Join(os.TempDir(), fmt.Sprintf("after-wall-%d-%d", os.Getpid(), time.Now().UnixNano()))
+	}
+	pid := w.pid
+	w.mu.Unlock()
+	if w.failWrapAfter != nil {
+		return wall.Launch{}, w.failWrapAfter
+	}
+	socket := cmp.Or(w.socket, l.Socket)
+	env := append(append(os.Environ(), l.Env...), session.EnvSocket+"="+socket, "FAKE_AFTER_SOCKET="+l.Socket)
+	args := append([]string{"-c", `echo $$ > "$1"; shift; exec "$@"`, "sh", pid, l.Command}, l.Args...)
+	return wall.Launch{Command: "/bin/sh", Args: args, Env: env, Dir: l.Dir}, nil
+}
+
+func (w *afterWall) UnwrapAfter(context.Context) error {
+	w.note("unwrap after")
+	w.mu.Lock()
+	pid := w.pid
+	w.mu.Unlock()
+	if b, err := os.ReadFile(pid); err == nil {
+		if n, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && syscall.Kill(n, 0) == nil {
+			syscall.Kill(n, syscall.SIGKILL)
+		}
+		os.Remove(pid)
+	}
+	return nil
+}
+
+// agentAddr is where the open wall's enclosure reports the agent's container, and where
+// the tests' connections to a walled forwarder come from: loopback.
+var agentAddr = netip.MustParseAddr("127.0.0.1")
+
+func (w *openWall) AgentAddrs(context.Context) ([]netip.Addr, error) {
+	return []netip.Addr{agentAddr}, nil
+}
 
 // relayWall is an open wall with a relay: the launch reaches the proxy through a
 // listener of the test's that opens every connection with the run's proxy secret, as
@@ -144,7 +262,7 @@ func TestWallWrapsTheLaunch(t *testing.T) {
 	w = &openWall{}
 	sp = spec(t)
 	sp.Wall, sp.Image, sp.Env = w, "i", nil
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", `test -z "$QORY_TEST_HOST_ONLY"`}
+	sp.Command, sp.Args = installedShell, []string{"-c", `test -z "$QORY_TEST_HOST_ONLY"`}
 	if res, err := run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 		t.Errorf("a nil environment under a wall carried the process's own: %v %+v", err, res)
 	}
@@ -162,7 +280,7 @@ func TestTheForwarderCarriesTheProxySecret(t *testing.T) {
 			sp, g := specGateway(t, "FAKE_EXIT=0", "FAKE_ALLOWED_URL=http://api.example/a")
 			out := filepath.Join(t.TempDir(), "env")
 			sp.Forwarder = nil
-			sp.Command, sp.Args = "/bin/sh", []string{"-c", `env > "$0"; exec "$1"`, out, os.Args[0]}
+			sp.Command, sp.Args = installedShell, []string{"-c", `env > "$0"; exec "$1"`, out, os.Args[0]}
 			if walled {
 				sp.Wall, sp.Image = &relayWall{}, "example.com/agent:1"
 			}
@@ -201,7 +319,7 @@ func TestTheUnwalledForwarderTakesOnlyTheAgentsPassword(t *testing.T) {
 	sp, g := specGateway(t, "FAKE_EXIT=0", "FAKE_ALLOWED_URL=http://api.example/a", "FAKE_STRAY="+strays)
 	out := filepath.Join(t.TempDir(), "env")
 	sp.Forwarder = nil
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", `env > "$0"; exec "$1"`, out, os.Args[0]}
+	sp.Command, sp.Args = installedShell, []string{"-c", `env > "$0"; exec "$1"`, out, os.Args[0]}
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)

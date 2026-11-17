@@ -11,6 +11,8 @@ import (
 	"io"
 	"io/fs"
 	"net"
+	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -42,6 +44,9 @@ const (
 	// BundlePath is where the enclosure finds the authorities it trusts when the run has
 	// one of its own: the image's bundle and the run's certificate, in one file.
 	BundlePath = "/qory/ca-bundle.pem"
+	// RuntimeDir holds the installed runtimes' folders, read-only:
+	// /qory/runtime/<runtime>, [Launch.Runtime].
+	RuntimeDir = "/qory/runtime"
 	// relayAlias is the name the agent reaches the relay by, and relayPort the port the
 	// relay forwards to the proxy.
 	relayAlias = "qory-proxy"
@@ -245,6 +250,9 @@ var (
 	envShape     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 	cpusShape    = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
 	bytesShape   = regexp.MustCompile(`^[0-9]+[bkmgBKMG]?$`)
+	// folderShape is a runtime's name, the name of its folder in [RuntimeDir]: the
+	// descriptor schema's pattern of runtime.
+	folderShape = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
 )
 
 // Name is docker, or the command's name when another was given.
@@ -388,6 +396,16 @@ func (e *dockerEnclosure) prepare(ctx context.Context) (Enclosure, error) {
 	return e, nil
 }
 
+// relayURL is the proxy URL of the relay inside: with password, the password of the
+// agent's proxy URL, under the user name qory.
+func relayURL(password string) string {
+	u := url.URL{Scheme: "http", Host: net.JoinHostPort(relayAlias, strconv.Itoa(relayPort))}
+	if password != "" {
+		u.User = url.UserPassword(link.ProxyUser, password)
+	}
+	return u.String()
+}
+
 // ipv6Subnet reports whether s, written as CIDR, is an IPv6 subnet.
 func ipv6Subnet(s string) bool {
 	ip, _, err := net.ParseCIDR(s)
@@ -469,6 +487,7 @@ func (e *dockerEnclosure) relay() string   { return e.base + "-relay" }
 func (e *dockerEnclosure) agent() string   { return e.base + "-agent" }
 func (e *dockerEnclosure) image() string   { return e.base + "-image" }
 func (e *dockerEnclosure) setup() string   { return e.base + "-setup" }
+func (e *dockerEnclosure) after() string   { return e.base + "-after" }
 func (e *dockerEnclosure) label() string   { return "dev.qory.run=" + e.req.RunID }
 
 // docker runs one docker command; a failure contains what the command printed. The
@@ -1033,9 +1052,10 @@ func (e *dockerEnclosure) relayImage() string {
 
 // StartRelay starts the relay towards the proxy at l.Proxy, from the request's
 // RelayImage, the machine's default, with l.ProxyToken as what it opens every connection
-// with, and waits until it listens. The session calls it once the run's forwarder
-// listens, as the run opens; Wrap and StartSetup call it when the relay has not started,
-// and a relay that started is left as it is. Only l.Proxy and l.ProxyToken are read.
+// with, followed by the peer line with l.ProxyPeer, and waits until it listens. The
+// session calls it once the run's forwarder listens, as the run opens; Wrap and
+// StartSetup call it when the relay has not started, and a relay that started is left
+// as it is. Only l.Proxy, l.ProxyToken and l.ProxyPeer are read.
 func (e *dockerEnclosure) StartRelay(ctx context.Context, l Launch) error {
 	if e.relayed {
 		return nil
@@ -1051,6 +1071,9 @@ func (e *dockerEnclosure) StartRelay(ctx context.Context, l Launch) error {
 	relayEnv := []string{RelayInsideEnv + "=" + strings.Join(e.subnets, ",")}
 	if l.ProxyToken != "" {
 		relayEnv = append(relayEnv, RelayTokenEnv+"="+l.ProxyToken)
+	}
+	if l.ProxyPeer {
+		relayEnv = append(relayEnv, RelayPeerEnv+"=1")
 	}
 	relayEnvFile, err := e.envFile("relay-env", relayEnv)
 	if err != nil {
@@ -1139,13 +1162,15 @@ func (e *dockerEnclosure) firstUse(ctx context.Context, ca []byte) (string, erro
 // Wrap returns the docker run that starts the launch in the agent's container: on the
 // internal network only, the launch's mounts at the paths they have on this machine or
 // at their Targets, the workspace as the working directory inside one of them, the
-// helper read-only, the socket's directory, and the launch's environment through a
-// file, so no value is on a command line. It starts the relay first when it has not
-// started, [dockerEnclosure.StartRelay], and runs the run's first use of the enclosure
-// when no container of the run's image ran it. With a transcript directory it creates
-// the agent's container, makes the bind's parents in it, [dockerEnclosure.copyDirs],
-// and returns the docker start that attaches to it in place of the docker run. The
-// session calls it once for each session.
+// helper read-only, the installed runtime's folder read-only at
+// /qory/runtime/<runtime> when the launch has one, the socket's directory, and the
+// launch's environment through a file, so no value is on a command line. The proxy
+// variables name the relay, with l.ProxyPassword in the URL when it is set. It starts
+// the relay first when it has not started, [dockerEnclosure.StartRelay], and runs the
+// run's first use of the enclosure when no container of the run's image ran it. With a
+// transcript directory it creates the agent's container, makes the bind's parents in
+// it, [dockerEnclosure.copyDirs], and returns the docker start that attaches to it in
+// place of the docker run. The session calls it once for each session.
 func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	mounts, dir, err := e.mounts(l)
 	if err != nil {
@@ -1158,13 +1183,17 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	if err != nil {
 		return Launch{}, err
 	}
+	runtimeMount, err := runtimeMount(l.Runtime)
+	if err != nil {
+		return Launch{}, err
+	}
 	limits, err := limits(l.Limits)
 	if err != nil {
 		return Launch{}, err
 	}
 	// Everything that can be refused is, before anything is started.
 	env := append([]string(nil), l.Env...)
-	env = append(env, link.ProxyEnv(fmt.Sprintf("http://%s:%d", relayAlias, relayPort))...)
+	env = append(env, link.ProxyEnv(relayURL(l.ProxyPassword))...)
 	if l.Socket != "" {
 		env = append(env, link.EnvRunSocket+"="+path.Join(hooksDir, filepath.Base(l.Socket)))
 	}
@@ -1228,6 +1257,9 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	if bundle != "" {
 		run = append(run, "--mount", bundle)
 	}
+	if runtimeMount != "" {
+		run = append(run, "--mount", runtimeMount)
+	}
 	if transcript != "" {
 		run = append(run, "--mount", transcript)
 	}
@@ -1267,6 +1299,135 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 		cli = withSelection(cli, e.env)
 	}
 	return Launch{Command: e.command(), Args: run, Env: cli, Dir: dir}, nil
+}
+
+// WrapAfter is the launch that starts After's container with docker run --rm, as the
+// agent's container starts without nested Docker: on the inside network, from the run's
+// image under the run's container runtime, as the wall's user with no capability and none
+// to gain, with the launch's mounts at their paths or their Targets, the launch's socket
+// directory at /qory/hooks, the workspace as its working directory, the helper, with l.CA
+// the bundle, and the launch's limits. The proxy variables name the relay with no
+// password, so a request to the route to the caller gets 403 from the gateway's proxy,
+// and one with the agent's password 503, since that session ended: the route serves a
+// password and the agent's address only. The environment, through a file, is l.Env, the
+// proxy variables, the socket's and, with l.CA, the variables that point at the bundle.
+// With nested Docker the container runs under the same runtime, with no root, no daemon,
+// no store volume and no IPv6 sysctl, as Wrap sets none. The entrypoint is l.Command. It starts the relay and runs the run's first use of the
+// enclosure when neither ran, as Wrap does.
+func (e *dockerEnclosure) WrapAfter(ctx context.Context, l Launch) (Launch, error) {
+	mounts, dir, err := e.mounts(l)
+	if err != nil {
+		return Launch{}, err
+	}
+	helper, err := mount(e.d.Helper, HelperPath, true)
+	if err != nil {
+		return Launch{}, err
+	}
+	limits, err := limits(l.Limits)
+	if err != nil {
+		return Launch{}, err
+	}
+	env := append([]string(nil), l.Env...)
+	env = append(env, link.ProxyEnv(relayURL(""))...)
+	if l.Socket != "" {
+		env = append(env, link.EnvRunSocket+"="+path.Join(hooksDir, filepath.Base(l.Socket)))
+	}
+	if len(l.CA) > 0 {
+		for _, n := range e.d.SetsWithAuthority() {
+			env = append(env, n+"="+BundlePath)
+		}
+	}
+	envFile, err := e.envFile("after-env", env)
+	if err != nil {
+		return Launch{}, err
+	}
+	if err := e.StartRelay(ctx, l); err != nil {
+		return Launch{}, err
+	}
+	bundle, err := e.firstUse(ctx, l.CA)
+	if err != nil {
+		return Launch{}, err
+	}
+	run := []string{"run", "--rm", "--name", e.after(), "--label", e.label(), "--network", e.inside()}
+	if e.req.Runtime != "" {
+		run = append(run, "--runtime", e.req.Runtime)
+	}
+	run = append(run, e.hardening()...)
+	run = append(run, "--no-healthcheck")
+	if !e.req.Docker {
+		// Wrap leaves this flag out for nested Docker, whose runtime sets the
+		// container's sysctls; After's container follows that rule.
+		run = append(run, "--sysctl", "net.ipv6.conf.default.disable_ipv6=1")
+	}
+	run = append(run, limits...)
+	run = append(run, "--env-file", envFile, "--workdir", l.Dir, "--mount", helper)
+	for _, m := range mounts {
+		run = append(run, "--mount", m)
+	}
+	if bundle != "" {
+		run = append(run, "--mount", bundle)
+	}
+	run = append(run, e.neverPull()...)
+	run = append(run, "--entrypoint", l.Command, e.req.Image)
+	run = append(run, l.Args...)
+	if rm := []string{"rm", "--force", "--volumes", e.after()}; !slices.ContainsFunc(e.made, func(c []string) bool { return slices.Equal(c, rm) }) {
+		e.made = append(e.made, rm)
+	}
+	cli := accesskey.WithoutVariables(os.Environ())
+	if e.env != nil {
+		cli = withSelection(cli, e.env)
+	}
+	return Launch{Command: e.command(), Args: run, Env: cli, Dir: dir}, nil
+}
+
+// UnwrapAfter removes After's container, within closeWait, as Unwrap removes the agent's.
+func (e *dockerEnclosure) UnwrapAfter(ctx context.Context) error {
+	return e.removeContainer(ctx, e.after(), noSuchContainer)
+}
+
+// AgentAddrs returns the addresses of the agent's container on the inside network,
+// read with docker inspect: its IPv4 address and, with nested Docker, its IPv6 one. A
+// container that does not run, or has no address there, is an error, so the route
+// serves no request until the agent's container of the session runs.
+func (e *dockerEnclosure) AgentAddrs(ctx context.Context) ([]netip.Addr, error) {
+	// The endpoint is read as JSON: from Docker 29 on, a template prints an unset
+	// address field as "invalid IP", and JSON prints it as "".
+	format := fmt.Sprintf("{{if .State.Running}}{{json (index .NetworkSettings.Networks %q)}}{{end}}", e.inside())
+	out, err := e.docker(ctx, "inspect", "--type", "container", "--format", format, e.agent())
+	if err != nil {
+		return nil, err
+	}
+	return endpointAddrs(out)
+}
+
+// endpointAddrs returns the IPv4 and IPv6 addresses in out, the JSON of a container's
+// endpoint on a network that docker inspect prints. An empty field is no address; an
+// empty out, or null for a container not on the network, has none, which is an error.
+func endpointAddrs(out []byte) ([]netip.Addr, error) {
+	var endpoint struct {
+		IPAddress         string
+		GlobalIPv6Address string
+	}
+	if s := strings.TrimSpace(string(out)); s != "" {
+		if err := json.Unmarshal([]byte(s), &endpoint); err != nil {
+			return nil, fmt.Errorf("wall docker: the agent's endpoint on the inside network: %w", err)
+		}
+	}
+	var addrs []netip.Addr
+	for _, f := range []string{endpoint.IPAddress, endpoint.GlobalIPv6Address} {
+		if f == "" {
+			continue
+		}
+		a, err := netip.ParseAddr(f)
+		if err != nil {
+			return nil, fmt.Errorf("wall docker: the agent's address %s on the inside network: %w", accesskey.ShownValue(f, false), err)
+		}
+		addrs = append(addrs, a.Unmap())
+	}
+	if len(addrs) == 0 {
+		return nil, errors.New("wall docker: the agent's container runs with no address on the inside network")
+	}
+	return addrs, nil
 }
 
 // Unwrap removes the agent's container that Wrap's launch started, within closeWait,
@@ -1537,7 +1698,8 @@ func firstFile(stream []byte) ([]byte, int64, error) {
 // inside; a mount whose path inside, its Path or its Target, holds it, by whole
 // components, shows it, and a launch none of whose mounts does is refused: the adapter
 // binds nothing of the caller's the launch does not list. A Target that is not
-// absolute, or that is, holds or lies under the adapter's /qory, is refused.
+// absolute is refused, and so is a mount whose place inside, its Target or else its
+// Path, is, holds or lies under the adapter's /qory.
 func (e *dockerEnclosure) mounts(l Launch) ([]string, string, error) {
 	if !filepath.IsAbs(l.Dir) {
 		return nil, "", fmt.Errorf("wall docker: the workspace %s is not an absolute path", accesskey.ShownValue(l.Dir, true))
@@ -1556,10 +1718,12 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, string, error) {
 			if !filepath.IsAbs(m.Target) {
 				return nil, "", fmt.Errorf("wall docker: the mount %s is shown at %s, which is not an absolute path", accesskey.ShownValue(m.Path, true), accesskey.ShownValue(m.Target, true))
 			}
-			if under(qoryDir, m.Target) || under(m.Target, qoryDir) {
-				return nil, "", fmt.Errorf("wall docker: the mount %s is shown at %s, which overlaps %s, the wall's", accesskey.ShownValue(m.Path, true), accesskey.ShownValue(m.Target, true), qoryDir)
-			}
 			dst = filepath.Clean(m.Target)
+		}
+		// A mount with no Target is shown at its Path, so the place inside is checked,
+		// whichever it is.
+		if inside := filepath.Clean(dst); under(qoryDir, inside) || under(inside, qoryDir) {
+			return nil, "", fmt.Errorf("wall docker: the mount %s is shown at %s, which overlaps %s, the wall's", accesskey.ShownValue(m.Path, true), accesskey.ShownValue(dst, true), qoryDir)
 		}
 		binds = append(binds, bind{m.Path, dst, m.ReadOnly})
 		if rel, err := filepath.Rel(dst, l.Dir); host == "" && err == nil && under(dst, l.Dir) {
@@ -1815,6 +1979,9 @@ func (e *dockerEnclosure) transcriptMount(ctx context.Context, l Launch) (string
 	}
 	if l.Socket != "" {
 		sources = append(sources, filepath.Dir(l.Socket))
+	}
+	if l.Runtime.Path != "" {
+		sources = append(sources, l.Runtime.Path)
 	}
 	for _, p := range sources {
 		if under(p, tr.Path) || under(tr.Path, p) {
@@ -2240,6 +2407,22 @@ func limits(l Limits) ([]string, error) {
 type bind struct {
 	src, dst string
 	readonly bool
+}
+
+// runtimeMount is the --mount of the launch's installed runtime folder, read-only at
+// /qory/runtime/<Name>; empty for a launch with none. A Path that is not absolute and
+// clean, and a Name that is not a runtime's, are refused.
+func runtimeMount(r RuntimeFolder) (string, error) {
+	if r.Path == "" && r.Name == "" {
+		return "", nil
+	}
+	if !filepath.IsAbs(r.Path) || filepath.Clean(r.Path) != r.Path {
+		return "", fmt.Errorf("wall docker: the runtime folder %s is not an absolute, clean path", accesskey.ShownValue(r.Path, true))
+	}
+	if !folderShape.MatchString(r.Name) {
+		return "", fmt.Errorf("wall docker: the runtime %s has no name a folder in %s can have", accesskey.ShownName(r.Name, true), RuntimeDir)
+	}
+	return mount(r.Path, path.Join(RuntimeDir, r.Name), true)
 }
 
 // mount is one --mount value. The value is comma-separated fields, so a path holding a

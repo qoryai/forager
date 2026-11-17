@@ -87,6 +87,16 @@ A credential's secret comes from one of three sources:
   failing location and keyword, at most 5 and then how many more, with no value, and no
   member name other than the schema's. A tool's lines on standard error have `***` in place of
   the shapes too.
+- The route to the caller, `http://host.qory.invalid` in `QORY_HOST_URL`, sets no
+  credential. The session's forwarder takes every header off a request but
+  `Content-Type`, `Proxy-Authorization` among them, adds `Qory-Session`, the number of
+  the session that sent the request, and passes the request only to the handler the
+  caller gave in `OpenSpec.QoryRoute`. Behind a wall, the agent's proxy URL then has a
+  password of the session's launch alone, which the run's masker replaces in the
+  output. The forwarder serves the route only to a request with that password from the
+  address of the session's agent container, which the wall's relay writes for each
+  connection. The setup container never reaches the handler, also with the password.
+  See [Forager from Go](go.md#the-route-to-the-caller).
 
 In `qory`, the `gateway.credentials` section of `forager.yaml` defines them. See
 [qory's docs][qory-credentials].
@@ -296,7 +306,7 @@ values. An entry is one of two kinds:
   as in [Paths and an account header](#paths-and-an-account-header).
 - A host credential is any other secret: `{name, apply, placeholders}`. Each of its 1
   to 16 `apply` items is one place and way the value is set: `{hosts, scheme, username,
-  header, paths}`.
+  header, paths, push_ref}`.
 
 ```json
 {"version": 1,
@@ -314,6 +324,28 @@ values. An entry is one of two kinds:
     "placeholders": ["GIT_TOKEN"]}]}
 ```
 
+- A path in `paths` is matched whole, or up to a final `*` as a prefix. A segment
+  written `{}` matches any one segment: `/repos/example-org/app/pulls/{}` matches
+  `/repos/example-org/app/pulls/12`, and not `/repos/example-org/app/pulls/12/merge`.
+  So an item can allow a repository's pull requests and leave out their merge. Two
+  paths of one host overlap when one request can match both, and a `{}` overlaps
+  every segment that is not empty.
+- `push_ref` is the one branch a git push through the item may change, such as
+  `refs/heads/qory/wi_01`. The proxy reads every push to a host of a credential before
+  it sends a byte: each ref the push creates, updates or deletes must be `push_ref`.
+  A push through an item with no `push_ref`, a push to another branch or a tag, a
+  signed push, and a push with push options (`git push -o`) get a `403`, and the
+  record has the request `denied` with the rule `wall:push-ref`. Through such an item a push to another branch fails with:
+
+  ```text
+  qory: push only refs/heads/qory/wi_01.
+  The push of "refs/heads/main" to git.example/example-org/app.git/git-receive-pack was not sent: it creates, updates or deletes that ref.
+  ```
+
+  git itself prints only `The requested URL returned error: 403`. An adapter's output
+  may have `push_ref` on an item in the same form. A credential defined with `env` or
+  `file` has no `push_ref`, so no push goes through it.
+
 - The run needs no wall: the gateway sets these credentials with or without one.
   On an unwalled local run the agent can read the gateway's access key, which opens the
   sealed values. The program that starts the run must refuse stored credentials there,
@@ -323,8 +355,9 @@ values. An entry is one of two kinds:
   with none of its `key_prefixes` stops the run with `run_configuration_invalid`.
 - The control plane may send a value with `expires_at`, when it stops working, and
   `apply`, where it is set. `apply` may narrow the entry's items, such as to fewer hosts
-  or paths, and never widen them. A value that expired before the run started, or an
-  item outside its entry, stops the run with `run_configuration_invalid`.
+  or paths, with the same `push_ref`, and never widen them. A value that expired
+  before the run started, or an item outside its entry, stops the run with
+  `run_configuration_invalid`.
 - The gateway fetches a value with `expires_at` again 5 minutes before it expires, and
   after a host answers `401` to a request with the value, at most every 30 seconds per
   credential. The renewed value takes the old value's place, and the gateway overwrites the
@@ -483,6 +516,74 @@ not see, such as one of another organisation. Its open's `dev.qory.run.policy_ap
 lists each harness credential by `name` and `purpose` alone, and the stack proxy's
 `dev.qory.run.egress` records have no `path` and no `path_rule`. `harness_hidden` is
 fixed when the run starts: a reload ignores it.
+
+### Push credentials
+
+A host credential with `purpose: push` is for qory's push of the work item's branch and
+the pull request calls of its submit step. Forager has no access level: Qory Apiary sends
+a push credential only for a `write` run, beside a read work credential. A run with no
+push credential, such as a `write-no-push` run, which gets a read work credential alone,
+has no push proxy: `PushProxy` returns "Add a push credential to the run configuration:
+this run has no push proxy."
+
+```json
+{"version": 1,
+ "security_policy": {"version": 1, "egress": {"mode": "enforce", "allow": ["git.example", "api.git.example"]}},
+ "credentials": [
+   {"name": "work-1",
+    "apply": [{"hosts": ["git.example"], "scheme": "basic",
+               "username": "x-access-token", "paths": ["/example-org/app.git/*"]}],
+    "placeholders": ["GIT_TOKEN"]},
+   {"name": "push-1", "purpose": "push",
+    "apply": [{"hosts": ["git.example"], "scheme": "basic", "username": "x-access-token",
+               "paths": ["/example-org/app.git/*"], "push_ref": "refs/heads/qory/wi_01"},
+              {"hosts": ["api.git.example"], "scheme": "bearer",
+               "paths": ["/repos/example-org/app/pulls", "/repos/example-org/app/pulls/{}"]}]}]}
+```
+
+- Only the run's push proxy sets a push credential, on its items' hosts and paths, with
+  the branch guard of each item's `push_ref`. The run's proxy, which the sessions, the
+  setup step, After, the image step and `HostProxy` go through, never sets one, and the
+  run answer lists no host or placeholder for it. A push through the run's proxy gets
+  the branch guard's `403`, `wall:push-ref`, when no work credential there has a
+  `push_ref`. The branch guard covers a git push to a host of a work credential; a write
+  through the forge's API, such as a REST or GraphQL call, depends on the work
+  credential's scope at the forge.
+- qory reaches the push proxy through `(*session.Run).PushProxy`
+  ([the push proxy](go.md#the-push-proxy)). The push proxy allows the push credentials'
+  hosts alone. It sets the push value only on the paths of the push items, and returns
+  a `403` for a path that no item covers.
+- The push proxy checks paths, not methods. On a path an item covers, every method gets
+  the push value: under the item `/repos/example-org/app/pulls/{}`, a `PATCH` of
+  `/repos/example-org/app/pulls/12` passes, and `PUT
+  /repos/example-org/app/pulls/12/merge` gets a `403`. The branch guard limits each git
+  push to the item's `push_ref`.
+- The paths of the push items pin the repository. An item with no paths covers every
+  path on its hosts.
+- The push proxy stays open from the run's open until its close, through every join.
+  On one machine the run answer's `push_proxy_secret` opens it. Behind a separate
+  gateway `QORY-PUSH` and the run key open it. Neither enters a wall or a container.
+- The run gets a certificate authority. The gateway fetches and renews the value as any
+  other stored credential's.
+- The policy in force must allow each host of a push credential, and no path rule of
+  the node's may cover one, since the push proxy checks no path rule. At the start,
+  the run stops with `run_configuration_invalid` otherwise. At a reload, the reload
+  fails and the policy in force stays. The texts:
+  - a host under no allow entry in `enforce` mode: "Add each push credential's host to
+    the run's egress allow list.";
+  - a host a deny entry covers: "Remove each push credential's host from the egress
+    deny lists.";
+  - a host a node's path rule covers: "Remove the node's path rules for each push
+    credential's host: the push proxy checks none.".
+
+  Each has a second line with the credential and the host.
+- A push credential with `placeholders` stops the run with "Remove placeholders from
+  push credentials: no session gets a push credential.", with the credential on a
+  second line.
+- Two `apply` items of push credentials on one host need paths, and their paths must
+  not overlap. A work credential on the same host and paths is fine: no proxy sets both.
+- Every `dev.qory.run.policy_applied`, the open's and each join's, lists each item of a
+  push credential with `purpose: push`.
 
 ## Tools
 
