@@ -71,7 +71,7 @@ type linkRun struct {
 
 	// push is the run's push proxy, and pushSecret its secret on the local link, held so
 	// that no print of the run shows it; both nil for a run with no push credential and
-	// once the run let go of what it holds, under mu ([linkRun.closePush]).
+	// once [linkRun.closePush] closed the push proxy and cleared its secret, under mu.
 	push       *proxy.Proxy
 	pushSecret secretValue
 
@@ -1543,13 +1543,19 @@ func harnessApplied(uses []proxy.Credential, hidden bool) []any {
 			}
 			continue
 		}
-		e := map[string]any{"name": name, "hosts": anyOf(shownValues(u.Hosts)), "scheme": u.Scheme, "purpose": server.PurposeHarness}
-		if u.Paths != nil {
-			e["paths"] = anyOf(shownValues(u.Paths))
-		}
-		out = append(out, e)
+		out = append(out, appliedItem(u, server.PurposeHarness))
 	}
 	return out
+}
+
+// appliedItem is the entry of dev.qory.run.policy_applied's credentials of u, an item of
+// a harness or a push credential, with purpose: its name, hosts, scheme and paths.
+func appliedItem(u proxy.Credential, purpose string) map[string]any {
+	e := map[string]any{"name": accesskey.ShownName(u.Name, false), "hosts": anyOf(shownValues(u.Hosts)), "scheme": u.Scheme, "purpose": purpose}
+	if u.Paths != nil {
+		e["paths"] = anyOf(shownValues(u.Paths))
+	}
+	return e
 }
 
 // anyOf is values in JSON's types, as an event's data decodes.
@@ -1606,6 +1612,10 @@ func (lr *linkRun) apply(next *policy.Loaded) error {
 	// step under its record's lock.
 	hold := lr.st.Hold()
 	refused := lr.px.SetPolicyOpening(in.Mode, in.AllowFirst, in.Allow, in.Deny, d.Guard, in.Paths, d.Uses)
+	// A guarded push proxy opens the names the run's proxy opens under the new policy.
+	if push := lr.pushProxy(); push != nil && push.Guarded() {
+		push.Guard(d.Guard)
+	}
 	lr.r.Commit(d)
 	lr.posts.SetRunDigest(d.Policy.RunConfiguration)
 	lr.mu.Lock()

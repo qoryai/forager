@@ -90,7 +90,8 @@ func TestARunWithoutAPushCredentialHasNoPush(t *testing.T) {
 // of the push credentials, each run_configuration_invalid with a first line of fixed
 // text within 100 characters and the credentials' names: placeholders, two items on one
 // host with one of them without paths or with paths that overlap, of one credential or
-// of two, and a host the run's enforce allow list does not cover. Two push credentials
+// of two, a host the run's enforce allow list does not cover, a host a deny list of the
+// run's or of the node's covers, and a host a path rule of the node's covers. Two push credentials
 // on one host with paths apart pass, and so does any host under observe; nothing is
 // fetched for a refused one.
 func TestAPushCredentialThePushProxyCannotSetIsRefused(t *testing.T) {
@@ -104,30 +105,40 @@ func TestAPushCredentialThePushProxyCannotSetIsRefused(t *testing.T) {
 	doc := func(mode string, entries ...string) string {
 		return `{"version":1,"security_policy":{"version":1,"egress":{"mode":"` + mode + `","allow":["git.example"]}},"credentials":[` + strings.Join(entries, ",") + `]}`
 	}
+	nodes := map[string]*run.Policy{
+		"a host the node's deny list covers": {Version: 1, Egress: run.PolicyEgress{Mode: "observe", Deny: []string{"git.example"}}},
+		"a host the node's path rules cover": {Version: 1, Egress: run.PolicyEgress{Mode: "enforce", Allow: []string{"git.example"}, Paths: map[string][]string{"git.example": {"/example-org/*"}}}},
+	}
 	for _, c := range []struct {
 		name, doc, want string
 		names           []string
 	}{
 		{"placeholders", doc("enforce", entry("push-1", "git.example", "", `,"placeholders":["PUSH_TOKEN"]`)),
-			"Remove the placeholders from each push credential: no session gets a push credential.\nThe push credential \"push-1\" has placeholders.", []string{"push-1"}},
+			"Remove placeholders from push credentials: no session gets a push credential.\nThe push credential \"push-1\" has placeholders.", []string{"push-1"}},
 		{"two items of one on one host, one without paths", doc("enforce",
 			`{"name":"push-1","purpose":"push","apply":[{"hosts":["git.example"],"scheme":"bearer","paths":["/example-org/a.git/*"]},{"hosts":["git.example"],"scheme":"bearer"}]}`),
-			"Give paths to each apply item of the push credentials that claims a host another item claims.\nThe push credential \"push-1\" claims git.example in two apply items, and one of them has no paths.", []string{"push-1"}},
+			"Give paths to every apply item of a push credential on a host that another push item is for.\nThe push credential \"push-1\" is for git.example in two apply items, and one of them has no paths.", []string{"push-1"}},
 		{"two items of one on one host whose paths overlap", doc("enforce",
 			`{"name":"push-1","purpose":"push","apply":[{"hosts":["git.example"],"scheme":"bearer","paths":["/example-org/*"]},{"hosts":["git.example"],"scheme":"bearer","paths":["/example-org/a.git/*"]}]}`),
-			"Give the push credentials' apply items on one host paths that do not overlap.\nThe push credential \"push-1\" has apply items with overlapping paths on git.example.", []string{"push-1"}},
+			"Change the paths of push credential items on one host so that they do not overlap.\nThe push credential \"push-1\" has apply items with overlapping paths on git.example.", []string{"push-1"}},
 		{"two on one host, one without paths", doc("enforce", entry("push-1", "git.example", `"/example-org/a.git/*"`, ""), entry("push-2", "git.example", "", "")),
-			"Give paths to each apply item of the push credentials that claims a host another item claims.\nThe push credentials \"push-1\" and \"push-2\" both claim git.example, and one of them has no paths.", []string{"push-1", "push-2"}},
+			"Give paths to every apply item of a push credential on a host that another push item is for.\nThe push credentials \"push-1\" and \"push-2\" are both for git.example, and one of them has no paths.", []string{"push-1", "push-2"}},
 		{"two on one host whose paths overlap", doc("enforce", entry("push-1", "git.example", `"/example-org/*"`, ""), entry("push-2", "git.example", `"/example-org/a.git/*"`, "")),
-			"Give the push credentials' apply items on one host paths that do not overlap.\nThe push credentials \"push-1\" and \"push-2\" have overlapping paths on git.example.", []string{"push-1", "push-2"}},
+			"Change the paths of push credential items on one host so that they do not overlap.\nThe push credentials \"push-1\" and \"push-2\" have overlapping paths on git.example.", []string{"push-1", "push-2"}},
 		{"a host the allow list does not cover", doc("enforce", entry("push-1", "api.git.example", "", "")),
-			"Add each push credential's host to the run's egress allow list, or remove that credential.\nThe push credential \"push-1\" is for api.git.example, which no allow entry covers.", []string{"push-1"}},
+			"Add each push credential's host to the run's egress allow list.\nThe push credential \"push-1\" is for api.git.example, which no allow entry covers.", []string{"push-1"}},
+		{"a host the run's deny list covers", strings.Replace(doc("observe", entry("push-1", "api.git.example", "", "")), `"allow":["git.example"]`, `"deny":["*.git.example"]`, 1),
+			"Remove each push credential's host from the egress deny lists.\nThe push credential \"push-1\" is for api.git.example, which a deny entry covers.", []string{"push-1"}},
+		{"a host the node's deny list covers", doc("enforce", entry("push-1", "git.example", "", "")),
+			"Remove each push credential's host from the egress deny lists.\nThe push credential \"push-1\" is for git.example, which a deny entry covers.", []string{"push-1"}},
+		{"a host the node's path rules cover", doc("enforce", entry("push-1", "git.example", "", "")),
+			"Remove the node's path rules for each push credential's host: the push proxy checks none.\nThe push credential \"push-1\" is for git.example, which a path rule of the node covers.", []string{"push-1"}},
 		{"two on one host with paths apart", doc("enforce", entry("push-1", "git.example", `"/example-org/a.git/*"`, ""), entry("push-2", "git.example", `"/example-org/b.git/*"`, "")), "", nil},
 		{"a host outside the allow list under observe", doc("observe", entry("push-1", "api.git.example", "", "")), "", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := &controlPlane{answer: harnessValue}
-			r, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, c.doc, digest('1')), Secrets: s.fetch})
+			r, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Node: nodes[c.name], Fetched: computed(t, c.doc, digest('1')), Secrets: s.fetch})
 			if c.want == "" {
 				if err != nil {
 					t.Fatalf("refused: %v", err)
@@ -161,7 +172,7 @@ func TestAReloadMustAllowThePushHosts(t *testing.T) {
 		d.Discard()
 		t.Fatal("the reload passed")
 	}
-	if !strings.Contains(err.Error(), "Add each push credential's host to the run's egress allow list") {
+	if !strings.Contains(err.Error(), "Add each push credential's host to the run's egress allow list.") {
 		t.Errorf("the reload's error %v", err)
 	}
 	if got := r.Policy().Policy.Egress.Allow; !slices.Equal(got, []string{"git.example", "api.git.example"}) {
@@ -205,7 +216,26 @@ func TestThePushPlaceholdersFixtureIsRefused(t *testing.T) {
 	_, err = run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, string(b), digest('1')),
 		Secrets: (&controlPlane{answer: harnessValue}).fetch})
 	if code, names := refusalOf(err); code != refusal.RunConfigurationInvalid || !slices.Equal(names, []string{"push-1"}) ||
-		!strings.HasPrefix(err.Error(), "Remove the placeholders from each push credential") {
+		!strings.HasPrefix(err.Error(), "Remove placeholders from push credentials") {
 		t.Errorf("Open: %v; want the placeholders refused", err)
+	}
+}
+
+// TestAReloadMustNotDenyThePushHosts pins the hold's check of the deny list at a
+// reload: a policy whose deny list covers a host of push-1 fails the reload, and the
+// policy in force stays.
+func TestAReloadMustNotDenyThePushHosts(t *testing.T) {
+	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, pushDoc, digest('1')), Secrets: (&controlPlane{answer: harnessValue}).fetch})
+	denying := strings.Replace(pushDoc, `"allow":["git.example","api.git.example"]`, `"allow":["git.example","api.git.example"],"deny":["api.git.example"]`, 1)
+	d, err := reload(t, r, computed(t, denying, digest('2')))
+	if err == nil {
+		d.Discard()
+		t.Fatal("the reload passed")
+	}
+	if !strings.Contains(err.Error(), "Remove each push credential's host from the egress deny lists.") {
+		t.Errorf("the reload's error %v", err)
+	}
+	if got := r.Policy().Policy.Egress.Deny; len(got) != 0 {
+		t.Errorf("the policy in force denies %v", got)
 	}
 }

@@ -332,7 +332,7 @@ func (r *Run) Hold(ctx context.Context) error {
 	r.renew.start(routine.ForRun(r.cfg.Report, r.cfg.RunID))
 	r.chosen = chosen
 	pol := r.start
-	r.terminates = len(held.Uses) > 0 || len(chosen) > 0 || len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0 || len(r.beside) > 0 || r.server || r.hasHarness() || r.HasPush()
+	r.terminates = len(held.Uses) > 0 || len(chosen) > 0 || len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0 || len(r.beside) > 0 || r.server || r.hasHarness()
 	return nil
 }
 

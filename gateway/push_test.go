@@ -58,13 +58,17 @@ func pushRunDoc(push bool) string {
 // link that trusts it and serves doc, whose credentials the control seals.
 type pushOrigin struct {
 	h     *harness
+	c     *control
 	port  string
 	roots *x509.CertPool
 	mu    sync.Mutex
 	got   []string
 }
 
-func newPushOrigin(t *testing.T, doc string) *pushOrigin {
+func newPushOrigin(t *testing.T, doc string) *pushOrigin { return newPushOriginUnder(t, doc, nil) }
+
+// newPushOriginUnder is newPushOrigin with node as the node's policy, none when nil.
+func newPushOriginUnder(t *testing.T, doc string, node *gateway.Policy) *pushOrigin {
 	t.Helper()
 	certFile, keyFile, roots := testCertificate(t, t.TempDir())
 	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
@@ -89,9 +93,9 @@ func newPushOrigin(t *testing.T, doc string) *pushOrigin {
 	c.mu.Lock()
 	c.secrets = map[string]string{"work-1": workSecret, "push-1": pushSecretWord}
 	c.mu.Unlock()
-	cfg := gateway.Config{Server: c.server()}
+	cfg := gateway.Config{Server: c.server(), Policy: node}
 	gateway.SetUpstreamRoots(&cfg, roots)
-	o.h = start(t, cfg)
+	o.h, o.c = start(t, cfg), c
 	o.h.secrets = append(o.h.secrets, workSecret, pushSecretWord)
 	return o
 }
@@ -295,8 +299,12 @@ func TestThePushProxySetsThePushCredentialAlone(t *testing.T) {
 		return err != nil
 	})
 	h.close()
-	var pushed []string
+	var pushed, writes []string
 	for _, l := range h.record(a.RunID) {
+		if l.Type == event.RunTargetWrite {
+			writes = append(writes, fmt.Sprint(l.Data["system"], " ", l.Data["path"], " ", l.Data["state"]))
+			continue
+		}
 		if l.Type != event.RunEgress {
 			continue
 		}
@@ -318,6 +326,12 @@ func TestThePushProxySetsThePushCredentialAlone(t *testing.T) {
 		"GET /example-org/other.git/info/refs denied <nil>  localhost",
 		"<nil> <nil> denied <nil> <nil> ",
 		"GET /repos/example-org/app/pulls/12 allowed push-1 /repos/example-org/app/pulls/{} localhost",
+	}
+	// The push of the work item's branch through the push proxy is a target write: one
+	// record when it begins, and one when it ends, cut since the stand-in host returns
+	// no report-status. The push the branch guard stopped is none.
+	if wantWrites := []string{"localhost example-org/app started", "localhost example-org/app cut"}; !slices.Equal(writes, wantWrites) {
+		t.Errorf("the target writes %q, want %q", writes, wantWrites)
 	}
 	if !slices.Equal(pushed, wantRecords) {
 		t.Errorf("the push proxy's records\n%q\nwant\n%q", pushed, wantRecords)
@@ -415,7 +429,7 @@ func TestThePushAndWorkValuesAreRenewed(t *testing.T) {
 	clock.advance(time.Hour - 5*time.Minute)
 	eventually(t, "the renewal before expires_at", func() bool { return len(asked()) == 2 })
 	if a := asked(); !slices.Equal(a[1], []string{"work-1", "push-1"}) {
-		t.Errorf("the renewal asked for %v; want work-1 and push-1", a[1])
+		t.Errorf("the renewal's secrets request was for %v; want work-1 and push-1", a[1])
 	}
 	eventually(t, "the second values at the origin", func() bool {
 		return through(a.ProxySecret, "/work/x") == "work-1-value-2-of-the-renewal-test" && through(a.PushProxySecret, "/push/x") == "push-1-value-2-of-the-renewal-test"
@@ -444,4 +458,48 @@ func TestAWalledRunsPushProxyIsGuarded(t *testing.T) {
 	}
 	o.h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID))
 	o.h.close()
+}
+
+// TestAReloadSetsThePushProxysGuard pins the guard of a walled run's push proxy across a
+// reload, as the run's proxy's: under a run policy that lists no host by name, the
+// guard stops the push proxy's requests to localhost; once a reload lists localhost by
+// name, as the node's policy does, the push proxy reaches it with push-1's value.
+func TestAReloadSetsThePushProxysGuard(t *testing.T) {
+	doc := func(allow string) string {
+		return strings.Replace(pushRunDoc(true), `"mode":"enforce","allow":["localhost"]`, `"mode":"observe","allow":[`+allow+`]`, 1)
+	}
+	o := newPushOriginUnder(t, doc(""), &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "observe", Allow: []string{"localhost"}}})
+	h := o.h
+	a := h.open(server.LinkRunRequest{Wall: true})
+	h.mu.Lock()
+	first := h.digests[len(h.digests)-1].RunConfiguration
+	h.mu.Unlock()
+	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied))
+	pull := func() error {
+		resp, err := o.client(t, a, a.PushProxySecret).Get("https://localhost:" + o.port + "/repos/example-org/app/pulls/12")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				return fmt.Errorf("status %d", resp.StatusCode)
+			}
+		}
+		return err
+	}
+	if err := pull(); err == nil || !strings.Contains(err.Error(), "Forbidden") {
+		t.Fatalf("the push proxy before the reload: %v; want the guard's 403", err)
+	}
+	o.c.serveDocument(doc(`"localhost"`), 'b')
+	h.post(logged(a.RunID))
+	eventually(t, "the reload", func() bool {
+		d := h.post(heartbeat(a.RunID))
+		return d.Accepted() && d.Digests.RunConfiguration != first
+	})
+	if err := pull(); err != nil {
+		t.Errorf("the push proxy after the reload: %v", err)
+	}
+	if got := o.requests(); !slices.Equal(got, []string{"GET /repos/example-org/app/pulls/12 Bearer " + pushSecretWord}) {
+		t.Errorf("the origin got %q", got)
+	}
+	h.post(exited(a.RunID))
+	h.close()
 }

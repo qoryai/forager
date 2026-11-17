@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway/internal/proxy"
 	"github.com/qoryai/forager/gateway/internal/routine"
@@ -23,8 +22,9 @@ import (
 // 403 for every other path of those hosts. It reports the pushes it passes as the
 // run's proxy does ([proxy.Proxy.ObserveWrites]). Each decision is a
 // dev.qory.run.egress with channel push ([pushEgress]). When guarded is true it is
-// guarded as the run's proxy is. It stays open until the run lets go of what it holds:
-// qory pushes after each session. On the local link it is registered under a fresh
+// guarded as the run's proxy is, and a reload sets its guard's names as it sets the run's
+// proxy's. It stays open until [linkRun.release] closes it at the run's end: qory pushes
+// after each session. On the local link it is registered under a fresh
 // secret, the run answer's push_proxy_secret, which no other proxy has; on the one
 // address the run key opens it, after [link.PushPreamble].
 func (lr *linkRun) openPush(guarded bool, ca *proxy.CA) error {
@@ -84,16 +84,17 @@ func (lr *linkRun) openPush(guarded bool, ca *proxy.CA) error {
 	return lr.g.proxies.Register(secret, px)
 }
 
-// pushProxy is the run's push proxy, nil for a run with no push credential and once the
-// run let go of what it holds.
+// pushProxy is the run's push proxy, nil for a run with no push credential and once
+// [linkRun.closePush] closed it.
 func (lr *linkRun) pushProxy() *proxy.Proxy {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
 	return lr.push
 }
 
-// closePush closes the run's push proxy, once, as the run lets go of what it holds: its
-// secret opens nothing from then on, and every connection through it closes.
+// closePush closes the run's push proxy, once, at the run's end: it unregisters the
+// secret, which opens nothing from then on, clears it, and closes every connection
+// through the push proxy.
 func (lr *linkRun) closePush() {
 	lr.mu.Lock()
 	px, secret := lr.push, lr.pushSecret
@@ -135,11 +136,7 @@ func pushPathRefused(method, host, path string) string {
 func pushApplied(uses []proxy.Credential) []any {
 	var out []any
 	for _, u := range uses {
-		e := map[string]any{"name": accesskey.ShownName(u.Name, false), "hosts": anyOf(shownValues(u.Hosts)), "scheme": u.Scheme, "purpose": server.PurposePush}
-		if u.Paths != nil {
-			e["paths"] = anyOf(shownValues(u.Paths))
-		}
-		out = append(out, e)
+		out = append(out, appliedItem(u, server.PurposePush))
 	}
 	return out
 }
