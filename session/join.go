@@ -1261,8 +1261,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	}
 	stopReason := r.stops.end()
 	// After runs in a new container once the runtime exited, whatever ended it: its exit
-	// with any status, 125 included, the time limit, a pause or a stop from outside. Only
-	// a run closed from outside starts none. When the launch failed before any container
+	// with any status, 125 included, the time limit, a stop in a batch's answer (a pause,
+	// or model_key_unauthorized), or a stop from outside. Only a run closed from outside
+	// starts none. When the launch failed before any container
 	// existed, After still starts, on the unchanged workspace. The step ends before the
 	// session's dev.qory.session.exited.
 	if len(spec.After) > 0 && !closed {
