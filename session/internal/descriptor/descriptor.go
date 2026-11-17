@@ -502,7 +502,9 @@ func (d *Descriptor) checkRules() error {
 					return fmt.Errorf("rules[%d]: set the field %s in one of data, sum, set or from_started, not in %s and %s",
 						i, accesskey.ShownName(f, false), other, m.member)
 				}
-				for g, other := range seen {
+				// In the order of the names, so that the error is the same on every parse.
+				for _, g := range slices.Sorted(maps.Keys(seen)) {
+					other := seen[g]
 					if strings.HasPrefix(f, g+".") || strings.HasPrefix(g, f+".") {
 						return fmt.Errorf("rules[%d]: set %s in %s or %s in %s, not both: one is a member of the other",
 							i, accesskey.ShownName(g, false), other, accesskey.ShownName(f, false), m.member)

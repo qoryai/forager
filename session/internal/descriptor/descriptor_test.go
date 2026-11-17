@@ -1289,6 +1289,7 @@ func TestARuleSetsAFieldInOneOfItsMembers(t *testing.T) {
 		{"    from_started: [session_id]\n    sum: {over: modelUsage, fields: {session_id: n}}\n", "set the field session_id in one of data, sum, set or from_started, not in sum and from_started"},
 		{"    set: {usage: 1}\n    sum: {over: modelUsage, fields: {usage.input: inputTokens}}\n", "set usage.input in sum or usage in set, not both: one is a member of the other"},
 		{"    set: {usage: 1}\n    data: {usage.output: usage.output_tokens}\n", "set usage.output in data or usage in set, not both: one is a member of the other"},
+		{"    set: {usage: 1}\n    data: {usage.output: usage.output_tokens, usage.input: usage.input_tokens}\n", "set usage.input in data or usage in set, not both: one is a member of the other"},
 		{"    set: {outcome: done}\n    sum: {over: modelUsage, fields: {usage.input: inputTokens}}\n", ""},
 	} {
 		_, err := descriptor.Parse("amp.yaml", []byte(head+c.rule))
