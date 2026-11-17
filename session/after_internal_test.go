@@ -109,7 +109,7 @@ func TestAfterPathKeepsDirectoriesTheUserCannotWrite(t *testing.T) {
 // TestAgentMayChangeADirectoryItOwns pins the agent's ~/.local/bin with mode 555 on it
 // and every directory above it up to the home: no process can write it, but the agent
 // owns it and may set its mode again, so After's PATH leaves it out, and a program in
-// it is refused.
+// it does not run.
 func TestAgentMayChangeADirectoryItOwns(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root can write every directory")

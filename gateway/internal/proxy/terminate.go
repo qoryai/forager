@@ -56,8 +56,8 @@ type Credential struct {
 	// every request to its hosts.
 	Placeholder string
 	// PushRef is the one ref a git push through the credential may create, update or
-	// delete, such as refs/heads/qory/wi_01: the branch guard refuses a push to its
-	// hosts whose ref commands name any other, and every push when it is empty.
+	// delete, such as refs/heads/qory/wi_01: a push to its hosts whose ref commands
+	// name any other gets a 403 from the branch guard, and so does every push when it is empty.
 	PushRef string
 }
 

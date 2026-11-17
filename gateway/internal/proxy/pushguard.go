@@ -15,29 +15,29 @@ import (
 	"github.com/qoryai/forager/accesskey"
 )
 
-// PushRefRule is the rule a denial names of a git push the branch guard refuses: a
+// PushRefRule is the rule a denial names of a git push the branch guard stops: a
 // push to a host of a credential whose ref commands name a ref other than the
 // credential's PushRef, a push through a credential with no PushRef, and a request
-// that names receive-pack in any other form than git's push over HTTP. A refusal of the
-// proxy's, in either mode, with a 403, before anything reaches the host.
+// that names receive-pack in any other form than git's push over HTTP. The proxy
+// answers each, in either mode, with a 403 before anything reaches the host.
 const PushRefRule = "wall:push-ref"
 
 // MaxPushCommands is the most bytes of a push's request the guard reads for its ref
 // commands, the shallow lines, the commands and their flush: a section that does not
-// end within it is refused.
+// end within it gets a 403.
 const MaxPushCommands = 64 << 10
 
 // PushCommandsWait is how long the guard waits for a push's ref commands to arrive
-// whole: a section that has not ended by then is refused.
+// whole: a section that has not ended by then gets a 403.
 var PushCommandsWait = 10 * time.Second
 
-// pushRefusal is why the guard refuses a push, and the text of its 403.
+// pushRefusal is why the guard answers a push with a 403, and the text of that 403.
 type pushRefusal struct{ text string }
 
 func (e *pushRefusal) Error() string { return e.text }
 
 // pushLike reports whether r names receive-pack, in any case, in its path or its
-// Content-Type: what the guard reads, or refuses, on a host of a credential.
+// Content-Type: what the guard reads, or answers with a 403, on a host of a credential.
 func pushLike(r *http.Request) bool {
 	return strings.Contains(strings.ToLower(r.URL.EscapedPath()), "receive-pack") ||
 		strings.Contains(strings.ToLower(r.URL.Path), "receive-pack") ||
@@ -47,18 +47,18 @@ func pushLike(r *http.Request) bool {
 // guardPush is the branch guard for r, a request to host whose path clean the proxy
 // decided, with c the credential the proxy sets on it, nil for none: nil when r is no
 // push or a push that changes c.PushRef alone, whose body then goes on as it came,
-// and the refusal otherwise. A push is any request [pushLike] reports. Only POST
+// and the [*pushRefusal] otherwise. A push is any request [pushLike] reports. Only POST
 // .../git-receive-pack with Content-Type application/x-git-receive-pack-request and no
-// content coding is read; any other form is refused, and so is a push through a
+// content coding is read; any other form gets a refusal, and so does a push through a
 // credential with no PushRef. The guard reads the request's shallow lines and its ref
 // commands up to their flush before anything is sent: each command must create,
 // update or delete PushRef. A signed push, a line of another form, and a section over
-// [MaxPushCommands] or slower than [PushCommandsWait] are refused, and so is a
+// [MaxPushCommands] or slower than [PushCommandsWait] get one, and so does a
 // capability outside [pushCapabilities], push-options among them: a push option asks
 // some hosts to act on a branch other than PushRef, such as a merge into main. After
-// the flush the body ends, or a pack follows: anything else is refused. A body of a
+// the flush the body ends, or a pack follows: anything else gets one. A body of a
 // flush alone, git's probe before a large push, names no ref and goes on; a flush
-// followed by more bytes is refused.
+// followed by more bytes gets one.
 func guardPush(w http.ResponseWriter, r *http.Request, host, clean string, c *Credential) error {
 	if !pushLike(r) {
 		return nil
@@ -282,7 +282,7 @@ func objectID(s string) bool {
 	return true
 }
 
-// shownRef is a ref or a capability a push named, as a refusal shows it: at most 256
+// shownRef is a ref or a capability a push named, as the text of a [*pushRefusal] shows it: at most 256
 // bytes, quoted in ASCII, and a phrase in place of one that contains an access key's
 // secret.
 func shownRef(ref string) string {
@@ -295,9 +295,8 @@ func shownRef(ref string) string {
 	return strconv.QuoteToASCII(ref)
 }
 
-// refusePush answers a push the guard refused: req, the request's decision, is
-// recorded denied with [PushRefRule], and the session gets a 403 with the refusal's
-// text.
+// refusePush answers a push the guard stopped: req, the request's decision, is
+// recorded denied with [PushRefRule], and the session gets a 403 with the text of err.
 func (p *Proxy) refusePush(w http.ResponseWriter, req Decision, err error) {
 	req.Allowed, req.PathRule, req.Outcome = false, PushRefRule, Refused
 	p.observe(req)

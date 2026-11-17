@@ -89,7 +89,7 @@ type Use struct {
 	Scheme, Username, Header string
 	Paths                    []string
 	// PushRef is the one ref a git push through the use may create, update or delete;
-	// empty refuses every push (the proxy's branch guard).
+	// empty means every push gets a 403 (the proxy's branch guard).
 	PushRef string
 	// Stored says the credential is the server's, a run configuration's credentials
 	// entry, whose value Qory Apiary sealed to the access key.
@@ -500,12 +500,12 @@ func (h *Held) check(mode policy.Mode, allow []string) error {
 	return nil
 }
 
-// checkPaths refuses a path of a credential's that is not in the policy's path grammar,
+// checkPaths returns an error for a path of a credential's that is not in the policy's path grammar,
 // a { or a } outside a segment {} among them.
 func checkPaths(name string, paths []string) error {
 	for _, p := range paths {
 		if !policy.ValidPath(p) {
-			return fmt.Errorf("credential %s: write the path %s from /, with { and } only as a whole segment {}, and * only at the end", accesskey.ShownName(name, false), accesskey.ShownValue(p, true))
+			return fmt.Errorf("Write the paths of credential %s from /, with { and } only as the segment {} and * only at the end.\nThe path %s is not in that form.", accesskey.ShownName(name, false), accesskey.ShownValue(p, true))
 		}
 	}
 	return nil

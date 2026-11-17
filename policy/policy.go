@@ -616,7 +616,7 @@ func (m Mode) Validate() error {
 // and neither /repos/o/r/pulls/12/merge nor /repos/o/r/pulls/. In a pattern with both,
 // such as /a/{}/b*, the {} segments are matched first, then the prefix. The comparison
 // is exact, case included: on a host that ignores case this denies a spelling the host
-// would have taken, never the reverse. A pattern [ValidPath] refuses matches nothing.
+// would have taken, never the reverse. A pattern for which [ValidPath] is false matches nothing.
 // Pass path as [CleanPath] returns it: a {} segment matches any segment that is not
 // empty, .. and one with %2f included, so on a path CleanPath did not return, /a/{}/b
 // matches /a/../b and /a/x%2fy/b.
@@ -635,7 +635,7 @@ const OneSegment = "{}"
 
 // ValidPath reports whether p is a pattern of the path grammar: a / first, no ?, # or
 // whitespace, a * only at the end, and a { or a } only in a segment written exactly
-// {}. The schemas hold the same grammar; a { anywhere else is refused, so no pattern
+// {}. The schemas hold the same grammar; a { anywhere else fails validation, so no pattern
 // reads one as a literal.
 func ValidPath(p string) bool {
 	body, _ := strings.CutSuffix(p, "*")
@@ -702,7 +702,7 @@ func matchPath(p, path string) bool {
 // matches, entry matches too. Without {} that is the same pattern, or a prefix pattern
 // whose prefix the other starts with. With {} it is decided segment by segment, and a
 // case it cannot decide is not covered: a narrowing that cannot be shown inside its
-// entry is refused.
+// entry fails validation.
 func CoversPath(entry, other string) bool {
 	if strings.ContainsAny(entry+other, "{}") && (!ValidPath(entry) || !ValidPath(other)) {
 		return false
@@ -743,8 +743,8 @@ func CoversPath(entry, other string) bool {
 }
 
 // OverlapPaths reports whether one request path can match both patterns. A case it
-// cannot decide counts as an overlap: two credentials whose paths may overlap are
-// refused.
+// cannot decide counts as an overlap: two credentials whose paths may overlap fail
+// validation.
 func OverlapPaths(a, b string) bool {
 	if strings.ContainsAny(a+b, "{}") && (!ValidPath(a) || !ValidPath(b)) {
 		return true

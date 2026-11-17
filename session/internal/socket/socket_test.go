@@ -249,7 +249,7 @@ func TestServeFirstReadsTheFirstConnectionAlone(t *testing.T) {
 }
 
 // TestEachListenerReadsItsSources pins the sources of a listener: a launch's listener
-// refuses a record of the after source, and After's listener refuses every other.
+// skips a record of the after source, and After's listener skips every other.
 func TestEachListenerReadsItsSources(t *testing.T) {
 	for name, c := range map[string]struct {
 		listen          func(time.Duration) (*socket.Listener, error)
@@ -290,7 +290,7 @@ func TestEachListenerReadsItsSources(t *testing.T) {
 			mu.Lock()
 			defer mu.Unlock()
 			if !slices.Equal(got, []string{c.accepted}) || refused != 1 {
-				t.Errorf("read %q, refused %d; want %q read and 1 refused", got, refused, c.accepted)
+				t.Errorf("read %q, skipped %d; want %q read and 1 skipped", got, refused, c.accepted)
 			}
 		})
 	}
@@ -520,7 +520,7 @@ func TestBadLinesOfOneConnectionAreCapped(t *testing.T) {
 }
 
 // TestServeFirstCountsAnErrorOfHandleAgainstTheCap pins that After's first connection has
-// the cap of any connection: of 25 records that handle refuses, bad gets MaxBadLines errors
+// the cap of any connection: of 25 records for which handle returns an error, bad gets MaxBadLines errors
 // and one summary.
 func TestServeFirstCountsAnErrorOfHandleAgainstTheCap(t *testing.T) {
 	l, err := socket.ListenAfter(0)
@@ -531,7 +531,7 @@ func TestServeFirstCountsAnErrorOfHandleAgainstTheCap(t *testing.T) {
 	var bad []string
 	done := make(chan struct{})
 	go func() {
-		l.ServeFirst(func(descriptor.Record) error { return errors.New("refused") }, func(err error) {
+		l.ServeFirst(func(descriptor.Record) error { return errors.New("not recorded") }, func(err error) {
 			mu.Lock()
 			bad = append(bad, err.Error())
 			mu.Unlock()

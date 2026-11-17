@@ -38,25 +38,25 @@ func TestASegmentOfBracesMatchesOneSegment(t *testing.T) {
 	}
 }
 
-// TestAStrayBraceIsRefused pins the grammar: { and } only as a whole segment {}, and a
+// TestAStrayBraceFailsValidation pins the grammar: { and } only as a whole segment {}, and a
 // pattern that holds one elsewhere matches nothing.
-func TestAStrayBraceIsRefused(t *testing.T) {
+func TestAStrayBraceFailsValidation(t *testing.T) {
 	for _, p := range []string{"/a/{}", "/{}", "/a/{}/b*", "/a/{}*", "/a/*", "/a/b", "/"} {
 		if !policy.ValidPath(p) {
-			t.Errorf("%s refused; want it valid", p)
+			t.Errorf("%s fails validation; want it valid", p)
 		}
 	}
 	for _, p := range []string{"/a/{", "/a/}", "/a/{x}", "/a/x{}", "/a/{}x", "/a/{{}}", "/a/{}/b{", "a/{}", "/a/*/b", "/a?b", "/a b"} {
 		if policy.ValidPath(p) {
-			t.Errorf("%s valid; want it refused", p)
+			t.Errorf("%s is valid; want it to fail validation", p)
 		}
 		if _, ok := policy.MatchPath([]string{p}, strings.ReplaceAll(p, "*", "")); ok && strings.ContainsAny(p, "{}") {
-			t.Errorf("%s matched; want a refused pattern to match nothing", p)
+			t.Errorf("%s matched; want a pattern that fails validation to match nothing", p)
 		}
 	}
 	doc := `{"version": 1, "egress": {"mode": "enforce", "allow": ["git.example"], "paths": {"git.example": ["/repos/{x}/app"]}}}`
 	if _, err := policy.Parse("policy.json", []byte(doc)); err == nil {
-		t.Error("a policy with /repos/{x}/app parsed; want it refused")
+		t.Error("a policy with /repos/{x}/app parsed; want it to fail validation")
 	}
 	doc = `{"version": 1, "egress": {"mode": "enforce", "allow": ["git.example"], "paths": {"git.example": ["/repos/{}/app", "/repos/o/{}/pulls/{}*"]}}}`
 	if _, err := policy.Parse("policy.json", []byte(doc)); err != nil {

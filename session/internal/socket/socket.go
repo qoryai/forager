@@ -79,7 +79,7 @@ func Listen(grace time.Duration) (*Listener, error) {
 }
 
 // ListenAfter is [Listen] for a session's After: the listener reads records of the
-// after source only, and a record of any other source is refused as one that is not a
+// after source only, and a record of any other source is skipped as one that is not a
 // record.
 func ListenAfter(grace time.Duration) (*Listener, error) {
 	return listen(grace, []string{descriptor.SourceAfter})

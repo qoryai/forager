@@ -498,7 +498,7 @@ type SessionSpec struct {
 	// program, and from reaching a remote other than over HTTPS. Programs that git starts
 	// from the workspace's .git/config still run as After's user: a filter, textconv or
 	// merge driver, and on git 2.54.0, which has no setting that turns off every
-	// hook.<name>.command, such a hook. The caller refuses such keys. PATH
+	// hook.<name>.command, such a hook. The caller's check of .git/config must fail on such keys. PATH
 	// keeps only absolute directories that the agent's user does not own, nor any
 	// directory above them, and that no group or other user may write, but a directory
 	// with the sticky bit; a directory on a read-only mount counts as unchanged. So a
@@ -773,7 +773,7 @@ type AfterResult struct {
 	State string
 	// ExitCode is the command's exit status, 128 and the signal's number for a command a
 	// signal ended, 127 for a program Exec did not find, 126 for one it could not start
-	// or refused, 125 when Exec could not make After's HOME, and -1 when the step ended
+	// or that does not run, 125 when Exec could not make After's HOME, and -1 when the step ended
 	// with no status: the agent's container could not be removed, After's container did
 	// not start, no record of After's exit arrived, or the step was cut off.
 	ExitCode int

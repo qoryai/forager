@@ -35,7 +35,7 @@ ls /proc/$PPID/fd > after-fds 2> after-fds-err; echo "fds $?" >> after-probe`)
 		return string(b)
 	}
 	if got := read("after-probe"); got != "environ 1\nfds 2\n" && got != "environ 1\nfds 1\n" {
-		t.Errorf("the probe's results %q; want both reads refused", got)
+		t.Errorf("the probe's results %q; want both reads denied", got)
 	}
 	for _, f := range []string{"after-environ", "after-fds"} {
 		if b := read(f); b != "" {

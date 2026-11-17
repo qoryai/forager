@@ -24,7 +24,7 @@ import (
 // afterName is the name of a session's after step.
 const afterName = "after"
 
-// checkAfter refuses an After a session cannot have: one without a wall, with no
+// checkAfter returns an error for an After a session cannot have: one without a wall, with no
 // AfterTimeout above zero, with an empty program, or with a NUL in a word. A wall
 // needs Exec, which [checkExec] checks first.
 func checkAfter(spec runSpec) error {
@@ -126,7 +126,7 @@ func execAfter(a afterLaunch, stderr io.Writer) int {
 }
 
 // agentUser is the user After's program check treats as the agent's: the user the helper
-// runs as, which behind a wall is never root, since a root image is refused. A test
+// runs as, which behind a wall is never root, since a run with a root image does not start. A test
 // running as root sets it to another user, since no file is safe from root.
 var agentUser = os.Getuid
 
