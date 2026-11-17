@@ -646,9 +646,9 @@ func credentialNames(n int) []string {
 }
 
 // TestSealThenOpenAtTheCountBound pins MaxCredentials at 16: 16 values of MaxValueBytes
-// each, every byte one JSON escapes in 6 bytes, seal to an answer of at most MaxAnswer
-// bytes that opens to every value; a sealing of 17 is ErrRequest, and so is an Open
-// that requests 17.
+// each, every byte 0x01, which JSON escapes in 6 bytes, the most any byte takes, seal to
+// an answer of at most MaxAnswer bytes that opens to every value; a sealing of 17 is
+// ErrRequest, and so is an Open that requests 17.
 func TestSealThenOpenAtTheCountBound(t *testing.T) {
 	if MaxCredentials != 16 {
 		t.Fatalf("MaxCredentials is %d; want 16", MaxCredentials)
@@ -661,10 +661,7 @@ func TestSealThenOpenAtTheCountBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	control := make([]byte, 0, MaxValueBytes)
-	for len(control) < MaxValueBytes {
-		control = append(control, 0x01+byte(len(control)%0x1e))
-	}
+	control := bytes.Repeat([]byte{0x01}, MaxValueBytes)
 	id, runID, digest := "ak_0123456789abcdef", "01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a", "sha256="+strings.Repeat("ab", 32)
 	now := time.Unix(1800000000, 0)
 	sealing := func(names []string) Sealing {

@@ -937,8 +937,8 @@ release may change what an existing document does, and says so under Upgrading.
 #### Changed
 
 - A run configuration, a secrets request and a sealed plaintext accept up to 16
-  credentials, up from 8, and `sealed.MaxCredentials` is 16; up to 6 of them stay
-  model keys.
+  credentials, up from 8; up to 6 of the credentials stay model keys.
+  `sealed.MaxCredentials` is 16.
 - A run with a run key writes neutral values in its events: `dev.qory.run.started`
   has no `host`, `dir` of `dev.qory.session.started` is `/workspace`, `command` and
   `args` have `<run>`, `<home>` and `<inputs>` at each occurrence of the run
