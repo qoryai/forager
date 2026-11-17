@@ -11,12 +11,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway"
+	"github.com/qoryai/forager/internal/linktest"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
@@ -112,8 +114,9 @@ const (
 
 // sendsHostCalls pins both host calls through a run's life, with sp set up for a run
 // with a control plane whose host calls l records: from the open, during a join, a
-// refusal of Qory Apiary's from apiary, and not after the close, when nothing is sent.
-// No error contains secret.
+// refusal of Qory Apiary's from apiary, which is not [session.ErrRunClosed], and not
+// after the close, when nothing is sent and the error wraps [session.ErrRunClosed]. No
+// error contains secret.
 func sendsHostCalls(t *testing.T, sp runSpec, l *hostCallLog, secret string) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -139,13 +142,13 @@ func sendsHostCalls(t *testing.T, sp runSpec, l *hostCallLog, secret string) {
 	l.refuse(&hostCallRefusal{status: http.StatusConflict, body: `{"error":"run_ended","message":"Start a new run to record pushed commits."}`})
 	_, err = r.PushedCommits(ctx, []byte(pushedBody))
 	var ref *accesskey.Refusal
-	if !errors.As(err, &ref) || ref.Status != http.StatusConflict || ref.Code != "run_ended" || ref.From != accesskey.FromApiary || err.Error() != "Start a new run to record pushed commits." {
+	if !errors.As(err, &ref) || ref.Status != http.StatusConflict || ref.Code != "run_ended" || ref.From != accesskey.FromApiary || err.Error() != "Start a new run to record pushed commits." || errors.Is(err, session.ErrRunClosed) {
 		t.Errorf("a signed 409: %v (%+v)", err, ref)
 	}
 	errs = append(errs, err)
 	l.refuse(nil)
 	_, err = r.NextSession(ctx, bytes.Repeat([]byte(" "), server.MaxNextSessionRequest+1))
-	if !errors.As(err, &ref) || ref.Status != http.StatusRequestEntityTooLarge || ref.From != accesskey.FromGateway {
+	if !errors.As(err, &ref) || ref.Status != http.StatusRequestEntityTooLarge || ref.From != accesskey.FromGateway || errors.Is(err, session.ErrRunClosed) {
 		t.Errorf("a body over the limit: %v (%+v)", err, ref)
 	}
 	errs = append(errs, err)
@@ -167,7 +170,7 @@ func sendsHostCalls(t *testing.T, sp runSpec, l *hostCallLog, secret string) {
 	sent := l.count()
 	for _, call := range []func(context.Context, []byte) ([]byte, error){r.NextSession, r.PushedCommits} {
 		_, err := call(context.Background(), []byte(`{}`))
-		if err == nil || !strings.HasPrefix(err.Error(), "Open another run to send the ") {
+		if !errors.Is(err, session.ErrRunClosed) || !strings.HasPrefix(err.Error(), "Open another run to send the ") {
 			t.Errorf("after the close: %v", err)
 		}
 		errs = append(errs, err)
@@ -212,7 +215,8 @@ func TestHostCallsBehindASeparateGateway(t *testing.T) {
 }
 
 // TestHostCallsWithNoControlPlane pins a run with no control plane: both host calls
-// return an error that starts with the fix, with nothing sent to the gateway.
+// return an error that starts with the fix and is not [session.ErrRunClosed], with
+// nothing sent to the gateway.
 func TestHostCallsWithNoControlPlane(t *testing.T) {
 	sp := spec(t)
 	startGateway(t, &sp, gateway.Config{})
@@ -224,7 +228,7 @@ func TestHostCallsWithNoControlPlane(t *testing.T) {
 	defer r.Close(ctx, session.Outcome{State: event.StateCancelled})
 	for _, call := range []func(context.Context, []byte) ([]byte, error){r.NextSession, r.PushedCommits} {
 		got, err := call(ctx, []byte(`{}`))
-		if got != nil || err == nil || !strings.HasPrefix(err.Error(), "Open the run with a control plane to send the ") {
+		if got != nil || err == nil || !strings.HasPrefix(err.Error(), "Open the run with a control plane to send the ") || errors.Is(err, session.ErrRunClosed) {
 			t.Errorf("%q %v", got, err)
 		}
 		// The gateway's 404 for a run with no control plane is a refusal: the session's
@@ -233,6 +237,77 @@ func TestHostCallsWithNoControlPlane(t *testing.T) {
 			t.Errorf("the error is the gateway's refusal %+v, not the session's", ref)
 		}
 	}
+}
+
+// closedHostCalls fails the test unless both host calls of r return an error that wraps
+// [session.ErrRunClosed] and starts with the fix, with nothing sent: the text is that of
+// the check before the send, which a sent call never returns.
+func closedHostCalls(t *testing.T, what string, r *session.Run) {
+	t.Helper()
+	for name, call := range map[string]func(context.Context, []byte) ([]byte, error){"next-session": r.NextSession, "pushed-commits": r.PushedCommits} {
+		got, err := call(context.Background(), []byte(`{}`))
+		want := "Open another run to send the " + name + " request: this run is closed."
+		if got != nil || !errors.Is(err, session.ErrRunClosed) || err.Error() != want {
+			t.Errorf("%s: %s: %q %v", what, name, got, err)
+		}
+	}
+}
+
+// TestHostCallsInAClosedRun pins both host calls in a run with a control plane, at a
+// fake gateway, once the run is closed but before Close returns: while Close sends the
+// run's last batch, which has dev.qory.run.exited, and once the gateway closed the run
+// with a 410 to a batch. Each returns an error that wraps [session.ErrRunClosed], with
+// nothing sent.
+func TestHostCallsInAClosedRun(t *testing.T) {
+	t.Run("the close began", func(t *testing.T) {
+		sp, g := specGateway(t)
+		hasRunAPI(g)
+		ctx := context.Background()
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var called atomic.Bool
+		g.OnBatch(func(evs []map[string]any) linktest.Reply {
+			if len(ofType(evs, event.RunExited)) > 0 && !called.Swap(true) {
+				closedHostCalls(t, "during the close", r)
+			}
+			return linktest.Reply{Status: http.StatusOK}
+		})
+		if _, err := r.Close(ctx, session.Outcome{State: event.StateCancelled}); err != nil {
+			t.Fatal(err)
+		}
+		if !called.Load() {
+			t.Error("the gateway got no batch with run.exited")
+		}
+	})
+	t.Run("the gateway closed the run", func(t *testing.T) {
+		sp, g := specGateway(t)
+		hasRunAPI(g)
+		g.SetInterval(1)
+		ctx := context.Background()
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close(ctx, session.Outcome{State: event.StateCancelled})
+		// The next heartbeat's batch gets the 410 that closes the run.
+		var gave410 atomic.Bool
+		g.OnBatch(func([]map[string]any) linktest.Reply {
+			gave410.Store(true)
+			return *gone("stopped", "cancelled", "no_longer_needed")
+		})
+		for deadline := time.Now().Add(15 * time.Second); !gave410.Load(); time.Sleep(20 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal("the gateway got no batch to return the 410 to")
+			}
+		}
+		waitFor(t, func() bool {
+			_, _, err := r.RunAPI()
+			return err != nil && strings.HasPrefix(err.Error(), "Open another run to reach the run API")
+		})
+		closedHostCalls(t, "after the gateway's 410", r)
+	})
 }
 
 // reachesNoHostCall fails the test unless no request of c, a client of a container's

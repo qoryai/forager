@@ -2203,6 +2203,12 @@ release may change what an existing document does, and says so under Upgrading.
   check's context ended, gets the `503` `push_check_unavailable`. The check gets the
   verdicts of a program that sends each after the reply to the one before in the order
   sent.
+- `session.ErrRunClosed`: the error of `Run.NextSession` and `Run.PushedCommits` wraps
+  it once `Close` began or the gateway closed the run, with nothing sent, so a caller
+  tests the case with `errors.Is`. A `410` from the gateway, for a run that ended there
+  before or during the call, is not `ErrRunClosed`: `server.Ended` reports it. The
+  error's text is, for next-session,
+  `Open another run to send the next-session request: this run is closed.`
 - The helper's exec, `session.Exec`, measures the enclosure when the runtime exits. It
   reads `/sys/fs/cgroup/memory.peak` and the `usage_usec` line of
   `/sys/fs/cgroup/cpu.stat`, only when `/sys/fs/cgroup/memory.max` exists, and sends
