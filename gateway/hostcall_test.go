@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -128,8 +129,8 @@ func TestAHostCallForwardsItsBodyUnread(t *testing.T) {
 // once, and message, from apiary, a 503 among them; an unsigned answer, a signed 410, a
 // signed answer with no code, a 200 that is no JSON and a 200 over the answer's limit
 // are 502 control_plane_unavailable from the gateway, with one line in its log. The
-// text of a signed 410, a 200 that is no JSON and an answer over the limit asks to
-// check the control plane, and that of the others to send the request again.
+// text of a signed 410, a 200 that is no JSON and an answer over the limit starts with
+// "Check the control plane", and that of the others with "Send the … request again".
 func TestAHostCallPassesOnTheControlPlanesRefusal(t *testing.T) {
 	o := openRunAPIRun(t)
 	answer := func(a func(w http.ResponseWriter, r *http.Request)) {
@@ -699,6 +700,20 @@ func TestAHostCallAdmitsItsConnection(t *testing.T) {
 // separate run's proxy refuses both.
 const ownAddressDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost","127.0.0.1"]}}}`
 
+// allowsOwnAddress fails the test unless the policy the run applied, applied, has an
+// enforce mode and allows localhost and 127.0.0.1, so the policy itself refuses neither.
+func allowsOwnAddress(t *testing.T, applied json.RawMessage) {
+	t.Helper()
+	var members struct {
+		Mode  string   `json:"mode"`
+		Allow []string `json:"allow"`
+	}
+	if err := json.Unmarshal(applied, &members); err != nil || members.Mode != "enforce" ||
+		!slices.Contains(members.Allow, "localhost") || !slices.Contains(members.Allow, "127.0.0.1") {
+		t.Fatalf("the applied policy %s does not allow localhost and 127.0.0.1: %v", applied, err)
+	}
+}
+
 // guardRefused fails the test unless the record of a run has a dev.qory.run.egress of
 // host refused by the guard of the machine's addresses, wall:own-address.
 func guardRefused(t *testing.T, what string, record func() []recorded, host string) {
@@ -726,6 +741,7 @@ func TestTheGuardKeepsAHostCallFromAContainer(t *testing.T) {
 		f := runAPIOf(c)
 		h := start(t, gateway.Config{Server: c.server()})
 		a := h.open(server.LinkRunRequest{Wall: true})
+		allowsOwnAddress(t, a.Applied)
 		h.post(started(a.RunID, nil), applied(a.RunID, a.Applied))
 		o := &runAPIRun{t: t, h: h, f: f, a: a}
 		serveHostCalls(f)
@@ -749,6 +765,7 @@ func TestTheGuardKeepsAHostCallFromAContainer(t *testing.T) {
 		serveHostCalls(f)
 		r := startRemote(t, c, gateway.Config{})
 		e := r.open(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{})
+		allowsOwnAddress(t, e.a.Applied)
 		f.reset()
 		client := r.relay(t, e.key)
 		_, port, _ := net.SplitHostPort(r.g.Addr())

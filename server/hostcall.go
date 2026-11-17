@@ -36,8 +36,9 @@ const (
 const HostCallTime = 60 * time.Second
 
 // hostCallWait is the most time the session waits for the answer to one host call:
-// [HostCallTime], plus the 120 seconds a reopen of the run behind a separate gateway may
-// take before the gateway sends it, plus a minute for the link, rounded up.
+// [HostCallTime] and the up to 120 seconds a reopen of the run behind a separate gateway
+// takes before the gateway sends it (heldRun in gateway/remote.go), 3 minutes, rounded
+// up.
 const hostCallWait = 4 * time.Minute
 
 // NextSession sends the next-session request of the run runID, a POST of body to
