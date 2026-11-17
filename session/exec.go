@@ -379,11 +379,11 @@ type execOptions struct {
 }
 
 // parseExec reads [Exec]'s arguments: its options, and the program and its arguments
-// after --. A name outside a variable's grammar is refused without being quoted, since
+// after --. A name outside a variable's grammar is an error, shown without being quoted, since
 // what is not a name may hold a value.
 func parseExec(args []string) (execOptions, []string, error) {
 	var opts execOptions
-	usage := errors.New("exec: want --unset NAME ... -- program [args], or --after-only --after-timeout MS --after-word WORD ...")
+	usage := errors.New("exec: want --unset NAME ... -- program [args], or --after-only with its options")
 	timeout := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {

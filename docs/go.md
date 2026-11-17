@@ -424,7 +424,7 @@ returns and before `Close`. Each error starts with the fix, and writes nothing:
 
 | Call | When | Error |
 |---|---|---|
-| `StartStep` | a kind other than fetch, compose, build, push, machine and copy | `start a host step of kind fetch, compose, build, push, machine or copy, not "setup": Join writes the join, image, wall, setup and after steps` |
+| `StartStep` | a kind other than fetch, compose, build, push, machine and copy | `Start a host step of kind fetch, compose, build, push, machine or copy, not "setup".` and, on a second line, `Join writes the join, image, wall, setup and after steps.` |
 | `StartStep` | while a `Join` runs | `start the host step after Join returns: a session of the run is still running` |
 | `StartStep` | while step 1 is open | `exit step 1 before the next host step starts: one host step is open at a time` |
 | `StartStep` | after `Close` | `open a new run for the host step: the run is closed` |

@@ -546,7 +546,7 @@ func TestNoAfterRunsWhenTheAgentsContainerNeverStarted(t *testing.T) {
 		t.Error("After ran")
 	}
 	if !slices.ContainsFunc(reports(), func(r string) bool {
-		return strings.HasPrefix(r, "After did not run: no record said the program started")
+		return strings.HasPrefix(r, "Read the launch's output: the helper never started the program")
 	}) {
 		t.Errorf("the reports %q have no line that After did not run", reports())
 	}
@@ -746,7 +746,7 @@ func TestAChildOfAftersCommandCannotSendARecord(t *testing.T) {
 }
 
 // TestAnAfterRecordOnTheLaunchesSocketIsNotRecorded pins the launch's socket, which the
-// agent reaches: a record of the after source on it is refused as no record, and no
+// agent reaches: a record of the after source on it is skipped as no record, and no
 // after step comes of it.
 func TestAnAfterRecordOnTheLaunchesSocketIsNotRecorded(t *testing.T) {
 	sp, _ := afterSpec(t, `"$0"; exit 0`, "/bin/sh", "-c", "exit 7")
@@ -776,7 +776,7 @@ func TestAnAfterRecordOnTheLaunchesSocketIsNotRecorded(t *testing.T) {
 		}
 	}
 	if refused != 3 {
-		t.Errorf("%d records refused, reports %q; want 3", refused, reports())
+		t.Errorf("%d records skipped, reports %q; want 3", refused, reports())
 	}
 }
 
@@ -794,7 +794,7 @@ func gitVersion(t *testing.T) (major, minor int) {
 }
 
 // TestAfterGitRunsNothingTheRepositoryPlants pins After's git settings and HOME: a
-// remote with a local path, whose receivepack setting git would run, is refused, since
+// remote with a local path, whose receivepack setting git would run, fails, since
 // git reaches a remote only over HTTPS; a hook in .git/hooks does not run; a hook of
 // .git/config's hook.<name>.command does not run on git 2.55 and later, which has the
 // setting that turns it off, hook.<event>.enabled (git 2.54 runs it: no setting turns
@@ -840,7 +840,7 @@ git push -q planted HEAD:refs/heads/after; echo "push $?" >> after-git`)
 		return string(b)
 	}
 	if got := read("after-git"); !strings.HasPrefix(got, "commit 0\npush ") || got == "commit 0\npush 0\n" {
-		t.Errorf("After's git: %q; want the commit and a refused push", got)
+		t.Errorf("After's git: %q; want the commit and a failed push", got)
 	}
 	planted := []string{"classic-hook-ran", "receivepack-ran"}
 	if configHooksOff {

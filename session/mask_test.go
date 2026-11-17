@@ -725,7 +725,7 @@ func TestTheErrorsOfSetupFetchImageAndStepsAreMasked(t *testing.T) {
 		}
 		defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
 		_, err = r.StartStep("fetch "+token+" "+ghp, "fetch github.com/example-org/app")
-		check(t, "StartStep", err, `start a host step of kind fetch, compose, build, push, machine or copy, not "fetch *** ***": Join writes the join, image, wall, setup and after steps`)
+		check(t, "StartStep", err, "Start a host step of kind fetch, compose, build, push, machine or copy, not \"fetch *** ***\".\nJoin writes the join, image, wall, setup and after steps.")
 		step, err := r.StartStep(event.StepFetch, "fetch github.com/example-org/app")
 		if err != nil {
 			t.Fatal(err)

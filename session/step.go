@@ -58,7 +58,7 @@ type Step struct {
 func (r *Run) StartStep(kind, name string) (_ *Step, err error) {
 	defer func() { err = maskError(r.masker, err) }()
 	if kind != event.StepFetch && kind != event.StepCompose && kind != event.StepBuild && kind != event.StepPush && kind != event.StepMachine && kind != event.StepCopy {
-		return nil, fmt.Errorf("start a host step of kind fetch, compose, build, push, machine or copy, not %s: Join writes the join, image, wall, setup and after steps", accesskey.ShownValue(kind, true))
+		return nil, fmt.Errorf("Start a host step of kind fetch, compose, build, push, machine or copy, not %s.\nJoin writes the join, image, wall, setup and after steps.", accesskey.ShownValue(kind, true))
 	}
 	if name == "" {
 		return nil, fmt.Errorf("give the step a name, such as %q: a step's name is never empty", "fetch github.com/example-org/app")

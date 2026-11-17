@@ -1203,7 +1203,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// with any status after the helper started it gets After. The step ends before the
 	// session's dev.qory.session.exited.
 	if len(spec.After) > 0 && !closed && !launched.Load() {
-		r.open.Report("After did not run: no record said the program started in the enclosure, so the workspace is taken as unchanged")
+		r.open.Report("Read the launch's output: the helper never started the program, so After did not run.")
 	}
 	if len(spec.After) > 0 && !closed && launched.Load() {
 		r.runAfter(afterRun{
