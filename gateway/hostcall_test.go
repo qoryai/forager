@@ -700,7 +700,7 @@ func TestAHostCallAdmitsItsConnection(t *testing.T) {
 const ownAddressDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost","127.0.0.1"]}}}`
 
 // guardRefused fails the test unless the record of a run has a dev.qory.run.egress of
-// host refused by the guard of the gateway's own addresses, wall:own-address.
+// host refused by the guard of the machine's addresses, wall:own-address.
 func guardRefused(t *testing.T, what string, record func() []recorded, host string) {
 	t.Helper()
 	eventually(t, what+": the guard's denial in the record", func() bool {
@@ -714,9 +714,9 @@ func guardRefused(t *testing.T, what string, record func() []recorded, host stri
 }
 
 // TestTheGuardKeepsAHostCallFromAContainer pins that a policy that allows localhost and
-// the one address's host opens no host call to a container: the guard of the gateway's
-// own addresses refuses each with 403, walled on one machine and behind a separate
-// gateway, and the control plane gets nothing.
+// the one address's host opens no host call to a container: the guard of the machine's
+// addresses refuses each with 403, walled on one machine and behind a separate gateway,
+// and the control plane gets nothing.
 func TestTheGuardKeepsAHostCallFromAContainer(t *testing.T) {
 	body := []byte(`{"session":1,"state":"succeeded","reason":null}`)
 	head := "Content-Type: application/json\r\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n"

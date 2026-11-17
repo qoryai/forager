@@ -272,9 +272,8 @@ func reachesNoHostCall(t *testing.T, what string, c *http.Client, runID, oneAddr
 // TestNoContainerReachesAHostCallThroughTheSession pins that a program behind a wall,
 // through the wall's relay, and a program on the host through the host proxy, reach
 // neither host call: on one machine under an enforce policy that allows no host, and
-// behind a separate gateway with no policy, where the guard of the gateway's own
-// addresses refuses localhost and the one address. The control plane gets no host
-// call.
+// behind a separate gateway with no policy, where the guard of the machine's addresses
+// refuses localhost and the one address. The control plane gets no host call.
 func TestNoContainerReachesAHostCallThroughTheSession(t *testing.T) {
 	for _, separate := range []bool{false, true} {
 		name := "one machine"
