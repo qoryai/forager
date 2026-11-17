@@ -1278,8 +1278,18 @@ func TestRuleFieldsAreSetOnce(t *testing.T) {
 
 // TestARuleSetsAFieldInOneOfItsMembers pins the check of a rule's fields across data,
 // sum, set and from_started: a field of sum that set or from_started sets too, and a
-// field of set whose member data or sum sets, are refused; distinct fields pass.
+// field of set whose member data or sum sets, are refused, with the first such member
+// by name when several are; distinct fields pass. The fixture
+// descriptor-beyond-schema-set-and-sum.yaml, which passes the schema, is refused too.
 func TestARuleSetsAFieldInOneOfItsMembers(t *testing.T) {
+	b, err := fs.ReadFile(contracts.FS, "fixtures/invalid/descriptor-beyond-schema-set-and-sum.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const fixtureWant = "set the field outcome in one of data, sum, set or from_started, not in sum and set"
+	if _, err := descriptor.Parse("descriptor-beyond-schema-set-and-sum.yaml", b); err == nil || !strings.Contains(err.Error(), fixtureWant) {
+		t.Errorf("the fixture: %v; want %q", err, fixtureWant)
+	}
 	const head = "version: 1\nruntime: amp\nsources: {output: {format: jsonl}}\nrules:\n" +
 		"  - source: output\n    match: {type: result}\n    type: dev.qory.runtime.result\n"
 	for _, c := range []struct {

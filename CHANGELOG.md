@@ -70,9 +70,10 @@ release may change what an existing document does, and says so under Upgrading.
   path with one matches no request.
 - Read `after` as a step kind, and `reason` on `dev.qory.run.step_exited`: a gateway
   built before this change answers a batch that has them with `400`.
-- Remove a stray `{` or `}` from the paths of `egress.paths`, of a credential's `paths`
-  and of an apply item's `paths`: a `{` or `}` outside a segment written exactly `{}`
-  fails validation from this change, where before it was a character of the path.
+- Remove a stray `{` or `}` from the paths of `egress.paths`, of a credential's `paths`,
+  of an apply item's `paths` and of an API credential's `paths`: a `{` or `}` outside a
+  segment written exactly `{}` fails validation from this change, where before it was a
+  character of the path.
 - Delete `runtime_version` from each runtime descriptor of yours: the descriptor schema
   now fails on it, so `descriptor.Parse` returns an error for a descriptor that has it.
   The version comes from `SessionSpec.RuntimeInstall.Version`.
@@ -339,10 +340,10 @@ release may change what an existing document does, and says so under Upgrading.
 - An apply item of a host credential, in the run configuration, the secrets answer and
   an adapter's output, may have `push_ref`, the one branch a git push through it may
   change (§Credentials, The push branch). A renewal keeps it.
-- The path grammar of `egress.paths` and of a credential's `paths` has a `{}` segment,
-  which matches one non-empty segment: `/repos/example-org/app/pulls/{}` matches
-  `/repos/example-org/app/pulls/12` and not `/repos/example-org/app/pulls/12/merge`. A
-  `{` or `}` anywhere else fails validation.
+- The path grammar of `egress.paths`, of a credential's `paths` and of an API
+  credential's `paths` has a `{}` segment, which matches one non-empty segment:
+  `/repos/example-org/app/pulls/{}` matches `/repos/example-org/app/pulls/12` and not
+  `/repos/example-org/app/pulls/12/merge`. A `{` or `}` anywhere else fails validation.
 - `dev.qory.run.step_started` has the kind `after`, the session's after step, and
   `dev.qory.run.step_exited` an optional `reason`, `timeout` or `out_of_memory`, which
   an after step alone has. `record.schema.json` has the source `after`.

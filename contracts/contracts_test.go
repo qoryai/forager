@@ -462,8 +462,9 @@ const beyondLinkSchema = "-beyond-schema-"
 // account_claim that is no JSON pointer, / alone, with a control character or with an
 // escape other than ~0 and ~1, an account_header with a space or that is a reserved
 // header, Authorization, Host, Content-Length with _, Cookie, a Proxy-, X-Qory- or
-// Qory- header, or paths that are empty, 33, twice, with an inner * or
-// relative; a secrets request whose unauthorized is empty, of 7, twice or not a name; a
+// Qory- header, or paths that are empty, 33, twice, with an inner *, with a { or }
+// outside a {} segment or relative; a secrets request whose unauthorized is empty,
+// of 7, twice or not a name; a
 // model keys report whose unauthorized is empty, of 7, a list of names, or has an entry
 // without at or credential, with an at that is no time or with a member it does not
 // define; a link batch, a session.exited or a run.exited with model_key_switch and a
