@@ -49,11 +49,11 @@ func pushLike(r *http.Request) bool {
 // push or a push that changes c.PushRef alone, whose body then goes on as it came,
 // and the [*pushRefusal] otherwise. A push is any request [pushLike] reports. Only POST
 // .../git-receive-pack with Content-Type application/x-git-receive-pack-request and no
-// content coding is read; any other form gets a refusal, and so does a push through a
+// content coding is read; any other form gets a 403, and so does a push through a
 // credential with no PushRef. The guard reads the request's shallow lines and its ref
 // commands up to their flush before anything is sent: each command must create,
 // update or delete PushRef. A signed push, a line of another form, and a section over
-// [MaxPushCommands] or slower than [PushCommandsWait] get one, and so does a
+// [MaxPushCommands] or slower than [PushCommandsWait] get one too, and so does a
 // capability outside [pushCapabilities], push-options among them: a push option asks
 // some hosts to act on a branch other than PushRef, such as a merge into main. After
 // the flush the body ends, or a pack follows: anything else gets one. A body of a
