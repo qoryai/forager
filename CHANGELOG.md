@@ -11,19 +11,19 @@ release may change what an existing document does, and says so under Upgrading.
 #### Upgrading
 
 - Send `push_ref` on the apply item of a credential that pushes, such as
-  `refs/heads/qory/wi_01`: from this change the gateway refuses every git push through
-  an item without it, and through a credential the machine defines with `env` or
+  `refs/heads/qory/wi_01`: from this change the gateway returns `403` for every git push
+  through an item without it, and through a credential the machine defines with `env` or
   `file`, which has none; an adapter may answer `push_ref` on an item. A gateway built
   before this change fails a run whose run configuration has `push_ref` with
   `run_configuration_invalid`, and reads a `{}` segment as the characters `{}`, so a
   path with one matches no request.
 - Read `after` as a step kind, and `reason` on `dev.qory.run.step_exited`: a gateway
-  built before this change refuses a batch that has them.
+  built before this change answers a batch that has them with `400`.
 - Remove a stray `{` or `}` from the paths of `egress.paths`, of a credential's `paths`
   and of an apply item's `paths`: a `{` or `}` outside a segment written exactly `{}`
-  is refused from this change, where before it was a character of the path.
+  fails validation from this change, where before it was a character of the path.
 - Delete `runtime_version` from each runtime descriptor of yours: the descriptor schema
-  now refuses it, so `descriptor.Parse` returns an error for a descriptor that has it.
+  now fails on it, so `descriptor.Parse` returns an error for a descriptor that has it.
   The version comes from `SessionSpec.RuntimeInstall.Version`.
 - A gateway built before this change fails a run with `run_configuration_invalid` when
   the run configuration's API credential has `resets_at`, `schedule_resets_at` or
@@ -272,7 +272,7 @@ release may change what an existing document does, and says so under Upgrading.
 - The path grammar of `egress.paths` and of a credential's `paths` has a `{}` segment,
   which matches one non-empty segment: `/repos/example-org/app/pulls/{}` matches
   `/repos/example-org/app/pulls/12` and not `/repos/example-org/app/pulls/12/merge`. A
-  `{` or `}` anywhere else is refused.
+  `{` or `}` anywhere else fails validation.
 - `dev.qory.run.step_started` has the kind `after`, the session's after step, and
   `dev.qory.run.step_exited` an optional `reason`, `timeout` or `out_of_memory`, which
   an after step alone has. `record.schema.json` has the source `after`.

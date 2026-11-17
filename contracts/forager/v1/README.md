@@ -540,8 +540,8 @@ is not empty and contains no `/`: `/repos/example-org/app/pulls/{}` matches
 `/repos/example-org/app/pulls/12`, and neither `/repos/example-org/app/pulls/12/merge`
 nor `/repos/example-org/app/pulls/`. A `{}` may stand at any segment, and beside a final
 `*`: `/repos/{}/app/*` matches `/repos/example-org/app/pulls`. A `*` anywhere but at
-the end, and a `{` or `}` anywhere but in a `{}` segment, is refused when the entry is
-loaded. So a list can allow a repository's pull requests and leave out their merge:
+the end, and a `{` or `}` anywhere but in a `{}` segment, fails validation when the entry
+is loaded. So a list can allow a repository's pull requests and leave out their merge:
 `/repos/example-org/app/pulls/{}` and no entry for `/repos/example-org/app/pulls/{}/merge`.
 
 **Matching a path.** On a terminated host every request is decided by the policy's
@@ -816,9 +816,9 @@ value only in answers from a host a credential is for. A tool's answers are the 
 git push before it sends a byte of it, in either mode. A push is a request whose path
 or `Content-Type` contains `receive-pack`, in any case. Only `POST` to a path that ends
 in `/git-receive-pack`, with `Content-Type` `application/x-git-receive-pack-request`
-and no content coding other than `identity`, is read; any other form of push is
-refused. The credential the proxy sets on the push must have `push_ref` (§From the
-server): a push with no credential set, or with one that has no `push_ref`, is refused.
+and no content coding other than `identity`, is read; any other form of push gets
+`403`. The credential the proxy sets on the push must have `push_ref` (§From the
+server): a push with no credential set, or with one that has no `push_ref`, gets `403`.
 A credential the machine defines with `env` or `file` has no `push_ref`, so no push
 goes through it; an adapter's answer may have `push_ref` on an item, as a run
 configuration's may. The proxy reads the request's `shallow` lines,
@@ -827,14 +827,14 @@ must name `push_ref`, so the push creates, updates or deletes that branch alone.
 first command may ask only for the capabilities `report-status`, `report-status-v2`,
 `side-band`, `side-band-64k`, `quiet`, `atomic`, `ofs-delta`, `delete-refs`, `agent`,
 `object-format` and `session-id`: a push with push options (`push-options`), which
-ask some hosts to act on another branch, such as a merge into the default branch, is
-refused, and so is any other capability, and a capability list with a tab or
+ask some hosts to act on another branch, such as a merge into the default branch, gets
+`403`, and so does any other capability, and a capability list with a tab or
 another control character. After the flush the body ends, or a pack
-(`PACK`) follows: anything else is refused. A signed push (`push-cert`), a line of
+(`PACK`) follows: anything else gets `403`. A signed push (`push-cert`), a line of
 another form, and commands longer than 64 KiB (65536 bytes) or slower than 10 seconds
-are refused. A request body of a flush alone, git's probe before a large push, names
-no ref and passes; a flush followed by more bytes is refused. A push that passes goes
-on as it came. A refused push gets a `403` with a two-line text body before anything reaches
+get `403`. A request body of a flush alone, git's probe before a large push, names
+no ref and passes; a flush followed by more bytes gets `403`. A push that passes goes
+on as it came. A push that gets `403` has a two-line text body before anything reaches
 the host, and its `dev.qory.run.egress` is `denied` with the `path_rule`
 `wall:push-ref`; it has no `dev.qory.run.target_write`. Such texts are
 `qory: push only refs/heads/qory/wi_01.` with the line `The push of "refs/heads/main" to
@@ -6495,7 +6495,7 @@ empty `credential.helper`, `commit.gpgSign=false`, `tag.gpgSign=false`, and
 `hook.<event>.enabled=false` for each hook event of githooks(5). So git reaches a remote
 over HTTPS alone: a remote with a local path or a `file://` URL, whose `receivepack` or
 `uploadpack` setting git would run, and one over ssh, whose `core.sshCommand` git would
-run, are refused. Git 2.55 and later run no hook of `.git/config`'s
+run, fail the push. Git 2.55 and later run no hook of `.git/config`'s
 `hook.<name>.command` with these settings; git 2.54 runs such a hook whatever they are,
 so the caller's check of `.git/config` must fail on `hook.*` keys before it sets After. Other keys of
 `.git/config` that name a program, such as a filter, also still apply: the caller checks
