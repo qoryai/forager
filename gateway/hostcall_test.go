@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
@@ -41,16 +43,16 @@ func hostCall(h *harness, runID, path string, body []byte) ([]byte, error) {
 	return l.PushedCommits(context.Background(), runURL, runID, body)
 }
 
-// noContentTo answers r with a signed 204 and no body, as Qory Apiary answers a
+// noContentTo sends a signed 204 with no body for r, as Qory Apiary does for a
 // pushed-commits request.
 func (f *fakeRunAPI) noContentTo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(server.HeaderSignature, f.c.signer.SignAnswer(accesskey.Answer{Status: http.StatusNoContent, RequestSignature: r.Header.Get(server.HeaderSignature)}))
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// hostCallAnswers makes f answer a next-session request with a signed 200 that echoes
-// its body back, and a pushed-commits request with a signed 204.
-func hostCallAnswers(f *fakeRunAPI) {
+// serveHostCalls makes f return a signed 200 that echoes the body back for a
+// next-session request, and a signed 204 for a pushed-commits request.
+func serveHostCalls(f *fakeRunAPI) {
 	f.answers(func(w http.ResponseWriter, r *http.Request, body []byte) {
 		if strings.HasSuffix(r.URL.Path, "/pushed-commits") {
 			f.noContentTo(w, r)
@@ -79,7 +81,7 @@ func refusalWith(t *testing.T, what string, err error, status int, code, from st
 // passes; and a call while a session is joined passes too.
 func TestAHostCallForwardsItsBodyUnread(t *testing.T) {
 	o := openRunAPIRun(t)
-	hostCallAnswers(o.f)
+	serveHostCalls(o.f)
 	for _, path := range hostCallPaths {
 		o.f.reset()
 		got, err := hostCall(o.h, o.a.RunID, path, notJSON)
@@ -121,11 +123,13 @@ func TestAHostCallForwardsItsBodyUnread(t *testing.T) {
 	}
 }
 
-// TestAHostCallPassesOnTheControlPlanesRefusal pins the answers of the control plane
-// that are no 2xx: a signed coded refusal passes with its status, code, names and
-// message, from apiary, a 503 among them; an unsigned answer, a signed 410, a signed
-// answer with no code, a 200 that is no JSON and a 200 over the answer's limit are
-// 502 control_plane_unavailable from the gateway, with one line in its log.
+// TestAHostCallPassesOnTheControlPlanesRefusal pins what the control plane returns
+// other than a 2xx: a signed coded refusal passes with its status, code, names, each
+// once, and message, from apiary, a 503 among them; an unsigned answer, a signed 410, a
+// signed answer with no code, a 200 that is no JSON and a 200 over the answer's limit
+// are 502 control_plane_unavailable from the gateway, with one line in its log. The
+// text of a signed 410, a 200 that is no JSON and an answer over the limit asks to
+// check the control plane, and that of the others to send the request again.
 func TestAHostCallPassesOnTheControlPlanesRefusal(t *testing.T) {
 	o := openRunAPIRun(t)
 	answer := func(a func(w http.ResponseWriter, r *http.Request)) {
@@ -133,7 +137,7 @@ func TestAHostCallPassesOnTheControlPlanesRefusal(t *testing.T) {
 	}
 	for _, path := range hostCallPaths {
 		answer(func(w http.ResponseWriter, r *http.Request) {
-			o.f.sign(w, r, http.StatusConflict, []byte(`{"error":"run_ended","names":["repositories[0].commit",""],"message":"Start a new run to record pushed commits."}`))
+			o.f.sign(w, r, http.StatusConflict, []byte(`{"error":"run_ended","names":["repositories[0].commit","","repositories[0].commit"],"message":"Start a new run to record pushed commits."}`))
 		})
 		_, err := hostCall(o.h, o.a.RunID, path, []byte(`{}`))
 		if ref := refusalWith(t, path+": a signed 409", err, http.StatusConflict, "run_ended", accesskey.FromApiary); ref != nil {
@@ -163,33 +167,45 @@ func TestAHostCallPassesOnTheControlPlanesRefusal(t *testing.T) {
 		t.Errorf("a refusal with a run key: %d %s", status, body)
 	}
 
-	unavailable := map[string]func(w http.ResponseWriter, r *http.Request){
-		"an unsigned 409": func(w http.ResponseWriter, _ *http.Request) {
+	// check is whether the text asks to check the control plane, since the same answer
+	// comes back, in place of sending the request again.
+	unavailable := map[string]struct {
+		send  func(w http.ResponseWriter, r *http.Request)
+		check bool
+	}{
+		"an unsigned 409": {func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusConflict)
 			io.WriteString(w, `{"error":"run_ended"}`)
-		},
-		"a signed 410": func(w http.ResponseWriter, r *http.Request) {
+		}, false},
+		"a signed 410": {func(w http.ResponseWriter, r *http.Request) {
 			o.f.sign(w, r, http.StatusGone, []byte(`{"error":"run_closed"}`))
-		},
-		"a signed 500 with no code": func(w http.ResponseWriter, r *http.Request) {
+		}, true},
+		"a signed 500 with no code": {func(w http.ResponseWriter, r *http.Request) {
 			o.f.sign(w, r, http.StatusInternalServerError, []byte(`oops`))
-		},
-		"a 200 that is no JSON": func(w http.ResponseWriter, r *http.Request) {
+		}, false},
+		"a 200 that is no JSON": {func(w http.ResponseWriter, r *http.Request) {
 			body := []byte("next: end")
 			w.Header().Set("Content-Type", "text/plain")
 			w.Header().Set(server.HeaderSignature, o.f.c.signer.SignAnswer(accesskey.Answer{Status: http.StatusOK, RequestSignature: r.Header.Get(server.HeaderSignature), Body: body}))
 			w.Write(body)
-		},
-		"a 200 over the limit": func(w http.ResponseWriter, r *http.Request) {
+		}, true},
+		"a 200 over the limit": {func(w http.ResponseWriter, r *http.Request) {
 			o.f.sign(w, r, http.StatusOK, bytes.Repeat([]byte(" "), server.MaxNextSessionAnswer+1))
-		},
+		}, true},
 	}
-	for what, a := range unavailable {
-		answer(a)
+	for what, u := range unavailable {
+		answer(u.send)
 		_, err := hostCall(o.h, o.a.RunID, "/next-session", []byte(`{}`))
 		refusalWith(t, what, err, http.StatusBadGateway, "control_plane_unavailable", accesskey.FromGateway)
 		if _, ok := server.Ended(err); ok {
 			t.Errorf("%s ends the run", what)
+		}
+		want := "Send the next-session request again: "
+		if u.check {
+			want = "Check the control plane: "
+		}
+		if err == nil || !strings.HasPrefix(err.Error(), want) {
+			t.Errorf("%s: the text %q, want it to start with %q", what, err, want)
 		}
 	}
 	if n := len(o.h.reportsWith("the next-session request got no valid answer")); n != len(unavailable) {
@@ -204,14 +220,15 @@ func TestAHostCallPassesOnTheControlPlanesRefusal(t *testing.T) {
 // not_found.
 func TestTheGatewaysRefusalsOfAHostCall(t *testing.T) {
 	o := openRunAPIRun(t)
-	hostCallAnswers(o.f)
+	serveHostCalls(o.f)
 	for path, limit := range map[string]int{"/next-session": server.MaxNextSessionRequest, "/pushed-commits": server.MaxPushedCommitsRequest} {
 		_, err := hostCall(o.h, o.a.RunID, path, bytes.Repeat([]byte("a"), limit+1))
 		if ref := refusalWith(t, path+": over the limit", err, http.StatusRequestEntityTooLarge, "payload_too_large", accesskey.FromGateway); ref != nil && !startsWithAFix.MatchString(err.Error()) {
 			t.Errorf("%s: the text %q starts with no fix", path, err)
 		}
 		status, body := rawPost(t, raw(t, o.h.g.LocalLink()), "/v1/run-configuration/"+o.a.RunID+path, "text/plain", "{}")
-		if status != http.StatusBadRequest || !strings.Contains(body, `"error":"invalid_request"`) || !strings.Contains(body, `"from":"gateway"`) {
+		if status != http.StatusBadRequest || !strings.Contains(body, `"error":"invalid_request"`) || !strings.Contains(body, `"from":"gateway"`) ||
+			!strings.Contains(body, `"message":"Send the `+path[1:]+` request with Content-Type: application/json: the gateway sent nothing.\nContent-Type: text/plain"`) {
 			t.Errorf("%s: text/plain: %d %s", path, status, body)
 		}
 		_, err = hostCall(o.h, event.NewRunID(), path, []byte(`{}`))
@@ -249,7 +266,7 @@ func TestAHostCallBehindASeparateGateway(t *testing.T) {
 	c := gatewayControl(t)
 	f := runAPIOf(c)
 	f.passAttach.Store(true)
-	hostCallAnswers(f)
+	serveHostCalls(f)
 	r := startRemote(t, c, gateway.Config{})
 	e := r.open(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{})
 	f.reset()
@@ -306,15 +323,15 @@ var enforceNothing = &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mo
 
 // TestNoContainerReachesAHostCall pins that a program in a container, whose one way out
 // is the run's proxy through the wall's relay, reaches neither host call on one
-// machine: the run API route answers 404 for both paths; the proxy answers 400 to a
-// request with no host and 403 to the link's paths at localhost, which the policy does
+// machine: the run API route returns 404 for both paths; the proxy returns 400 for a
+// request with no host and 403 for the link's paths at localhost, which the policy does
 // not allow; and a connection to the proxy's address with no relay preamble is closed
-// unanswered. The control plane gets nothing.
+// with no answer. The control plane gets nothing.
 func TestNoContainerReachesAHostCall(t *testing.T) {
 	c := newControl(t)
 	f := runAPIOf(c)
 	o := startRunAPIRun(t, start(t, gateway.Config{Server: c.server(), Policy: enforceNothing}), f)
-	hostCallAnswers(o.f)
+	serveHostCalls(o.f)
 	o.f.reset()
 	body := []byte(`{"session":1,"state":"succeeded","reason":null}`)
 	head := "Content-Type: application/json\r\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n"
@@ -348,7 +365,7 @@ func TestNoContainerReachesAHostCall(t *testing.T) {
 // TestNoContainerReachesAHostCallBehindASeparateGateway pins the same behind a
 // separate gateway. The run's proxy connections arrive on the one address with the
 // relay's preamble and the run key, as the session's forwarder opens them for a
-// container, and never reach the link: the run API route answers 404 for both paths, a
+// container, and never reach the link: the run API route returns 404 for both paths, a
 // request with no host 400, and the link's paths at the one address 403. A link
 // request needs the run key as its bearer, which no container has: a bound request
 // without it is 400 run_key_invalid (TestEveryRequestCarriesAnAcceptedRunKey), and an
@@ -357,7 +374,7 @@ func TestNoContainerReachesAHostCallBehindASeparateGateway(t *testing.T) {
 	c := gatewayControl(t)
 	f := runAPIOf(c)
 	f.passAttach.Store(true)
-	hostCallAnswers(f)
+	serveHostCalls(f)
 	r := startRemote(t, c, gateway.Config{Policy: enforceNothing})
 	e := r.open(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{})
 	f.reset()
@@ -409,4 +426,403 @@ func TestNoContainerReachesAHostCallBehindASeparateGateway(t *testing.T) {
 	if got := f.requests(); len(got) != 0 {
 		t.Errorf("the control plane got %+v", got)
 	}
+}
+
+// holdHostCalls makes f hold each request until the request ends, with no answer, and
+// returns a channel that gets a value as each request arrives and one that gets a value
+// as each ends.
+func holdHostCalls(f *fakeRunAPI) (arrived, ended <-chan struct{}) {
+	a, e := make(chan struct{}, 8), make(chan struct{}, 8)
+	f.answers(func(_ http.ResponseWriter, r *http.Request, _ []byte) {
+		a <- struct{}{}
+		<-r.Context().Done()
+		e <- struct{}{}
+	})
+	return a, e
+}
+
+// within fails the test unless c gets a value within d.
+func within(t *testing.T, what string, c <-chan struct{}, d time.Duration) {
+	t.Helper()
+	select {
+	case <-c:
+	case <-time.After(d):
+		t.Fatalf("%s: not within %s", what, d)
+	}
+}
+
+// startHostCall sends the host call path of the run on the local link of h with ctx,
+// and returns a channel that gets its error.
+func startHostCall(ctx context.Context, h *harness, runID, path string) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		l, runURL := h.linkOf(runID), server.LocalOrigin+"/v1/run-configuration"
+		var err error
+		if path == "/next-session" {
+			_, err = l.NextSession(ctx, runURL, runID, []byte(`{}`))
+		} else {
+			_, err = l.PushedCommits(ctx, runURL, runID, []byte(`{}`))
+		}
+		done <- err
+	}()
+	return done
+}
+
+// TestAHostCallEndsWithItsCaller pins a caller that hangs up while the control plane
+// holds the request: the gateway cancels its request to the control plane at once, and
+// writes no line to its log.
+func TestAHostCallEndsWithItsCaller(t *testing.T) {
+	o := openRunAPIRun(t)
+	arrived, ended := holdHostCalls(o.f)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := startHostCall(ctx, o.h, o.a.RunID, "/next-session")
+	within(t, "the request at the control plane", arrived, 10*time.Second)
+	cancel()
+	within(t, "the control plane's request cancelled", ended, 5*time.Second)
+	if err := <-done; err == nil {
+		t.Error("a call whose caller hung up returned no error")
+	}
+	// A later call that passes is the barrier: the gateway has written any line of the
+	// first one by then.
+	serveHostCalls(o.f)
+	if _, err := hostCall(o.h, o.a.RunID, "/next-session", []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got := o.h.reportsWith("request got no valid answer"); len(got) != 0 {
+		t.Errorf("lines in the gateway's log: %q", got)
+	}
+}
+
+// TestAHostCallOfARunThatEndsMeanwhile pins a run that ends at the gateway while the
+// control plane holds its host call: the gateway cancels its request to the control
+// plane, the caller gets the run's 410 at once, and the gateway writes no line to its
+// log.
+func TestAHostCallOfARunThatEndsMeanwhile(t *testing.T) {
+	o := openRunAPIRun(t)
+	arrived, ended := holdHostCalls(o.f)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	done := startHostCall(ctx, o.h, o.a.RunID, "/pushed-commits")
+	within(t, "the request at the control plane", arrived, 10*time.Second)
+	o.h.post(exited(o.a.RunID))
+	err := <-done
+	if end, ok := server.Ended(err); !ok || end.From != accesskey.FromGateway {
+		t.Errorf("a call of a run that ended meanwhile: %v (%+v)", err, end)
+	}
+	within(t, "the control plane's request cancelled", ended, 5*time.Second)
+	if got := o.h.reportsWith("request got no valid answer"); len(got) != 0 {
+		t.Errorf("lines in the gateway's log: %q", got)
+	}
+}
+
+// TestAHostCallOfARunClosedPaused pins a run that its session closed paused: both host
+// calls get the run's 410 run_closed, and the control plane gets nothing.
+func TestAHostCallOfARunClosedPaused(t *testing.T) {
+	o := openRunAPIRun(t)
+	serveHostCalls(o.f)
+	o.f.reset()
+	n := o.h.joined(o.a.RunID)
+	paused := map[string]any{"state": "paused", "exit_code": 1, "reason": "model_key_limit"}
+	if d := o.h.post(sessionStarted(o.a.RunID, n), ev(o.a.RunID, event.SessionExited, map[string]any{"session": n, "state": "paused", "exit_code": 1, "reason": "model_key_limit", "duration_ms": 5})); !d.Accepted() {
+		t.Fatalf("the paused session: %+v", d)
+	}
+	if d := o.h.post(exitedWith(o.a.RunID, paused)); !d.Accepted() {
+		t.Fatalf("the paused close: %+v", d)
+	}
+	for _, path := range hostCallPaths {
+		_, err := hostCall(o.h, o.a.RunID, path, []byte(`{}`))
+		if end, ok := server.Ended(err); !ok || end.Code != accesskey.CodeRunClosed || end.From != accesskey.FromGateway {
+			t.Errorf("%s of a run closed paused: %v (%+v)", path, err, end)
+		}
+	}
+	if got := o.f.requests(); len(got) != 0 {
+		t.Errorf("the control plane got %+v", got)
+	}
+}
+
+// TestAHostCallHasItsTime pins the time of a host call at the control plane, 60
+// seconds: past it, with a shorter time set for the test, the caller gets 502
+// control_plane_unavailable with the text to send the request again, the gateway's
+// request is cancelled, and the gateway writes one line to its log.
+func TestAHostCallHasItsTime(t *testing.T) {
+	if server.HostCallTime != time.Minute || gateway.HostCallTimeOf(gateway.Config{}) != time.Minute {
+		t.Errorf("the time of a host call is %s, and %s at a gateway; want 1m0s", server.HostCallTime, gateway.HostCallTimeOf(gateway.Config{}))
+	}
+	c := newControl(t)
+	f := runAPIOf(c)
+	cfg := gateway.Config{Server: c.server()}
+	gateway.SetHostCallTime(&cfg, 300*time.Millisecond)
+	o := startRunAPIRun(t, start(t, cfg), f)
+	_, ended := holdHostCalls(f)
+	begin := time.Now()
+	_, err := hostCall(o.h, o.a.RunID, "/next-session", []byte(`{}`))
+	if took := time.Since(begin); took > 10*time.Second {
+		t.Errorf("the call took %s", took)
+	}
+	refusalWith(t, "a call past its time", err, http.StatusBadGateway, "control_plane_unavailable", accesskey.FromGateway)
+	if err == nil || !strings.HasPrefix(err.Error(), "Send the next-session request again: ") {
+		t.Errorf("the text %q", err)
+	}
+	within(t, "the control plane's request cancelled", ended, 5*time.Second)
+	if n := len(o.h.reportsWith("the next-session request got no valid answer")); n != 1 {
+		t.Errorf("%d lines in the gateway's log, want 1", n)
+	}
+}
+
+// TestAnAnswerOverTheLimitStopsTheRead pins the read of the control plane's answer to
+// a host call: the gateway reads at most one byte over the call's limit, the body of a
+// 200 at most the call's answer limit and that of another 2xx at most 64 KiB, and the
+// caller gets 502 control_plane_unavailable with the text to check the control plane at
+// once, while the control plane holds the rest of the body open. A 201 of more than 64
+// KiB to a next-session request is among them.
+func TestAnAnswerOverTheLimitStopsTheRead(t *testing.T) {
+	o := openRunAPIRun(t)
+	for _, c := range []struct {
+		path         string
+		status, size int
+	}{
+		{"/next-session", http.StatusOK, server.MaxNextSessionAnswer + 1},
+		{"/next-session", http.StatusCreated, server.MaxRefusal + 1},
+		{"/pushed-commits", http.StatusOK, server.MaxPushedCommitsAnswer + 1},
+	} {
+		ended := make(chan struct{}, 1)
+		o.f.answers(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(c.status)
+			w.Write(bytes.Repeat([]byte(" "), c.size))
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			ended <- struct{}{}
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := <-startHostCall(ctx, o.h, o.a.RunID, c.path)
+		cancel()
+		what := fmt.Sprintf("%s: a %d of %d bytes", c.path, c.status, c.size)
+		refusalWith(t, what, err, http.StatusBadGateway, "control_plane_unavailable", accesskey.FromGateway)
+		if err == nil || !strings.HasPrefix(err.Error(), "Check the control plane: ") {
+			t.Errorf("%s: the text %q", what, err)
+		}
+		within(t, what+": the control plane's request ended", ended, 5*time.Second)
+	}
+}
+
+// TestAHostCallWhileTheGatewayStops pins a separate gateway's stop while the control
+// plane holds a host call: the run is suspended, and the caller gets a 503 with no body,
+// to send the request again to the gateway that starts next.
+func TestAHostCallWhileTheGatewayStops(t *testing.T) {
+	c := gatewayControl(t)
+	f := runAPIOf(c)
+	f.passAttach.Store(true)
+	r := startRemote(t, c, gateway.Config{})
+	e := r.open(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{})
+	arrived, _ := holdHostCalls(f)
+	got := make(chan answer, 1)
+	go func() {
+		got <- r.do(t, e.key, http.MethodPost, "/qory-link/run-configuration/"+e.a.RunID+"/next-session", []byte(`{}`))
+	}()
+	within(t, "the request at the control plane", arrived, 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if d, err := r.g.Close(ctx); d.RunClosed {
+		t.Fatalf("Close: %+v, %v", d, err)
+	}
+	if a := <-got; a.status != http.StatusServiceUnavailable || len(a.body) != 0 {
+		t.Errorf("the host call while the gateway stopped: %d %s; want a 503 with no body", a.status, a.body)
+	}
+	if r.reported("request got no valid answer") {
+		t.Error("a line in the gateway's log")
+	}
+}
+
+// TestAHostCallReopensItsRun pins a host call that reaches a separate gateway that
+// started again: it reopens the suspended run, with one attach, and reaches the control
+// plane.
+func TestAHostCallReopensItsRun(t *testing.T) {
+	c := gatewayControl(t)
+	f := runAPIOf(c)
+	f.passAttach.Store(true)
+	serveHostCalls(f)
+	cfg := gateway.Config{Dir: t.TempDir()}
+	before := startRemote(t, c, cfg)
+	e := before.open(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{})
+	after := before.restart(t, cfg)
+	f.reset()
+	attaches := len(c.attached())
+	if got := after.do(t, e.key, http.MethodPost, "/qory-link/run-configuration/"+e.a.RunID+"/next-session", notJSON); got.status != http.StatusOK || string(got.body) != `{"next":"end","echo":`+string(notJSON)+`}` {
+		t.Errorf("the host call that reopens the run: %d %q", got.status, got.body)
+	}
+	if n := len(c.attached()); n != attaches+1 {
+		t.Errorf("%d attaches for the reopen, want 1", n-attaches)
+	}
+	if seen := f.requests(); len(seen) != 1 || seen[0].target != "/v1/runs/"+e.a.RunID+"/next-session" || !bytes.Equal(seen[0].body, notJSON) {
+		t.Errorf("the control plane got %+v", seen)
+	}
+}
+
+// TestAHostCallAdmitsItsConnection pins admission on the one address: a connection
+// whose host call gets a 2xx, a next-session request's 200 or a pushed-commits
+// request's 204, is admitted and counts against the bounds no more.
+func TestAHostCallAdmitsItsConnection(t *testing.T) {
+	c := gatewayControl(t)
+	f := runAPIOf(c)
+	f.passAttach.Store(true)
+	serveHostCalls(f)
+	r := startRemote(t, c, gateway.Config{})
+	e := r.open(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{})
+	pending := func(want int) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for gateway.PendingConns(r.g) != want {
+			if time.Now().After(deadline) {
+				t.Fatalf("%d connections counted; want %d", gateway.PendingConns(r.g), want)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	pending(0)
+	for path, status := range map[string]int{"/next-session": http.StatusOK, "/pushed-commits": http.StatusNoContent} {
+		b, err := r.bind(t, gatewayKeys())
+		if err != nil {
+			t.Fatal(err)
+		}
+		pending(1)
+		if a := b.do(t, e.key, http.MethodPost, "/qory-link/run-configuration/"+e.a.RunID+path, []byte(`{}`)); a.status != status || a.close {
+			t.Errorf("%s: %d close=%v %s", path, a.status, a.close, a.body)
+		}
+		pending(0)
+		b.Close()
+	}
+}
+
+// ownAddressDoc is a run configuration whose policy allows localhost and 127.0.0.1, the
+// host of a test's one address, which no node's policy names: the guard of a walled or
+// separate run's proxy refuses both.
+const ownAddressDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost","127.0.0.1"]}}}`
+
+// guardRefused fails the test unless the record of a run has a dev.qory.run.egress of
+// host refused by the guard of the gateway's own addresses, wall:own-address.
+func guardRefused(t *testing.T, what string, record func() []recorded, host string) {
+	t.Helper()
+	eventually(t, what+": the guard's denial in the record", func() bool {
+		for _, l := range record() {
+			if l.Type == event.RunEgress && l.Data["host"] == host && l.Data["decision"] == "denied" && l.Data["rule"] == "wall:own-address" {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// TestTheGuardKeepsAHostCallFromAContainer pins that a policy that allows localhost and
+// the one address's host opens no host call to a container: the guard of the gateway's
+// own addresses refuses each with 403, walled on one machine and behind a separate
+// gateway, and the control plane gets nothing.
+func TestTheGuardKeepsAHostCallFromAContainer(t *testing.T) {
+	body := []byte(`{"session":1,"state":"succeeded","reason":null}`)
+	head := "Content-Type: application/json\r\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n"
+	t.Run("one machine", func(t *testing.T) {
+		c := newControl(t)
+		c.serveDocument(ownAddressDoc, 'a')
+		f := runAPIOf(c)
+		h := start(t, gateway.Config{Server: c.server()})
+		a := h.open(server.LinkRunRequest{Wall: true})
+		h.post(started(a.RunID, nil), applied(a.RunID, a.Applied))
+		o := &runAPIRun{t: t, h: h, f: f, a: a}
+		serveHostCalls(f)
+		f.reset()
+		for _, path := range hostCallPaths {
+			target := server.LocalOrigin + "/v1/run-configuration/" + a.RunID + path
+			if resp, b, _ := o.send(line(http.MethodPost, target)+head, body); resp.StatusCode != http.StatusForbidden {
+				t.Errorf("%s at localhost through the proxy: %d %s", path, resp.StatusCode, b)
+			}
+		}
+		guardRefused(t, "localhost", func() []recorded { return h.record(a.RunID) }, "localhost")
+		if got := f.requests(); len(got) != 0 {
+			t.Errorf("the control plane got %+v", got)
+		}
+	})
+	t.Run("separate gateway", func(t *testing.T) {
+		c := gatewayControl(t)
+		c.serveDocument(ownAddressDoc, 'a')
+		f := runAPIOf(c)
+		f.passAttach.Store(true)
+		serveHostCalls(f)
+		r := startRemote(t, c, gateway.Config{})
+		e := r.open(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{})
+		f.reset()
+		client := r.relay(t, e.key)
+		_, port, _ := net.SplitHostPort(r.g.Addr())
+		for _, path := range hostCallPaths {
+			linkPath := "/qory-link/run-configuration/" + e.a.RunID + path
+			for _, u := range []string{"http://127.0.0.1:" + port + linkPath, "http://localhost:" + port + linkPath} {
+				resp, err := client.Post(u, "application/json", bytes.NewReader(body))
+				if err != nil {
+					t.Fatal(err)
+				}
+				b, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if resp.StatusCode != http.StatusForbidden {
+					t.Errorf("%s through the proxy: %d %s", u, resp.StatusCode, b)
+				}
+			}
+		}
+		for _, host := range []string{"127.0.0.1", "localhost"} {
+			guardRefused(t, host, func() []recorded { return r.record(e.a.RunID) }, host)
+		}
+		if got := f.requests(); len(got) != 0 {
+			t.Errorf("the control plane got %+v", got)
+		}
+	})
+}
+
+// TestNoOtherProxyOfARunReachesAHostCall pins the run's push proxy and stack proxy: a
+// host call's path at the run API's host or at localhost through either gets a 403,
+// and the control plane gets nothing.
+func TestNoOtherProxyOfARunReachesAHostCall(t *testing.T) {
+	try := func(t *testing.T, c *http.Client, runID, runAPI string, f *fakeRunAPI) {
+		t.Helper()
+		for _, path := range hostCallPaths {
+			for _, u := range []string{runAPI + path, server.LocalOrigin + "/v1/run-configuration/" + runID + path} {
+				resp, err := c.Post(u, "application/json", strings.NewReader(`{}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				b, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if resp.StatusCode != http.StatusForbidden {
+					t.Errorf("%s: %d %s", u, resp.StatusCode, b)
+				}
+			}
+		}
+		if got := f.requests(); len(got) != 0 {
+			t.Errorf("the control plane got %+v", got)
+		}
+	}
+	t.Run("push proxy", func(t *testing.T) {
+		o := newPushOrigin(t, pushRunDoc(true))
+		a := o.h.open(server.LinkRunRequest{})
+		if a.PushProxySecret == "" {
+			t.Fatal("the run has no push proxy")
+		}
+		// The fake run API takes every request of the control from here on, the run's
+		// secrets opened.
+		f := runAPIOf(o.c)
+		serveHostCalls(f)
+		try(t, o.client(t, a, a.PushProxySecret), a.RunID, a.RunAPI, f)
+	})
+	t.Run("stack proxy", func(t *testing.T) {
+		c := newControl(t)
+		c.serveDocument(harnessGatewayDoc(false), 'a')
+		c.mu.Lock()
+		c.secrets = map[string]string{"harness-1": "fake-harness-value"}
+		c.mu.Unlock()
+		h := start(t, gateway.Config{Server: c.server()})
+		a := h.open(server.LinkRunRequest{})
+		if a.StackProxySecret == "" {
+			t.Fatal("the run has no stack proxy")
+		}
+		f := runAPIOf(c)
+		serveHostCalls(f)
+		try(t, relay(h.g.Addr(), a.StackProxySecret), a.RunID, a.RunAPI, f)
+	})
 }

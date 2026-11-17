@@ -107,7 +107,7 @@ func (a *apiary) configuration() ([]byte, string) {
 // starter's registration, or a 503 while failAttaches is above 0, a reload and a
 // batch, whose events it keeps.
 func (a *apiary) handle(w http.ResponseWriter, r *http.Request) {
-	if a.hostCalls.answer(a.signer, w, r) || runAPIAnswers(a.signer, w, r) {
+	if a.hostCalls.serve(a.signer, w, r) || runAPIAnswers(a.signer, w, r) {
 		return
 	}
 	body, _ := io.ReadAll(r.Body)

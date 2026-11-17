@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -34,7 +36,7 @@ type hostCallLog struct {
 	refusal *hostCallRefusal
 }
 
-// hostCallRefusal is a signed refusal a fake Qory Apiary answers a host call with.
+// hostCallRefusal is a signed refusal a fake Qory Apiary returns for a host call.
 type hostCallRefusal struct {
 	status int
 	body   string
@@ -43,9 +45,9 @@ type hostCallRefusal struct {
 // nextAnswer is the fake Qory Apiary's answer to a next-session request.
 const nextAnswer = `{"next":"session","session":2,"workflow":"write-acceptance-checks","time_limit_minutes":60,"full_suite":false,"inputs":{"version":1}}`
 
-// answer answers r when it is a host call, signed by signer, and reports whether it
-// was one.
-func (l *hostCallLog) answer(signer *accesskey.Key, w http.ResponseWriter, r *http.Request) bool {
+// serve writes the answer for r when it is a host call, signed by signer, and reports
+// whether it was one.
+func (l *hostCallLog) serve(signer *accesskey.Key, w http.ResponseWriter, r *http.Request) bool {
 	rest, ok := strings.CutPrefix(r.URL.Path, "/v1/runs/")
 	if !ok || r.Method != http.MethodPost {
 		return false
@@ -210,7 +212,7 @@ func TestHostCallsBehindASeparateGateway(t *testing.T) {
 }
 
 // TestHostCallsWithNoControlPlane pins a run with no control plane: both host calls
-// return an error that starts with the fix, with nothing sent.
+// return an error that starts with the fix, with nothing sent to the gateway.
 func TestHostCallsWithNoControlPlane(t *testing.T) {
 	sp := spec(t)
 	startGateway(t, &sp, gateway.Config{})
@@ -221,16 +223,21 @@ func TestHostCallsWithNoControlPlane(t *testing.T) {
 	}
 	defer r.Close(ctx, session.Outcome{State: event.StateCancelled})
 	for _, call := range []func(context.Context, []byte) ([]byte, error){r.NextSession, r.PushedCommits} {
-		if got, err := call(ctx, []byte(`{}`)); got != nil || err == nil || !strings.HasPrefix(err.Error(), "Open the run with a control plane to send the ") {
+		got, err := call(ctx, []byte(`{}`))
+		if got != nil || err == nil || !strings.HasPrefix(err.Error(), "Open the run with a control plane to send the ") {
 			t.Errorf("%q %v", got, err)
+		}
+		// The gateway's 404 for a run with no control plane is a refusal: the session's
+		// error, with nothing sent, is none.
+		if ref := (*accesskey.Refusal)(nil); errors.As(err, &ref) {
+			t.Errorf("the error is the gateway's refusal %+v, not the session's", ref)
 		}
 	}
 }
 
 // reachesNoHostCall fails the test unless no request of c, a client of a container's
-// way out, reaches a host call of the run runID: the run API route answers 404 for
-// both paths, and the proxy 403 to the local link's paths and the one address's, under
-// a policy that allows neither host.
+// way out, reaches a host call of the run runID: the run API route returns 404 for
+// both paths, and the proxy 403 for the local link's paths and the one address's.
 func reachesNoHostCall(t *testing.T, what string, c *http.Client, runID, oneAddress string) {
 	t.Helper()
 	urls := []string{link.RunAPIURL(runID) + "/next-session", link.RunAPIURL(runID) + "/pushed-commits"}
@@ -264,9 +271,10 @@ func reachesNoHostCall(t *testing.T, what string, c *http.Client, runID, oneAddr
 
 // TestNoContainerReachesAHostCallThroughTheSession pins that a program behind a wall,
 // through the wall's relay, and a program on the host through the host proxy, reach
-// neither host call, on one machine and behind a separate gateway, each under an
-// enforce policy that allows neither localhost nor the one address: the control plane
-// gets no host call.
+// neither host call: on one machine under an enforce policy that allows no host, and
+// behind a separate gateway with no policy, where the guard of the gateway's own
+// addresses refuses localhost and the one address. The control plane gets no host
+// call.
 func TestNoContainerReachesAHostCallThroughTheSession(t *testing.T) {
 	for _, separate := range []bool{false, true} {
 		name := "one machine"
@@ -307,5 +315,49 @@ func TestNoContainerReachesAHostCallThroughTheSession(t *testing.T) {
 				t.Errorf("the control plane got %d host calls", n)
 			}
 		})
+	}
+}
+
+// TestNoEngineProxyReachesAHostCall pins the engine proxy's forwarder at a real gateway
+// on one machine, under an enforce policy that allows no host: a request through it,
+// as a container the engine starts sends it, reaches neither host call, and the control
+// plane gets no host call.
+func TestNoEngineProxyReachesAHostCall(t *testing.T) {
+	t.Cleanup(session.SetEngineCertsDir(t.TempDir()))
+	roots := filepath.Join(t.TempDir(), "cert.pem")
+	if err := os.WriteFile(roots, []byte(machineRoots), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(session.SetMachineBundles([]string{roots}))
+	c := newControl(t)
+	sp := spec(t)
+	sp.RunID = event.NewRunID()
+	startGateway(t, &sp, gateway.Config{Server: c.server(), Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{}}}})
+	sp.EngineProxy = &session.EngineProxy{Addr: freeLoopback(t), Password: enginePassword}
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close(ctx, session.Outcome{State: event.StateCancelled})
+	step, err := r.StartStep(event.StepFetch, "fetch example.com/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop, err := r.EngineProxy([]string{"registry.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse("http://qory:" + enginePassword + "@" + sp.EngineProxy.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reachesNoHostCall(t, "the engine proxy", throughProxy(u), sp.RunID, "")
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	step.Exit(event.StateSucceeded, 0)
+	if n := c.hostCalls.count(); n != 0 {
+		t.Errorf("the control plane got %d host calls", n)
 	}
 }

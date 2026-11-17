@@ -47,7 +47,7 @@ func isTranscript(path, runs string) bool {
 // transcript_unavailable. A run that ended at the gateway is 410. On the local link a
 // run id of no run here is 400 invalid_request; on the one address the run id is the
 // run key's, any other 400 run_key_invalid, and a run the gateway does not hold is
-// reopened, or answered a 503 or a 410 ([Gateway.linkRunOf]).
+// reopened, or gets a 503 or a 410 ([Gateway.linkRunOf]).
 func (g *Gateway) transcript(s *side, w http.ResponseWriter, r *http.Request, runID string) {
 	lr := g.linkRunOf(s, w, r, runID)
 	if lr == nil {

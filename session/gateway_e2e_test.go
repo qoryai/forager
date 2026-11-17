@@ -290,7 +290,7 @@ func newControl(t *testing.T) *control {
 		},
 	}
 	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if c.hostCalls.answer(signer, w, r) || c.runAPI.Load() && runAPIAnswers(signer, w, r) {
+		if c.hostCalls.serve(signer, w, r) || c.runAPI.Load() && runAPIAnswers(signer, w, r) {
 			return
 		}
 		if r.URL.Path == receiver.DefaultRunPath && c.closeOnFetch.Load() {

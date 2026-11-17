@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/internal/linktest"
@@ -87,5 +88,25 @@ func TestTheLinkSendsTheHostCalls(t *testing.T) {
 	}
 	if _, err := k.PushedCommits(ctx, runURL, runID, []byte(`{}`)); err == nil || !strings.HasPrefix(err.Error(), "Check the gateway and the control plane: ") {
 		t.Errorf("an answer over the most: %v", err)
+	}
+}
+
+// TestAHostCallWaitsPastTheLinksWait pins the session's wait for a host call: longer
+// than the link's wait for every other request, which the test sets to 50 ms, so an
+// answer that comes after 300 ms still reaches the caller.
+func TestAHostCallWaitsPastTheLinksWait(t *testing.T) {
+	g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		time.Sleep(300 * time.Millisecond)
+		answer(w, 200, `{"next":"end"}`)
+	}))
+	k, _ := newLink(t, g)
+	server.SetLinkWaits(k, 50*time.Millisecond, 50*time.Millisecond)
+	runURL := server.LocalOrigin + "/v1/run-configuration"
+	if b, err := k.NextSession(context.Background(), runURL, runID, []byte(`{}`)); err != nil || string(b) != `{"next":"end"}` {
+		t.Errorf("next-session: %q, %v", b, err)
+	}
+	if _, err := k.PushedCommits(context.Background(), runURL, runID, []byte(`{}`)); err != nil {
+		t.Errorf("pushed-commits: %v", err)
 	}
 }
