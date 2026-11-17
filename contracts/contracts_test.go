@@ -463,21 +463,21 @@ const beyondLinkSchema = "-beyond-schema-"
 // escape other than ~0 and ~1, an account_header with a space or that is a reserved
 // header, Authorization, Host, Content-Length with _, Cookie, a Proxy-, X-Qory- or
 // Qory- header, or paths that are empty, 33, twice, with an inner *, with a { or }
-// outside a {} segment or relative; a secrets request whose unauthorized is empty,
-// of 7, twice or not a name; a
-// model keys report whose unauthorized is empty, of 7, a list of names, or has an entry
-// without at or credential, with an at that is no time or with a member it does not
-// define; a link batch, a session.exited or a run.exited with model_key_switch and a
-// state other than paused, or with model_key_unauthorized and a state other than
-// failed; and a descriptor whose endpoint is a flag or two places, whose config has no
-// flag, a short flag, a member it does not define, an empty fixed or one of 65 keys, a
-// fixed value that is a fraction, a table, an integer over 2^53-1, or a string with a
-// line feed or over 4096 characters, or a key with a space, whose model key or
-// declared secret has an account_header, or whose resume has a prefix with * or an
-// empty after. A fixture whose name contains
-// -beyond-schema- breaks a rule only the gateway checks, and passes its schema. The longest schema name the file name starts with is
-// the schema, so run-configuration-variable-value-not-string is held to the run
-// configuration and not to a schema named run.
+// outside a {} segment or relative; a secrets request whose unauthorized is empty, of
+// 7, twice or not a name; a model keys report whose unauthorized is empty, of 7, a
+// list of names, or has an entry without at or credential, with an at that is no time
+// or with a member it does not define; a link batch, a session.exited or a run.exited
+// with model_key_switch and a state other than paused, or with model_key_unauthorized
+// and a state other than failed; and a descriptor whose endpoint is a flag or two
+// places, whose config has no flag, a short flag, a member it does not define, an
+// empty fixed or one of 65 keys, a fixed value that is a fraction, a table, an integer
+// over 2^53-1, or a string with a line feed or over 4096 characters, or a key with a
+// space, whose model key or declared secret has an account_header, or whose resume has
+// a prefix with * or an empty after. A fixture whose name contains -beyond-schema-
+// breaks a rule only the gateway checks, or for a descriptor the session, and passes
+// its schema. The longest schema name the file name starts with is the schema, so
+// run-configuration-variable-value-not-string is held to the run configuration and not
+// to a schema named run.
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-registration.schema.json", "run-configuration.schema.json", "event.schema.json", "batch.schema.json",

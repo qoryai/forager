@@ -3905,12 +3905,11 @@ each key the gateway no longer sets after a model provider's `401` that no renew
 brought back, `credential`, its name, and `at`, the gateway's clock when the `401`
 arrived, an RFC 3339 time as `observed_at`. Each report has every such key when the
 gateway made it, so a key a renewal brought back is absent from the next report the
-gateway makes; a report made at a session's start or end keeps the keys it was made
-with across its tries. Absent when the group has none (§Credentials, Keys out after a
-401). The server ignores an entry whose `credential` is
-not one of the run's credentials, and treats the report as if that entry were absent.
-More than 6 entries, a credential twice or an entry of the wrong type is a
-signed `400` `invalid_request`:
+gateway makes; a report made at a session's start or end keeps the keys it was made with
+across its tries. Absent when the group has none (§Credentials, Keys out after a 401).
+The server ignores an entry whose `credential` is not one of the run's credentials, and
+treats the report as if that entry were absent. More than 6 entries, a credential twice
+or an entry of the wrong type is a signed `400` `invalid_request`:
 
 ```json
 {"version": 1, "run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9e", "time": "2026-11-10T12:00:05Z",
@@ -3929,18 +3928,18 @@ Each session also makes two boundary reports, with every window the gateway has,
 when nothing changed: its start report at the join's `200`, and its end report when the
 gateway numbers its `dev.qory.session.exited`, or when the run ends at the gateway while
 its join is open. A join sent again that gets its `200` again makes no second start
-report. A boundary report waits for the gap of a
-second after the report before, and keeps the session, the windows and the keys in
-`unauthorized` it was made with across its tries, with a new `time` for each try. So the end report of session 2 never
-has the state or the number of session 3, and reports reach the server in the order the
-gateway made them, each with a later `time` than the one before. A boundary report that
-waits takes the place of the next try of a report of changes, and contains its changes.
-The first report with a session's number is its start report, and the last is its end
+report. A boundary report waits for the gap of a second after the report before, and
+keeps the session, the windows and the keys in `unauthorized` it was made with across
+its tries, with a new `time` for each try. So the end report of session 2 never has the
+state or the number of session 3, and reports reach the server in the order the gateway
+made them, each with a later `time` than the one before. A boundary report that waits
+takes the place of the next try of a report of changes, and contains its changes. The
+first report with a session's number is its start report, and the last is its end
 report, with two exceptions. A gateway that restarts while a session is open makes no
-start report for it when it reopens the run, and a start report made before the
-restart that had not gone may be lost: the stopping gateway sends it once more, within
-10 seconds, only while its process still runs. A boundary report that has not gone
-within the 10 seconds after the run's end is lost.
+start report for it when it reopens the run, and a start report made before the restart
+that had not gone may be lost: the stopping gateway sends it once more, within 10
+seconds, only while its process still runs. A boundary report that has not gone within
+the 10 seconds after the run's end is lost.
 
 When the run ends while a change waits for its report, a boundary report waits to go,
 or a report waits for its next try, the gateway sends each waiting boundary report and
@@ -6782,22 +6781,21 @@ up in its parent, so two binds of one root are allowed:
   workspace, each once, and the session's directory, `sessions/<n>/` in the run
   directory, read-only. For a session with `SessionSpec.RuntimeInstall` it binds the
   folder `SessionSpec.RuntimeInstall.Dir` leads to, read-only, at
-  `/qory/runtime/<runtime>` (§The runtime, The installed program). For a runtime with `resume` it also binds the session's
-  transcript directory, `transcripts/<n>/` in the run directory, writable, at
-  `resume.prefix` below the home of the agent's user inside, or at an absolute
-  `resume.prefix`. An absolute `resume.prefix` inside a writable mount's place inside is
-  read in that mount, with no bind, and one inside a read-only mount's gets no
-  transcript (§The events, A session's transcript). The session makes that directory and
-  checks that it is, contains and lies inside no other bind; the wall fails the session
-  when it overlaps a mount, or when its place inside overlaps another bind's or `/qory`.
-  The workspace is writable, or read-only for a session with
-  `SessionSpec.WorkspaceReadOnly`, and
-  is the working directory inside, through the bind that holds it, or bound at the same
-  path as on the machine when no mount holds it; a run whose policy names its image by
-  reference sees the bind that holds it at `/workspace` (§Images), and a wall binds a
-  mount at the path the session gives it inside, its target or else its path on the machine, and refuses a mount whose path
-  inside is, contains or lies under `/qory`. The
-  session passes the wall every bind,
+  `/qory/runtime/<runtime>` (§The runtime, The installed program). For a runtime with
+  `resume` it also binds the session's transcript directory, `transcripts/<n>/` in the
+  run directory, writable, at `resume.prefix` below the home of the agent's user inside,
+  or at an absolute `resume.prefix`. An absolute `resume.prefix` inside a writable
+  mount's place inside is read in that mount, with no bind, and one inside a read-only
+  mount's gets no transcript (§The events, A session's transcript). The session makes
+  that directory and checks that it is, contains and lies inside no other bind; the wall
+  fails the session when it overlaps a mount, or when its place inside overlaps another
+  bind's or `/qory`. The workspace is writable, or read-only for a session with
+  `SessionSpec.WorkspaceReadOnly`, and is the working directory inside, through the bind
+  that holds it, or bound at the same path as on the machine when no mount holds it; a
+  run whose policy names its image by reference sees the bind that holds it at
+  `/workspace` (§Images), and a wall binds a mount at the path the session gives it
+  inside, its target or else its path on the machine, and refuses a mount whose path
+  inside is, contains or lies under `/qory`. The session passes the wall every bind,
   each path clean, and the working directory lies in one of them by its names, or the
   run fails; a wall binds nothing of the caller's the launch does not list;
 - a place inside another one, or the same, by their paths on the machine, of the same

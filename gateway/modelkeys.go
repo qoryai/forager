@@ -161,8 +161,9 @@ const lastWait = 10 * time.Second
 // during the gap or a backoff before that report goes in no second report. A boundary
 // report goes also when nothing changed, and keeps its session, its windows and its
 // keys out of use after a 401 across tries; one that waits takes the place of the next
-// try of a report of changes, which it covers. When ctx ends while a report waits, in the gap, in a backoff or in flight,
-// the waiting boundary reports and the newest state go once more ([keyReporter.last]).
+// try of a report of changes, which it covers. When ctx ends while a report waits, in
+// the gap, in a backoff or in flight, the waiting boundary reports and the newest state
+// go once more ([keyReporter.last]).
 func (k *keyReporter) run(ctx context.Context) {
 	var last time.Time
 	// sent is the change count the last report sent or dropped covers.
