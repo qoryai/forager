@@ -395,7 +395,7 @@ func rollouterSpec(t *testing.T, paused string) (runSpec, string) {
 	}
 	home := t.TempDir()
 	sp.Runtime, sp.Forwarder = rt, nil
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", rollouterScript, "sh", "exec", "--json"}
+	sp.Command, sp.Args = installedShell, []string{"-c", rollouterScript, "sh", "exec", "--json"}
 	sp.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home}
 	session.SetTranscriptPoll(&sp.SessionSpec, 50*time.Millisecond)
 	if paused != "" {
@@ -621,7 +621,7 @@ func absoluteResumerSpec(t *testing.T, prefix, dir string) runSpec {
 	t.Helper()
 	sp, g := specGateway(t)
 	sp.Runtime, sp.Forwarder = absoluteResumer(t, prefix), nil
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", absoluteResumerScript, "sh"}
+	sp.Command, sp.Args = installedShell, []string{"-c", absoluteResumerScript, "sh"}
 	sp.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "PREFIX=" + dir}
 	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
 		a := linktest.RunAnswer(req)
