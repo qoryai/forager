@@ -480,15 +480,15 @@ func (g *Gateway) edgeHandler(s *side) http.Handler {
 }
 
 // forLiveRun reports whether r is a request of the link a 2xx answers for a live run
-// only: the run request, a reload, a join or a batch. Once one is answered 2xx, its connection
-// is admitted.
+// only: the run request, a reload, a transcript request, a join, a host call or a
+// batch. Once one is answered 2xx, its connection is admitted.
 func forLiveRun(r *http.Request) bool {
 	switch {
 	case r.Method == http.MethodPost && (r.URL.Path == remoteRunPath || r.URL.Path == remoteEventsPath):
 		return true
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, remoteRunPath+"/"):
 		return true
-	case r.Method == http.MethodPost && isJoin(r.URL.Path, remoteRunPath):
+	case r.Method == http.MethodPost && (isJoin(r.URL.Path, remoteRunPath) || isHostCall(r.URL.Path, remoteRunPath)):
 		return true
 	}
 	return false
