@@ -453,9 +453,9 @@ fixed when the run starts: a reload ignores it.
 A host credential with `purpose: push` is for qory's push of the work item's branch and
 the pull request calls of its submit step. Forager has no access level: Qory Apiary sends
 a push credential only for a `write` run, beside a read work credential. A run with no
-push credential, such as a `write-no-push` run, has no push proxy: `PushProxy` returns
-an error, and a push through the run's proxy gets the branch guard's `403`,
-`wall:push-ref`, unless a work credential has a `push_ref`.
+push credential, such as a `write-no-push` run, which gets a read work credential alone,
+has no push proxy: `PushProxy` returns "Add a push credential to the run configuration:
+this run has no push proxy."
 
 ```json
 {"version": 1,
@@ -477,7 +477,9 @@ an error, and a push through the run's proxy gets the branch guard's `403`,
   setup step, After, the image step and `HostProxy` go through, never sets one, and the
   run answer lists no host or placeholder for it. A push through the run's proxy gets
   the branch guard's `403`, `wall:push-ref`, when no work credential there has a
-  `push_ref`.
+  `push_ref`. The branch guard covers a git push to a host of a work credential; a write
+  through the forge's API, such as a REST or GraphQL call, depends on the work
+  credential's scope at the forge.
 - qory reaches the push proxy through `(*session.Run).PushProxy`
   ([the push proxy](go.md#the-push-proxy)). The push proxy allows the push credentials'
   hosts alone. It sets the push value only on the paths of the push items, and returns
