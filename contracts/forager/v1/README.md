@@ -2481,17 +2481,15 @@ removed with `read_needs_setup_removed`, each `failed` with `exit_code` `-1`. qo
 closes a run with no join whose access is not read and that has no wall with
 `write_needs_wall`, `failed` with `exit_code` `-1`. The close writes a starter's reason
 when its caller gives one, and the gateway accepts it only `failed` after the gateway
-numbered a join of the run. qory closes a run after a join with one of the five end
-codes of integrations' `contracts/run/v1/outcome.schema.json`,
-`push_credential_missing`, `push_refused`, `prebuilt_image_too_large`,
-`push_not_recorded` and `environment_image_missing`, as it sets them in the starter's
-outcome (§The server, The outcome). The gateway returns `400` `invalid_request` to a
-batch with a `dev.qory.run.exited` with a starter's reason and another state, or before
-the gateway numbered a join of the run, and ends the run `failed` with `batch_refused`.
-`(*session.Run).Close` returns an error for each of the eleven codes with another state
-or exit code, or after a join, and the gateway returns `400` `invalid_request` to a batch
-with such a `dev.qory.run.exited` and ends the run `failed` with `batch_refused`. The
-state of each of Forager's endings:
+numbered a join of the run. qory closes a run after a join with one of its end codes,
+listed in `$defs/end_codes` of integrations' `contracts/run/v1/outcome.schema.json`, as
+it sets the code in the starter's outcome (§The server, The outcome). The gateway
+returns `400` `invalid_request` to a batch with a `dev.qory.run.exited` with a starter's
+reason and another state, or before the gateway numbered a join of the run, and ends the
+run `failed` with `batch_refused`. `(*session.Run).Close` returns an error for each of
+the eleven codes with another state or exit code, or after a join, and the gateway
+returns `400` `invalid_request` to a batch with such a `dev.qory.run.exited` and ends
+the run `failed` with `batch_refused`. The state of each of Forager's endings:
 
 | Ending | `state` | `reason` |
 |---|---|---|
@@ -3561,12 +3559,12 @@ document:
   vocabulary, never `paused`. With no `state`, the outcome is `cancelled` with the reason `stopped`.
 - `reason`, optional: a code, a lower-case letter, then lower-case letters, digits and
   `_`, up to 64. One that is one of Forager's reserved codes, or that is not a code, is
-  dropped, and the outcome is kept. qory sets one of the five end codes of integrations'
-  `contracts/run/v1/outcome.schema.json` for a failed run: `push_credential_missing`,
-  `push_refused`, `prebuilt_image_too_large`, `push_not_recorded` or
-  `environment_image_missing`. None of them is a reserved code, and Forager passes each
-  unchanged, as it passes any other code. The rule that those codes go only with `state`
-  `failed` belongs to that contract and to the control plane, not to Forager.
+  dropped, and the outcome is kept. qory sets one of its end codes, listed in
+  `$defs/end_codes` of integrations' `contracts/run/v1/outcome.schema.json`, for a
+  failed run, such as `push_refused`. None of qory's end codes is a reserved code, and
+  Forager passes each unchanged, as it passes any other code. The rule that those codes
+  go only with `state` `failed` belongs to that contract and to the control plane, not
+  to Forager.
 - `time`, required, held to the same window as a registration's.
 
 The starter's outcome sets the run's state whenever it arrives while the run's record is

@@ -93,8 +93,8 @@ func TestAPushRefusedOutcomeReachesTheReceiver(t *testing.T) {
 }
 
 // TestAStartersEndCodeInTheCloseReachesTheControl pins a session's dev.qory.run.exited
-// with a starter's reason after a join: each of the five end codes qory closes a run
-// with after a join, $defs end_codes of integrations' contracts/run/v1/outcome.schema.json,
+// with a starter's reason after a join: each of the end codes qory closes a run with
+// after a join, $defs end_codes of integrations' contracts/run/v1/outcome.schema.json,
 // and push_window_closed, a code of the pattern outside that list, failed after a
 // session. The run's push step exits failed with exit code 1 before each push code, and
 // the close is failed with exit code 1, as qory's push step closes a run.
@@ -115,6 +115,7 @@ func TestAStartersEndCodeInTheCloseReachesTheControl(t *testing.T) {
 		{"prebuilt_image_too_large", -1, false},
 		{"push_not_recorded", 1, true},
 		{"environment_image_missing", -1, false},
+		{"push_head_changed", 1, true},
 		{"push_window_closed", 1, true},
 	} {
 		code := c.code

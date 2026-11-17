@@ -71,11 +71,11 @@ func TestTheLinkRefusesARunExitedBeyondItsSchema(t *testing.T) {
 // read_needs_setup_removed and write_needs_wall only failed with exit_code -1 in a run
 // with no join, and a starter's reason only failed after the gateway numbered a join of
 // the run, such as push_credential_missing, push_refused, prebuilt_image_too_large,
-// push_not_recorded and environment_image_missing, the five end codes qory closes a
-// run with after a join, are taken; a reason the gateway decides, a reserved reason out
-// of its place, a reason that is no code, and a starter's reason with another state or
-// in a run with no join are refused, and the run ends failed, batch_refused, its
-// reason in the report. environment_image_missing is none of the image codes, which
+// push_not_recorded, environment_image_missing and push_head_changed, end codes qory
+// closes a run with after a join, are taken; a reason the gateway decides, a reserved
+// reason out of its place, a reason that is no code, and a starter's reason with
+// another state or in a run with no join are refused, and the run ends failed,
+// batch_refused, its reason in the report. environment_image_missing is none of the image codes, which
 // the gateway takes only in a run with no join.
 func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 	h := start(t, gateway.Config{})

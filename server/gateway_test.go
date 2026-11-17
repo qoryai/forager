@@ -584,10 +584,10 @@ func TestTheEndMember(t *testing.T) {
 	}
 }
 
-// endCodes are the five end codes qory sets in a failed run's outcome, $defs end_codes
-// of integrations' contracts/run/v1/outcome.schema.json, and push_window_closed, a code
-// of the pattern outside that list.
-var endCodes = []string{"push_credential_missing", "push_refused", "prebuilt_image_too_large", "push_not_recorded", "environment_image_missing", "push_window_closed"}
+// endCodes are the end codes qory sets in a failed run's outcome, $defs end_codes of
+// integrations' contracts/run/v1/outcome.schema.json, and push_window_closed, a code of
+// the pattern outside that list.
+var endCodes = []string{"push_credential_missing", "push_refused", "prebuilt_image_too_large", "push_not_recorded", "environment_image_missing", "push_head_changed", "push_window_closed"}
 
 // TestPostOutcomeSendsQorysEndCodesUnchanged pins qory's end codes on their way to the
 // server and back: PostOutcome sends each, with the state failed, as the body's reason,

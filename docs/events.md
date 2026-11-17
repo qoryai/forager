@@ -252,8 +252,8 @@ starter's, carried as given. A starter's code is none of Forager's reserved code
 none of the image, workflow, `read_needs_*` and `write_needs_wall` codes, which the
 close takes only before a join. The gateway accepts a starter's code in the close only
 `failed`, after the gateway numbered a join of the run. qory closes a run after a join
-with one of its five end codes, `push_credential_missing`, `push_refused`,
-`prebuilt_image_too_large`, `push_not_recorded` and `environment_image_missing`. The
+with one of its end codes, listed in `$defs/end_codes` of integrations'
+`contracts/run/v1/outcome.schema.json`. The
 close writes `timeout`, `cancelled`, `interrupted`, `cancelled`, a run stopped from
 where it was started (a Ctrl-C), and `no_session`, `failed`, a run closed with no
 session after its host work failed, such as a fetch, and `model_key_limit`, `paused`, a
