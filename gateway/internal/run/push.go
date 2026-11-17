@@ -23,7 +23,7 @@ func (r *Run) HasPush() bool {
 // paths, or when their paths overlap. A work or harness credential on the same host is
 // no conflict: no proxy sets two purposes.
 func (r *Run) checkPush() error {
-	var items []claim
+	var items []applyItem
 	for _, c := range r.stored {
 		if !c.Push() {
 			continue
@@ -33,7 +33,7 @@ func (r *Run) checkPush() error {
 				"Remove placeholders from push credentials: no session gets a push credential.\nThe push credential %s has placeholders.", accesskey.ShownName(c.Name, true))
 		}
 		for _, a := range c.Applies() {
-			items = append(items, claim{c.Name, a.Hosts, a.Paths})
+			items = append(items, applyItem{c.Name, a.Hosts, a.Paths})
 		}
 	}
 	c, ok := firstConflict(items)
@@ -127,17 +127,17 @@ func (r *Run) PushUses() []proxy.Credential {
 	return out
 }
 
-// claim is one apply item of a harness or a push credential: the credential's name, and
+// applyItem is one apply item of a harness or a push credential: the credential's name, and
 // the item's hosts and paths.
-type claim struct {
+type applyItem struct {
 	name  string
 	hosts []string
 	paths []string
 }
 
-// conflict is two claims on one exact host that one proxy cannot set both of: first
+// conflict is two apply items on one exact host that one proxy cannot set both of: first
 // and second are the credentials' names, one whether they are one credential, and
-// pathless whether one of the claims has no paths; otherwise their paths overlap.
+// pathless whether one of the items has no paths; otherwise their paths overlap.
 type conflict struct {
 	first, second, host string
 	one, pathless       bool
@@ -153,7 +153,7 @@ func (c conflict) names() []string {
 
 // firstConflict is the first conflict among items, in their order, and whether there is
 // one.
-func firstConflict(items []claim) (conflict, bool) {
+func firstConflict(items []applyItem) (conflict, bool) {
 	for i, u := range items {
 		for _, other := range items[:i] {
 			for _, host := range u.hosts {

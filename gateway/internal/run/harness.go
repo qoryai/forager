@@ -38,7 +38,7 @@ func (r *Run) StackAllows(host string) bool {
 // their paths overlap. A work
 // credential on the same host is no conflict: no proxy sets both.
 func (r *Run) checkHarness() error {
-	var items []claim
+	var items []applyItem
 	for _, c := range r.stored {
 		if !c.Harness() {
 			continue
@@ -65,7 +65,7 @@ func (r *Run) checkHarness() error {
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
 					"Add %s to a stack_hosts list: the harness credential %s is for it", host, name)
 			}
-			items = append(items, claim{c.Name, a.Hosts, a.Paths})
+			items = append(items, applyItem{c.Name, a.Hosts, a.Paths})
 		}
 	}
 	if c, ok := firstConflict(items); ok {

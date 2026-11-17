@@ -18,7 +18,7 @@ import (
 
 // pushDoc is a run configuration of a write run: a read work credential, work-1, on the
 // repository's paths of git.example, and a push credential, push-1, whose first item
-// claims the same paths with the branch guard's ref and whose second item claims the
+// is for the same paths with the branch guard's ref and whose second item is for the
 // pull request paths of api.git.example.
 const pushDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["git.example","api.git.example"]}},"credentials":[` +
 	`{"name":"work-1","apply":[{"hosts":["git.example"],"scheme":"basic","username":"x-access-token","paths":["/example-org/app.git/*"]}],"placeholders":["GIT_TOKEN"]},` +
@@ -41,7 +41,7 @@ func pushValueOf(r *run.Run, name string) string {
 // TestAPushCredentialIsThePushProxysAlone pins the split of a write run's credentials:
 // one secrets request opens both; the run's proxy, which the sessions, the setup step,
 // After, the image step and the host proxy go through, sets work-1 alone, though push-1
-// claims the same paths, and the run's placeholders are work-1's; the push proxy sets
+// is for the same paths, and the run's placeholders are work-1's; the push proxy sets
 // push-1 alone, on each of its items, with the branch guard's ref; the run needs its
 // authority.
 func TestAPushCredentialIsThePushProxysAlone(t *testing.T) {

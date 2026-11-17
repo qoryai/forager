@@ -1332,8 +1332,9 @@ then lists each harness credential by `name` and `purpose` alone, and the stack 
 run starts: a reload's `harness_hidden` is ignored.
 
 **Push credentials.** A host credential with `purpose: push` is for qory's push of the
-work item's branch and the pull request calls of its submit step. A `write` run has one
-beside a read work credential; a `write-no-push` run has the read work credential alone.
+work item's branch and the pull request calls of its submit step. Forager has no access
+level: Qory Apiary sends a push credential only for a `write` run, beside a read work
+credential, and a run with no push credential opens no push proxy.
 
 ```json
 {"name": "push-1", "purpose": "push",
@@ -1350,22 +1351,30 @@ After, image step or host proxy gets its value. A push from any of them through 
 run's proxy gets the branch guard's `403`, `wall:push-ref`, when no work credential
 there has a `push_ref`. The push proxy allows the push credentials' hosts alone, in
 `enforce` mode, and returns a `403` for every other host and for every path of those
-hosts that no item covers. Its decisions are `dev.qory.run.egress` records with `channel:
+hosts that no item covers. It checks paths, not methods: on a path an item covers, every
+method gets the push value, so under the item `/repos/example-org/app/pulls/{}` a
+`PATCH` of `/repos/example-org/app/pulls/12` passes, while
+`/repos/example-org/app/pulls/12/merge` gets a `403`. The branch guard limits each git
+push to the item's `push_ref`. The paths of the push items pin the repository: an item
+with no paths covers every path on its hosts. Its decisions are `dev.qory.run.egress` records with `channel:
 push`. It opens with the run and stays open until the run closes, through every join,
 since qory pushes after each session. A run with a push credential has a certificate
 authority, and the push proxy ends TLS with it on every host. The gateway fetches and
 renews the value as any other credential's from the server.
 
-Each of these is `run_configuration_invalid`, with the credential's name in `names`, at
-the start and, for the egress allow list, at every reload too: a push credential with
-`placeholders`, `Remove the placeholders from each push credential: no session gets a
-push credential.`; a host of one that the run's egress allow list does not cover in
-`enforce` mode, `Add each push credential's host to the run's egress allow list, or
-remove that credential.`; two items of push credentials on one host when one has no
-paths, `Give paths to each apply item of the push credentials that claims a host another
-item claims.`; and two whose paths overlap on one host, `Give the push credentials'
-apply items on one host paths that do not overlap.` Each text has a second line with the
-credential's name and host. A work credential on a push credential's host and paths is
+Each of these is `run_configuration_invalid`, with the credential's name in `names`.
+At the start: a push credential with `placeholders`, `Remove placeholders from push
+credentials: no session gets a push credential.`, with the credential's name on a
+second line; two items of push credentials on one host when one has no paths, `Give
+paths to every apply item of a push credential on a host that another push item is
+for.`; and two whose paths overlap on one host, `Change the paths of push credential
+items on one host so that they do not overlap.` At the start, and at every reload, where
+the reload fails and the policy in force stays: a host of one that the policy in force
+does not allow under `enforce`, `Add each push credential's host to the run's egress
+allow list.`; one a deny entry covers, `Remove each push credential's host from the
+egress deny lists.`; and one a path rule of the node's covers, `Remove the node's path
+rules for each push credential's host: the push proxy checks none.` The texts of hosts
+and of items have a second line with the credentials' names and the host. A work credential on a push credential's host and paths is
 no conflict, since no proxy sets both. Every `dev.qory.run.policy_applied`, the open's
 and each join's, lists each item of a push credential in `credentials`, with `purpose:
 push`.
@@ -5148,7 +5157,9 @@ covers gets one with the same first line and a second that ends `no push credent
 the run covers this path`. The push proxy stays open from the run's open until its
 close, and a reopened run on a separate gateway opens it again. `Run.PushProxy` returns
 an error for a run with no push credential, during a `Join`, during a `copy` step, with
-a session's wall kept, and on a closed run; its forwarder ends at the next `Join` and at
+a session's wall kept, while a container that can write the run's binds may still run
+or the setup container is up, on a walled run whose bundle could not be written, and
+on a closed run; its forwarder ends at the next `Join` and at
 `Run.Close`. No wall, relay or container gets the push proxy secret or the run key, so
 a session, the setup step and After reach the run's proxy alone.
 
