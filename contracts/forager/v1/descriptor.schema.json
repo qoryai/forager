@@ -402,7 +402,7 @@
             }
           },
           "set": {
-            "description": "Fields of the event's data with a value of the descriptor's, for a field the record has no member for, such as {source: startup}: each key is a field of the type's data, each value a string, a number or a boolean set there as it is. A field is in one of data, set and from_started.",
+            "description": "Fields of the event's data with a value of the descriptor's, for a field the record has no member for, such as {source: startup}: each key is a field of the type's data, each value a string, a number or a boolean set there as it is. A field is in one of data, sum, set and from_started, and no field of one of them is a member of a field of another.",
             "type": "object",
             "minProperties": 1,
             "propertyNames": {

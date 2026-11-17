@@ -6026,7 +6026,9 @@ start contain no session id: Codex's `turn.completed` maps to
 thread id of `thread.started`. Only a rule of the `output` source that produces
 another type than `dev.qory.runtime.started` has `from_started`, and the session
 writes no event of such a rule before that start. A field in two of the three
-members is refused.
+members, or in one of them and in `sum`, is refused, and so is a field of one of the
+four whose member another of them sets, such as `usage` in `set` beside `usage.input`
+in `sum`.
 
 **Tools**, optional: `summary`, a map of a tool's name, as the runtime reports it in
 `tool`, to one dotted path inside the tool's `input`, such as `Bash: command`. The session
