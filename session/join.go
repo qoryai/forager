@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
@@ -954,22 +953,12 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// is drained counts, and only behind a wall: without one there is no enclosure.
 	var measureMu sync.Mutex
 	var measure map[string]any
-	// launched is true once the helper in the enclosure said it starts the program.
-	var launched atomic.Bool
 	// records returns an error for a setup record that is not recorded; Serve counts it
 	// against the cap on a connection's bad lines.
 	records := func(rec runtimes.Record) error {
 		switch rec.Source {
 		case runtimes.SourceSetup:
 			return setupSteps.handle(rec)
-		case runtimes.SourceLaunch:
-			if rec.Record["event"] != "started" {
-				return errors.New("a record of the launch source has no event started and is not recorded")
-			}
-			if spec.Wall != nil {
-				launched.Store(true)
-			}
-			return nil
 		case runtimes.SourceMeasure:
 			if spec.Wall != nil {
 				measureMu.Lock()
@@ -1058,7 +1047,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		if err := r.listed.update(slices.Concat(again.sources, binds, installBinds, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
 		}
-		inner, innerArgs := withExec(spec.Exec, unset, command, args, len(spec.After) > 0)
+		inner, innerArgs := withExec(spec.Exec, unset, command, args)
 		launch, err = enclosure.Wrap(runCtx, wall.Launch{
 			Command: inner, Args: innerArgs, Dir: shown.Dir, Interactive: interactive,
 			Env:   wrapEnv,
@@ -1199,16 +1188,12 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		cancelFlush()
 	}
 	keyLimit := r.stops.end() == event.ReasonModelKeyLimit
-	// After runs in a new container once the runtime exited, whatever ended it: its exit,
-	// the time limit, a pause or a stop from outside. A run closed from outside starts
-	// none, and neither does a launch whose helper never said it started the program,
-	// such as a docker run that failed: the workspace is unchanged. A runtime that exits
-	// with any status after the helper started it gets After. The step ends before the
+	// After runs in a new container once the runtime exited, whatever ended it: its exit
+	// with any status, 125 included, the time limit, a pause or a stop from outside. Only
+	// a run closed from outside starts none. When the launch failed before any container
+	// existed, After still starts, on the unchanged workspace. The step ends before the
 	// session's dev.qory.session.exited.
-	if len(spec.After) > 0 && !closed && !launched.Load() {
-		r.open.Report("Read the launch's output: the helper never started the program, so After did not run.")
-	}
-	if len(spec.After) > 0 && !closed && launched.Load() {
+	if len(spec.After) > 0 && !closed {
 		r.runAfter(afterRun{
 			ctx: ctx, runCtx: runCtx, spec: spec, enclosure: enclosure, unwrapAgent: unwrapAgent,
 			steps: afterSteps, dir: shown.Dir, mounts: shown.Mounts, proxy: fwd.Addr(),

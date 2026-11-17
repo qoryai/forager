@@ -40,14 +40,9 @@ func checkExec(spec runSpec) error {
 
 // withExec is the launch of command and args started through the helper's exec, which
 // unsets the names first, then starts the launch and measures the enclosure when it
-// exits. The session calls it only behind a wall. With launchRecord, a session with
-// After, the exec gets --launch-record: it sends the record that the program starts, and
-// does not start the program when it cannot.
-func withExec(helper, unset []string, command string, args []string, launchRecord bool) (string, []string) {
+// exits. The session calls it only behind a wall.
+func withExec(helper, unset []string, command string, args []string) (string, []string) {
 	words := slices.Clone(helper[1:])
-	if launchRecord {
-		words = append(words, "--launch-record")
-	}
 	for _, name := range unset {
 		words = append(words, "--unset", name)
 	}
@@ -81,15 +76,6 @@ func withExec(helper, unset []string, command string, args []string, launchRecor
 // then inherits it ignored. A signal that reaches Exec after the program has exited
 // changes nothing.
 //
-// Just before it starts the program, with [EnvSocket] set, Exec sends the session one
-// record of the launch source, {"event": "started"}, so the session knows the helper
-// started the program: a docker run that failed, and an Exec that finds no program, send
-// none. The record comes before the runtime's preparation script, so it means the helper
-// started, not that every setup command of the session succeeded. With --launch-record,
-// which the session passes when it has After, Exec writes the error to stderr and
-// returns 125 without starting the program when it cannot send the record; without it,
-// Exec writes the error to stderr and starts the program.
-//
 // When the program has exited and [EnvSocket] is set, Exec reads the enclosure's peak
 // memory and CPU time from its cgroup v2 files and sends them to the session's socket
 // as one record of the measure source: peak_memory_bytes from memory.peak, and
@@ -102,8 +88,8 @@ func withExec(helper, unset []string, command string, args []string, launchRecor
 // container the session starts, as [execAfter] says, and nothing else of the above: it
 // checks no mount of /qory or /qory/runtime, and needs no runtime folder.
 //
-// Its arguments are --launch-record, once or not at all, --unset NAME, any number of
-// times, then -- and the program and its arguments, which no option of its reaches; or --after-only, --after-timeout MS and
+// Its arguments are --unset NAME, any number of times, then -- and the program and its
+// arguments, which no option of its reaches; or --after-only, --after-timeout MS and
 // --after-word WORD once for each word of After, and nothing after them. A NAME is a
 // variable's name: letters, digits and underscores, starting with a letter or an underscore. When a signal ended
 // the program, Exec ends by the same signal once it has sent the measure, so its
@@ -162,24 +148,6 @@ func Exec(args []string, stderr io.Writer) int {
 	}
 	closeInherited()
 	notify := passedOn()
-	// The session runs After only for a launch whose helper sent this record: a docker
-	// run that failed, or a helper that found no program, sends nothing. With
-	// --launch-record the program does not start when the record cannot be sent, so
-	// "the program started" holds exactly when the record was sent; without it the error
-	// goes to stderr and the program starts.
-	sendErr := errors.New("the run socket is not set")
-	if addr != "" {
-		sendErr = sendLaunch(addr)
-	}
-	if sendErr != nil {
-		if opts.launchRecord {
-			fmt.Fprintf(stderr, "exec: run the launch where the run socket reaches the container.\nThe record that the program starts could not be sent (%v), so the program did not start.\n", accesskey.ShownError(sendErr))
-			return 125
-		}
-		if addr != "" {
-			fmt.Fprintf(stderr, "exec: the record that the program starts could not be sent (%v); the program starts.\n", accesskey.ShownError(sendErr))
-		}
-	}
 	code, sig, err := startAndWait(path, argv, notify)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -226,13 +194,6 @@ func endsByDefault(sig syscall.Signal) bool {
 		return false
 	}
 	return true
-}
-
-// sendLaunch sends the session one record of the launch source, {"event": "started"},
-// just before Exec starts the program: the container ran, and the workspace is the
-// program's to change.
-func sendLaunch(addr string) error {
-	return socket.Send(context.Background(), addr, []descriptor.Record{{Source: descriptor.SourceLaunch, Record: map[string]any{"event": "started"}}})
 }
 
 // sendMeasure sends the measure of the cgroup v2 files under root, [readMeasure]'s, to
@@ -395,10 +356,9 @@ func readMeasure(root string) map[string]any {
 // execOptions are [Exec]'s options: the names to unset, and with afterOnly
 // SessionSpec.After.
 type execOptions struct {
-	names        []string
-	after        afterLaunch
-	afterOnly    bool
-	launchRecord bool
+	names     []string
+	after     afterLaunch
+	afterOnly bool
 }
 
 // parseExec reads [Exec]'s arguments: its options, and the program and its arguments
@@ -421,8 +381,6 @@ func parseExec(args []string) (execOptions, []string, error) {
 			opts.names = append(opts.names, args[i])
 		case "--after-only":
 			opts.afterOnly = true
-		case "--launch-record":
-			opts.launchRecord = true
 		case "--after-timeout":
 			if i+1 == len(args) {
 				return opts, nil, errors.New("exec: --after-timeout needs milliseconds")
@@ -461,8 +419,6 @@ func parseExec(args []string) (execOptions, []string, error) {
 			return opts, nil, errors.New("exec: the first --after-word, After's program, is empty")
 		case len(opts.names) > 0:
 			return opts, nil, errors.New("exec: --after-only takes no --unset")
-		case opts.launchRecord:
-			return opts, nil, errors.New("exec: --after-only takes no --launch-record")
 		}
 		return opts, nil, nil
 	}

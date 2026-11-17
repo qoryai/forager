@@ -51,7 +51,7 @@ func TestParseExecReadsAfter(t *testing.T) {
 		t.Errorf("parseExec(%q): %+v, %q, %v", args, opts, argv, err)
 	}
 	// The launch of the runtime has no option of After.
-	if _, args := withExec([]string{"helper", "exec"}, []string{"B"}, "runtime", nil, false); slices.ContainsFunc(args, func(w string) bool { return strings.HasPrefix(w, "--after") }) {
+	if _, args := withExec([]string{"helper", "exec"}, []string{"B"}, "runtime", nil); slices.ContainsFunc(args, func(w string) bool { return strings.HasPrefix(w, "--after") }) {
 		t.Errorf("withExec: %q", args)
 	}
 }
@@ -236,66 +236,5 @@ func TestAfterDoesNotRunWithoutTheSocket(t *testing.T) {
 	}
 	if code != setupRunnerFailed || !strings.Contains(stderr.String(), "so After did not run") {
 		t.Errorf("exit %d, stderr %q; want 125 and the reason After did not run", code, stderr.String())
-	}
-}
-
-// TestParseExecReadsLaunchRecord pins --launch-record: it goes with a program and not
-// with --after-only, and withExec passes it only when asked.
-func TestParseExecReadsLaunchRecord(t *testing.T) {
-	opts, argv, err := parseExec([]string{"--launch-record", "--unset", "A", "--", "p", "x"})
-	if err != nil || !opts.launchRecord || !slices.Equal(opts.names, []string{"A"}) || !slices.Equal(argv, []string{"p", "x"}) {
-		t.Errorf("parseExec: %+v, %q, %v", opts, argv, err)
-	}
-	if _, _, err := parseExec([]string{"--launch-record", "--after-only", "--after-timeout", "1000", "--after-word", "git"}); err == nil || !strings.Contains(err.Error(), "--after-only takes no --launch-record") {
-		t.Errorf("--launch-record with --after-only: %v", err)
-	}
-	if _, args := withExec([]string{"helper", "exec"}, nil, "p", nil, true); !slices.Contains(args, "--launch-record") {
-		t.Errorf("withExec with the record: %q", args)
-	}
-	if _, args := withExec([]string{"helper", "exec"}, nil, "p", nil, false); slices.Contains(args, "--launch-record") {
-		t.Errorf("withExec without the record: %q", args)
-	}
-}
-
-// TestExecWhenTheLaunchRecordCannotBeSent pins the helper's two paths when the run
-// socket cannot be reached, each in a process of the test binary: with --launch-record
-// it exits 125 and does not start the program; without it, it writes the error and
-// starts the program.
-func TestExecWhenTheLaunchRecordCannotBeSent(t *testing.T) {
-	touch, err := exec.LookPath("touch")
-	if err != nil {
-		t.Skip("no touch in PATH")
-	}
-	for name, c := range map[string]struct {
-		flag      bool
-		socket    string
-		wantCode  int
-		wantRan   bool
-		wantError string
-	}{
-		"the flag, a socket that does not exist": {true, "/nonexistent/sock", 125, false, "so the program did not start"},
-		"the flag, no socket":                    {true, "", 125, false, "so the program did not start"},
-		"no flag, a socket that does not exist":  {false, "/nonexistent/sock", 0, true, "the program starts"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			ran := filepath.Join(t.TempDir(), "ran")
-			args := []string{"exec"}
-			if c.flag {
-				args = append(args, "--launch-record")
-			}
-			cmd := exec.Command(os.Args[0], append(args, "--", touch, ran)...)
-			cmd.Env = append(os.Environ(), EnvSocket+"="+c.socket)
-			var stderr strings.Builder
-			cmd.Stderr = &stderr
-			err := cmd.Run()
-			code := 0
-			if exit := (*exec.ExitError)(nil); errors.As(err, &exit) {
-				code = exit.ExitCode()
-			}
-			_, statErr := os.Stat(ran)
-			if code != c.wantCode || (statErr == nil) != c.wantRan || !strings.Contains(stderr.String(), c.wantError) {
-				t.Errorf("exit %d, program ran %v, stderr %q; want %d, %v and %q", code, statErr == nil, stderr.String(), c.wantCode, c.wantRan, c.wantError)
-			}
-		})
 	}
 }

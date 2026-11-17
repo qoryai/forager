@@ -2,6 +2,7 @@ package session_test
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -505,9 +506,12 @@ func TestARunClosedDuringTheRemovalIsTriedAgain(t *testing.T) {
 }
 
 // neverStartsWall is an afterWall whose launch fails before the helper runs, as a docker
-// run does that exits 125 with no container: Wrap returns a command that exits 125 and
-// starts neither the helper nor the program.
+// run does that exits 125 with no container: Wrap returns a command that writes the
+// engine's error line to stderr and exits 125, and starts neither the helper nor the
+// program.
 type neverStartsWall struct{ *afterWall }
+
+const launchFailureLine = "docker: Error response from daemon: no such image: example.com/agent:1"
 
 func (w *neverStartsWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
 	w.afterWall.openWall.Prepare(ctx, req)
@@ -515,40 +519,76 @@ func (w *neverStartsWall) Prepare(ctx context.Context, req wall.Request) (wall.E
 }
 
 func (w *neverStartsWall) Wrap(_ context.Context, l wall.Launch) (wall.Launch, error) {
-	return wall.Launch{Command: "/bin/sh", Args: []string{"-c", "exit 125"}, Dir: l.Dir}, nil
+	return wall.Launch{Command: "/bin/sh", Args: []string{"-c", "echo '" + launchFailureLine + "' >&2; exit 125"}, Dir: l.Dir}, nil
 }
 
-// TestNoAfterRunsWhenTheAgentsContainerNeverStarted pins a launch that fails before the
-// helper starts the program, here a command that exits 125 as a failed docker run does:
-// the workspace is unchanged, so the session removes the agent's container, starts no
-// After container, writes no after step and has no Result.After, and reports why.
-func TestNoAfterRunsWhenTheAgentsContainerNeverStarted(t *testing.T) {
+// TestAfterRunsWhenTheLaunchFailsBeforeAnyContainer pins a launch whose docker run
+// exits 125 with no container: After still starts, on the unchanged workspace, and
+// Result.After is not nil. The session's state is the launch's, failed with 125.
+func TestAfterRunsWhenTheLaunchFailsBeforeAnyContainer(t *testing.T) {
 	sp, aw := afterSpec(t, "exit 0", "/bin/sh", "-c", "touch after-ran")
-	w := &neverStartsWall{afterWall: aw}
-	sp.Wall = w
-	reports := reportsOf(t, &sp)
+	sp.Wall = &neverStartsWall{afterWall: aw}
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.ExitCode != 125 || res.After != nil {
-		t.Errorf("result %+v, After %+v; want the launch's 125 and no After", res, res.After)
+	if res.ExitCode != 125 || res.State != event.StateFailed {
+		t.Errorf("result %+v; want the launch's failed 125", res)
 	}
-	if got := w.calls(); !slices.Equal(got, []string{"unwrap"}) {
-		t.Errorf("the wall's calls %q; want the agent's container's removal alone", got)
+	if res.After == nil || res.After.State != event.StateSucceeded {
+		t.Errorf("Result.After %+v; want After to have run and succeeded", res.After)
 	}
-	for _, s := range steps(t, events(t, res)) {
-		if s.started["kind"] == event.StepAfter {
-			t.Errorf("an after step %+v", s)
+	if _, err := os.Stat(filepath.Join(sp.Dir, "after-ran")); err != nil {
+		t.Errorf("After did not run: %v", err)
+	}
+	if got := aw.calls(); !slices.Equal(got, []string{"unwrap", "wrap after", "unwrap after"}) {
+		t.Errorf("the wall's calls %q", got)
+	}
+}
+
+// TestTheLaunchFailureComesBeforeAftersFailure pins the order of two failures: when the
+// launch fails before any container exists and After's container cannot start either,
+// the engine's error line of the launch reaches the terminal and the run's record
+// before the after step's failure line, and the after step ends failed with -1.
+func TestTheLaunchFailureComesBeforeAftersFailure(t *testing.T) {
+	sp, aw := afterSpec(t, "exit 0", "/bin/sh", "-c", "touch after-ran")
+	aw.failWrapAfter = errors.New("no image")
+	sp.Wall = &neverStartsWall{afterWall: aw}
+	var out syncBuffer
+	sp.Stderr = &out
+	res, err := run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 125 {
+		t.Errorf("result %+v; want the launch's 125", res)
+	}
+	if res.After == nil || res.After.State != event.StateFailed || res.After.ExitCode != -1 {
+		t.Fatalf("Result.After %+v; want failed, -1", res.After)
+	}
+	text := out.String()
+	launch, after := strings.Index(text, launchFailureLine), strings.Index(text, "After did not run: its container could not be set up")
+	if launch < 0 || after < 0 || launch > after {
+		t.Errorf("the terminal has the launch's line at %d and After's at %d; want the launch's first:\n%s", launch, after, text)
+	}
+	var order []string
+	started := false
+	for _, e := range events(t, res) {
+		d := data(e)
+		switch e["type"] {
+		case event.RunLog:
+			if b, _ := d["bytes"].(string); strings.Contains(b, base64.StdEncoding.EncodeToString([]byte(launchFailureLine))[:20]) && !started {
+				order = append(order, "launch line")
+			}
+		case event.StepStarted:
+			if d["kind"] == event.StepAfter {
+				started = true
+				order = append(order, "after started")
+			}
 		}
 	}
-	if _, err := os.Stat(filepath.Join(sp.Dir, "after-ran")); err == nil {
-		t.Error("After ran")
-	}
-	if !slices.ContainsFunc(reports(), func(r string) bool {
-		return strings.HasPrefix(r, "Read the launch's output: the helper never started the program")
-	}) {
-		t.Errorf("the reports %q have no line that After did not run", reports())
+	if !slices.Equal(order, []string{"launch line", "after started"}) {
+		t.Errorf("the record has %q; want the launch's line before the after step", order)
 	}
 }
 
@@ -1000,80 +1040,5 @@ func TestAfterReadsEveryRecordBeforeItDecidesTheStepHasNoExit(t *testing.T) {
 	}
 	if strings.Contains(all[len(all)-1].logs["stderr"], "no exit status") {
 		t.Errorf("the after step has the line %q", all[len(all)-1].logs["stderr"])
-	}
-}
-
-// launchWall is an afterWall whose launch is changed after the open wall wraps it: edit
-// gets the wrapped launch.
-type launchWall struct {
-	*afterWall
-	edit func(l *wall.Launch)
-}
-
-func (w *launchWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
-	w.afterWall.openWall.Prepare(ctx, req)
-	return w, nil
-}
-
-func (w *launchWall) Wrap(ctx context.Context, l wall.Launch) (wall.Launch, error) {
-	got, err := w.afterWall.openWall.Wrap(ctx, l)
-	if err == nil {
-		w.edit(&got)
-	}
-	return got, err
-}
-
-// TestNoAfterRunsWhenTheLaunchRecordCannotBeSent pins a helper that cannot reach the
-// run socket: with After the session passes --launch-record, so the helper writes the
-// error and exits 125 without starting the runtime, and the session starts no After:
-// "the program started" holds exactly when the record was sent.
-func TestNoAfterRunsWhenTheLaunchRecordCannotBeSent(t *testing.T) {
-	sp, aw := afterSpec(t, "touch runtime-ran", "/bin/sh", "-c", "touch after-ran")
-	w := &launchWall{afterWall: aw, edit: func(l *wall.Launch) {
-		l.Env = append(l.Env, session.EnvSocket+"="+filepath.Join(os.TempDir(), "no-such-run-socket"))
-	}}
-	sp.Wall = w
-	reports := reportsOf(t, &sp)
-	res, err := run(context.Background(), sp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.ExitCode != 125 || res.After != nil {
-		t.Errorf("result %+v, After %+v; want the helper's 125 and no After", res, res.After)
-	}
-	for _, f := range []string{"runtime-ran", "after-ran"} {
-		if _, err := os.Stat(filepath.Join(sp.Dir, f)); err == nil {
-			t.Errorf("%s exists: the program or After ran", f)
-		}
-	}
-	if !slices.ContainsFunc(reports(), func(r string) bool {
-		return strings.HasPrefix(r, "Read the launch's output: the helper never started the program")
-	}) {
-		t.Errorf("the reports %q have no line that After did not run", reports())
-	}
-}
-
-// TestAnotherLaunchRecordIsNotTheProgramStarting pins that the session counts a record
-// of the launch source only with event started: a launch whose process sends another
-// event starts no After, and the session reports the record.
-func TestAnotherLaunchRecordIsNotTheProgramStarting(t *testing.T) {
-	sp, aw := afterSpec(t, "exit 0", "/bin/sh", "-c", "touch after-ran")
-	w := &launchWall{afterWall: aw, edit: func(l *wall.Launch) {
-		*l = wall.Launch{Command: os.Args[0], Env: append(slices.Clone(l.Env), `FAKE_SOCKET_RECORDS={"source": "launch", "record": {"event": "other"}}`), Dir: l.Dir}
-	}}
-	sp.Wall = w
-	reports := reportsOf(t, &sp)
-	res, err := run(context.Background(), sp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.After != nil {
-		t.Errorf("Result.After %+v; want none", res.After)
-	}
-	if _, err := os.Stat(filepath.Join(sp.Dir, "after-ran")); err == nil {
-		t.Error("After ran")
-	}
-	if !slices.ContainsFunc(reports(), func(r string) bool { return strings.Contains(r, "has no event started") }) {
-		t.Errorf("the reports %q have no line for the record", reports())
 	}
 }

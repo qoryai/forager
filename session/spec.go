@@ -521,11 +521,11 @@ type SessionSpec struct {
 	// container's removal and After's start included, is cut off at AfterTimeout, 5 s
 	// from SIGTERM to SIGKILL, 1 s for After's last output and 1 minute for the removal
 	// and the start; after the context's end it gets StopGrace from that moment, and its
-	// step then ends cancelled with -1. A run closed from outside starts no After, nor
-	// does a launch whose helper sent no record that it started the program, such as a
-	// docker run that failed: Result.After is nil. The record comes before the session's
-	// setup commands run inside the wall, so After runs when one of them fails, and when a
-	// runtime exits 125 by itself. The
+	// step then ends cancelled with -1. A run closed from outside starts no After. After
+	// runs after every other exit, 125 included: when the launch failed before any container
+	// existed, such as a docker run that exited 125 with no container, After still starts
+	// on the unchanged workspace, and when its container cannot start for the same cause,
+	// the after step ends failed with -1 after the launch's error line. The
 	// session first removes the setup container, when the run has one, as Run.RemoveSetup
 	// does, with its wall step before the after step, since it shares the workspace and
 	// the network with After's container; when that fails, After does not run and its step
@@ -758,9 +758,10 @@ type Result struct {
 	// intervals, and batch_refused when it refused a batch from the run's session.
 	ClosedReason string
 	// After is the outcome of the session's after step, SessionSpec.After's: nil when
-	// the spec has no After, and when no After started: the run was closed from outside,
-	// or the launch failed before the helper started the program, such as a docker run
-	// that exited 125 with no container.
+	// the spec has no After, and when the run was closed from outside, which starts no
+	// After. A launch that failed before any container existed, such as a docker run that
+	// exited 125, still gets After, on the unchanged workspace; if After's container cannot
+	// start for the same cause, After is failed with ExitCode -1.
 	// A caller that sets After treats nil as an After that did not run.
 	After *AfterResult
 }

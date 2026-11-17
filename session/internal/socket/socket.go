@@ -163,7 +163,7 @@ const Patience = 5 * time.Second
 
 // launchSources are the sources of a record a launch's listener reads. The output source is not
 // among them: output records come only from the runtime's standard output.
-var launchSources = []string{descriptor.SourceHooks, descriptor.SourceSetup, descriptor.SourceMeasure, descriptor.SourceLaunch}
+var launchSources = []string{descriptor.SourceHooks, descriptor.SourceSetup, descriptor.SourceMeasure}
 
 // errOutput is the error of a record of the output source read on the socket.
 var errOutput = errors.New("refused a record of the output source: output records come only from the runtime's standard output")
