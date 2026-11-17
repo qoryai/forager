@@ -119,17 +119,17 @@ func (r *Run) HostProxy() (HostProxy, error) {
 	if r.remote != nil {
 		dial = r.link.DialProxy
 	}
-	return r.startForwarder(r.answer.ProxySecret, dial, true)
+	return r.startForwarder(r.answer.ProxySecret, dial, true, &r.hosts)
 }
 
 // startForwarder starts a forwarder on loopback with a fresh password, which the run's
-// masker gets before the forwarder starts, and lists it among the run's host proxies,
-// which the next Join and Close end. On one machine it opens each connection to the
+// masker gets before the forwarder starts, and lists it in list, the run's host proxies
+// or its push proxies, which the next Join and Close end. On one machine it opens each connection to the
 // gateway's proxy with the relay's preamble and secret; behind a separate gateway it
 // opens each one with dial. With bundle, Env sets the bundle's variables after the proxy
 // variables; without it, only when the run has a bundle. CABundle is the bundle's path,
 // empty for none.
-func (r *Run) startForwarder(secret string, dial func(context.Context) (net.Conn, error), bundle bool) (HostProxy, error) {
+func (r *Run) startForwarder(secret string, dial func(context.Context) (net.Conn, error), bundle bool, list *hostProxies) (HostProxy, error) {
 	password, err := newForwarderSecret()
 	if err != nil {
 		return HostProxy{}, err
@@ -144,7 +144,7 @@ func (r *Run) startForwarder(secret string, dial func(context.Context) (net.Conn
 	if err != nil {
 		return HostProxy{}, err
 	}
-	r.hosts.add(fwd)
+	list.add(fwd)
 	env := fwd.Env()
 	if bundle || r.bundle != "" {
 		env = append(env, r.bundleVars...)
@@ -153,7 +153,7 @@ func (r *Run) startForwarder(secret string, dial func(context.Context) (net.Conn
 		Env:      env,
 		ProxyURL: fwd.URL(),
 		CABundle: r.bundle,
-		close:    func() error { return r.hosts.close(fwd) },
+		close:    func() error { return list.close(fwd) },
 	}, nil
 }
 
@@ -194,7 +194,7 @@ func (r *Run) StackProxy() (HostProxy, error) {
 	if r.remote != nil {
 		dial = r.link.DialStack
 	}
-	return r.startForwarder(r.answer.StackProxySecret, dial, false)
+	return r.startForwarder(r.answer.StackProxySecret, dial, false, &r.hosts)
 }
 
 // errStackAfterJoin refuses a stack proxy once a Join of the run has reached its join

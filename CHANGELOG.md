@@ -2065,7 +2065,7 @@ release may change what an existing document does, and says so under Upgrading.
   machine with the run answer's `push_proxy_secret`, behind a separate gateway with
   `QORY-PUSH` and the run key (`server.Link.DialPush`). It has the host proxy's rules,
   returns an error while the setup container is up or `ContainerKept` is true, and ends
-  at the next `Join` and at `Close`. For a run with no push credential it
+  at the next `Join`, at `Setup` and at `Close`. For a run with no push credential it
   returns "Add a push credential to the run configuration: this run has no push
   proxy." The push proxy secret and the run key reach no wall and no container.
 - `SessionSpec.After` and `AfterTimeout`: a command that runs in a new container of the

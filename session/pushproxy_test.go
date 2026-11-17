@@ -464,3 +464,43 @@ func TestTheHostProxyOfAPushRunReachesTheRunsProxy(t *testing.T) {
 		t.Errorf("the gateway's proxy saw %q, want %q", got, want)
 	}
 }
+
+// TestSetupClosesThePushProxy pins the push proxy forwarder across a Setup: Setup closes
+// it before the setup container starts, so no push runs while the setup container can
+// write the run's binds; PushProxy then returns the text that starts with RemoveSetup,
+// and a host proxy started before the Setup still takes connections.
+func TestSetupClosesThePushProxy(t *testing.T) {
+	const setupUp = "Call RemoveSetup before PushProxy: the setup container can still write the run's binds."
+	sp, g := specGateway(t)
+	withPush(g, true)
+	w := &setupWall{}
+	sp.Wall, sp.Image = w, "example.com/agent:1"
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+	h, err := r.PushProxy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, addr := hostParts(t, h)
+	host, err := r.HostProxy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands[:1]}); err != nil {
+		t.Fatal(err)
+	}
+	refused(t, addr, "after Setup")
+	if _, err := r.PushProxy(); err == nil || err.Error() != setupUp {
+		t.Errorf("PushProxy with the setup container up: %v, want %q", err, setupUp)
+	}
+	if status, _ := throughHost(t, host.ProxyURL, "http://git.example/example-org/app.git/info/refs"); status != http.StatusOK {
+		t.Errorf("the host proxy after Setup got %d", status)
+	}
+	if err := h.Close(); err != nil {
+		t.Errorf("HostProxy.Close of the push proxy after Setup: %v", err)
+	}
+}

@@ -615,8 +615,9 @@ before the first one, with no container of the run that can write its binds runn
   ```
 - Behind a wall or a separate gateway the push proxy is guarded as the run's proxy is.
 - The gateway keeps the push proxy open from the run's open until its close, so qory
-  can push after each session. The forwarder ends at `Close()`, at the next `Join` and
-  at `Run.Close`; call `PushProxy` again after that `Join` returns.
+  can push after each session. The forwarder ends at `Close()`, at the next `Join`, at
+  `Setup` before the setup container starts, and at `Run.Close`; call `PushProxy` again
+  after that `Join` returns, or after `RemoveSetup` removed the setup container.
 - `PushProxy` returns "Add a push credential to the run configuration: this run has no
   push proxy." for a run with no push credential: on one machine, a run answer with no
   `push_proxy_secret`; behind a separate gateway, an open whose `policy_applied` lists

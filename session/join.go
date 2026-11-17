@@ -150,6 +150,7 @@ func (r *Run) join(ctx context.Context, spec SessionSpec) (*Result, error) {
 	// wall's start, so their passwords open nothing while the session runs. The join
 	// request closes the run's stack proxy at the gateway.
 	r.hosts.closeAll()
+	r.pushes.closeAll()
 	r.closeEngine()
 	r.joinAsked.Store(true)
 

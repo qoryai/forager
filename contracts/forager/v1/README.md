@@ -5159,8 +5159,8 @@ close, and a reopened run on a separate gateway opens it again. `Run.PushProxy` 
 an error for a run with no push credential, during a `Join`, during a `copy` step, with
 a session's wall kept, while a container that can write the run's binds may still run
 or the setup container is up, on a walled run whose bundle could not be written, and
-on a closed run; its forwarder ends at the next `Join` and at
-`Run.Close`. No wall, relay or container gets the push proxy secret or the run key, so
+on a closed run; its forwarder ends at the next `Join`, at `Setup` before
+the setup container starts, and at `Run.Close`. No wall, relay or container gets the push proxy secret or the run key, so
 a session, the setup step and After reach the run's proxy alone.
 
 ## The run API

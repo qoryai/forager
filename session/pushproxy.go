@@ -19,8 +19,8 @@ import (
 // which the sessions, the setup step, After and [Run.HostProxy] go through, never sets
 // a push credential. Env and CABundle are as [Run.HostProxy] sets them.
 //
-// It ends at [HostProxy.Close], at the next [Run.Join] or at [Run.Close], as the host
-// proxy does; the gateway keeps the run's push proxy open until the run closes, so a
+// It ends at [HostProxy.Close], at the next [Run.Join], at [Run.Setup], before the setup
+// container starts, and at [Run.Close]; the gateway keeps the run's push proxy open until the run closes, so a
 // PushProxy after a session reaches it again. An error means no push proxy started:
 // the run has no push credential (on one machine, the run answer has no
 // push_proxy_secret; behind a separate gateway, the open's policy_applied lists no
@@ -66,7 +66,7 @@ func (r *Run) PushProxy() (HostProxy, error) {
 	if r.remote != nil {
 		dial = r.link.DialPush
 	}
-	return r.startForwarder(r.answer.PushProxySecret, dial, true)
+	return r.startForwarder(r.answer.PushProxySecret, dial, true, &r.pushes)
 }
 
 // The errors of PushProxy while a container that can write the run's binds may run.

@@ -59,8 +59,11 @@ type Run struct {
 	caVars     []string
 	// bundleErr is why a walled run with an authority has no bundle, which
 	// [Run.HostProxy] returns; nil otherwise.
-	bundleErr  error
-	hosts      hostProxies
+	bundleErr error
+	hosts     hostProxies
+	// pushes are the run's open push proxy forwarders ([Run.PushProxy]), apart from
+	// hosts, since Setup closes them alone before the setup container starts.
+	pushes     hostProxies
 	engine     engineProxies
 	reserved   []string
 	listed     *registration
@@ -887,6 +890,7 @@ func (r *Run) close(ctx context.Context, out Outcome) (*Closed, error) {
 	r.shutCheck(errCheckClosedRun, true)
 	r.ending.Store(true)
 	r.hosts.closeAll()
+	r.pushes.closeAll()
 	r.closeEngine()
 	// A host step still open ends before run.exited, as one the caller stopped.
 	if r.hostStep != nil {
