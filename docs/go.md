@@ -1452,7 +1452,7 @@ request asks the gateway for, for this session.
 - `Forwarder` is the command installed as the runtime's hook. It must call
   `session.Forward(ctx, os.Stdin)`. That passes the hook's input to the run, over a
   socket whose address is in the environment. The socket accepts records of the
-  `hooks`, `setup`, `measure` and `after` sources and refuses a record of the `output`
+  `hooks`, `setup`, `measure` and `launch` sources and skips a record of the `output`
   source:
   output records come from the runtime's standard output only.
 - `CAEnv` lists the names of the variables that point at `ca-bundle.pem` in the run
@@ -1533,7 +1533,7 @@ request asks the gateway for, for this session.
   agent's password gets `503`, since that session ended; the handler is called for
   neither. Forager does not narrow the run's proxy for After: it applies the credentials
   the run's configuration holds, and the push guard as it is. The wall must be a `wall.AfterWrapper` with an `Unwrap`, as the
-  Docker wall is: Join refuses `After` behind another wall. After runs in `Dir` with no
+  Docker wall is: Join returns an error for `After` behind another wall. After runs in `Dir` with no
   input, without the variables that point git elsewhere, with an empty `HOME` and no
   `XDG_*` variable, and with settings that keep git from running a hook, an fsmonitor,
   a credential helper or a signing program, and from reaching a remote other than over
@@ -1543,8 +1543,8 @@ request asks the gateway for, for this session.
   the `PATH`, since no directory that user may write is on it. It does not change which
   programs git starts from the workspace's `.git/config`: a filter, `textconv` or merge
   driver that file names still runs as After's user, and on git 2.54.0, which has no
-  setting that turns off every `hook.<name>.command`, so does such a hook. qory refuses
-  unknown `.git/config` keys. The helper in the container sends the step's
+  setting that turns off every `hook.<name>.command`, so does such a hook. qory's check
+  of `.git/config` fails on unknown keys. The helper in the container sends the step's
   records over one connection that it opens before After starts, and the session reads
   that connection alone, so a process After starts cannot write the step. It is the
   session's `after` step, with its output as the step's lines, before
@@ -1685,7 +1685,7 @@ request asks the gateway for, for this session.
 - `After`, for a spec with `After`, the after step's outcome: `Step`, its number;
   `State`, `succeeded`, `failed` or `cancelled`; `ExitCode`, the command's status,
   `127` for a program the helper did not find, `126` for one it could not start or
-  refused, and `-1` when the step ended with no status, such as when the agent's
+  that does not run, and `-1` when the step ended with no status, such as when the agent's
   container could not be removed or After's container did not start; and `Reason`,
   `timeout`, `out_of_memory` or empty. It is nil when no After ran: the run was closed,
   the runtime did not start, or the launch exited `125`. A caller that set `After` treats

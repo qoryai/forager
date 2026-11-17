@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/record.schema.json",
   "title": "Record",
-  "description": "One unit of runtime output as a descriptor reads it, one report of a setup command that runs inside the wall, one report of SessionSpec.After's command, or the measure of the enclosure as its runtime exits: the source it came from and the record itself. The shape of the lines a hook forwarder, a setup runner and the helper's exec write to the local socket, and of a descriptor fixture's records.jsonl. The launch's local socket accepts the sources hooks, setup, measure and launch; the socket of After's container accepts after; both refuse output.",
+  "description": "One unit of runtime output as a descriptor reads it, one report of a setup command that runs inside the wall, one report of SessionSpec.After's command, or the measure of the enclosure as its runtime exits: the source it came from and the record itself. The shape of the lines a hook forwarder, a setup runner and the helper's exec write to the local socket, and of a descriptor fixture's records.jsonl. The launch's local socket accepts the sources hooks, setup, measure and launch; the socket of After's container accepts after; neither records output.",
   "type": "object",
   "additionalProperties": false,
   "if": {"properties": {"source": {"const": "measure"}}, "required": ["source"]},

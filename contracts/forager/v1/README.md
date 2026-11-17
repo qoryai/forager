@@ -5808,7 +5808,7 @@ framing beyond the newline. The forwarder the session installs as a hook is one 
 client; a harness that reports something itself writes the same shape with
 `source: hooks`. A record of the `hooks` source reaches a receiver only through the
 descriptor's rules. The launch's socket accepts records of the `hooks`, `setup`,
-`measure` and `launch` sources and refuses a record of the `output` source: the session skips it and writes no
+`measure` and `launch` sources and skips a record of the `output` source, writing no
 event for it. Output records come from the runtime's standard output only, which the
 session reads on the host, while any process in the agent's container can write to the
 socket. The setup runner is another client: it writes records
@@ -5828,8 +5828,8 @@ with no container; once the runtime exits it writes a record of the `measure` so
 runner's without `command` and `started`, whose `exited` may have `reason`, `timeout`
 or `out_of_memory`. The `after` source has a socket in a directory that no other
 container binds, in After's container alone (§The wall, After), which accepts records of
-that source only, over the first connection it accepts. The launch's socket refuses a
-record of the `after` source. The session cuts
+that source only, over the first connection it accepts. A record of the `after` source on the
+launch's socket is skipped. The session cuts
 off a connection of the launch's socket that stays open longer than 5 seconds, so the
 runner opens a connection for each batch of records. Each socket is removed when its
 session ends.
@@ -6497,7 +6497,7 @@ over HTTPS alone: a remote with a local path or a `file://` URL, whose `receivep
 `uploadpack` setting git would run, and one over ssh, whose `core.sshCommand` git would
 run, are refused. Git 2.55 and later run no hook of `.git/config`'s
 `hook.<name>.command` with these settings; git 2.54 runs such a hook whatever they are,
-so the caller refuses `hook.*` keys in `.git/config` before it sets After. Other keys of
+so the caller's check of `.git/config` must fail on `hook.*` keys before it sets After. Other keys of
 `.git/config` that name a program, such as a filter, also still apply: the caller checks
 them first. The workspace is the one input After shares with the agent; a program a key
 of `.git/config` or a `.gitattributes` names runs in After's container, as its user, with

@@ -127,7 +127,7 @@ func (r *Run) runAfter(a afterRun) {
 		Mounts: mountHolding(a.mounts, a.dir), Limits: a.spec.Limits,
 	})
 	if err != nil {
-		fail(fmt.Sprintf("Fix the cause on the next line, then run the session again.\nAfter did not run: its container could not be set up: %v.", accesskey.ShownError(err)))
+		fail(fmt.Sprintf("Check that the run's image is on this machine and that the wall's engine runs.\nAfter did not run: its container could not be set up: %v.", accesskey.ShownError(err)))
 		return
 	}
 	defer func() {
@@ -142,7 +142,7 @@ func (r *Run) runAfter(a afterRun) {
 	cmd := exec.Command(launch.Command, launch.Args...)
 	cmd.Env, cmd.Dir, cmd.Stdout, cmd.Stderr = launch.Env, launch.Dir, out, out
 	if err := cmd.Start(); err != nil {
-		fail(fmt.Sprintf("Fix the cause on the next line, then run the session again.\nAfter did not run: its container could not be started: %v.", accesskey.ShownError(err)))
+		fail(fmt.Sprintf("Check that the docker command runs on this machine, then run the session again.\nAfter did not run: its container could not be started: %v.", accesskey.ShownError(err)))
 		return
 	}
 	done := make(chan error, 1)
@@ -165,7 +165,7 @@ func (r *Run) runAfter(a afterRun) {
 			if waitErr != nil {
 				text = fmt.Sprintf("%v: %s", waitErr, text)
 			}
-			fail(fmt.Sprintf("Fix what the next line shows, then run the session again.\nAfter's container ended with no exit status for After: %s.", accesskey.ShownValue(text, false)))
+			fail(fmt.Sprintf("Read the container's output on the second line, then run the session again.\nAfter did not run to its end: the container ended with no exit status for After: %s.", accesskey.ShownValue(text, false)))
 		}
 	case steps.running():
 		reason := ""

@@ -2055,12 +2055,12 @@ release may change what an existing document does, and says so under Upgrading.
   After runs with git's hooks, fsmonitor, credential helpers, signing, the system's and
   user's configuration, and remotes other than HTTPS off, an empty `HOME`, no `XDG_*`
   variable, and a `PATH` without a directory the agent's user owns or may write. A
-  program After's command looks up in `PATH`, and that it could have changed, is refused,
+  program After's command looks up in `PATH`, and that it could have changed, does not run,
   and a write into the workspace by that user, while After runs, cannot change which
   program that lookup finds. It does not change which programs git starts from the
   workspace's `.git/config`: a filter, `textconv` or merge driver it names still runs as
   After's user, and on git 2.54.0, which has no setting that turns off every
-  `hook.<name>.command`, so does such a hook. qory refuses unknown `.git/config` keys.
+  `hook.<name>.command`, so does such a hook. qory's check of `.git/config` fails on unknown keys.
   The session writes After as an `after` step before `dev.qory.session.exited`, which
   keeps the runtime's state, and `Result.After` has its outcome. The helper's exec, with
   the new option `--after-only`, sends the step's records over one connection that it
@@ -2078,8 +2078,8 @@ release may change what an existing document does, and says so under Upgrading.
   `ContainerKept()` true. A failure to remove the agent's container or to start
   After's ends the step `failed` with `-1`; a removal that the context's end cuts is
   tried again as the session ends. With After, `Join` may take `AfterTimeout` plus 66
-  seconds more than its 15 seconds. The launch's socket refuses a record of the
-  `after` source. Join refuses After behind a wall that is no `wall.AfterWrapper` with an
+  seconds more than its 15 seconds. A record of the `after` source on the
+  launch's socket is skipped and reported. Join returns an error for After behind a wall that is no `wall.AfterWrapper` with an
   `Unwrap`, without an `AfterTimeout`, or without a wall.
 - `OpenSpec.QoryRoute`, an `http.Handler` that serves a session's plain HTTP requests
   to `http://host.qory.invalid/`, walled or not, on one machine or behind a separate
