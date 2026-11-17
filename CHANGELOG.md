@@ -25,7 +25,7 @@ release may change what an existing document does, and says so under Upgrading.
   such as `/a/../b`, an empty segment, a backslash, or an encoded slash, backslash, dot
   or percent sign. A segment counts by its part before its first `;` or `%3B`, so
   `/a/..;/b` and `/a/;x/b` are refused. `server.CheckCredentials` refuses such a path
-  with `run_configuration_invalid`, and `server.UnclearPath` reports it, since the
+  with `run_configuration_invalid`, and `policy.UnclearPath` reports it, since the
   proxy denies every request path with one. In a run configuration not read from
   bytes, it also refuses what the schema refuses in one that is: an `account_header`
   without `account_claim`, the reverse, either without `oauth`, and an
@@ -1257,6 +1257,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Write each path of a machine credential's `paths` in `forager.yaml` without a `.` or
+  `..` segment, an empty segment, a backslash, or an encoded slash, backslash, dot or
+  percent sign, also before a segment's first `;` or `%3B`. The gateway refuses such a
+  path as it resolves the machine's credentials, as the server already refuses it in a
+  run configuration, since the proxy denies every request path with one.
 - Update the gateway before the sessions that write `peak_memory_bytes` and
   `cpu_time_ms` on `dev.qory.session.exited`. A gateway built with an older contract
   does not have them, and ends the run `failed` with `batch_refused` at the batch that

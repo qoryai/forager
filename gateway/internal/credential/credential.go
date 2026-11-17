@@ -516,11 +516,17 @@ func (h *Held) check(mode policy.Mode, allow []string) error {
 }
 
 // checkPaths returns an error for a path of a credential's that is not in the policy's path grammar,
-// a { or a } outside a segment {} among them.
+// a { or a } outside a segment {} among them, and for one [policy.UnclearPath] reports,
+// which matches no request, as the server refuses it in a run configuration.
 func checkPaths(name string, paths []string) error {
 	for _, p := range paths {
 		if !policy.ValidPath(p) {
 			return fmt.Errorf("Write each credential path from /, with { and } only as the segment {} and * only at the end.\nThe path %s of credential %s is not in that form.", accesskey.ShownValue(p, true), accesskey.ShownName(name, false))
+		}
+		if policy.UnclearPath(p) {
+			return fmt.Errorf("Remove empty, . and .. segments, backslashes, %%2F, %%5C, %%2E, %%25 from the path %s of the credential %s.\n"+
+				"Each segment is read up to its first ; or %%3B, and %%2f counts as %%2F. "+
+				"The proxy denies every request whose path has one of these parts, so the path matches no request.", accesskey.ShownValue(p, true), accesskey.ShownName(name, false))
 		}
 	}
 	return nil

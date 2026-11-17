@@ -818,3 +818,17 @@ func CleanPath(escaped string) (string, bool) {
 	}
 	return escaped, true
 }
+
+// UnclearPath reports whether a path of a credential's paths has a part
+// [CleanPath] refuses in a request's path, such as /a/../b, /a/..;/b, // or %2e:
+// a request path with one is denied before any credential's paths are read, so the
+// path matches none. A path that ends in * is read as the request paths it matches: the
+// text after its last slash is the start of a segment, so /a/.* and /a/..* match /a/.x
+// and /a/..x, and /a/../* and /a/..;* match none.
+func UnclearPath(path string) bool {
+	if prefix, ok := strings.CutSuffix(path, "*"); ok {
+		path = prefix + "x"
+	}
+	_, ok := CleanPath(path)
+	return !ok
+}

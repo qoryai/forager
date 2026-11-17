@@ -179,6 +179,10 @@ func TestCredentialsWithPathsThatDoNotOverlapShareAHost(t *testing.T) {
 			"give the credentials product and harness paths that do not overlap on github.com, or claim it in only one of them: their paths /repos/* and /repos/{}/app overlap"},
 		"a stray brace": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/repos/{owner}/app"), def("harness", "HARNESS_TOKEN", github, "/operator-org/*")},
 			"Write each credential path from /, with { and } only as the segment {} and * only at the end.\nThe path \"/repos/{owner}/app\" of credential product is not in that form."},
+		"an unclear path": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/v1/../responses"), def("harness", "HARNESS_TOKEN", github, "/operator-org/*")},
+			"Remove empty, . and .. segments, backslashes, %2F, %5C, %2E, %25 from the path \"/v1/../responses\" of the credential product.\n" +
+				"Each segment is read up to its first ; or %3B, and %2f counts as %2F. " +
+				"The proxy denies every request whose path has one of these parts, so the path matches no request."},
 		"the second without paths": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/example-org/*"), def("harness", "HARNESS_TOKEN", github)}, alone},
 		"the first without paths":  {[]Definition{def("product", "PRODUCT_TOKEN", github), def("harness", "HARNESS_TOKEN", github, "/operator-org/*")}, alone},
 	} {
@@ -1156,5 +1160,21 @@ func TestAnAdaptersLineHasNoKey(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("no renewal was reported")
+	}
+}
+
+// TestCheckPathsRefusesAnUnclearPath pins checkPaths on a machine credential's paths: a
+// path that policy.UnclearPath reports is refused with the path in the error's first
+// line, and a clean path and a path with a {} segment pass.
+func TestCheckPathsRefusesAnUnclearPath(t *testing.T) {
+	err := checkPaths("model", []string{"/v1/responses", "/v1/../responses"})
+	if err == nil {
+		t.Fatal("checkPaths took /v1/../responses")
+	}
+	if first, _, _ := strings.Cut(err.Error(), "\n"); !strings.Contains(first, `the path "/v1/../responses" of the credential model`) {
+		t.Errorf("first line %q; want the path and the credential in it", first)
+	}
+	if err := checkPaths("model", []string{"/v1/responses", "/repos/{}/app", "/v1/*"}); err != nil {
+		t.Errorf("a clean path and a {} path: %v", err)
 	}
 }

@@ -931,3 +931,25 @@ func TestCleanPathReadsASegmentUpToItsSemicolon(t *testing.T) {
 		}
 	}
 }
+
+// TestUnclearPath pins UnclearPath on a credential's paths: a dot segment, an empty
+// segment, a backslash, or an encoded slash, backslash, dot or percent sign makes a path
+// unclear, and so does a segment that is one of those before its first ; or %3B. A dot
+// inside a name, after the last slash of a path that ends in *, or in a name before a ;
+// is no dot segment, and a {} segment is a normal one.
+func TestUnclearPath(t *testing.T) {
+	for _, p := range []string{"/a/../b", "/a/./b", "/..", "/.", "/a/..", "/a/../*", "/a/./*", "/./*", "/a//b", "//*",
+		"/a/%2e%2e/b", "/a%2Fb", "/a%5cb", "/a%25b", `/a\b`, "/a/%2e*", "/v1/../responses",
+		"/a/..;/b", "/a/.;/b", "/a/..;x/b", "/a/..;", "/a/..;*", "/a/;x/b", "/a/..%3b/b", "/a/..%3B/b", "/a/%2e%2e;/b", "/a/%2e;/b"} {
+		if !policy.UnclearPath(p) {
+			t.Errorf("UnclearPath(%s) is false; want true", p)
+		}
+	}
+	for _, p := range []string{"/a/.well-known", "/a/.*", "/a/..*", "/a/..b", "/a.b/c", "/backend-api/codex/*", "/a/", "/*",
+		"/a/b;jsessionid=0123/c", "/a/b;jsessionid=0123", "/a/..b;x/c", "/a/b%3bx/c",
+		"/backend-api/{}/responses", "/repos/example-org/app/pulls/{}", "/a/{}/*", "/{}"} {
+		if policy.UnclearPath(p) {
+			t.Errorf("UnclearPath(%s) is true; want false", p)
+		}
+	}
+}
