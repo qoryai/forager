@@ -169,6 +169,55 @@ func sessionWrites(t *testing.T, c *http.Client, port string) sent {
 	return push
 }
 
+// pushRefused is the first line of the branch guard's 403 for a push through a
+// credential with no push_ref.
+const pushRefused = "qory: push through qory's push step, with a credential that allows a push.\n"
+
+// pushSplit checks the credentials of a run of [pushRunDoc]. Without push, it pins the
+// document of a write-no-push run: applied, the members of the open's
+// dev.qory.run.policy_applied, lists work-1 alone with no purpose, and each secrets
+// request c got is for work-1 alone. With push, applied lists work-1, then push-1's two
+// items with purpose push, and each secrets request is for work-1 and push-1. Behind a
+// separate gateway no other test checks a write run's applied, which a session reads
+// to start its push proxy.
+func pushSplit(t *testing.T, c *control, applied json.RawMessage, push bool) {
+	t.Helper()
+	wantApplied, wantAsked := []string{"work-1 <nil>"}, []string{"work-1"}
+	if push {
+		wantApplied, wantAsked = append(wantApplied, "push-1 push", "push-1 push"), append(wantAsked, "push-1")
+	}
+	listed, _ := members(applied)["credentials"].([]any)
+	var got []string
+	for _, e := range listed {
+		m, _ := e.(map[string]any)
+		got = append(got, fmt.Sprint(m["name"], " ", m["purpose"]))
+	}
+	if !slices.Equal(got, wantApplied) {
+		t.Errorf("the open's applied credentials %q, want %q", got, wantApplied)
+	}
+	asked := c.requests(t)
+	if len(asked) == 0 {
+		t.Error("the control got no secrets request")
+	}
+	for _, r := range asked {
+		if !slices.Equal(r.Credentials, wantAsked) {
+			t.Errorf("a secrets request for %q, want %q", r.Credentials, wantAsked)
+		}
+	}
+}
+
+// receivePacks returns the channel, decision and path rule of each git push's
+// dev.qory.run.egress among records.
+func receivePacks(records []recorded) []string {
+	var out []string
+	for _, l := range records {
+		if l.Type == event.RunEgress && strings.HasSuffix(fmt.Sprint(l.Data["path"]), "/git-receive-pack") {
+			out = append(out, fmt.Sprint(l.Data["channel"], " ", l.Data["decision"], " ", l.Data["path_rule"]))
+		}
+	}
+	return out
+}
+
 // TestASessionsRequestsGetOnlyTheWorkCredential pins the card's split, in a write run
 // and in a write-no-push run, on the local link: what the sessions, the setup step,
 // After, the image step and the host proxy send through the run's proxy, the run
@@ -177,7 +226,10 @@ func sessionWrites(t *testing.T, c *http.Client, port string) sent {
 // since work-1 has no push_ref, and reaches nothing; the REST write and the GraphQL
 // mutation reach the origin with work-1's value. A write run's answer has a
 // push_proxy_secret apart from proxy_secret; a write-no-push run's has none, and the run
-// has no push proxy and no push value.
+// has no push proxy and no push value: its secrets request is for work-1 alone, and its
+// open's dev.qory.run.policy_applied lists no credential with purpose push. A second push
+// through the run's proxy after the session exited gets the same 403. The record has
+// each push as a dev.qory.run.egress denied by wall:push-ref, with no channel push.
 func TestASessionsRequestsGetOnlyTheWorkCredential(t *testing.T) {
 	work := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+workSecret))
 	for _, c := range []struct {
@@ -198,18 +250,36 @@ func TestASessionsRequestsGetOnlyTheWorkCredential(t *testing.T) {
 			if got := gateway.Tokens(o.h.g, a.RunID); !reflect.DeepEqual(got, map[string]string{"work-1": workSecret}) {
 				t.Errorf("the run's proxy sets %v; want work-1 alone", got)
 			}
-			push := sessionWrites(t, o.client(t, a, a.ProxySecret), o.port)
-			if push.status != http.StatusForbidden || !strings.HasPrefix(push.body, "qory: push through qory's push step, with a credential that allows a push.\n") {
+			pushSplit(t, o.c, a.Applied, c.push)
+			proxy := o.client(t, a, a.ProxySecret)
+			push := sessionWrites(t, proxy, o.port)
+			if push.status != http.StatusForbidden || !strings.HasPrefix(push.body, pushRefused) {
 				t.Errorf("the push through the run's proxy got %+v; want the branch guard's 403", push)
 			}
 			want := []string{"PATCH /repos/example-org/app/git/refs/heads/main " + work, "POST /graphql " + work}
 			if got := o.requests(); !slices.Equal(got, want) {
 				t.Errorf("the origin got\n%q\nwant\n%q", got, want)
 			}
-			if d := o.h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID)); !d.Accepted() {
-				t.Fatalf("the batch: %+v", d)
+			if d := o.h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {
+				t.Fatalf("the open's batch: %+v", d)
+			}
+			o.h.joined(a.RunID)
+			if d := o.h.post(sessionStarted(a.RunID, 1), applied(a.RunID, a.Applied), sessionExited(a.RunID, 1)); !d.Accepted() {
+				t.Fatalf("the join's batch: %+v", d)
+			}
+			if got := send(t, proxy, o.port, http.MethodPost, "/example-org/app.git/git-receive-pack", "application/x-git-receive-pack-request", receivePack(pushWorkItem)); got.status != http.StatusForbidden || !strings.HasPrefix(got.body, pushRefused) {
+				t.Errorf("the push through the run's proxy after the session got %+v; want the branch guard's 403", got)
+			}
+			if got := o.requests(); len(got) != 0 {
+				t.Errorf("the origin got %q after the session", got)
+			}
+			if d := o.h.post(exited(a.RunID)); !d.Accepted() {
+				t.Fatalf("the last batch: %+v", d)
 			}
 			o.h.close()
+			if got, want := receivePacks(o.h.record(a.RunID)), []string{"<nil> denied wall:push-ref", "<nil> denied wall:push-ref"}; !slices.Equal(got, want) {
+				t.Errorf("the record's pushes %q, want %q", got, want)
+			}
 		})
 	}
 }
@@ -342,8 +412,21 @@ func TestThePushProxySetsThePushCredentialAlone(t *testing.T) {
 // values expire an hour after the start; 5 minutes before, the gateway requests both
 // from the reference receiver in one request, and from then on the run's proxy sets
 // work-1's second value and the push proxy push-1's second value. The run's proxy
-// returns a 403 for push-1's path and sends nothing.
+// returns a 403 for push-1's path and sends nothing. In a write-no-push run, with
+// work-1 alone, the renewal requests work-1 alone, and the run has no push proxy
+// before or after it.
 func TestThePushAndWorkValuesAreRenewed(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		push bool
+	}{{"write", true}, {"write-no-push", false}} {
+		t.Run(c.name, func(t *testing.T) { renewsPush(t, c.push) })
+	}
+}
+
+// renewsPush is TestThePushAndWorkValuesAreRenewed for a write run, with push, or a
+// write-no-push run.
+func renewsPush(t *testing.T, push bool) {
 	certFile, keyFile, roots := testCertificate(t, t.TempDir())
 	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
@@ -365,9 +448,12 @@ func TestThePushAndWorkValuesAreRenewed(t *testing.T) {
 	clock := &stepClock{now: time.Now().UTC().Truncate(time.Second)}
 	begun := clock.Now()
 	ref := newReference(t, "localhost")
-	ref.doc = []byte(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"credentials":[` +
-		`{"name":"work-1","apply":[{"hosts":["localhost"],"scheme":"header","header":"x-api-key","paths":["/work/*"]}]},` +
-		`{"name":"push-1","purpose":"push","apply":[{"hosts":["localhost"],"scheme":"header","header":"x-api-key","paths":["/push/*"]}]}]}`)
+	doc := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"credentials":[` +
+		`{"name":"work-1","apply":[{"hosts":["localhost"],"scheme":"header","header":"x-api-key","paths":["/work/*"]}]}`
+	if push {
+		doc += `,{"name":"push-1","purpose":"push","apply":[{"hosts":["localhost"],"scheme":"header","header":"x-api-key","paths":["/push/*"]}]}`
+	}
+	ref.doc = []byte(doc + `]}`)
 	ref.h.Secrets = func(_ receiver.Run, names []string) ([]receiver.Value, *receiver.Refusal) {
 		ref.mu.Lock()
 		n := len(ref.asked)
@@ -419,21 +505,41 @@ func TestThePushAndWorkValuesAreRenewed(t *testing.T) {
 		}
 		return v
 	}
-	if w, p := through(a.ProxySecret, "/work/x"), through(a.PushProxySecret, "/push/x"); w != "work-1-value-1-of-the-renewal-test" || p != "push-1-value-1-of-the-renewal-test" {
-		t.Fatalf("before the renewal the origin got %q and %q", w, p)
+	noPushProxy := func(when string) {
+		t.Helper()
+		if tokens, proxied := gateway.PushTokens(h.g, a.RunID); a.PushProxySecret != "" || proxied || len(tokens) != 0 {
+			t.Errorf("%s the write-no-push run's push_proxy_secret %q, push proxy %v with %v; want none", when, a.PushProxySecret, proxied, tokens)
+		}
+	}
+	if push {
+		if p := through(a.PushProxySecret, "/push/x"); p != "push-1-value-1-of-the-renewal-test" {
+			t.Fatalf("before the renewal the push proxy reached the origin with %q", p)
+		}
+	} else {
+		noPushProxy("before the renewal")
+	}
+	if w := through(a.ProxySecret, "/work/x"); w != "work-1-value-1-of-the-renewal-test" {
+		t.Fatalf("before the renewal the run's proxy reached the origin with %q", w)
 	}
 	// The run's proxy has no credential for push-1's path, so no path rule covers it.
 	if got := through(a.ProxySecret, "/push/x"); got != "(no request: 403)" {
 		t.Errorf("the run's proxy on push-1's path: %q", got)
 	}
+	want := []string{"work-1"}
+	if push {
+		want = append(want, "push-1")
+	}
 	clock.advance(time.Hour - 5*time.Minute)
 	eventually(t, "the renewal before expires_at", func() bool { return len(asked()) == 2 })
-	if a := asked(); !slices.Equal(a[1], []string{"work-1", "push-1"}) {
-		t.Errorf("the renewal's secrets request was for %v; want work-1 and push-1", a[1])
+	if a := asked(); !slices.Equal(a[1], want) {
+		t.Errorf("the renewal's secrets request was for %v; want %v", a[1], want)
 	}
 	eventually(t, "the second values at the origin", func() bool {
-		return through(a.ProxySecret, "/work/x") == "work-1-value-2-of-the-renewal-test" && through(a.PushProxySecret, "/push/x") == "push-1-value-2-of-the-renewal-test"
+		return through(a.ProxySecret, "/work/x") == "work-1-value-2-of-the-renewal-test" && (!push || through(a.PushProxySecret, "/push/x") == "push-1-value-2-of-the-renewal-test")
 	})
+	if !push {
+		noPushProxy("after the renewal")
+	}
 	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID))
 	h.close()
 }
@@ -499,6 +605,43 @@ func TestAReloadSetsThePushProxysGuard(t *testing.T) {
 	}
 	if got := o.requests(); !slices.Equal(got, []string{"GET /repos/example-org/app/pulls/12 Bearer " + pushSecretWord}) {
 		t.Errorf("the origin got %q", got)
+	}
+	h.post(exited(a.RunID))
+	h.close()
+}
+
+// TestAReloadAddsNoPushCredential pins a reload of a write-no-push run whose document
+// adds push-1 with purpose push: the reload fails as a change of credentials, the
+// gateway reports it, and the policy in force stays. The run has no push proxy after
+// it, its proxy sets work-1 alone, and its one secrets request is for work-1.
+func TestAReloadAddsNoPushCredential(t *testing.T) {
+	o := newPushOrigin(t, pushRunDoc(false))
+	h := o.h
+	a := h.open(server.LinkRunRequest{})
+	h.mu.Lock()
+	first := h.digests[len(h.digests)-1].RunConfiguration
+	h.mu.Unlock()
+	if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {
+		t.Fatalf("the open's batch: %+v", d)
+	}
+	o.c.serveDocument(pushRunDoc(true), 'b')
+	h.post(logged(a.RunID))
+	const line = "start a new run to use other credentials; a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays"
+	eventually(t, "the failed reload's report", func() bool {
+		h.post(heartbeat(a.RunID))
+		return h.reported(line)
+	})
+	if d := h.post(heartbeat(a.RunID)); !d.Accepted() || d.Digests.RunConfiguration != first {
+		t.Errorf("the batch after the failed reload: %+v; want the run configuration %s in force", d, first)
+	}
+	if tokens, proxied := gateway.PushTokens(h.g, a.RunID); proxied || len(tokens) != 0 {
+		t.Errorf("after the failed reload the run has a push proxy: %v with %v", proxied, tokens)
+	}
+	if got := gateway.Tokens(h.g, a.RunID); !reflect.DeepEqual(got, map[string]string{"work-1": workSecret}) {
+		t.Errorf("after the failed reload the run's proxy sets %v; want work-1 alone", got)
+	}
+	if reqs := o.c.requests(t); len(reqs) != 1 || !slices.Equal(reqs[0].Credentials, []string{"work-1"}) {
+		t.Errorf("the secrets requests %+v; want one for work-1", reqs)
 	}
 	h.post(exited(a.RunID))
 	h.close()
