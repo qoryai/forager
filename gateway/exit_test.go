@@ -69,11 +69,12 @@ func TestTheLinkRefusesARunExitedBeyondItsSchema(t *testing.T) {
 // image_rate_limited, image_registry_unreachable, workflow_not_in_harness,
 // read_needs_wall, read_needs_setup_outside, read_needs_no_nested_docker,
 // read_needs_setup_removed and write_needs_wall only failed with exit_code -1 in a run
-// with no join, and a starter's reason, such as qory's end code push_refused, only
-// failed in a run with a join, are taken; a reason the gateway decides, a reserved
-// reason out of its place, a reason that is no code, and a starter's reason with
-// another state or in a run with no join are refused, and the run ends failed,
-// batch_refused, its reason in the report.
+// with no join, and a starter's reason only failed in a run with a join, such as
+// push_credential_missing, push_refused, prebuilt_image_too_large and
+// push_not_recorded, the four end codes qory closes a run with after a join, are
+// taken; a reason the gateway decides, a reserved reason out of its place, a reason
+// that is no code, and a starter's reason with another state or in a run with no join
+// are refused, and the run ends failed, batch_refused, its reason in the report.
 func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 	h := start(t, gateway.Config{})
 	for _, c := range []struct {
@@ -144,11 +145,16 @@ func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 		{map[string]any{"state": "failed", "exit_code": 130, "reason": "interrupted"}, false, "one link-batch.schema.json refuses"},
 		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "timeout"}, false, "one link-batch.schema.json refuses"},
 		{map[string]any{"state": "failed", "exit_code": -1, "reason": "session_lost"}, false, "one link-batch.schema.json refuses"},
+		// The schema refuses stopped, failed model_key_limit and Checks_Failed after a
+		// join before closeRule runs; TestCloseRuleRefusesAReservedReasonAfterAJoin
+		// calls closeRule with stopped.
 		{map[string]any{"state": "failed", "exit_code": -1, "reason": "stopped"}, true, "one link-batch.schema.json refuses"},
 		{map[string]any{"state": "failed", "exit_code": 0, "reason": "model_key_limit"}, true, "one link-batch.schema.json refuses"},
 		{map[string]any{"state": "failed", "exit_code": 1, "reason": "Checks_Failed"}, true, "one link-batch.schema.json refuses"},
 		{map[string]any{"state": "failed", "exit_code": 1, "reason": "checks_failed"}, true, ""},
 		{map[string]any{"state": "failed", "exit_code": 0, "reason": "push_refused"}, true, ""},
+		{map[string]any{"state": "failed", "exit_code": 1, "reason": "push_refused"}, true, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "prebuilt_image_too_large"}, true, ""},
 		{map[string]any{"state": "succeeded", "exit_code": 0, "reason": "all_checks_passed"}, true, "a run.exited all_checks_passed that is not failed"},
 		{map[string]any{"state": "cancelled", "exit_code": 0, "reason": "push_refused"}, true, "a run.exited push_refused that is not failed"},
 		{map[string]any{"state": "succeeded", "exit_code": 0, "reason": "all_checks_passed"}, false, "a run.exited all_checks_passed that is not failed"},

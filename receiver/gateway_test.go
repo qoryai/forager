@@ -1095,7 +1095,8 @@ func TestTheEndMember(t *testing.T) {
 // outcome failed with the code is kept as it came, and the end member of the next 2xx
 // to a batch is failed with the code, which ReadEnd reads unchanged. So is push_refused
 // with the state succeeded, since the rule that an end code goes only with failed is
-// the control plane's, not the receiver's.
+// the control plane's, not the receiver's. It pins each code unchanged at the control
+// plane, and does not reach the gateway's closeRule.
 func TestQorysEndCodesPassTheReceiver(t *testing.T) {
 	s := newStand(t)
 	s.now = time.Now().UTC().Truncate(time.Second)
@@ -1116,7 +1117,9 @@ func TestQorysEndCodesPassTheReceiver(t *testing.T) {
 		}
 		_, rec := s.batch(directKey2, event.NewEmitter(id, nil), event.RunHeartbeat)
 		var got map[string]map[string]string
-		json.Unmarshal(rec.Body.Bytes(), &got)
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("the answer to the batch after the outcome %+v: %v: %s", c, err, rec.Body.String())
+		}
 		if want := map[string]map[string]string{"end": {"state": c.State, "reason": c.Reason}}; rec.Code != http.StatusAccepted || !jsonEqual(got, want) {
 			t.Errorf("the end of the outcome %+v: %d %s", c, rec.Code, rec.Body.String())
 		}

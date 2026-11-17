@@ -592,7 +592,8 @@ var endCodes = []string{"push_credential_missing", "push_refused", "prebuilt_ima
 // TestPostOutcomeSendsQorysEndCodesUnchanged pins qory's end codes on their way to the
 // server and back: PostOutcome sends each, with the state failed, as the body's reason,
 // byte for byte; and a delivery whose signed 202 contains the end member failed with the
-// code reads it unchanged.
+// code reads it unchanged. It pins each code unchanged at the control plane, and does
+// not reach the gateway's closeRule.
 func TestPostOutcomeSendsQorysEndCodesUnchanged(t *testing.T) {
 	a := newApiary(t)
 	c := a.client()
@@ -618,7 +619,8 @@ func TestPostOutcomeSendsQorysEndCodesUnchanged(t *testing.T) {
 // TestTheControlPlaneAppliesTheEndCodesStateRule pins that Forager does not apply the
 // rule of integrations' contracts/run/v1/outcome.schema.json that an end code goes only
 // with the state failed: the control plane applies it. PostOutcome sends push_refused
-// with the state succeeded unchanged, and ReadEnd reads that end unchanged.
+// with the state succeeded unchanged, and ReadEnd reads that end unchanged. It pins the
+// code unchanged at the control plane, and does not reach the gateway's closeRule.
 func TestTheControlPlaneAppliesTheEndCodesStateRule(t *testing.T) {
 	a := newApiary(t)
 	a.answer = func(*http.Request, []byte) (int, http.Header, string) { return 200, nil, `{"version":1}` }

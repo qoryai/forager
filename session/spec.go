@@ -643,7 +643,9 @@ func checkMachine(spec OpenSpec) error {
 // code of the caller's, which is none of Forager's reserved codes; and
 // ExitCode, the run's exit code: the last session's, 124 at the run's time limit, -1
 // when no session ran. A failed run with no reason that no session joined is closed as
-// failed with no_session and -1.
+// failed with no_session and -1. The gateway accepts a code of the caller's only with
+// State failed after a join, and ends any other close with such a code as failed with
+// batch_refused.
 type Outcome struct {
 	State    string
 	Reason   string

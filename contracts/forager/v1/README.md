@@ -2480,12 +2480,14 @@ with `read_needs_no_nested_docker`, and a read run whose setup container could n
 removed with `read_needs_setup_removed`, each `failed` with `exit_code` `-1`. qory
 closes a run with no join whose access is not read and that has no wall with
 `write_needs_wall`, `failed` with `exit_code` `-1`. The close writes a starter's reason
-when its caller gives one, and the gateway accepts it only `failed` in a run a session
-joined, such as the end code `push_refused` of integrations'
-`contracts/run/v1/outcome.schema.json`, which qory also sets in the starter's outcome
-(§The server, The outcome). The gateway returns `400` `invalid_request` to a
-batch with a `dev.qory.run.exited` with a starter's reason and another state, or of a
-run no session joined, and ends the run `failed` with `batch_refused`.
+when its caller gives one, and the gateway accepts it only `failed` after the gateway
+numbered a join of the run. qory closes a run after a join with one of the four end
+codes of integrations' `contracts/run/v1/outcome.schema.json`,
+`push_credential_missing`, `push_refused`, `prebuilt_image_too_large` and
+`push_not_recorded`, as it sets them in the starter's outcome (§The server, The
+outcome). The gateway returns `400` `invalid_request` to a batch with a
+`dev.qory.run.exited` with a starter's reason and another state, or before the gateway
+numbered a join of the run, and ends the run `failed` with `batch_refused`.
 `(*session.Run).Close` returns an error for each of the eleven codes with another state
 or exit code, or after a join, and the gateway returns `400` `invalid_request` to a batch
 with such a `dev.qory.run.exited` and ends the run `failed` with `batch_refused`. The
@@ -4832,11 +4834,12 @@ when any of its events:
   `timeout`, `interrupted`, `no_session`, `model_key_limit`, `image_missing`,
   `image_user_root`, `image_access_denied`, `image_rate_limited`,
   `image_registry_unreachable`, `workflow_not_in_harness`, `read_needs_wall`,
-  `read_needs_setup_outside`, `read_needs_no_nested_docker`,
-  `read_needs_setup_removed`, `write_needs_wall` and a starter's reason; one with a
-  starter's reason (a code that is none of Forager's reserved codes) that is not
-  `failed`, or that comes before the gateway numbered a join of the run; one with `no_session`,
-  `image_missing`, `image_user_root`, `image_access_denied`, `image_rate_limited`,
+  `read_needs_setup_outside`, `read_needs_no_nested_docker`, `read_needs_setup_removed`,
+  `write_needs_wall` and a starter's reason; one with a starter's reason (a code that is
+  none of Forager's reserved codes and none of the eleven codes from `image_missing` to
+  `write_needs_wall` in this list) that is not `failed`, or that comes before the
+  gateway numbered a join of the run; one with `no_session`, `image_missing`,
+  `image_user_root`, `image_access_denied`, `image_rate_limited`,
   `image_registry_unreachable`, `workflow_not_in_harness`, `read_needs_wall`,
   `read_needs_setup_outside`, `read_needs_no_nested_docker`, `read_needs_setup_removed`
   or `write_needs_wall` after the gateway numbered a join of the run; or one with
@@ -4853,12 +4856,12 @@ when any of its events:
   the check of an image its registry refused, rate-limited or did not reach, a close
   with no join of a run whose workflow is not in the harness, or a close with no join of
   a read run that has no wall, whose setup is set to run inside the agent's container,
-  whose image runs nested Docker or whose setup container could not be removed, a
-  close with no join of a run whose access is not read and that has no wall, or a
-  close `failed` with a starter's reason after a join, and the
-  gateway writes the event of every other reason itself (The end of a run at the
-  gateway, below); or is a `dev.qory.run.exited` while a join is open, from the
-  gateway's `200` to it until the gateway numbers its `dev.qory.session.exited`;
+  whose image runs nested Docker or whose setup container could not be removed, a close
+  with no join of a run whose access is not read and that has no wall, or a close
+  `failed` with a starter's reason after a join, and the gateway writes the event of
+  every other reason itself (The end of a run at the gateway, below); or is a
+  `dev.qory.run.exited` while a join is open, from the gateway's `200` to it until the
+  gateway numbers its `dev.qory.session.exited`;
 - is a `dev.qory.session.started` whose `session` is not the number of a join the
   gateway answered `200`, or the second of one number, or one after the
   `dev.qory.session.exited` of its number; or a `dev.qory.session.exited`

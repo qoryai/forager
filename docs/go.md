@@ -1832,9 +1832,12 @@ the gateway does. Close a run whose last session ended with `model_key_limit` wi
 pause of the run. `Close` returns an error for `model_key_limit` with another state, for
 `paused` with no reason or another reason, in a run with no join, and after a last
 session that ended otherwise.
-Close a run that a session joined with `failed` and a code of yours, a lower-case
-letter, then lower-case letters, digits and `_`, up to 64 characters, and none of
-Forager's reserved codes, such as qory's end code `push_refused`. The gateway accepts
+After the gateway numbered a join of the run, close it with `failed` and a code of
+yours: a lower-case letter, then lower-case letters, digits and `_`, up to 64
+characters, none of Forager's reserved codes and none of the eleven codes from
+`image_missing` to `write_needs_wall`, which close only a run no session joined. qory
+closes a run after a join with one of its four end codes, `push_credential_missing`,
+`push_refused`, `prebuilt_image_too_large` and `push_not_recorded`. The gateway accepts
 such a code only `failed` after a join; otherwise it ends the run `failed` with
 `batch_refused`.
 `Close` refuses an outcome the contract refuses, and a close while a `Join` runs.
