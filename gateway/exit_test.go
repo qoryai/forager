@@ -69,14 +69,14 @@ func TestTheLinkRefusesARunExitedBeyondItsSchema(t *testing.T) {
 // image_rate_limited, image_registry_unreachable, workflow_not_in_harness,
 // read_needs_wall, read_needs_setup_outside, read_needs_no_nested_docker,
 // read_needs_setup_removed and write_needs_wall only failed with exit_code -1 in a run
-// with no join, and a starter's reason only failed after the gateway numbered a join of
-// the run, such as push_credential_missing, push_refused, prebuilt_image_too_large,
-// push_not_recorded, environment_image_missing and push_head_changed, end codes qory
-// closes a run with after a join, are taken; a reason the gateway decides, a reserved
-// reason out of its place, a reason that is no code, and a starter's reason with
-// another state or in a run with no join are refused, and the run ends failed,
-// batch_refused, its reason in the report. environment_image_missing is none of the image codes, which
-// the gateway takes only in a run with no join.
+// with no join, and a starter's reason only failed, before or after the gateway
+// numbered a join of the run, such as push_credential_missing, push_refused,
+// prebuilt_image_too_large, push_not_recorded, environment_image_missing and
+// push_head_changed, end codes qory closes a run with, are taken; a reason the gateway
+// decides, a reserved reason out of its place, a reason that is no code, and a
+// starter's reason with another state are refused, and the run ends failed,
+// batch_refused, its reason in the report. environment_image_missing is none of the
+// image codes, which the gateway takes only in a run with no join.
 func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 	h := start(t, gateway.Config{})
 	for _, c := range []struct {
@@ -161,9 +161,10 @@ func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 		{map[string]any{"state": "succeeded", "exit_code": 0, "reason": "all_checks_passed"}, true, "a run.exited all_checks_passed that is not failed"},
 		{map[string]any{"state": "cancelled", "exit_code": 0, "reason": "push_refused"}, true, "a run.exited push_refused that is not failed"},
 		{map[string]any{"state": "succeeded", "exit_code": 0, "reason": "all_checks_passed"}, false, "a run.exited all_checks_passed that is not failed"},
-		{map[string]any{"state": "failed", "exit_code": 1, "reason": "checks_failed"}, false, "a run.exited checks_failed of a run with no join"},
-		{map[string]any{"state": "failed", "exit_code": -1, "reason": "push_credential_missing"}, false, "a run.exited push_credential_missing of a run with no join"},
-		{map[string]any{"state": "failed", "exit_code": -1, "reason": "environment_image_missing"}, false, "a run.exited environment_image_missing of a run with no join"},
+		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "push_credential_missing"}, false, "a run.exited push_credential_missing that is not failed"},
+		{map[string]any{"state": "failed", "exit_code": 1, "reason": "checks_failed"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "push_credential_missing"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "environment_image_missing"}, false, ""},
 	} {
 		a := h.open(server.LinkRunRequest{})
 		if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {

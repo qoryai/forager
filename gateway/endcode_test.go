@@ -93,15 +93,17 @@ func TestAPushRefusedOutcomeReachesTheReceiver(t *testing.T) {
 }
 
 // TestAStartersEndCodeInTheCloseReachesTheControl pins a session's dev.qory.run.exited
-// with a starter's reason after a join: each of the end codes qory closes a run with
-// after a join, $defs end_codes of integrations' contracts/run/v1/outcome.schema.json,
-// and push_window_closed, a code of the pattern outside that list, failed after a
-// session. The run's push step exits failed with exit code 1 before each push code, and
-// the close is failed with exit code 1, as qory's push step closes a run.
-// prebuilt_image_too_large and environment_image_missing come from inside the
-// prebuild's step session, with no push step, and the close is failed with exit code
-// -1. The link accepts the batch, and the run's dev.qory.run.exited, in the gateway's
-// record and at the control, is failed with the code and the exit code unchanged.
+// with a starter's reason: each of the end codes qory closes a run with, $defs end_codes
+// of integrations' contracts/run/v1/outcome.schema.json, and push_window_closed, a code
+// of the pattern outside that list, failed after a session. The run's push step exits
+// failed with exit code 1 before each push code, and the close is failed with exit code
+// 1, as qory's push step closes a run. prebuilt_image_too_large and
+// environment_image_missing come from inside the prebuild's step session, with no push
+// step, and the close is failed with exit code -1. push_credential_missing closes a run
+// with no join too, failed with exit code -1, as qory closes a run that fails before
+// any session. The link accepts the batch, and the run's dev.qory.run.exited, in the
+// gateway's record and at the control, is failed with the code and the exit code
+// unchanged.
 func TestAStartersEndCodeInTheCloseReachesTheControl(t *testing.T) {
 	ctl := newControl(t)
 	h := start(t, gateway.Config{Server: ctl.server()})
@@ -109,24 +111,30 @@ func TestAStartersEndCodeInTheCloseReachesTheControl(t *testing.T) {
 		code string
 		exit int
 		push bool // a push step that exits failed with exit code 1 before the close
+		join bool // a session that joins and exits before the close
 	}{
-		{"push_credential_missing", 1, true},
-		{"push_refused", 1, true},
-		{"prebuilt_image_too_large", -1, false},
-		{"push_not_recorded", 1, true},
-		{"environment_image_missing", -1, false},
-		{"push_head_changed", 1, true},
-		{"push_window_closed", 1, true},
+		{"push_credential_missing", 1, true, true},
+		{"push_refused", 1, true, true},
+		{"prebuilt_image_too_large", -1, false, true},
+		{"push_not_recorded", 1, true, true},
+		{"environment_image_missing", -1, false, true},
+		{"push_head_changed", 1, true, true},
+		{"push_window_closed", 1, true, true},
+		{"push_credential_missing", -1, false, false},
 	} {
-		code := c.code
+		code, name := c.code, c.code
 		a := h.open(server.LinkRunRequest{})
 		runID := a.RunID
 		if d := h.post(started(runID, nil), applied(runID, a.Applied)); !d.Accepted() {
-			t.Fatalf("%s: the first batch: %+v", code, d)
+			t.Fatalf("%s: the first batch: %+v", name, d)
 		}
-		n := h.joined(runID)
-		if d := h.post(sessionStarted(runID, n), sessionExited(runID, n)); !d.Accepted() {
-			t.Fatalf("%s: the session's batch: %+v", code, d)
+		if c.join {
+			n := h.joined(runID)
+			if d := h.post(sessionStarted(runID, n), sessionExited(runID, n)); !d.Accepted() {
+				t.Fatalf("%s: the session's batch: %+v", name, d)
+			}
+		} else {
+			name += " with no join"
 		}
 		var evs []map[string]any
 		if c.push {
@@ -137,7 +145,7 @@ func TestAStartersEndCodeInTheCloseReachesTheControl(t *testing.T) {
 		}
 		evs = append(evs, exitedWith(runID, map[string]any{"state": event.StateFailed, "exit_code": c.exit, "reason": code}))
 		if d := h.post(evs...); !d.Accepted() {
-			t.Errorf("%s: the close's batch: %+v", code, d)
+			t.Errorf("%s: the close's batch: %+v", name, d)
 			continue
 		}
 		check := func(where string, rec []recorded) {
@@ -149,13 +157,13 @@ func TestAStartersEndCodeInTheCloseReachesTheControl(t *testing.T) {
 				}
 			}
 			if len(exits) != 1 || exits[0]["state"] != event.StateFailed || exits[0]["reason"] != code || exits[0]["exit_code"] != float64(c.exit) {
-				t.Errorf("%s: %s: run.exited %v; want one, failed with %s and %d", code, where, exits, code, c.exit)
+				t.Errorf("%s: %s: run.exited %v; want one, failed with %s and %d", name, where, exits, code, c.exit)
 			}
 		}
 		rec := h.record(runID)
 		validEvents(t, rec)
 		check("the gateway's record", rec)
-		eventually(t, code+": the run.exited at the control", func() bool {
+		eventually(t, name+": the run.exited at the control", func() bool {
 			for _, l := range ctl.lines(t) {
 				if l.Type == event.RunExited && l.Subject == runID {
 					return true

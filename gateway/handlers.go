@@ -595,12 +595,13 @@ var stopModelKeyLimit = []byte(`{"stop":{"reason":"` + event.ReasonModelKeyLimit
 // model_key_limit, the pause after a limit refusal, paused, only for a run with a join
 // whose last dev.qory.session.exited has that reason. It accepts a starter's reason, a
 // code of the reason's pattern that is none of Forager's reserved codes and none of the
-// eleven codes from image_missing to write_needs_wall, only failed after the gateway
-// numbered a join of the run: qory closes a run after a join with one of its end codes,
-// listed in $defs/end_codes of integrations' contracts/run/v1/outcome.schema.json. The
-// gateway writes the event of every other end itself. joined is true when the gateway
-// numbered a join of the run, and last is the reason of the last
-// dev.qory.session.exited the run's stream numbered, empty for none.
+// eleven codes from image_missing to write_needs_wall, only failed, before or after the
+// gateway numbered a join of the run: qory closes a failed run with one of its end
+// codes, listed in $defs/end_codes of integrations'
+// contracts/run/v1/outcome.schema.json, whether or not a session joined it. The gateway
+// writes the event of every other end itself. joined is true when the gateway numbered
+// a join of the run, and last is the reason of the last dev.qory.session.exited the
+// run's stream numbered, empty for none.
 func closeRule(data map[string]any, joined bool, last string) string {
 	given, hasReason := data["reason"]
 	why, _ := given.(string)
@@ -631,11 +632,8 @@ func closeRule(data map[string]any, joined bool, last string) string {
 			return "a run.exited " + why + " that is not failed with exit_code -1"
 		}
 	case event.StarterReason(why):
-		switch {
-		case data["state"] != event.StateFailed:
+		if data["state"] != event.StateFailed {
 			return "a run.exited " + why + " that is not failed"
-		case !joined:
-			return "a run.exited " + why + " of a run with no join"
 		}
 	default:
 		return "a run.exited with a reason the gateway decides"
