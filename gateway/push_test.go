@@ -573,3 +573,40 @@ func TestAReloadSetsThePushProxysGuard(t *testing.T) {
 	h.post(exited(a.RunID))
 	h.close()
 }
+
+// TestAReloadAddsNoPushCredential pins a reload of a write-no-push run whose document
+// adds push-1 with purpose push: the reload fails as a change of credentials, the
+// gateway reports it, and the policy in force stays. The run has no push proxy after
+// it, its proxy sets work-1 alone, and its one secrets request is for work-1.
+func TestAReloadAddsNoPushCredential(t *testing.T) {
+	o := newPushOrigin(t, pushRunDoc(false))
+	h := o.h
+	a := h.open(server.LinkRunRequest{})
+	h.mu.Lock()
+	first := h.digests[len(h.digests)-1].RunConfiguration
+	h.mu.Unlock()
+	if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {
+		t.Fatalf("the open's batch: %+v", d)
+	}
+	o.c.serveDocument(pushRunDoc(true), 'b')
+	h.post(logged(a.RunID))
+	const line = "start a new run to use other credentials; a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays"
+	eventually(t, "the failed reload's report", func() bool {
+		h.post(heartbeat(a.RunID))
+		return h.reported(line)
+	})
+	if d := h.post(heartbeat(a.RunID)); !d.Accepted() || d.Digests.RunConfiguration != first {
+		t.Errorf("the batch after the failed reload: %+v; want the run configuration %s in force", d, first)
+	}
+	if tokens, proxied := gateway.PushTokens(h.g, a.RunID); proxied || len(tokens) != 0 {
+		t.Errorf("after the failed reload the run has a push proxy: %v with %v", proxied, tokens)
+	}
+	if got := gateway.Tokens(h.g, a.RunID); !reflect.DeepEqual(got, map[string]string{"work-1": workSecret}) {
+		t.Errorf("after the failed reload the run's proxy sets %v; want work-1 alone", got)
+	}
+	if reqs := o.c.requests(t); len(reqs) != 1 || !slices.Equal(reqs[0].Credentials, []string{"work-1"}) {
+		t.Errorf("the secrets requests %+v; want one for work-1", reqs)
+	}
+	h.post(exited(a.RunID))
+	h.close()
+}
