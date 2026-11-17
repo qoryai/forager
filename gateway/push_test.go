@@ -169,6 +169,52 @@ func sessionWrites(t *testing.T, c *http.Client, port string) sent {
 	return push
 }
 
+// pushRefused is the first line of the branch guard's 403 for a push through a
+// credential with no push_ref.
+const pushRefused = "qory: push through qory's push step, with a credential that allows a push.\n"
+
+// pushSplit checks the credentials of a run of [pushRunDoc] with push, or without it as
+// a write-no-push run's: applied, the members of the open's dev.qory.run.policy_applied,
+// lists work-1 with no purpose, then push-1's items with purpose push only with push;
+// and each secrets request c got is for work-1, and for push-1 only with push.
+func pushSplit(t *testing.T, c *control, applied json.RawMessage, push bool) {
+	t.Helper()
+	wantApplied, wantAsked := []string{"work-1 <nil>"}, []string{"work-1"}
+	if push {
+		wantApplied, wantAsked = append(wantApplied, "push-1 push", "push-1 push"), append(wantAsked, "push-1")
+	}
+	listed, _ := members(applied)["credentials"].([]any)
+	var got []string
+	for _, e := range listed {
+		m, _ := e.(map[string]any)
+		got = append(got, fmt.Sprint(m["name"], " ", m["purpose"]))
+	}
+	if !slices.Equal(got, wantApplied) {
+		t.Errorf("the open's applied credentials %q, want %q", got, wantApplied)
+	}
+	asked := c.requests(t)
+	if len(asked) == 0 {
+		t.Error("the control got no secrets request")
+	}
+	for _, r := range asked {
+		if !slices.Equal(r.Credentials, wantAsked) {
+			t.Errorf("a secrets request for %q, want %q", r.Credentials, wantAsked)
+		}
+	}
+}
+
+// receivePacks are the dev.qory.run.egress records of git pushes among records: each
+// one's channel, decision and path rule.
+func receivePacks(records []recorded) []string {
+	var out []string
+	for _, l := range records {
+		if l.Type == event.RunEgress && strings.HasSuffix(fmt.Sprint(l.Data["path"]), "/git-receive-pack") {
+			out = append(out, fmt.Sprint(l.Data["channel"], " ", l.Data["decision"], " ", l.Data["path_rule"]))
+		}
+	}
+	return out
+}
+
 // TestASessionsRequestsGetOnlyTheWorkCredential pins the card's split, in a write run
 // and in a write-no-push run, on the local link: what the sessions, the setup step,
 // After, the image step and the host proxy send through the run's proxy, the run
@@ -177,7 +223,11 @@ func sessionWrites(t *testing.T, c *http.Client, port string) sent {
 // since work-1 has no push_ref, and reaches nothing; the REST write and the GraphQL
 // mutation reach the origin with work-1's value. A write run's answer has a
 // push_proxy_secret apart from proxy_secret; a write-no-push run's has none, and the run
-// has no push proxy and no push value.
+// has no push proxy and no push value: its secrets request is for work-1 alone, and its
+// open's dev.qory.run.policy_applied lists no credential with purpose push. A second push
+// after the session exited, when After and qory's push step run, gets the same 403, and
+// the record has each push as a dev.qory.run.egress denied by wall:push-ref, with no
+// channel push.
 func TestASessionsRequestsGetOnlyTheWorkCredential(t *testing.T) {
 	work := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+workSecret))
 	for _, c := range []struct {
@@ -198,18 +248,36 @@ func TestASessionsRequestsGetOnlyTheWorkCredential(t *testing.T) {
 			if got := gateway.Tokens(o.h.g, a.RunID); !reflect.DeepEqual(got, map[string]string{"work-1": workSecret}) {
 				t.Errorf("the run's proxy sets %v; want work-1 alone", got)
 			}
-			push := sessionWrites(t, o.client(t, a, a.ProxySecret), o.port)
-			if push.status != http.StatusForbidden || !strings.HasPrefix(push.body, "qory: push through qory's push step, with a credential that allows a push.\n") {
+			pushSplit(t, o.c, a.Applied, c.push)
+			proxy := o.client(t, a, a.ProxySecret)
+			push := sessionWrites(t, proxy, o.port)
+			if push.status != http.StatusForbidden || !strings.HasPrefix(push.body, pushRefused) {
 				t.Errorf("the push through the run's proxy got %+v; want the branch guard's 403", push)
 			}
 			want := []string{"PATCH /repos/example-org/app/git/refs/heads/main " + work, "POST /graphql " + work}
 			if got := o.requests(); !slices.Equal(got, want) {
 				t.Errorf("the origin got\n%q\nwant\n%q", got, want)
 			}
-			if d := o.h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID)); !d.Accepted() {
-				t.Fatalf("the batch: %+v", d)
+			if d := o.h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {
+				t.Fatalf("the open's batch: %+v", d)
+			}
+			o.h.joined(a.RunID)
+			if d := o.h.post(sessionStarted(a.RunID, 1), applied(a.RunID, a.Applied), sessionExited(a.RunID, 1)); !d.Accepted() {
+				t.Fatalf("the join's batch: %+v", d)
+			}
+			if got := send(t, proxy, o.port, http.MethodPost, "/example-org/app.git/git-receive-pack", "application/x-git-receive-pack-request", receivePack(pushWorkItem)); got.status != http.StatusForbidden || !strings.HasPrefix(got.body, pushRefused) {
+				t.Errorf("the push through the run's proxy after the session got %+v; want the branch guard's 403", got)
+			}
+			if got := o.requests(); len(got) != 0 {
+				t.Errorf("the origin got %q after the session", got)
+			}
+			if d := o.h.post(exited(a.RunID)); !d.Accepted() {
+				t.Fatalf("the last batch: %+v", d)
 			}
 			o.h.close()
+			if got, want := receivePacks(o.h.record(a.RunID)), []string{"<nil> denied wall:push-ref", "<nil> denied wall:push-ref"}; !slices.Equal(got, want) {
+				t.Errorf("the record's pushes %q, want %q", got, want)
+			}
 		})
 	}
 }
