@@ -223,9 +223,6 @@ func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
 		"an endpoint with a user":   strings.Replace(api(""), `https://`, `https://`+value+`@`, 1),
 		"an endpoint with a query":  strings.Replace(api(""), `/anthropic`, `/anthropic?key=`+value, 1),
 		"a key prefix with a space": api(`,"key_prefixes":["sk ant"]`),
-		"17 host credentials":       counted(0, 17),
-		"6 API and 11 host":         counted(6, 11),
-		"7 API and 9 host":          counted(7, 9),
 	} {
 		v := newVerified(t)
 		v.runDoc = doc
@@ -236,6 +233,23 @@ func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
 		}
 		if err != nil && strings.Contains(err.Error(), value) {
 			t.Errorf("%s: the error quotes the value: %v", name, err)
+		}
+	}
+	// The count limits fail on the list itself: 17 credentials on maxItems, 7 model keys
+	// on maxContains.
+	for name, c := range map[string]struct {
+		doc, want string
+	}{
+		"17 host credentials": {counted(0, 17), "/credentials (maxItems)"},
+		"6 API and 11 host":   {counted(6, 11), "/credentials (maxItems)"},
+		"7 API and 9 host":    {counted(7, 9), "/credentials (maxContains)"},
+	} {
+		v := newVerified(t)
+		v.runDoc = c.doc
+		_, _, err := v.client().Register(context.Background(), v.srv.URL+"/v1/runs", registration(t))
+		var r *accesskey.Refusal
+		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v; want run_configuration_invalid with %s", name, err, c.want)
 		}
 	}
 }
