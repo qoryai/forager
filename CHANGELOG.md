@@ -838,7 +838,7 @@ release may change what an existing document does, and says so under Upgrading.
   `refusal.Decides`.
 - The link's run request has `images.allow`; its answer has `relay_image`, the image the
   relay starts from, and `reference: true` on an `image` the policy names by reference.
-- A run configuration's `credentials`: at most 8 credentials whose values the server
+- A run configuration's `credentials`: at most 16 credentials whose values the server
   stores for the run, with no value. An API credential, a model key, is `{name,
   format, endpoint, auth, key_prefixes}`: the gateway sets its value on every path of
   the endpoint's host alone. `endpoint` is `https`, with a host, an optional port and

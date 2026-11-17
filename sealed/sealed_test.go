@@ -513,8 +513,8 @@ func TestOpenRefusesAnAnswerOutsideItsForm(t *testing.T) {
 			_, err := Open(f.answer, f.key, f.pin, f.runID, f.digest, []string{"model", "model"}, f.now)
 			return err
 		},
-		"nine credentials": func() error {
-			_, err := Open(f.answer, f.key, f.pin, f.runID, f.digest, []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"}, f.now)
+		"17 credentials": func() error {
+			_, err := Open(f.answer, f.key, f.pin, f.runID, f.digest, credentialNames(MaxCredentials+1), f.now)
 			return err
 		},
 	} {
@@ -632,6 +632,74 @@ func TestSealThenOpen(t *testing.T) {
 		if _, err := Seal(bad.s, signer); !errors.Is(err, bad.want) {
 			t.Errorf("%s: %v; want %v", name, err, bad.want)
 		}
+	}
+}
+
+// credentialNames returns n credential names in the grammar, sorted: cred-00, cred-01
+// and on.
+func credentialNames(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("cred-%02d", i)
+	}
+	return out
+}
+
+// TestSealThenOpenAtTheCountBound pins MaxCredentials at 16: 16 values of MaxValueBytes
+// each, every byte 0x01, which JSON escapes in 6 bytes, the most any byte takes, seal to
+// an answer of at most MaxAnswer bytes that opens to every value; a sealing of 17 is
+// ErrRequest, and so is an Open that requests 17.
+func TestSealThenOpenAtTheCountBound(t *testing.T) {
+	if MaxCredentials != 16 {
+		t.Fatalf("MaxCredentials is %d; want 16", MaxCredentials)
+	}
+	key, err := accesskey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := accesskey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	control := bytes.Repeat([]byte{0x01}, MaxValueBytes)
+	id, runID, digest := "ak_0123456789abcdef", "01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a", "sha256="+strings.Repeat("ab", 32)
+	now := time.Unix(1800000000, 0)
+	sealing := func(names []string) Sealing {
+		values := make([]Value, len(names))
+		for i, n := range names {
+			values[i] = NewValue(n, control)
+		}
+		return Sealing{AccessKeyID: id, PublicKey: key.PublicKey(), RunID: runID, RunConfiguration: digest,
+			Credentials: names, Exp: Expiry(now), Values: values}
+	}
+	names := credentialNames(MaxCredentials)
+	answer, err := Seal(sealing(names), signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(answer) > MaxAnswer {
+		t.Errorf("the answer of 16 values is %d bytes; want at most MaxAnswer, %d", len(answer), MaxAnswer)
+	}
+	pin := accesskey.Pin{{Alg: "ed25519", PublicKey: signer.PublicKey().String()}}
+	v, err := Open(answer, AccessKey{ID: id, Key: key}, pin, runID, digest, names, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Len() != MaxCredentials {
+		t.Errorf("%d values; want %d", v.Len(), MaxCredentials)
+	}
+	for _, n := range names {
+		if b, ok := v.Value(n); !ok || !bytes.Equal(b, control) {
+			t.Errorf("the value of %s did not round-trip", n)
+		}
+	}
+	v.Clear()
+	over := credentialNames(MaxCredentials + 1)
+	if _, err := Seal(sealing(over), signer); !only(err, ErrRequest) {
+		t.Errorf("a sealing of 17: %v; want ErrRequest", err)
+	}
+	if _, err := Open(answer, AccessKey{ID: id, Key: key}, pin, runID, digest, over, now); !only(err, ErrRequest) {
+		t.Errorf("an Open that requests 17: %v; want ErrRequest", err)
 	}
 }
 
@@ -860,6 +928,38 @@ func TestPlaintextRefusals(t *testing.T) {
 		if err != nil && strings.Contains(err.Error(), marker) {
 			t.Errorf("%s: the error contains the value: %v", name, err)
 		}
+	}
+}
+
+// TestPlaintextCountBound pins the count of a plaintext: 16 credentials and 16 values
+// read back against 16 requested; 17 credentials, or 17 values, are ErrPlaintext; and a
+// request of 17 is ErrRequest, before the plaintext is read.
+func TestPlaintextCountBound(t *testing.T) {
+	d := "sha256=" + strings.Repeat("0", 64)
+	doc := func(credentials, values int) []byte {
+		names, _ := json.Marshal(credentialNames(credentials))
+		var items []string
+		for _, n := range credentialNames(values) {
+			items = append(items, `{"credential":"`+n+`","value":"x"}`)
+		}
+		return []byte(`{"version":1,"run_configuration":"` + d + `","credentials":` + string(names) + `,"values":[` + strings.Join(items, ",") + `]}`)
+	}
+	requested := credentialNames(MaxCredentials)
+	v, err := Plaintext(doc(16, 16), d, requested)
+	if err != nil || v.Len() != 16 {
+		t.Errorf("16 credentials and 16 values: %d values, %v; want 16", v.Len(), err)
+	}
+	v.Clear()
+	for name, pt := range map[string][]byte{
+		"17 credentials": doc(17, 16),
+		"17 values":      doc(16, 17),
+	} {
+		if v, err := Plaintext(pt, d, requested); v.Len() != 0 || !only(err, ErrPlaintext) {
+			t.Errorf("%s: %d values, %v; want ErrPlaintext alone", name, v.Len(), err)
+		}
+	}
+	if _, err := Plaintext(doc(16, 16), d, credentialNames(MaxCredentials+1)); !only(err, ErrRequest) {
+		t.Errorf("a request of 17: %v; want ErrRequest alone", err)
 	}
 }
 
