@@ -674,6 +674,11 @@ empty body of a pushed-commits `204`. A body is at most 4 KiB for next-session a
 for pushed-commits. Call either at any time from `Open` to `Close`, from any goroutine,
 while a `Join` runs too.
 
+No container reaches either call. On one machine, only a gateway started with
+`gateway.Config.NoLinkSocket` keeps them to the process that holds the link in memory:
+with a link socket, any process of the session's user that reaches the socket can send
+them for a run whose id it knows.
+
 Each returns an error that starts with the fix in a closed run and in a run with no
 control plane, with nothing sent. A refusal is an `*accesskey.Refusal`: `From` is
 `apiary` for Qory Apiary's code with its status, such as `409` `run_ended`, and

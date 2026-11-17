@@ -1220,6 +1220,16 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The link's host calls, `POST <run.url>/<run_id>/next-session` and `POST
+  <run.url>/<run_id>/pushed-commits`: the gateway reads the body, at most 4 KiB and
+  64 KiB, before it looks up or reopens the run, and sends it unread to Qory Apiary with
+  `server.Client.HostCall`, signed with its access key, once, within 60 seconds. It
+  reads at most 1 MiB of a next-session `200`, 64 KiB of a pushed-commits `2xx`, and
+  64 KiB of any other status, and a longer answer is a `502`
+  `control_plane_unavailable` without the rest of its body read. A run that ends or is
+  suspended while Qory Apiary has the request gets the run's `410` or a `503`, and a
+  caller that hangs up cancels the request to Qory Apiary. A `2xx` admits the
+  connection on the one address.
 - A run whose run configuration has a push credential gets a push proxy, which sets
   the push credentials alone, on their items' hosts and paths, with each item's branch
   guard, and returns a `403` for every other host and path, with the first line "qory:

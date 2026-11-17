@@ -3937,10 +3937,11 @@ preamble and no secret of the link. The directory, mode `0700`, and the socket, 
 
 The socket's peer uid is the whole of the local link's trust. A process of the same
 user that reaches the socket is served as a session is: knowing a local run's id, it can
-post a batch into that run, fetch the run's configuration again, or end the run: with a
-batch that carries its `dev.qory.run.exited`, or with any batch of that run the link
-refuses with `400` `invalid_request` once its body has arrived whole, which ends the
-run `failed` with `batch_refused` (Events, below).
+post a batch into that run, fetch the run's configuration again, send the run's host
+calls, next-session and pushed-commits, to Qory Apiary (The host calls, below), or end
+the run: with a batch that carries its `dev.qory.run.exited`, or with any batch of that
+run the link refuses with `400` `invalid_request` once its body has arrived whole, which
+ends the run `failed` with `batch_refused` (Events, below).
 
 **In one process.** When the session and the gateway share one process, as `qory` runs
 them on one machine, the session reaches the gateway's link in memory and never dials
@@ -4597,8 +4598,17 @@ host, as `Run.NextSession` and `Run.PushedCommits` in Go:
 
 | Request | Qory Apiary's | Largest body | Largest `2xx` body |
 |---|---|---|---|
-| `POST <run.url>/<run_id>/next-session` | `POST <run.url>/<run_id>/next-session` | 4 KiB | 1 MiB, the run documents' limit |
+| `POST <run.url>/<run_id>/next-session` | `POST <run.url>/<run_id>/next-session` | 4 KiB | a `200` of 1 MiB, the run documents' limit, and any other `2xx` of 64 KiB |
 | `POST <run.url>/<run_id>/pushed-commits` | `POST <run.url>/<run_id>/pushed-commits` | 64 KiB | 64 KiB |
+
+Qory Apiary returns a next-session answer with `200`. The gateway reads at most one
+byte over the limit of the answer's status, so a `201` of more than 64 KiB is a `502`,
+as any answer over its limit.
+
+Only a gateway with no link socket, `gateway.Config.NoLinkSocket` as `qory run` starts
+it, keeps the host calls to the process that holds the link in memory. With a socket,
+any process of the session's user that reaches the socket can send them for a local
+run whose id it knows (The local link, above).
 
 Each is a `POST` to the path of `run.url`, a slash, the `run_id` and the call's name,
 with `Content-Type: application/json`; behind a separate gateway with the run key, as
@@ -4620,9 +4630,9 @@ once the run's close began or for a run with no control plane. The other answers
 | `400` | `run_key_invalid` | `gateway` | behind a separate gateway, a run id that is not the run key's; nothing is sent |
 | `404` | `not_found` | `gateway` | the run has no control plane; nothing is sent |
 | `413` | `payload_too_large` | `gateway` | the body is over its limit; nothing is sent |
-| `410` | the end's code | `gateway` | the run ended at the gateway; nothing is sent |
+| `410` | the end's code | `gateway` | the run ended at the gateway: nothing is sent, or the gateway cancels the request it sent |
 | `502` | `control_plane_unavailable` | `gateway` | no answer of Qory Apiary's, one that fails verification, an unsigned `401` among them, a signed `410`, an answer with no code that is no `2xx`, a `2xx` over its limit, or a `2xx` body without `Content-Type: application/json`; the gateway writes one line to its log |
-| `503` | none | | no body: the gateway closes and suspends the run, or behind a separate gateway the run's reopen goes on; send the request again |
+| `503` | none | | no body: the gateway closes and suspends the run, before the send or while Qory Apiary has the request, or behind a separate gateway the run's reopen goes on; send the request again |
 
 A `410` on the link ends the session's run, and only the gateway ends a run there, so
 Qory Apiary's `410` is a `502`. Qory Apiary returns the same result for a request it
