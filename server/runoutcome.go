@@ -24,12 +24,12 @@ type Outcome struct {
 	// Reason is the starter's reason, a code: a lower-case letter, then lower-case
 	// letters, digits and underscores, up to 64. The server drops one that is no code or
 	// is one of Forager's reserved codes and keeps the outcome. A Reason without a State
-	// is refused before anything is sent. qory sets one of the four end codes of
+	// is refused before anything is sent. qory sets one of the five end codes of
 	// integrations' contracts/run/v1/outcome.schema.json for a failed run:
-	// push_credential_missing, push_refused, prebuilt_image_too_large or
-	// push_not_recorded. None is a reserved code, and Forager passes each unchanged. The
-	// rule that those codes go only with the state failed belongs to that contract and
-	// to the control plane, not to Forager.
+	// push_credential_missing, push_refused, prebuilt_image_too_large, push_not_recorded
+	// or environment_image_missing. None is a reserved code, and Forager passes each
+	// unchanged. The rule that those codes go only with the state failed belongs to that
+	// contract and to the control plane, not to Forager.
 	Reason string `json:"reason,omitempty"`
 	// Time is when the outcome was given, RFC 3339 in UTC with whole seconds. Empty,
 	// PostOutcome sets it from the clock; a caller that tries again with the same Time

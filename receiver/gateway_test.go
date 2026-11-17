@@ -1089,7 +1089,7 @@ func TestTheEndMember(t *testing.T) {
 	}
 }
 
-// TestQorysEndCodesPassTheReceiver pins the four end codes qory sets in a failed run's
+// TestQorysEndCodesPassTheReceiver pins the five end codes qory sets in a failed run's
 // outcome, $defs end_codes of integrations' contracts/run/v1/outcome.schema.json, and
 // push_window_closed, a code of the pattern outside that list, at the receiver: an
 // outcome failed with the code is kept as it came, and the end member of the next 2xx
@@ -1105,6 +1105,7 @@ func TestQorysEndCodesPassTheReceiver(t *testing.T) {
 		{State: "failed", Reason: "push_refused"},
 		{State: "failed", Reason: "prebuilt_image_too_large"},
 		{State: "failed", Reason: "push_not_recorded"},
+		{State: "failed", Reason: "environment_image_missing"},
 		{State: "failed", Reason: "push_window_closed"},
 		{State: "succeeded", Reason: "push_refused"},
 	} {

@@ -1448,15 +1448,15 @@ release may change what an existing document does, and says so under Upgrading.
   code of the reason's pattern that is none of Forager's reserved codes and none of
   the eleven image, workflow, `read_needs_*` and `write_needs_wall` codes, which the
   gateway accepts only before a join. qory closes a run after a join with one of the
-  four end codes of integrations' `contracts/run/v1/outcome.schema.json`:
-  `push_credential_missing`, `push_refused`, `prebuilt_image_too_large` and
-  `push_not_recorded`. The code reaches the server unchanged, as it does from the
-  starter's outcome, where none of the four is a reserved code. Before, the gateway
-  returned `400` `invalid_request` to every starter's reason in the close and ended
-  the run `failed` with `batch_refused`. It still does so for a starter's reason with
-  another state, and for one before a join. The fixture
-  `link-batch-beyond-schema-exited-starter-reason.json` has the state `succeeded`, so
-  it fails the gateway's rule after a join too.
+  five end codes of integrations' `contracts/run/v1/outcome.schema.json`:
+  `push_credential_missing`, `push_refused`, `prebuilt_image_too_large`,
+  `push_not_recorded` and `environment_image_missing`. The code reaches the server
+  unchanged, as it does from the starter's outcome, where none of the five is a
+  reserved code. Before, the gateway returned `400` `invalid_request` to every
+  starter's reason in the close and ended the run `failed` with `batch_refused`. It
+  still does so for a starter's reason with another state, and for one before a join.
+  The fixture `link-batch-beyond-schema-exited-starter-reason.json` has the state
+  `succeeded`, so it fails the gateway's rule after a join too.
 - A run that opens while Qory Apiary restarts opens once Qory Apiary is back. The
   gateway tries the run's registration, or its attach, again 1, 2, 4, 8 and 15 seconds
   after the try before, then every 15 seconds, within 120 seconds of the run request's
