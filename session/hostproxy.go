@@ -1,8 +1,10 @@
 package session
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"slices"
 	"sync"
 
@@ -113,6 +115,21 @@ func (r *Run) HostProxy() (HostProxy, error) {
 	if r.bundleErr != nil {
 		return HostProxy{}, r.bundleErr
 	}
+	var dial func(context.Context) (net.Conn, error)
+	if r.remote != nil {
+		dial = r.link.DialProxy
+	}
+	return r.startForwarder(r.answer.ProxySecret, dial, true)
+}
+
+// startForwarder starts a forwarder on loopback with a fresh password, which the run's
+// masker gets before the forwarder starts, and lists it among the run's host proxies,
+// which the next Join and Close end. On one machine it opens each connection to the
+// gateway's proxy with the relay's preamble and secret; behind a separate gateway it
+// opens each one with dial. With bundle, Env sets the bundle's variables after the proxy
+// variables; without it, only when the run has a bundle. CABundle is the bundle's path,
+// empty for none.
+func (r *Run) startForwarder(secret string, dial func(context.Context) (net.Conn, error), bundle bool) (HostProxy, error) {
 	password, err := newForwarderSecret()
 	if err != nil {
 		return HostProxy{}, err
@@ -120,16 +137,20 @@ func (r *Run) HostProxy() (HostProxy, error) {
 	r.addPassword(password)
 	var fwd *forwarder
 	if r.remote == nil {
-		fwd, err = listenForwarder(link.Loopback, r.disc.Proxy.Address, r.answer.ProxySecret, password)
+		fwd, err = listenForwarder(link.Loopback, r.disc.Proxy.Address, secret, password)
 	} else {
-		fwd, err = listenForwarding(link.Loopback, forwarding{dial: r.link.DialProxy, hold: gatewayHold, password: password})
+		fwd, err = listenForwarding(link.Loopback, forwarding{dial: dial, hold: gatewayHold, password: password})
 	}
 	if err != nil {
 		return HostProxy{}, err
 	}
 	r.hosts.add(fwd)
+	env := fwd.Env()
+	if bundle || r.bundle != "" {
+		env = append(env, r.bundleVars...)
+	}
 	return HostProxy{
-		Env:      append(fwd.Env(), r.bundleVars...),
+		Env:      env,
 		ProxyURL: fwd.URL(),
 		CABundle: r.bundle,
 		close:    func() error { return r.hosts.close(fwd) },
@@ -169,31 +190,11 @@ func (r *Run) StackProxy() (HostProxy, error) {
 	if r.joinAsked.Load() {
 		return HostProxy{}, errStackAfterJoin
 	}
-	password, err := newForwarderSecret()
-	if err != nil {
-		return HostProxy{}, err
+	var dial func(context.Context) (net.Conn, error)
+	if r.remote != nil {
+		dial = r.link.DialStack
 	}
-	r.addPassword(password)
-	var fwd *forwarder
-	if r.remote == nil {
-		fwd, err = listenForwarder(link.Loopback, r.disc.Proxy.Address, r.answer.StackProxySecret, password)
-	} else {
-		fwd, err = listenForwarding(link.Loopback, forwarding{dial: r.link.DialStack, hold: gatewayHold, password: password})
-	}
-	if err != nil {
-		return HostProxy{}, err
-	}
-	r.hosts.add(fwd)
-	env := fwd.Env()
-	if r.bundle != "" {
-		env = append(env, r.bundleVars...)
-	}
-	return HostProxy{
-		Env:      env,
-		ProxyURL: fwd.URL(),
-		CABundle: r.bundle,
-		close:    func() error { return r.hosts.close(fwd) },
-	}, nil
+	return r.startForwarder(r.answer.StackProxySecret, dial, false)
 }
 
 // errStackAfterJoin refuses a stack proxy once a Join of the run has reached its join

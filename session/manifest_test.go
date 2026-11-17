@@ -208,6 +208,9 @@ func byReferenceHolding(g *linktest.Fake, creds []held) {
 				if c.purpose != "" {
 					use["purpose"] = c.purpose
 				}
+				if c.purpose == "push" {
+					a["push_proxy_secret"] = linktest.PushProxySecret
+				}
 				uses = append(uses, use)
 			}
 		}
@@ -453,6 +456,12 @@ func TestTheImageIsCheckedAtItsRegistryBeforeThePull(t *testing.T) {
 				}
 				if !slices.Contains(g.Connects(), "registry.example:443") {
 					t.Errorf("the run's proxy got the CONNECTs %q", g.Connects())
+				}
+				// The image step's dial goes to the run's proxy, never the push proxy.
+				if got := g.Preambles(); slices.ContainsFunc(got, func(p string) bool {
+					return strings.Contains(p, linktest.PushProxySecret) || strings.HasPrefix(p, "QORY-PUSH ")
+				}) {
+					t.Errorf("the image step's connections opened with %q", got)
 				}
 				closed, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded})
 				if err != nil {

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -70,7 +71,9 @@ func TestThePushProxyReachesTheRunsPushProxy(t *testing.T) {
 			}
 			withPush(g, !c.separate)
 			if c.walled {
-				sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+				// A wall with Unwrap, which removes the agent's container as the session
+				// ends: PushProxy waits while a container that can write the binds runs.
+				sp.Wall, sp.Image = &afterWall{}, "example.com/agent:1"
 			}
 			reports := reportsOf(t, &sp)
 			ctx := context.Background()
@@ -393,5 +396,71 @@ func TestAJoinsRecordListsThePushCredential(t *testing.T) {
 	}
 	if want := []any{push, push}; !reflect.DeepEqual(got, want) {
 		t.Errorf("the records' credentials %v, want %v", got, want)
+	}
+}
+
+// TestThePushProxyWaitsForTheRunsContainers pins PushProxy in a walled run with a
+// setup container: while the setup container is up, PushProxy returns the text that
+// starts with RemoveSetup; once RemoveSetup removed it, PushProxy starts; and when the
+// removal failed, so a container may still write the run's binds (ContainerKept),
+// PushProxy returns the text that starts with Close.
+func TestThePushProxyWaitsForTheRunsContainers(t *testing.T) {
+	const setupUp = "Call RemoveSetup before PushProxy: the setup container can still write the run's binds."
+	const kept = "Push after Close returns: a container of the run may still run and write the run's binds."
+	for _, c := range []struct {
+		name      string
+		removeErr error
+		after     string
+	}{{"removed", nil, ""}, {"kept", errors.New("engine down"), kept}} {
+		t.Run(c.name, func(t *testing.T) {
+			sp, g := specGateway(t)
+			withPush(g, true)
+			w := &setupWall{removeErr: c.removeErr}
+			sp.Wall, sp.Image = w, "example.com/agent:1"
+			ctx := context.Background()
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+			if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands[:1]}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.PushProxy(); err == nil || err.Error() != setupUp {
+				t.Errorf("PushProxy with the setup container up: %v, want %q", err, setupUp)
+			}
+			r.RemoveSetup(ctx)
+			_, err = r.PushProxy()
+			switch {
+			case c.after == "" && err != nil:
+				t.Errorf("PushProxy after RemoveSetup: %v", err)
+			case c.after != "" && (err == nil || err.Error() != c.after || !r.ContainerKept()):
+				t.Errorf("PushProxy after a failed removal: %v, ContainerKept %v; want %q", err, r.ContainerKept(), c.after)
+			}
+		})
+	}
+}
+
+// TestTheHostProxyOfAPushRunReachesTheRunsProxy pins the host proxy of a run with a push
+// credential on one machine, before any PushProxy: its request opens with the run's
+// proxy secret, and no connection to the gateway's proxy has the push proxy secret.
+func TestTheHostProxyOfAPushRunReachesTheRunsProxy(t *testing.T) {
+	sp, g := specGateway(t)
+	withPush(g, true)
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+	h, err := r.HostProxy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := throughHost(t, h.ProxyURL, "http://git.example/example-org/app.git/info/refs"); status != http.StatusOK {
+		t.Errorf("the request through the host proxy got %d", status)
+	}
+	if got, want := g.Preambles(), []string{link.RelayPreamble + " " + linktest.ProxySecret}; !slices.Equal(got, want) {
+		t.Errorf("the gateway's proxy saw %q, want %q", got, want)
 	}
 }

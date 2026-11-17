@@ -1,11 +1,12 @@
 package session
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 
 	"github.com/qoryai/forager/event"
-	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/server"
 )
 
@@ -20,10 +21,13 @@ import (
 //
 // It ends at [HostProxy.Close], at the next [Run.Join] or at [Run.Close], as the host
 // proxy does; the gateway keeps the run's push proxy open until the run closes, so a
-// PushProxy after a session reaches it again. An error means no push proxy started: the
-// run's open listed no push credential in policy_applied, a session of the run is
-// running, the run is closed, a copy step is open, the wall of a session could not be
-// removed and may still run, a walled run with an authority has no bundle, or the
+// PushProxy after a session reaches it again. An error means no push proxy started:
+// the run has no push credential (on one machine, the run answer has no
+// push_proxy_secret; behind a separate gateway, the open's policy_applied lists no
+// credential with purpose push), a session of the run is running, the run is closed, a
+// copy step is open, the wall of a session could not be removed and may still run, a
+// container that can write the run's binds may still run ([Run.ContainerKept]), the
+// setup container is up, a walled run with an authority has no bundle, or the
 // forwarder's port could not be opened.
 //
 // On one machine it opens each connection to the gateway's proxy with the relay's
@@ -49,31 +53,27 @@ func (r *Run) PushProxy() (HostProxy, error) {
 	if err := r.wallKept(); err != nil {
 		return HostProxy{}, err
 	}
+	if r.ContainerKept() {
+		return HostProxy{}, errPushContainerKept
+	}
+	if r.setupUp != nil {
+		return HostProxy{}, errPushSetupUp
+	}
 	if r.bundleErr != nil {
 		return HostProxy{}, r.bundleErr
 	}
-	password, err := newForwarderSecret()
-	if err != nil {
-		return HostProxy{}, err
+	var dial func(context.Context) (net.Conn, error)
+	if r.remote != nil {
+		dial = r.link.DialPush
 	}
-	r.addPassword(password)
-	var fwd *forwarder
-	if r.remote == nil {
-		fwd, err = listenForwarder(link.Loopback, r.disc.Proxy.Address, r.answer.PushProxySecret, password)
-	} else {
-		fwd, err = listenForwarding(link.Loopback, forwarding{dial: r.link.DialPush, hold: gatewayHold, password: password})
-	}
-	if err != nil {
-		return HostProxy{}, err
-	}
-	r.hosts.add(fwd)
-	return HostProxy{
-		Env:      append(fwd.Env(), r.bundleVars...),
-		ProxyURL: fwd.URL(),
-		CABundle: r.bundle,
-		close:    func() error { return r.hosts.close(fwd) },
-	}, nil
+	return r.startForwarder(r.answer.PushProxySecret, dial, true)
 }
+
+// The errors of PushProxy while a container that can write the run's binds may run.
+var (
+	errPushContainerKept = errors.New("Push after Close returns: a container of the run may still run and write the run's binds.")
+	errPushSetupUp       = errors.New("Call RemoveSetup before PushProxy: the setup container can still write the run's binds.")
+)
 
 // hasPush reports whether the run has a push proxy at the gateway: on one machine, the
 // run answer's push_proxy_secret, and behind a separate gateway, a credential with
