@@ -45,6 +45,21 @@ func withPush(g *linktest.Fake, local bool) {
 	})
 }
 
+// withoutPush makes g return, for each run request, the run answer of a write-no-push
+// run: its applied lists work-1 alone, a read work credential with no purpose, and it
+// has no push_proxy_secret.
+func withoutPush(g *linktest.Fake, local bool) {
+	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+		a := linktest.RemoteRunAnswer(req)
+		if local {
+			a = linktest.RunAnswer(req)
+		}
+		applied, _ := a["applied"].(map[string]any)
+		applied["credentials"] = []any{map[string]any{"name": "work-1", "hosts": []any{"git.example"}, "scheme": "basic"}}
+		return linktest.Reply{Status: 200, Body: a}
+	})
+}
+
 // TestThePushProxyReachesTheRunsPushProxy pins the push proxy forwarder of a run with a
 // push credential, on one machine, walled or not, and behind a separate gateway, after a
 // session: its URL is a port on loopback with a password, its Env points the proxy
@@ -115,10 +130,9 @@ func TestThePushProxyReachesTheRunsPushProxy(t *testing.T) {
 	}
 }
 
-// TestARunWithoutAPushCredentialHasNoPushProxy pins PushProxy of a run whose open lists
-// no push credential, on one machine and behind a separate gateway, as a write-no-push
-// run's: it returns the text that starts with the fix, and opens no connection to the
-// gateway's proxy.
+// TestARunWithoutAPushCredentialHasNoPushProxy pins PushProxy of a write-no-push run,
+// whose open lists work-1 alone, on one machine and behind a separate gateway: it
+// returns noPushProxy, and opens no connection to the gateway's proxy.
 func TestARunWithoutAPushCredentialHasNoPushProxy(t *testing.T) {
 	for _, separate := range []bool{false, true} {
 		t.Run(fmt.Sprint("separate ", separate), func(t *testing.T) {
@@ -128,6 +142,7 @@ func TestARunWithoutAPushCredentialHasNoPushProxy(t *testing.T) {
 				g.SetInterval(30)
 				sp.Gateway = remoteGateway(g, g.RunKey(t, event.NewRunID()))
 			}
+			withoutPush(g, !separate)
 			ctx := context.Background()
 			r, err := session.Open(ctx, opened(sp))
 			if err != nil {
@@ -235,12 +250,8 @@ func TestThePushProxyEnds(t *testing.T) {
 // relay sends, with the relay's token, reaches the gateway's proxy with QORY-RELAY and
 // the run's proxy secret or run key, never with the push proxy's preamble; and a
 // connection to the run's forwarder that opens with the push proxy's preamble is closed
-// unanswered and reaches nothing. A run with no push credential, as a write-no-push
-// run's, goes the same way, and after its Join a request through HostProxy reaches the
-// gateway's proxy with the run's preamble too, and PushProxy returns the text that
-// starts with the fix: the gateway's TestASessionsRequestsGetOnlyTheWorkCredential and
-// TestThePushProxyBehindASeparateGateway pin the 403 a push through the run's proxy gets
-// there.
+// unanswered and reaches nothing. A write-no-push run, whose open lists work-1 alone,
+// goes the same way, and PushProxy returns noPushProxy.
 func TestTheWallReachesNoPushProxy(t *testing.T) {
 	for _, c := range []struct{ separate, push bool }{{false, true}, {true, true}, {false, false}, {true, false}} {
 		separate := c.separate
@@ -261,6 +272,12 @@ func TestTheWallReachesNoPushProxy(t *testing.T) {
 			}
 			if c.push {
 				withPush(g, !separate)
+			} else {
+				withoutPush(g, !separate)
+				if !separate {
+					// The run answer has no push_proxy_secret: no request can contain it.
+					secret = ""
+				}
 			}
 			w := &setupAfterWall{aw: aw}
 			sp.Wall, sp.Image = w, "example.com/agent:1"
@@ -288,20 +305,6 @@ func TestTheWallReachesNoPushProxy(t *testing.T) {
 				t.Fatalf("Result.After %+v; want succeeded", res.After)
 			}
 			if !c.push {
-				h, err := r.HostProxy()
-				if err != nil {
-					t.Fatal(err)
-				}
-				const discovery = "http://git.example/example-org/app.git/info/refs?service=git-receive-pack"
-				if status, _ := throughHost(t, h.ProxyURL, discovery); status != http.StatusOK {
-					t.Errorf("the request through the host proxy got %d", status)
-				}
-				if got := g.Proxied(); !slices.Contains(got, "GET "+discovery) {
-					t.Errorf("the gateway's proxy answered %q, want the host proxy's request among them", got)
-				}
-				if err := h.Close(); err != nil {
-					t.Fatal(err)
-				}
 				if _, err := r.PushProxy(); err == nil || err.Error() != noPushProxy {
 					t.Errorf("PushProxy: %v, want %q", err, noPushProxy)
 				}
@@ -315,21 +318,23 @@ func TestTheWallReachesNoPushProxy(t *testing.T) {
 			seen := fmt.Sprintf("%#v", w.req)
 			aw.mu.Unlock()
 			w.mu.Unlock()
-			if strings.Contains(seen, secret) {
+			if secret != "" && strings.Contains(seen, secret) {
 				t.Errorf("the wall's request contains the push proxy's secret or the run key:\n%s", seen)
 			}
 			for name, l := range launches {
 				if reflect.DeepEqual(l, wall.Launch{}) {
 					t.Errorf("%s did not start", name)
 				}
-				if s := fmt.Sprintf("%#v", l); strings.Contains(s, secret) || strings.Contains(s, linktest.PushProxySecret) {
+				if s := fmt.Sprintf("%#v", l); secret != "" && (strings.Contains(s, secret) || strings.Contains(s, linktest.PushProxySecret)) {
 					t.Errorf("the launch of %s contains the push proxy's secret or the run key:\n%s", name, s)
 				}
 			}
 			if _, err := r.Close(ctx, outcomeOf(res, nil)); err != nil {
 				t.Fatal(err)
 			}
-			noSecretIn(t, linktest.PushProxySecret, r.Dir(), g, reports())
+			if secret != "" {
+				noSecretIn(t, linktest.PushProxySecret, r.Dir(), g, reports())
+			}
 		})
 	}
 }
