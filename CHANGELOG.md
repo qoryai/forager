@@ -10,6 +10,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- A gateway built before this change answers `405` to the link's host calls, `POST
+  <run.url>/<run_id>/next-session` and `POST <run.url>/<run_id>/pushed-commits`: run
+  `Run.NextSession` and `Run.PushedCommits` against a gateway of this change.
 - A gateway built before this change fails a run whose run configuration has a
   credential with `purpose: push` with `run_configuration_invalid`, and reads a
   `QORY-PUSH` connection on its one address as a request of the link's HTTP. A schema
@@ -272,6 +275,16 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- Two host calls of the gateway's link, `POST <run.url>/<run_id>/next-session` and
+  `POST <run.url>/<run_id>/pushed-commits`, and `Run.NextSession` and
+  `Run.PushedCommits`, which send them: the gateway forwards the body unread to Qory
+  Apiary's run endpoint, signed with its access key, and returns the answer unread.
+  The bodies are at most 4 KiB and 64 KiB, and the answers 1 MiB and 64 KiB. A signed
+  coded refusal of Qory Apiary's passes with its status and `from: apiary`; the
+  gateway's refusals are `413` `payload_too_large` for a body over the limit and `502`
+  `control_plane_unavailable` when no valid answer came. No container reaches either
+  call: they go over the link alone, and the run API's route answers `404` to both
+  paths (§The gateway's link, The host calls).
 - A host credential may have `purpose: push`, for qory's push and the pull request
   calls of its submit step through the run's push proxy (§Credentials, Push
   credentials). The run answer has `push_proxy_secret` on the local link for such a
