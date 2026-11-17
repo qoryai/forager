@@ -56,6 +56,11 @@ type apiary struct {
 	// every attach, those among them.
 	failAttaches int
 	tried        []triedAttach
+	// hostCalls are the host calls the apiary got; reports are the lines of the
+	// gateway of separateRun, and oneAddress is that gateway's one address.
+	hostCalls  hostCallLog
+	reports    []string
+	oneAddress string
 }
 
 // triedAttach is an attach the apiary got: its X-Qory-Instance-Id, the run key of its
@@ -102,7 +107,7 @@ func (a *apiary) configuration() ([]byte, string) {
 // starter's registration, or a 503 while failAttaches is above 0, a reload and a
 // batch, whose events it keeps.
 func (a *apiary) handle(w http.ResponseWriter, r *http.Request) {
-	if runAPIAnswers(a.signer, w, r) {
+	if a.hostCalls.answer(a.signer, w, r) || runAPIAnswers(a.signer, w, r) {
 		return
 	}
 	body, _ := io.ReadAll(r.Body)
