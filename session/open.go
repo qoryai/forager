@@ -513,15 +513,22 @@ func (r *Run) start(ctx context.Context) (err error) {
 		}
 	}
 	// On one machine the proxy secret opens every connection to the gateway's proxy,
-	// written by a forwarder or by the wall's relay, and the stack proxy secret every
-	// connection of the stack proxy's forwarder: one no preamble contains is no run.
-	// Behind a separate gateway the run key opens them, and the answer has neither.
+	// written by a forwarder or by the wall's relay, the stack proxy secret every
+	// connection of the stack proxy's forwarder, and the push proxy secret, when the run
+	// has a push credential, every connection of the push proxy's forwarder: one no
+	// preamble contains is no run. Behind a separate gateway the run key opens them, and
+	// the answer has none.
 	if r.remote == nil {
 		if err := link.CheckSecret(answer.ProxySecret); err != nil {
 			return fail2(fmt.Errorf("the gateway's proxy secret: %w", err))
 		}
 		if err := link.CheckSecret(answer.StackProxySecret); err != nil {
 			return fail2(fmt.Errorf("Use a gateway that sends stack_proxy_secret on its local link: the run answer's stack_proxy_secret is missing or malformed: %w", err))
+		}
+		if answer.PushProxySecret != "" {
+			if err := link.CheckSecret(answer.PushProxySecret); err != nil {
+				return fail2(fmt.Errorf("Use a gateway that sends a valid push_proxy_secret on its local link.\nThe run answer's push_proxy_secret is malformed: %w", err))
+			}
 		}
 	}
 	// Behind a wall, the run's wall is built as the run opens: its networks, the run's
