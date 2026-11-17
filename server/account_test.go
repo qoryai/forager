@@ -77,6 +77,8 @@ func TestAReservedAccountHeaderIsRefused(t *testing.T) {
 // path with one. A segment counts by its part before its first ; or %3B, as a server
 // such as Tomcat reads it. A dot inside a name, or after the last slash of a path that
 // ends in *, is no segment, and a ; after a name starts a parameter of a normal segment.
+// server.UnclearPath reports each refused path and none of the taken ones, a path with
+// a {} segment among them, as does the fixture model-keys-openai-paths-segment.json.
 func TestAnUnclearModelKeyPathIsRefused(t *testing.T) {
 	for _, p := range []string{"/a/../b", "/a/./b", "/..", "/.", "/a/..", "/a/../*", "/a/./*", "/./*", "/a//b", "//*",
 		"/a/%2e%2e/b", "/a%2Fb", "/a%5cb", "/a%25b", `/a\b`, "/a/%2e*",
@@ -88,14 +90,32 @@ func TestAnUnclearModelKeyPathIsRefused(t *testing.T) {
 		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !strings.Contains(err.Error(), "the proxy denies every request whose path has one") {
 			t.Errorf("path %s: %v", p, err)
 		}
+		if !server.UnclearPath(p) {
+			t.Errorf("UnclearPath(%s) is false; want true", p)
+		}
 	}
 	for _, p := range []string{"/a/.well-known", "/a/.*", "/a/..*", "/a/..b", "/a.b/c", "/backend-api/codex/*", "/a/", "/*",
-		"/a/b;jsessionid=0123/c", "/a/b;jsessionid=0123", "/a/..b;x/c", "/a/b%3bx/c"} {
+		"/a/b;jsessionid=0123/c", "/a/b;jsessionid=0123", "/a/..b;x/c", "/a/b%3bx/c",
+		"/backend-api/{}/responses", "/repos/example-org/app/pulls/{}", "/a/{}/*", "/{}"} {
 		c := subscription()
 		c.Paths = []string{p}
 		if err := server.CheckCredentials([]server.RunCredential{c}, ""); err != nil {
 			t.Errorf("path %s: %v", p, err)
 		}
+		if server.UnclearPath(p) {
+			t.Errorf("UnclearPath(%s) is true; want false", p)
+		}
+	}
+	b, err := fs.ReadFile(contracts.FS, "fixtures/run-configuration/model-keys-openai-paths-segment.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rc server.RunConfiguration
+	if err := jsonv2.Unmarshal(b, &rc); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.CheckCredentials(rc.Credentials, rc.ModelCredential); err != nil {
+		t.Errorf("model-keys-openai-paths-segment.json: %v", err)
 	}
 }
 
