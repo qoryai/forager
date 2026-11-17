@@ -453,7 +453,9 @@ fixed when the run starts: a reload ignores it.
 A host credential with `purpose: push` is for qory's push of the work item's branch and
 the pull request calls of its submit step. Forager has no access level: Qory Apiary sends
 a push credential only for a `write` run, beside a read work credential. A run with no
-push credential opens no push proxy, so nothing in it can push with a push credential.
+push credential, such as a `write-no-push` run, has no push proxy: `PushProxy` returns
+an error, and a push through the run's proxy gets the branch guard's `403`,
+`wall:push-ref`, unless a work credential has a `push_ref`.
 
 ```json
 {"version": 1,
