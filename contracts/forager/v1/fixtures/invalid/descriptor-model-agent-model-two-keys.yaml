@@ -1,0 +1,10 @@
+# The agent place of an agent's model id is one key: frontmatter or toml, not both.
+version: 1
+runtime: amp
+sources: {output: {format: jsonl}}
+rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]
+model:
+  formats: [anthropic-messages]
+  model: {flag: --model}
+  agent: {frontmatter: model, toml: model}
+  endpoint: {variable: AMP_BASE_URL}

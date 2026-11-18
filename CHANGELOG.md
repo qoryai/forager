@@ -334,6 +334,16 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The agent places of an agent file of TOML, and Codex's: a descriptor's agent place,
+  `model.effort.agent`, takes `toml`, a key at the top of the agent's file, in place of
+  `frontmatter`, exactly one of the two; and `model.agent`, optional, is where an
+  agent's model id goes, `{frontmatter}` or `{toml}` with no `values`. Codex's
+  descriptor places an agent's model id in `{toml: model}` and an agent's effort value
+  in `{toml: model_reasoning_effort}`, with the run's seven values, `none` to `ultra`:
+  a Codex 0.167.2 agent file, such as `$CODEX_HOME/agents/reviewer.toml`, takes the
+  keys of `config.toml` at its top. `runtimes.json` lists both, `runtimes.ModelPlaces`
+  has `Agent`, a `*runtimes.AgentKey`, and `runtimes.AgentPlace` has `TOML`. A
+  composer that reads `frontmatter` alone finds no agent place in Codex's entry.
 - Two host calls of the gateway's link, `POST <run.url>/<run_id>/next-session` and
   `POST <run.url>/<run_id>/pushed-commits`, and `Run.NextSession` and
   `Run.PushedCommits`, which send them: the gateway forwards the body unread to Qory

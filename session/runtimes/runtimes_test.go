@@ -202,9 +202,10 @@ func TestADescriptorSaysWhereItsModelGoesThroughTheOptionalInterface(t *testing.
 	doc := other + `model:
   formats: [openai-responses, openai-chat]
   model: {setting: agent.model}
+  agent: {toml: model}
   effort:
     run: {flag: --effort, values: [low, high]}
-    agent: {frontmatter: effort, values: [low, high, max]}
+    agent: {toml: model_reasoning_effort, values: [low, high, max]}
   endpoint: {variable: OTHER_BASE_URL}
   overrides: [OTHER_MODEL]
 `
@@ -219,9 +220,10 @@ func TestADescriptorSaysWhereItsModelGoesThroughTheOptionalInterface(t *testing.
 	want := runtimes.ModelPlaces{
 		Formats: []string{"openai-responses", "openai-chat"},
 		Model:   runtimes.Place{Setting: "agent.model"},
+		Agent:   &runtimes.AgentKey{TOML: "model"},
 		Effort: &runtimes.Effort{
 			Run:   runtimes.ValuedPlace{Place: runtimes.Place{Flag: "--effort"}, Values: []string{"low", "high"}},
-			Agent: &runtimes.AgentPlace{Frontmatter: "effort", Values: []string{"low", "high", "max"}},
+			Agent: &runtimes.AgentPlace{TOML: "model_reasoning_effort", Values: []string{"low", "high", "max"}},
 		},
 		Endpoint:  runtimes.Endpoint{Variable: "OTHER_BASE_URL"},
 		Overrides: []string{"OTHER_MODEL"},
@@ -233,7 +235,8 @@ func TestADescriptorSaysWhereItsModelGoesThroughTheOptionalInterface(t *testing.
 	got.Formats[0] = "gemini"
 	got.Effort.Run.Values[0] = "changed"
 	got.Effort.Agent.Values[0] = "changed"
-	got.Effort.Agent.Frontmatter = "changed"
+	got.Effort.Agent.TOML = "changed"
+	got.Agent.TOML = "changed"
 	got.Overrides[0] = "CHANGED"
 	if again, _ := m.Model(); !reflect.DeepEqual(again, want) {
 		t.Errorf("a change to what Model returned reached the runtime: %+v", again)

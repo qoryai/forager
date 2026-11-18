@@ -1,0 +1,12 @@
+# An agent place names a key of the agent's file, frontmatter or toml.
+version: 1
+runtime: amp
+sources: {output: {format: jsonl}}
+rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]
+model:
+  formats: [anthropic-messages]
+  model: {flag: --model}
+  effort:
+    run: {flag: --effort, values: [low, high]}
+    agent: {values: [low, high]}
+  endpoint: {variable: AMP_BASE_URL}

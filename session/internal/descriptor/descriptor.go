@@ -168,6 +168,9 @@ type Model struct {
 	Formats []string `yaml:"formats" json:"formats"`
 	// Model is where the run's model id goes.
 	Model Place `yaml:"model" json:"model"`
+	// Agent is where an agent's model id goes, in the agent's file; nil when the
+	// runtime has no place for one.
+	Agent *AgentKey `yaml:"agent" json:"agent,omitempty"`
 	// Effort is where an effort value goes; nil when the runtime has no place for one.
 	Effort *Effort `yaml:"effort" json:"effort,omitempty"`
 	// Endpoint is where the base URL of the run's model API goes.
@@ -205,10 +208,19 @@ type ValuedPlace struct {
 	Values []string `yaml:"values" json:"values"`
 }
 
-// AgentPlace is where a value goes in an agent's file: Frontmatter, a key of the file's
-// frontmatter, and the values the runtime accepts there.
+// AgentKey is where a value goes in an agent's file, exactly one of its fields set:
+// Frontmatter, a key of the file's frontmatter, for an agent file of Markdown; TOML, a
+// key at the top of the file, for an agent file of TOML.
+type AgentKey struct {
+	Frontmatter string `yaml:"frontmatter" json:"frontmatter,omitempty"`
+	TOML        string `yaml:"toml" json:"toml,omitempty"`
+}
+
+// AgentPlace is where a value goes in an agent's file, exactly one of Frontmatter and
+// TOML set as in [AgentKey], and the values the runtime accepts there.
 type AgentPlace struct {
-	Frontmatter string   `yaml:"frontmatter" json:"frontmatter"`
+	Frontmatter string   `yaml:"frontmatter" json:"frontmatter,omitempty"`
+	TOML        string   `yaml:"toml" json:"toml,omitempty"`
 	Values      []string `yaml:"values" json:"values"`
 }
 

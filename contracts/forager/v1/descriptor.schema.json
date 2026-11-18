@@ -178,7 +178,7 @@
       }
     },
     "model": {
-      "description": "The model API formats the runtime sends its requests in, where a composer writes a run's model id, effort value and model endpoint for the runtime, and the variables it reads a model key from. runtimes.json lists it for every descriptor that has one.",
+      "description": "The model API formats the runtime sends its requests in, where a composer writes a run's model id, effort value and model endpoint for the runtime, where it writes an agent's model id and effort value in the agent's file, and the variables the runtime reads a model key from. runtimes.json lists it for every descriptor that has one.",
       "type": "object",
       "additionalProperties": false,
       "required": ["formats", "model", "endpoint"],
@@ -191,6 +191,7 @@
           "items": {"$ref": "api-format.schema.json"}
         },
         "model": {"description": "Where the run's model id goes.", "$ref": "#/$defs/place"},
+        "agent": {"description": "Where an agent's model id goes, in the agent's file. Absent, the runtime has no place for an agent's model id.", "$ref": "#/$defs/agent_key"},
         "effort": {
           "description": "Where an effort value goes, and the values the runtime accepts there. Absent, the runtime has no place for one.",
           "type": "object",
@@ -491,16 +492,29 @@
       },
       "oneOf": [{"required": ["flag"]}, {"required": ["setting"]}, {"required": ["variable"]}]
     },
-    "agent_place": {
-      "description": "Where a value goes in an agent's file: frontmatter, a key of the file's frontmatter, and in values the values the runtime accepts there.",
+    "agent_key": {
+      "description": "Where a value goes in an agent's file, exactly one of: frontmatter, a key of the file's frontmatter, for an agent file of Markdown; toml, a key at the top of the file, for an agent file of TOML.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["frontmatter", "values"],
       "properties": {
-        "frontmatter": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"},
-        "values": {"$ref": "#/$defs/values"}
-      }
+        "frontmatter": {"$ref": "#/$defs/agent_file_key"},
+        "toml": {"$ref": "#/$defs/agent_file_key"}
+      },
+      "oneOf": [{"required": ["frontmatter"]}, {"required": ["toml"]}]
     },
+    "agent_place": {
+      "description": "Where a value goes in an agent's file, exactly one of frontmatter and toml as in agent_key, and in values the values the runtime accepts there.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["values"],
+      "properties": {
+        "frontmatter": {"$ref": "#/$defs/agent_file_key"},
+        "toml": {"$ref": "#/$defs/agent_file_key"},
+        "values": {"$ref": "#/$defs/values"}
+      },
+      "oneOf": [{"required": ["frontmatter"]}, {"required": ["toml"]}]
+    },
+    "agent_file_key": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"},
     "flag": {"type": "string", "pattern": "^--[a-z][a-z0-9-]{0,63}$"},
     "setting": {"type": "string", "maxLength": 256, "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"},
     "values": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,

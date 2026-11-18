@@ -171,9 +171,24 @@
         "model": {
           "flag": "--model"
         },
+        "agent": {
+          "toml": "model"
+        },
         "effort": {
           "run": {
             "setting": "model_reasoning_effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "ultra"
+            ]
+          },
+          "agent": {
+            "toml": "model_reasoning_effort",
             "values": [
               "none",
               "low",

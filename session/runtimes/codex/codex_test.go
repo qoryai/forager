@@ -31,9 +31,11 @@ func TestCodexIsARuntime(t *testing.T) {
 }
 
 // TestCodexReadsItsKeyFromOpenAIAPIKey pins the model section: the Responses format,
-// the model id as --model, the effort in model_reasoning_effort with its seven values,
-// the endpoint in the provider's base_url, and OPENAI_API_KEY for an API key and for a
-// subscription login's token alike.
+// the model id as --model, an agent's model id in the key model of its TOML file, the
+// effort in model_reasoning_effort with its seven values, an agent's effort in the key
+// model_reasoning_effort of its TOML file with the same values, the endpoint in the
+// provider's base_url, and OPENAI_API_KEY for an API key and for a subscription
+// login's token alike.
 func TestCodexReadsItsKeyFromOpenAIAPIKey(t *testing.T) {
 	rt, err := codex.New()
 	if err != nil {
@@ -43,11 +45,15 @@ func TestCodexReadsItsKeyFromOpenAIAPIKey(t *testing.T) {
 	if !ok {
 		t.Fatal("no model section")
 	}
+	efforts := []string{"none", "low", "medium", "high", "xhigh", "max", "ultra"}
 	want := runtimes.ModelPlaces{
 		Formats: []string{"openai-responses"},
 		Model:   runtimes.Place{Flag: "--model"},
-		Effort: &runtimes.Effort{Run: runtimes.ValuedPlace{Place: runtimes.Place{Setting: "model_reasoning_effort"},
-			Values: []string{"none", "low", "medium", "high", "xhigh", "max", "ultra"}}},
+		Agent:   &runtimes.AgentKey{TOML: "model"},
+		Effort: &runtimes.Effort{
+			Run:   runtimes.ValuedPlace{Place: runtimes.Place{Setting: "model_reasoning_effort"}, Values: efforts},
+			Agent: &runtimes.AgentPlace{TOML: "model_reasoning_effort", Values: efforts},
+		},
 		Endpoint: runtimes.Endpoint{Setting: "model_providers.qory.base_url"},
 		Keys: []runtimes.Key{
 			{Format: "openai-responses", Auth: runtimes.Auth{Scheme: "bearer"}, Variable: "OPENAI_API_KEY"},
