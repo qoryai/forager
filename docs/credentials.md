@@ -324,7 +324,7 @@ values. An entry is one of two kinds:
 {"version": 1,
  "model_credential": "model",
  "credentials": [
-   {"name": "model", "format": "anthropic-messages",
+   {"name": "model", "group": "anthropic", "format": "anthropic-messages",
     "endpoint": "https://api.model.example/anthropic",
     "auth": {"scheme": "header", "header": "x-api-key"},
     "key_prefixes": ["sk-ant-"]},
@@ -438,7 +438,7 @@ both or neither. The proxy sets the header beside the token, to the string that
 subscription login is such a key:
 
 ```json
-{"name": "subscription", "format": "openai-responses",
+{"name": "subscription", "group": "openai", "format": "openai-responses",
  "endpoint": "https://chatgpt.example/backend-api/codex",
  "auth": {"scheme": "bearer", "oauth": true, "account_header": "chatgpt-account-id",
           "account_claim": "/https:~1~1api.openai.com~1auth/chatgpt_account_id"},

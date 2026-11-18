@@ -876,7 +876,7 @@ values the server stores for the run, at most 16, and `model_credential`
 ```json
 "model_credential": "model",
 "credentials": [
-  {"name": "model", "format": "anthropic-messages",
+  {"name": "model", "group": "anthropic", "format": "anthropic-messages",
    "endpoint": "https://api.model.example/anthropic",
    "auth": {"scheme": "header", "header": "x-api-key"},
    "key_prefixes": ["sk-ant-"]},
@@ -1256,7 +1256,7 @@ a JSON pointer (RFC 6901, with `~1` for `/` and `~0` for `~` inside a member nam
 string in the token's JWT payload. A ChatGPT subscription is such a key:
 
 ```json
-{"name": "subscription", "format": "openai-responses",
+{"name": "subscription", "group": "openai", "format": "openai-responses",
  "endpoint": "https://chatgpt.example/backend-api/codex",
  "auth": {"scheme": "bearer", "oauth": true, "account_header": "chatgpt-account-id",
           "account_claim": "/https:~1~1api.openai.com~1auth/chatgpt_account_id"},

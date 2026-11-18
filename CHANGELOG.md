@@ -459,10 +459,9 @@ release may change what an existing document does, and says so under Upgrading.
   it ends, before `dev.qory.run.exited`. `request_id` is that of the request's
   `dev.qory.run.egress`. A link batch with the type is refused, as one with
   `dev.qory.run.egress` is. README §The events, Writes to a target.
-- Several model keys per run. When the start key is an API credential, the key group is
-  the start key and every API credential with its `format`, `auth` and `endpoint`, in the
-  order of `credentials`. The keys of the group share the start key's placeholder, and
-  the proxy sets one of them, the active key. The proxy keeps a copy of each request body
+- Several model keys per run. The API credentials with one `group` value are one key
+  group, in the order of `credentials`. The keys of a group share the placeholder of the
+  group's first key, and the proxy sets one of them, the group's active key. The proxy keeps a copy of each request body
   to the model endpoint, up to 8 MiB, until the answer's status arrives. On a `429` from
   the provider it puts the key in cooldown, makes the next key of the group the active
   key, and sends the request again from the copy, so the session does not see the
@@ -471,10 +470,10 @@ release may change what an existing document does, and says so under Upgrading.
   after the refusal: without it, 60 seconds for an API key and 3600 for a subscription.
   An `error` event of the type `rate_limit_error` in the streamed `200` of a `POST` to
   the model API's messages path, `/v1/messages` under the endpoint, puts the key in
-  cooldown and switches the active key too. The active key stays across sessions, and a
-  join request without `model_credential` gets it. The run configuration's API
-  credential has `resets_at`, `schedule_resets_at` and `pause_for_s`. README §Credentials,
-  Several model keys.
+  cooldown and switches the active key too. A group's active key stays across sessions,
+  and a join request without `model_credential` gets the active key of the start key's
+  group. The run configuration's API credential has `resets_at`, `schedule_resets_at` and
+  `pause_for_s`. README §Credentials, Several model keys.
 - A key's Use up to percentage: the run configuration's API credential has
   `use_up_to_percent`, 1 to 99, and `use_up_to_windows`, the limit windows it applies
   to, such as `five_hour` and `seven_day`. Runs use the key while every listed window's
@@ -1476,7 +1475,7 @@ release may change what an existing document does, and says so under Upgrading.
   no key is left; the gateway's answer to the session's next batch then has `stop`,
   `model_key_limit`. From then until the session's join ends, each request with the
   placeholder gets the proxy's `429`, `The gateway sends no more model requests in this
-  session: every model key of the run's key group is at its provider's limit, at its
+  session: every model key of the session's key group is at its provider's limit, at its
   Use up to percentage, or out of use after a 401 (unauthorized) of its provider, or
   the gateway could not send a request again with the next key after a limit response
   (a request over 8 MiB, a key whose credential does not cover the path, or an

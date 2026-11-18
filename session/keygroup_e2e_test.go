@@ -122,6 +122,17 @@ type keyControl struct {
 
 func newKeyControl(t *testing.T, provider string) *keyControl {
 	t.Helper()
+	credential := func(name string) string {
+		return `{"name":"` + name + `"` + groupMember + `,"format":"anthropic-messages","endpoint":"https://` + provider + `/v1","auth":{"scheme":"header","header":"x-api-key"}}`
+	}
+	return newKeyControlOf(t, credential("model")+`,`+credential("model-2"), "model", map[string]string{"model": limitedValue, "model-2": servedValue})
+}
+
+// newKeyControlOf is a keyControl whose run configuration has the API credentials
+// credentials, a JSON list's items, and the start key start, and whose secrets endpoint
+// serves values, by name.
+func newKeyControlOf(t *testing.T, credentials, start string, values map[string]string) *keyControl {
+	t.Helper()
 	key, signer := mustKey(t), mustKey(t)
 	store, err := receiver.OpenFile(filepath.Join(t.TempDir(), "received.jsonl"))
 	if err != nil {
@@ -129,12 +140,8 @@ func newKeyControl(t *testing.T, provider string) *keyControl {
 	}
 	t.Cleanup(func() { store.Close() })
 	c := &keyControl{key: key, pin: accesskey.Pin{{Alg: "ed25519", PublicKey: signer.PublicKey().String()}}}
-	credential := func(name string) string {
-		return `{"name":"` + name + `"` + groupMember + `,"format":"anthropic-messages","endpoint":"https://` + provider + `/v1","auth":{"scheme":"header","header":"x-api-key"}}`
-	}
 	doc := []byte(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},` +
-		`"credentials":[` + credential("model") + `,` + credential("model-2") + `],"model_credential":"model"}`)
-	values := map[string]string{"model": limitedValue, "model-2": servedValue}
+		`"credentials":[` + credentials + `],"model_credential":"` + start + `"}`)
 	h := &receiver.Handler{
 		Keys: func(k string) (receiver.AccessKey, bool) {
 			return receiver.AccessKey{PublicKey: key.PublicKey(), StoredSecrets: true}, k == testKeyID
@@ -275,5 +282,88 @@ func TestTheNextSessionGetsTheGroupsPlaceholder(t *testing.T) {
 	}
 	if !slices.Equal(second, []string{servedValue}) {
 		t.Errorf("the provider got session 2's request with x-api-key %q, want model-2's value once", second)
+	}
+}
+
+// runKeySessions runs one session per entry of models in one run of a real gateway
+// whose control is c, in front of provider: each session joins with that model key,
+// none for "", and its agent is keyRequest with the session's number, from 1, as
+// x-test-session. It returns each session's environment, and fails the test when a
+// session's request did not get a 200.
+func runKeySessions(t *testing.T, provider *keyProvider, c *keyControl, models []string) []map[string]string {
+	t.Helper()
+	authority := filepath.Join(t.TempDir(), "provider-ca.pem")
+	if err := os.WriteFile(authority, provider.ca, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(session.SetMachineBundles([]string{authority}))
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(provider.ca)
+	sp := spec(t)
+	sp.Forwarder = nil
+	cfg := gateway.Config{Server: c.server(), Version: "test", Heartbeat: time.Second,
+		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost"}}}}
+	trustUpstream(t, &cfg, roots)
+	rg := startGateway(t, &sp, cfg)
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	var envs, outs []string
+	for i, model := range models {
+		n := fmt.Sprint(i + 1)
+		env, out := filepath.Join(dir, "env-"+n), filepath.Join(dir, "curl-"+n)
+		s := sp.SessionSpec
+		s.ModelCredential = model
+		s.Command, s.Args = installedShell, []string{"-c", keyRequest, env, n, out}
+		if _, err := r.Join(ctx, s); err != nil {
+			t.Fatalf("session %s: %v", n, err)
+		}
+		envs, outs = append(envs, env), append(outs, out)
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	rg.close(t)
+	var got []map[string]string
+	for i, out := range outs {
+		b, _ := os.ReadFile(out)
+		e, _ := os.ReadFile(out + ".err")
+		if status := strings.TrimSpace(string(b)); status != "200 0" {
+			t.Errorf("session %d: curl's status and exit code %q, want 200 0; curl wrote %q", i+1, status, e)
+		}
+		got = append(got, envOf(t, envs[i]))
+	}
+	return got
+}
+
+// TestASessionOnAnotherGroupGetsThatGroupsPlaceholder pins two key groups whose keys
+// alternate in the run configuration, end to end through a real gateway: a with the
+// start key a-1 and a-2, and b with b-1 and b-2. Session 1 joins with no key in its
+// request and gets a-1's placeholder; its request reaches the provider with a-1's
+// value. Session 2 joins with b-2, of group b, which no session used: it gets b-1's
+// placeholder, the placeholder of group b's first key, which the proxy sets b-2 on, and
+// its request reaches the provider with b-2's value.
+func TestASessionOnAnotherGroupGetsThatGroupsPlaceholder(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("the agent sends its request with curl, and this machine has none")
+	}
+	provider := newKeyProvider(t)
+	credential := func(name, group string) string {
+		return `{"name":"` + name + `","group":"` + group + `","format":"anthropic-messages","endpoint":"https://` + provider.host + `/v1","auth":{"scheme":"header","header":"x-api-key"}}`
+	}
+	values := map[string]string{"a-1": "fake-a-value-0001", "b-1": "fake-b-value-0001", "a-2": "fake-a-value-0002", "b-2": "fake-b-value-0002"}
+	c := newKeyControlOf(t, credential("a-1", "a")+`,`+credential("b-1", "b")+`,`+credential("a-2", "a")+`,`+credential("b-2", "b"), "a-1", values)
+	envs := runKeySessions(t, provider, c, []string{"", "b-2"})
+	if got, want := envs[0]["ANTHROPIC_API_KEY"], link.KeyPlaceholder("a-1"); got != want {
+		t.Errorf("session 1: ANTHROPIC_API_KEY is %q, want %q", got, want)
+	}
+	if got, want := envs[1]["ANTHROPIC_API_KEY"], link.KeyPlaceholder("b-1"); got != want {
+		t.Errorf("session 2: ANTHROPIC_API_KEY is %q, want group b's placeholder %q", got, want)
+	}
+	if got, want := provider.requests(), []string{"1 " + values["a-1"], "2 " + values["b-2"]}; !slices.Equal(got, want) {
+		t.Errorf("the provider got %q, want %q", got, want)
 	}
 }
