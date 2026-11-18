@@ -1501,10 +1501,10 @@ then lists each harness credential by `name` and `purpose` alone, and the stack 
 run starts: a reload's `harness_hidden` is ignored.
 
 **Push credentials.** A host credential with `purpose: push` is for qory's push of the
-work item's branch. Its items list git's push paths of the repository alone, since the
-forge's adapter opens the pull request. Forager has no access level: Qory Apiary sends
-a push credential only for a `write` run, beside a read work credential, and a run with
-no push credential opens no push proxy.
+work item's branch. Qory Apiary lists git's push paths of the repository alone in its
+items, since the forge's adapter opens the pull request. Forager has no access level:
+Qory Apiary sends a push credential only for a `write` run, beside a read work
+credential, and a run with no push credential opens no push proxy.
 
 ```json
 {"name": "push-1", "purpose": "push",

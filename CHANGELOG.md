@@ -329,11 +329,11 @@ release may change what an existing document does, and says so under Upgrading.
   call: they go over the link alone, and the run API's route returns `404` for both
   paths (§The gateway's link, The host calls).
 - A host credential may have `purpose: push`, for qory's push of the work item's
-  branch through the run's push proxy (§Credentials, Push credentials). Its items list
-  git's push paths of the repository alone: the forge's adapter opens the pull
-  request. The run answer has `push_proxy_secret` on the local link for such a run,
-  `QORY-PUSH` and the run key open the push proxy on a separate gateway's one
-  address, `dev.qory.run.egress` has `channel: push`, and
+  branch through the run's push proxy (§Credentials, Push credentials). Qory Apiary
+  lists git's push paths of the repository alone in its items: the forge's adapter
+  opens the pull request. The run answer has `push_proxy_secret` on the local link for
+  such a run, `QORY-PUSH` and the run key open the push proxy on a separate gateway's
+  one address, `dev.qory.run.egress` has `channel: push`, and
   `dev.qory.run.policy_applied` lists each push credential's items with `purpose:
   push`. A push credential with `placeholders`, on a host the policy in force does not
   allow or a path rule of the node's covers, or whose items overlap on a host is

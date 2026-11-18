@@ -321,9 +321,11 @@ code `-1`. qory closes a run with no session whose access is not read and that h
 wall with `write_needs_wall`, `failed` with exit code `-1`. A run whose last
 session ended `paused` with `model_key_limit`, after the gateway's answer to a batch
 had `stop` because no model key of the run's key group was left out of cooldown, closes
-`paused` with `model_key_limit` after its host work; the gateway returns an error for that reason
-in a run with no join, after a last session that ended another way, and with another
-state; and for `paused` with no reason or another reason.
+`paused` with `model_key_limit` after its host work. The gateway returns an error for
+`model_key_limit`, `model_key_switch` and `model_key_unauthorized` in a run with no join,
+after a last session that ended another way, and with a state other than the one the
+list pairs with the reason; and for `paused` with no reason or with a reason other than
+`model_key_limit` and `model_key_switch`.
 The gateway writes the others: `session_lost`, `failed`, the session was silent;
 `batch_refused`, `failed`, the gateway refused a batch from the run's session
 (see the contract's §The gateway's link); `stopped`, `cancelled`, the starter ended the run and

@@ -519,13 +519,13 @@ fixed when the run starts: a reload ignores it.
 
 ### Push credentials
 
-A host credential with `purpose: push` is for qory's push of the work item's branch. Its
-items list git's push paths of the repository alone, since the forge's adapter opens the
-pull request. Forager has no access level: Qory Apiary sends a push credential only for
-a `write` run, beside a read work credential. A run with no push credential, such as a
-`write-no-push` run, which gets a read work credential alone, has no push proxy:
-`PushProxy` returns "Add a push credential to the run configuration: this run has no
-push proxy."
+A host credential with `purpose: push` is for qory's push of the work item's branch.
+Qory Apiary lists git's push paths of the repository alone in its items, since the
+forge's adapter opens the pull request. Forager has no access level: Qory Apiary sends a
+push credential only for a `write` run, beside a read work credential. A run with no
+push credential, such as a `write-no-push` run, which gets a read work credential alone,
+has no push proxy: `PushProxy` returns "Add a push credential to the run configuration:
+this run has no push proxy."
 
 ```json
 {"version": 1,
