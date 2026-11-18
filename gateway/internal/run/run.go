@@ -470,10 +470,11 @@ func (r *Run) open(ctx context.Context) error {
 // checkClaims sets keysOut: each model key with account_claim whose opened value in
 // values has no string at it ([credential.AccountClaim]), with a line in the run's
 // record that contains why, never the value or the claim. It refuses the run,
-// run_configuration_invalid, when no key of a key group of the run is left and none is
-// out or pending after a 401 ([Config.Revoked], [Config.Pending]): a reopened run
-// whose keys a 401 took out stops with model_key_unauthorized. The refusal names the
-// start key for the start key's group, and the group's first key for another group.
+// run_configuration_invalid, when no key of a key group of the run is left and none of
+// that group's keys is out or pending after a 401 ([Config.Revoked], [Config.Pending]):
+// a reopened run whose keys a 401 took out stops with model_key_unauthorized. The
+// refusal shows the start key for the start key's group, and the group's first key for
+// another group.
 func (r *Run) checkClaims(values sealed.Values) error {
 	var out []string
 	for _, c := range r.stored {
