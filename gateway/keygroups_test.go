@@ -32,7 +32,8 @@ var mixedValues = map[string]string{"machine": "fake-machine-value-0001", "a-1":
 // b-1 and b-2, all of the format anthropic-messages on one fake provider. The machine's
 // key reaches the provider at 127.0.0.1 and the server's keys at localhost: a
 // credential from the server replaces a machine's credential of its host. The provider
-// returns a limit refusal for each key in limited.
+// returns a limit refusal for each key in limited, and a 401 for each key in
+// unauthorized.
 type mixedRun struct {
 	h     *harness
 	runID string
@@ -41,10 +42,11 @@ type mixedRun struct {
 	machineURL string
 	agent      *http.Client
 
-	mu      sync.Mutex
-	limited map[string]bool
-	calls   []string
-	reports []string
+	mu           sync.Mutex
+	limited      map[string]bool
+	unauthorized map[string]bool
+	calls        []string
+	reports      []string
 }
 
 func startMixedRun(t *testing.T) *mixedRun {
@@ -56,7 +58,7 @@ func startMixedRun(t *testing.T) *mixedRun {
 // of the machine's, and its start key is a-1.
 func startKeyGroupsRun(t *testing.T, machine bool) *mixedRun {
 	t.Helper()
-	m := &mixedRun{limited: map[string]bool{}}
+	m := &mixedRun{limited: map[string]bool{}, unauthorized: map[string]bool{}}
 	t.Setenv("GATEWAY_TEST_MACHINE_KEY", mixedValues["machine"])
 	certFile, keyFile, roots := testCertificate(t, t.TempDir())
 	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
@@ -73,8 +75,13 @@ func startKeyGroupsRun(t *testing.T, machine bool) *mixedRun {
 		}
 		m.mu.Lock()
 		m.calls = append(m.calls, key)
-		limited := m.limited[key]
+		limited, rejected := m.limited[key], m.unauthorized[key]
 		m.mu.Unlock()
+		if rejected {
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"type":"error","error":{"type":"authentication_error"}}`)
+			return
+		}
 		if limited {
 			w.Header().Set("Anthropic-Ratelimit-Unified-5h-Status", "rejected")
 			w.Header().Set("Anthropic-Ratelimit-Unified-5h-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
@@ -153,11 +160,19 @@ func startKeyGroupsRun(t *testing.T, machine bool) *mixedRun {
 // and the keys the provider got for it, a placeholder where it got no key.
 func (m *mixedRun) send(t *testing.T, name string) (int, string) {
 	t.Helper()
+	return m.sendTo(t, name, "/messages")
+}
+
+// sendTo is send to the path path of the endpoint. The endpoints end in /v1, so the
+// path of the Messages API, whose 401 takes a key out, is /v1/messages there
+// ([modelkey.StreamPath]).
+func (m *mixedRun) sendTo(t *testing.T, name, path string) (int, string) {
+	t.Helper()
 	url := m.url
 	if name == "machine" {
 		url = m.machineURL
 	}
-	req, _ := http.NewRequest(http.MethodPost, url+"/messages", strings.NewReader(`{"model":"m"}`))
+	req, _ := http.NewRequest(http.MethodPost, url+path, strings.NewReader(`{"model":"m"}`))
 	req.Header.Set("X-Api-Key", link.KeyPlaceholder(name))
 	resp, err := m.agent.Do(req)
 	if err != nil {
@@ -328,5 +343,40 @@ func TestALaterSessionGetsItsGroupsKey(t *testing.T) {
 	}
 	if status, body := m.batch(t); status != http.StatusAccepted || body != "" {
 		t.Errorf("a batch of session 3: %d %q; want 202 with no stop", status, body)
+	}
+}
+
+// TestAGroupWithEveryKeyOutStopsItsSessionAlone pins a 401 for every key of group b, of
+// a run whose start key is a-1, of group a. Session 1 joins with b-2: the proxy sets
+// b-2, then b-1, and the provider returns a 401 for each, whose values have no
+// expires_at, so both are out for the run. The 401 reaches the session, and the answer
+// to the next batch has stop, model_key_unauthorized. Session 2 then joins with no key in
+// its request and gets a-1, of group a, with no stop in its batches.
+func TestAGroupWithEveryKeyOutStopsItsSessionAlone(t *testing.T) {
+	m := startKeyGroupsRun(t, false)
+	m.mu.Lock()
+	m.unauthorized["b-1"], m.unauthorized["b-2"] = true, true
+	m.mu.Unlock()
+	if key := m.join(t, "b-2"); key != "b-2" {
+		t.Fatalf("join 1 naming b-2: %q; want b-2", key)
+	}
+	m.h.post(sessionStarted(m.runID, 1))
+	if status, calls := m.sendTo(t, "b-1", "/v1/messages"); status != http.StatusUnauthorized || calls != "b-2,b-1" {
+		t.Errorf("session 1, group b's placeholder: %d %q; want the 401 after b-2 and b-1", status, calls)
+	}
+	if status, body := m.batch(t); status != http.StatusAccepted || body != `{"stop":{"reason":"model_key_unauthorized"}}` {
+		t.Errorf("a batch of session 1: %d %q; want stop, model_key_unauthorized", status, body)
+	}
+	m.h.post(ev(m.runID, event.SessionExited, map[string]any{"session": 1, "state": "failed", "exit_code": 1, "reason": "model_key_unauthorized", "duration_ms": 5}))
+
+	if key := m.join(t, ""); key != "a-1" {
+		t.Fatalf("join 2: %q; want a-1, group a's active key", key)
+	}
+	m.h.post(sessionStarted(m.runID, 2))
+	if status, calls := m.send(t, "a-1"); status != http.StatusOK || calls != "a-1" {
+		t.Errorf("session 2, group a's placeholder: %d %q; want a-1", status, calls)
+	}
+	if status, body := m.batch(t); status != http.StatusAccepted || body != "" {
+		t.Errorf("a batch of session 2: %d %q; want 202 with no stop", status, body)
 	}
 }
