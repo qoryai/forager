@@ -473,8 +473,8 @@ func (r *Run) open(ctx context.Context) error {
 // run_configuration_invalid, when no key of a key group of the run is left and none of
 // that group's keys is out or pending after a 401 ([Config.Revoked], [Config.Pending]):
 // a reopened run whose keys a 401 took out stops with model_key_unauthorized. The
-// refusal shows the start key for the start key's group, and the group's first key for
-// another group.
+// refusal's text has the group's group value. Its names are the start key for the
+// start key's group, and the group's first key for another group.
 func (r *Run) checkClaims(values sealed.Values) error {
 	var out []string
 	for _, c := range r.stored {
@@ -501,7 +501,7 @@ func (r *Run) checkClaims(values sealed.Values) error {
 			return nil
 		}
 		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
-			"run configuration %s: store in the control plane a value of a model key of the key group of %s with a string at its account_claim: no key of the group has one", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(name, true))
+			"Store in the control plane a value of a key of group %s with a string at its account_claim.\nNo key of the group has one in the run configuration %s", accesskey.ShownName(group[0].Group, true), accesskey.ShownValue(r.cfg.Fetched.URL, false))
 	}
 	// The start key's group first, by its start key, so its refusal is the one a run
 	// gets when another group has no key left too.

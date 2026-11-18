@@ -35,6 +35,11 @@ const accountDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode"
 	`{"name":"api-key","group":"openai-api","format":"openai-responses","endpoint":"https://api.model.example/v1","auth":{"scheme":"bearer"},"paths":["/v1/responses","/v1/responses/*"]},` +
 	`{"name":"files","apply":[{"hosts":["chat.model.example"],"scheme":"bearer","paths":["/backend-api/files/*"]}],"placeholders":["FILES_TOKEN"]}]}`
 
+// claimRefusal is the start of the refusal of a run whose key group openai, of
+// accountDoc, has no key with a string at its account_claim.
+const claimRefusal = "Store in the control plane a value of a key of group \"openai\" with a string at its account_claim.\n" +
+	"No key of the group has one in the run configuration " + runURL + ": run_configuration_invalid"
+
 // accountValues answers each subscription with a token of its account id, and every
 // other credential with a fake value of its name; values replaces the answer of a name.
 func accountValues(values map[string]string) func(string, int) (answer, error) {
@@ -154,7 +159,7 @@ func TestAValueWithoutItsClaimLeavesTheGroup(t *testing.T) {
 			t.Fatal("the run opened")
 		}
 		if code, names := refusalOf(err); code != "run_configuration_invalid" || !slices.Equal(names, []string{"subscription"}) ||
-			!strings.Contains(err.Error(), `store in the control plane a value of a model key of the key group of "subscription" with a string at its account_claim: no key of the group has one`) {
+			!strings.HasPrefix(err.Error(), claimRefusal) {
 			t.Errorf("%v (%s %v)", err, code, names)
 		}
 	})
@@ -177,7 +182,7 @@ func TestAnotherGroupWithoutTheClaimIsRefused(t *testing.T) {
 			t.Fatal("the run opened")
 		}
 		if code, names := refusalOf(err); code != "run_configuration_invalid" || !slices.Equal(names, []string{"subscription"}) ||
-			!strings.Contains(err.Error(), `store in the control plane a value of a model key of the key group of "subscription" with a string at its account_claim: no key of the group has one`) {
+			!strings.HasPrefix(err.Error(), claimRefusal) {
 			t.Errorf("%v (%s %v)", err, code, names)
 		}
 	})
