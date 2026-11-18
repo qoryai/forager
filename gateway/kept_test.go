@@ -575,8 +575,9 @@ func TestTheSweepTicks(t *testing.T) {
 }
 
 // TestTheModelKeyMarkFollowsPassAndResume pins model-key-limit on the one address: the
-// proxy passing a limit refusal to the session makes the empty file, mode 0600, and the
-// next join, which resumes the keys, removes it.
+// proxy passing a limit refusal to the session makes the file, mode 0600, with the key
+// group, anthropic, and no reason; the answer to the next batch adds the stop's reason,
+// and the next join, which resumes the keys, removes it.
 func TestTheModelKeyMarkFollowsPassAndResume(t *testing.T) {
 	certFile, keyFile, roots := testCertificate(t, t.TempDir())
 	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
@@ -632,11 +633,14 @@ func TestTheModelKeyMarkFollowsPassAndResume(t *testing.T) {
 	if mode, err := modeOf(mark); err != nil || mode != 0o600 {
 		t.Errorf("model-key-limit: mode %v, %v", mode, err)
 	}
-	if info, err := os.Stat(mark); err != nil || info.Size() != 0 {
-		t.Errorf("model-key-limit is not empty: %v", err)
+	if b, err := os.ReadFile(mark); err != nil || string(b) != `{"version":1,"groups":[{"group":"anthropic"}]}`+"\n" {
+		t.Errorf("model-key-limit after the pass: %q, %v", b, err)
 	}
 	if got := e.post(t, heartbeat(runID)); got.status != http.StatusAccepted || !strings.Contains(string(got.body), "model_key_limit") {
 		t.Errorf("a batch after the pass: %d %s", got.status, got.body)
+	}
+	if b, err := os.ReadFile(mark); err != nil || string(b) != `{"version":1,"groups":[{"group":"anthropic","reason":"model_key_limit"}]}`+"\n" {
+		t.Errorf("model-key-limit after the stop: %q, %v", b, err)
 	}
 	if a := r.do(t, key, http.MethodPost, "/qory-link/run-configuration/"+runID+"/sessions", []byte(`{"version":1,"passes":[],"model_key":true}`)); a.status != http.StatusOK {
 		t.Fatalf("the join: %d %s", a.status, a.body)

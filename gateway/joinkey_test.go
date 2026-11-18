@@ -42,6 +42,11 @@ type openaiRemote struct {
 	mu           sync.Mutex
 	calls        []string
 	unauthorized map[string]bool
+	// held, when set, is the key whose answer is a Responses stream that the provider
+	// starts and holds until release is closed, then ends with response.failed and
+	// the limit code rate_limit_exceeded.
+	held    string
+	release chan struct{}
 }
 
 // startOpenAIRemote opens the run on a separate gateway with a directory, so it can
@@ -52,8 +57,8 @@ func startOpenAIRemote(t *testing.T) *openaiRemote {
 }
 
 // startOpenAIRemoteOf is startOpenAIRemote; with other true, the run configuration has
-// a second key group, other, of the keys other and other-2 after model-2, which the
-// provider serves with a 200.
+// a second key group, other, of the keys other and other-2, which the provider serves
+// with a 200. The keys of the two groups alternate: model, other, model-2, other-2.
 func startOpenAIRemoteOf(t *testing.T, other bool) *openaiRemote {
 	t.Helper()
 	o := &openaiRemote{}
@@ -78,7 +83,16 @@ func startOpenAIRemoteOf(t *testing.T, other bool) *openaiRemote {
 		o.mu.Lock()
 		o.calls = append(o.calls, key)
 		rejected := o.unauthorized[key]
+		held, release := key != "" && key == o.held, o.release
 		o.mu.Unlock()
+		if held {
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n")
+			w.(http.Flusher).Flush()
+			<-release
+			io.WriteString(w, "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_1\",\"status\":\"failed\",\"error\":{\"code\":\"rate_limit_exceeded\",\"message\":\"m\"}}}\n\n")
+			return
+		}
 		if rejected {
 			w.WriteHeader(http.StatusUnauthorized)
 			io.WriteString(w, `{"error":{"code":"invalid_api_key"}}`)
@@ -105,7 +119,7 @@ func startOpenAIRemoteOf(t *testing.T, other bool) *openaiRemote {
 	}
 	entries := entry("model", "openai") + `,` + entry("model-2", "openai")
 	if other {
-		entries += `,` + entry("other", "other") + `,` + entry("other-2", "other")
+		entries = entry("model", "openai") + `,` + entry("other", "other") + `,` + entry("model-2", "openai") + `,` + entry("other-2", "other")
 	}
 	c := gatewayControl(t)
 	o.c = c
@@ -310,7 +324,7 @@ func TestAReopenKeepsTheStopsReasonAndTheKeysOut(t *testing.T) {
 		t.Fatalf("the batch after the 401: %d %q", got.status, got.body)
 	}
 	dir := filepath.Join(o.cfg.Dir, "runs", o.runID())
-	if b, err := os.ReadFile(filepath.Join(dir, "model-key-limit")); err != nil || string(b) != "model_key_switch\n" {
+	if b, err := os.ReadFile(filepath.Join(dir, "model-key-limit")); err != nil || string(b) != `{"version":1,"groups":[{"group":"openai","reason":"model_key_switch"}]}`+"\n" {
 		t.Errorf("the mark: %q, %v", b, err)
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "model-keys-unauthorized.json"))
@@ -459,5 +473,146 @@ func TestARestartGivesTheStopToTheSessionsGroup(t *testing.T) {
 	o.posted(t, sessionStarted(o.runID(), 3))
 	if status, calls := o.sendAs(t, "other"); status != http.StatusOK || strings.Join(calls, ",") != "other-2" {
 		t.Errorf("session 3, other's placeholder: %d %v; want 200 from other-2", status, calls)
+	}
+}
+
+// TestARestartKeepsTheKeysOutOfEveryGroup pins a restart in a run of two key groups whose
+// keys alternate, openai with model and model-2, and other with other and other-2, with
+// one key of each group out after a 401. Session 1 joins on model, which gets the
+// provider's 429, and session 2 then gets model-2, which gets a 401. Session 3 joins
+// with other, which gets a 401 too. The record of the keys out lists other and model-2
+// in the order of the credentials, and after the restart the reopen's secrets request
+// leaves both out, and the answer to session 3's next batch has the stop of its group.
+func TestARestartKeepsTheKeysOutOfEveryGroup(t *testing.T) {
+	o := startOpenAIRemoteOf(t, true)
+	o.mu.Lock()
+	o.unauthorized = map[string]bool{"model-2": true, "other": true}
+	o.mu.Unlock()
+	o.coolFirstKey(t)
+	o.posted(t, sessionStarted(o.runID(), 1))
+	o.posted(t, ev(o.runID(), event.SessionExited, map[string]any{"session": 1, "state": "paused", "exit_code": 1, "reason": "model_key_limit", "duration_ms": 5}))
+	if status, key := o.join(t); status != http.StatusOK || key != "model-2" {
+		t.Fatalf("join 2: %d %s; want 200 with model-2", status, key)
+	}
+	o.posted(t, sessionStarted(o.runID(), 2))
+	if status, calls := o.send(t); status != http.StatusUnauthorized || strings.Join(calls, ",") != "model-2" {
+		t.Fatalf("session 2: %d %v; want the provider's 401 for model-2", status, calls)
+	}
+	o.posted(t, ev(o.runID(), event.SessionExited, map[string]any{"session": 2, "state": "paused", "exit_code": 1, "reason": "model_key_limit", "duration_ms": 5}))
+	if status, key := o.joinNaming(t, "other"); status != http.StatusOK || key != "other" {
+		t.Fatalf("join 3 naming other: %d %s; want 200 with other", status, key)
+	}
+	o.posted(t, sessionStarted(o.runID(), 3))
+	if status, calls := o.sendAs(t, "other"); status != http.StatusUnauthorized || strings.Join(calls, ",") != "other" {
+		t.Fatalf("session 3: %d %v; want the provider's 401 for other", status, calls)
+	}
+	const stop = `{"stop":{"reason":"model_key_switch"}}`
+	if got := o.e.post(t, heartbeat(o.runID())); got.status != http.StatusAccepted || string(got.body) != stop {
+		t.Fatalf("the batch after the 401: %d %q", got.status, got.body)
+	}
+	b, err := os.ReadFile(filepath.Join(o.cfg.Dir, "runs", o.runID(), "model-keys-unauthorized.json"))
+	var kept struct {
+		Keys []struct {
+			Credential string `json:"credential"`
+			Out        bool   `json:"out"`
+		} `json:"keys"`
+	}
+	if err != nil || json.Unmarshal(b, &kept) != nil || len(kept.Keys) != 2 || kept.Keys[0].Credential != "other" || kept.Keys[1].Credential != "model-2" || !kept.Keys[0].Out || !kept.Keys[1].Out {
+		t.Errorf("the keys out: %s, %v; want other, then model-2, both out", b, err)
+	}
+	o.r = o.r.restart(t, o.cfg)
+	o.e.r = o.r
+	if got := o.e.post(t, heartbeat(o.runID())); got.status != http.StatusAccepted || string(got.body) != stop {
+		t.Errorf("the reopened run's first batch: %d %q", got.status, got.body)
+	}
+	if reqs := o.c.requests(t); len(reqs) == 0 || !slices.Equal(reqs[len(reqs)-1].Credentials, []string{"model", "other-2"}) {
+		t.Errorf("the secrets requests %+v; want the reopen's without other and model-2", reqs)
+	}
+}
+
+// TestARestartGivesAStaleGroupsStopToThatGroup pins the mark of a group that passes
+// while a session of another group is open. Session 1 joins with other, of the group
+// other, and its Responses stream starts; session 1 ends and session 2 joins with no
+// key, so it gets model, of the group openai. Only then the stream ends with a limit,
+// so the proxy passes it for the group other. The record's mark has the group other,
+// and session 2's batches have no stop, before and after a restart: its group passed
+// nothing.
+func TestARestartGivesAStaleGroupsStopToThatGroup(t *testing.T) {
+	o := startOpenAIRemoteOf(t, true)
+	o.mu.Lock()
+	o.held, o.release = "other", make(chan struct{})
+	o.mu.Unlock()
+	if status, key := o.joinNaming(t, "other"); status != http.StatusOK || key != "other" {
+		t.Fatalf("join 1 naming other: %d %s; want 200 with other", status, key)
+	}
+	o.posted(t, sessionStarted(o.runID(), 1))
+	agent := o.r.relay(t, o.key)
+	agent.Transport.(*http.Transport).TLSClientConfig = &tls.Config{RootCAs: o.ca}
+	req, _ := http.NewRequest(http.MethodPost, o.url+"/responses", strings.NewReader(`{"model":"m","stream":true}`))
+	req.Header.Set("Authorization", "Bearer "+link.KeyPlaceholder("other"))
+	type answer struct {
+		status int
+		body   string
+		err    error
+	}
+	streamed := make(chan answer, 1)
+	go func() {
+		resp, err := agent.Do(req)
+		if err != nil {
+			streamed <- answer{err: err}
+			return
+		}
+		b, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		streamed <- answer{status: resp.StatusCode, body: string(b), err: err}
+	}()
+	eventually(t, "the provider's start of the stream", func() bool {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		return slices.Contains(o.calls, "other")
+	})
+	o.posted(t, sessionExited(o.runID(), 1))
+	if status, key := o.join(t); status != http.StatusOK || key != "model" {
+		t.Fatalf("join 2: %d %s; want 200 with model", status, key)
+	}
+	o.posted(t, sessionStarted(o.runID(), 2))
+	close(o.release)
+	if a := <-streamed; a.err != nil || a.status != http.StatusOK || !strings.Contains(a.body, "rate_limit_exceeded") {
+		t.Fatalf("the stream of session 1: %d %q, %v; want the 200 with the limit", a.status, a.body, a.err)
+	}
+	mark := filepath.Join(o.cfg.Dir, "runs", o.runID(), "model-key-limit")
+	eventually(t, "the mark of the group other", func() bool {
+		b, err := os.ReadFile(mark)
+		return err == nil && string(b) == `{"version":1,"groups":[{"group":"other"}]}`+"\n"
+	})
+	if got := o.e.post(t, heartbeat(o.runID())); got.status != http.StatusAccepted || len(got.body) != 0 {
+		t.Errorf("a batch of session 2: %d %q; want no stop", got.status, got.body)
+	}
+	o.r = o.r.restart(t, o.cfg)
+	o.e.r = o.r
+	if got := o.e.post(t, heartbeat(o.runID())); got.status != http.StatusAccepted || len(got.body) != 0 {
+		t.Errorf("a batch of session 2 after the restart: %d %q; want no stop", got.status, got.body)
+	}
+}
+
+// TestARestartGivesAnOldMarkToTheSessionsGroup pins a mark that a gateway before key
+// groups wrote, a reason and a newline: the reopen gives it to the open session's
+// group, so the answer to the session's next batch has the stop with that reason.
+func TestARestartGivesAnOldMarkToTheSessionsGroup(t *testing.T) {
+	o := startOpenAIRemoteOf(t, true)
+	if status, key := o.joinNaming(t, "other"); status != http.StatusOK || key != "other" {
+		t.Fatalf("join 1 naming other: %d %s; want 200 with other", status, key)
+	}
+	o.posted(t, sessionStarted(o.runID(), 1))
+	if err := os.WriteFile(filepath.Join(o.cfg.Dir, "runs", o.runID(), "model-key-limit"), []byte("model_key_switch\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o.r = o.r.restart(t, o.cfg)
+	o.e.r = o.r
+	if got := o.e.post(t, heartbeat(o.runID())); got.status != http.StatusAccepted || string(got.body) != `{"stop":{"reason":"model_key_switch"}}` {
+		t.Errorf("the reopened run's first batch: %d %q; want stop, model_key_switch", got.status, got.body)
+	}
+	if status, calls := o.sendAs(t, "other"); status != http.StatusTooManyRequests || len(calls) != 0 {
+		t.Errorf("a request of session 1 after the restart: %d %v; want the gateway's 429 and no call", status, calls)
 	}
 }

@@ -49,9 +49,16 @@ type linkRun struct {
 	// startKeys is the key group of the run's start key, nil when the run has none or
 	// its start key is the machine's.
 	startKeys *modelkey.Group
+	// groupNames is the group value of each key group of keys, [run.KeyGroup.Name].
+	groupNames map[*modelkey.Group]string
 	// marking takes one write of the record's model key marks at a time, so the last
 	// write has the state of every group ([linkRun.watchKeys]).
 	marking sync.Mutex
+	// marked are the key groups of keys whose proxy passed a limit refusal or a 401 to
+	// the session since the group's last Resume, by group value, each with the stop's
+	// reason, empty until an answer had it; nil when no record keeps them. Under
+	// marking.
+	marked map[string]string
 	// reporter sends the key groups' reports, nil when the run has no key group or no
 	// control plane. Set under mu.
 	reporter *keyReporter
@@ -622,7 +629,7 @@ func (e holdError) Unwrap() error { return e.error }
 // run API, its limits and the node's path rules; the run's authority from authority,
 // called when the run's policy needs one, which the proxy ends TLS with; the start key;
 // and the key groups, which on the one address keep the mark of a passed limit refusal
-// in the run's record ([markLimit]). It returns the authority, nil for none. ctx is the
+// in the run's record ([markKeys]). It returns the authority, nil for none. ctx is the
 // run's, which the key reporter runs under; steps is that of the fetch of the run's
 // values and of the wait for its tools to listen, which the caller ends as Close starts,
 // so Close does not wait for them.
@@ -726,6 +733,7 @@ func (lr *linkRun) setKeyGroups(ctx context.Context, groups []run.KeyGroup) {
 	g, r, runID := lr.g, lr.r, lr.id
 	held := r.Held()
 	var made []*modelkey.Group
+	lr.groupNames = make(map[*modelkey.Group]string, len(groups))
 	px := make([]proxy.KeyGroup, 0, len(groups))
 	for _, kg := range groups {
 		group := modelkey.New(kg.Keys, held.Start, nil)
@@ -734,6 +742,7 @@ func (lr *linkRun) setKeyGroups(ctx context.Context, groups []run.KeyGroup) {
 			lr.startKeys = group
 		}
 		made = append(made, group)
+		lr.groupNames[group] = kg.Name
 		px = append(px, proxy.KeyGroup{Group: group, Format: kg.Format, Stream: kg.Stream})
 	}
 	// The keys in the order of the run configuration's credentials, which the reports
@@ -776,30 +785,47 @@ func (lr *linkRun) setKeyGroups(ctx context.Context, groups []run.KeyGroup) {
 }
 
 // watchKeys writes the marks of the run's key groups to its record, for a gateway that
-// starts again: the mark that the proxy passed a limit refusal or a 401 of a group to
-// the session, with the stop's reason once an answer has it, and the keys of every group
-// out of use after a 401. Sessions are serial and the proxy sets the keys of the
-// session's group alone, so one group at most is passed, and the reopen gives the mark
-// to the open session's group ([Gateway.reopen]). Each hook writes the state of every
-// group under lr.marking, so the last write has the newest state. The hooks are called
-// on the proxy's request path, the batch's and the renewal's: a write that fails is
-// reported, and the request goes on.
+// starts again: each group whose proxy passed a limit refusal or a 401 to the session,
+// by its group value, with the stop's reason once an answer has it ([markKeys]), and
+// the keys of every group out of use after a 401. A group may pass while a session of
+// another group is open: a stream of a session before can end in a limit after the
+// next join. The reopen gives the mark to each group it lists, so the open session's
+// group gets a stop only when that group passed ([Gateway.reopen]). Each hook writes
+// the state of every group under lr.marking, so the last write has the newest state.
+// The hooks are called on the proxy's request path, the batch's and the renewal's: a
+// write that fails is reported, and the request goes on.
 func (lr *linkRun) watchKeys() {
 	g, dir, runID := lr.g, lr.st.Dir(), lr.id
+	lr.marked = map[string]string{}
+	mark := func() {
+		var groups []markedGroup
+		for _, group := range lr.keys.Groups() {
+			name := lr.groupNames[group]
+			if reason, ok := lr.marked[name]; ok {
+				groups = append(groups, markedGroup{Group: name, Reason: reason})
+			}
+		}
+		if err := markKeys(dir, groups); err != nil {
+			g.report(fmt.Sprintf("run %s: writing its model key mark: %v", runID, err))
+		}
+	}
 	for _, group := range lr.keys.Groups() {
-		group.OnPassed(func(bool) {
+		name := lr.groupNames[group]
+		group.OnPassed(func(passed bool) {
 			lr.marking.Lock()
 			defer lr.marking.Unlock()
-			if err := markLimit(dir, lr.keys.Passed()); err != nil {
-				g.report(fmt.Sprintf("run %s: writing its model key mark: %v", runID, err))
+			if _, ok := lr.marked[name]; passed && !ok {
+				lr.marked[name] = ""
+			} else if !passed {
+				delete(lr.marked, name)
 			}
+			mark()
 		})
 		group.OnStop(func(reason string) {
 			lr.marking.Lock()
 			defer lr.marking.Unlock()
-			if err := markStop(dir, reason); err != nil {
-				g.report(fmt.Sprintf("run %s: check the run's record directory: writing the reason for the run's stop failed: %v", runID, err))
-			}
+			lr.marked[name] = reason
+			mark()
 		})
 		group.OnUnauthorized(func([]modelkey.Unauthorized) {
 			lr.marking.Lock()
@@ -809,6 +835,32 @@ func (lr *linkRun) watchKeys() {
 			}
 		})
 	}
+}
+
+// passMarked gives group the mark of a record a gateway reopens the run with: a pass,
+// with the stop's reason fixed at reason when it has one ([modelkey.Group.PassWith]).
+// The reason goes into the record's mark again.
+func (lr *linkRun) passMarked(group *modelkey.Group, reason string) {
+	if reason == "" {
+		group.Pass()
+		return
+	}
+	lr.marking.Lock()
+	if lr.marked != nil {
+		lr.marked[lr.groupNames[group]] = reason
+	}
+	lr.marking.Unlock()
+	group.PassWith(reason)
+}
+
+// keyGroupNamed is the key group whose group value is name, nil for none.
+func (lr *linkRun) keyGroupNamed(name string) *modelkey.Group {
+	for _, group := range lr.keys.Groups() {
+		if lr.groupNames[group] == name {
+			return group
+		}
+	}
+	return nil
 }
 
 // keyGroupOf is the key group of the model key name, nil when name is in none.

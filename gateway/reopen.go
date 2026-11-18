@@ -281,7 +281,7 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 		var mayPass holdError
 		return fail(!errors.As(err, &mayPass), err)
 	}
-	reason, marked, err := limitMarked(dir)
+	reason, groups, marked, err := limitMarked(dir)
 	if err != nil {
 		return fail(true, err)
 	}
@@ -296,20 +296,26 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 			}
 		}
 	}
-	// The mark is of the open session's key group, or of the start key's group when no
-	// session is open: sessions are serial, and the proxy sets the keys of the
-	// session's group alone ([linkRun.watchKeys]).
 	switch marks := lr.sessionKeys(); {
-	case !marked || marks == nil:
+	case !marked || lr.keys == nil:
 		// A run configuration with no key group now has no key to stop.
-	case reason != "":
-		// The answers to the session had stop before the stop of the gateway: the
-		// first batch's answer has stop again, with the same reason.
-		marks.PassWith(reason)
-	default:
-		// The proxy passed a limit refusal or a 401 to the session, and no answer had
-		// the stop yet: the first batch's answer has it, its reason as of then.
-		marks.Pass()
+	case groups != nil:
+		// The mark lists each group whose proxy passed a limit refusal or a 401 to
+		// the session, with the stop's reason when an answer had it: the first
+		// batch's answer of a session of such a group has the stop, with the same
+		// reason or with its reason as of then. A group the run configuration no
+		// longer has gets nothing.
+		for _, m := range groups {
+			if group := lr.keyGroupNamed(m.Group); group != nil {
+				lr.passMarked(group, m.Reason)
+			}
+		}
+	case marks != nil:
+		// A mark a gateway before key groups wrote, or one whose write did not end,
+		// lists no group: it is of the open session's key group, or of the start
+		// key's group when no session is open, as sessions are serial and the proxy
+		// sets the keys of the session's group alone.
+		lr.passMarked(marks, reason)
 	}
 	lr.mu.Lock()
 	open := lr.openJoin()

@@ -93,38 +93,57 @@ func TestTheKeptFilesReadBack(t *testing.T) {
 		t.Errorf("given.jsonl: %v %d %v", got, torn, err)
 	}
 
-	for _, passed := range []bool{true, true, false, false} {
-		if err := markLimit(dir, passed); err != nil {
+	// The mark of the key groups: written whole and read back with each group and its
+	// reason, mode 0600, and removed with no group left. A reason that is none of
+	// Stop's reads as none.
+	for _, groups := range [][]markedGroup{
+		{{Group: "anthropic"}},
+		{{Group: "anthropic", Reason: "model_key_limit"}, {Group: "openai", Reason: "model_key_switch"}},
+		{{Group: "openai", Reason: "model_key_unauthorized"}},
+	} {
+		if err := markKeys(dir, groups); err != nil {
 			t.Fatal(err)
 		}
-		if reason, marked, err := limitMarked(dir); err != nil || marked != passed || reason != "" {
-			t.Errorf("after markLimit(%v): marked %v, reason %q, %v", passed, marked, reason, err)
+		if reason, got, marked, err := limitMarked(dir); err != nil || !marked || reason != "" || !reflect.DeepEqual(got, groups) {
+			t.Errorf("after markKeys(%+v): marked %v, groups %+v, reason %q, %v", groups, marked, got, reason, err)
 		}
 	}
-	// The stop's reason in the mark: a Pass after it keeps it, a Resume removes it, and
-	// a mark whose contents are no reason is a mark with none.
-	for _, want := range []string{"model_key_limit", "model_key_switch", "model_key_unauthorized"} {
-		if err := markStop(dir, want); err != nil {
-			t.Fatal(err)
-		}
-		if err := markLimit(dir, true); err != nil {
-			t.Fatal(err)
-		}
-		if reason, marked, err := limitMarked(dir); err != nil || !marked || reason != want {
-			t.Errorf("after markStop(%s): marked %v, reason %q, %v", want, marked, reason, err)
-		}
+	if fi, err := os.Lstat(filepath.Join(dir, limitMark)); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("the mark: %v, %v; want mode 0600", fi, err)
 	}
-	if err := writeKept(dir, limitMark, []byte("model_key_lim")); err != nil {
+	if err := writeKept(dir, limitMark, []byte(`{"version":1,"groups":[{"group":"openai","reason":"model_key_lim"}]}`)); err != nil {
 		t.Fatal(err)
 	}
-	if reason, marked, err := limitMarked(dir); err != nil || !marked || reason != "" {
-		t.Errorf("a torn mark: marked %v, reason %q, %v; want marked with no reason", marked, reason, err)
+	if _, got, marked, err := limitMarked(dir); err != nil || !marked || !reflect.DeepEqual(got, []markedGroup{{Group: "openai"}}) {
+		t.Errorf("a group with no reason of Stop's: marked %v, groups %+v, %v", marked, got, err)
 	}
-	if err := markLimit(dir, false); err != nil {
-		t.Fatal(err)
+	// A mark of a gateway before key groups, and a mark whose write did not end, list
+	// no group: the reason in it, or none.
+	for content, want := range map[string]string{
+		"":                            "",
+		"model_key_limit\n":           "model_key_limit",
+		"model_key_switch\n":          "model_key_switch",
+		"model_key_unauthorized\n":    "model_key_unauthorized",
+		"model_key_lim":               "",
+		`{"version":1,"groups":[{"gr`: "",
+		`{"version":1,"groups":[]}`:   "",
+		`{"version":2,"groups":[{"group":"openai"}]}`: "",
+		"{" + strings.Repeat(" ", maxMark) + "}":      "",
+	} {
+		if err := writeKept(dir, limitMark, []byte(content)); err != nil {
+			t.Fatal(err)
+		}
+		if reason, got, marked, err := limitMarked(dir); err != nil || !marked || got != nil || reason != want {
+			t.Errorf("the mark %q: marked %v, groups %+v, reason %q, %v; want marked with no group and reason %q", content, marked, got, reason, err, want)
+		}
 	}
-	if _, marked, err := limitMarked(dir); err != nil || marked {
-		t.Errorf("after the Resume: marked %v, %v", marked, err)
+	for range 2 {
+		if err := markKeys(dir, nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, marked, err := limitMarked(dir); err != nil || marked {
+			t.Errorf("after the Resume: marked %v, %v", marked, err)
+		}
 	}
 
 	// The keys out of use after a 401: written and read back, and removed when none is left.

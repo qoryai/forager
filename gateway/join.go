@@ -273,8 +273,11 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 		lr.px.SetModelKey(model)
 	}
 	// A new join starts with no stop, in every group: the proxy sets the active key
-	// again. Only the group of the session before can have one, or the start key's
-	// group after a gateway that started again between sessions.
+	// again. Resume clears every group, as no single group is known here. Only the
+	// group of the session before can pass from its requests, since the proxy sets
+	// the keys of the session's group alone; but sessionKeys returns the start key's
+	// group when no session is open, and a session on the machine's model key has no
+	// group.
 	lr.keys.Resume()
 	if reporter != nil {
 		reporter.opened(j.session)
