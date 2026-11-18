@@ -105,7 +105,7 @@ type Config struct {
 	// pending ([modelkey.Group.Pending]). The secrets request leaves both out, since the
 	// server returns 409 with no value to a whole request that has a name it cannot
 	// seal. A revoked key gets no value and no renewal; a pending key gets its value
-	// from its renewal, once the run's key group has it pending ([renewer]). Nil for
+	// from its renewal, once its key group has it pending ([renewer]). Nil for
 	// an open.
 	Revoked, Pending []string
 	// StackHosts are the gateway's gateway.stack_hosts, which the run's stack proxy
@@ -470,7 +470,7 @@ func (r *Run) open(ctx context.Context) error {
 // checkClaims sets keysOut: each model key with account_claim whose opened value in
 // values has no string at it ([credential.AccountClaim]), with a line in the run's
 // record that contains why, never the value or the claim. It refuses the run,
-// run_configuration_invalid, when no key of the run's key group is left and none is
+// run_configuration_invalid, when no key of the start key's group is left and none is
 // out or pending after a 401 ([Config.Revoked], [Config.Pending]): a reopened run
 // whose keys a 401 took out stops with model_key_unauthorized.
 func (r *Run) checkClaims(values sealed.Values) error {

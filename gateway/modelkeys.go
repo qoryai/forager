@@ -27,7 +27,7 @@ const maxReportKeys = 66
 
 // keyReporter sends the state of a run's key groups to the control plane, signed POST
 // <run.url>/<run_id>/model-keys (the contract's §The server, The model keys): one report
-// in flight at most, at most one a second, each with every window of the group and the
+// in flight at most, at most one a second, each with every window of every group and the
 // number of the session open when it was made, and takes the newer states of the answer
 // into the groups. Each session's start and end make a report, a boundary report.
 type keyReporter struct {
@@ -60,8 +60,8 @@ type keyReporter struct {
 }
 
 // boundaryReport is the report made at a session's start or end: the session's number,
-// the keys and the keys out of use after a 401 as they were then, and the group's change
-// count they cover. Each try sends them with a new time.
+// the keys and the keys out of use after a 401 as they were then, and the sum of the
+// groups' change counts they cover. Each try sends them with a new time.
 type boundaryReport struct {
 	// id is 1 for the first boundary report of the run, 2 for the next, and so on.
 	id           uint64
@@ -96,7 +96,7 @@ func (k *keyReporter) opened(n int) { k.boundary(n, n) }
 // its end report.
 func (k *keyReporter) closed(n int) { k.boundary(n, 0) }
 
-// boundary makes the boundary report of session n, with every window the group has
+// boundary makes the boundary report of session n, with every window the groups have
 // now, also when nothing changed, and then sets open as the open session.
 func (k *keyReporter) boundary(n, open int) {
 	k.mu.Lock()
@@ -119,9 +119,9 @@ func (k *keyReporter) stop() {
 	k.mu.Unlock()
 }
 
-// next is the report to send at now, the group's change count it covers, and its id:
-// the oldest boundary report, with its session, keys, keys out of use after a 401 and
-// id, else the group's newest state with the open session and the id 0.
+// next is the report to send at now, the sum of the groups' change counts it covers, and
+// its id: the oldest boundary report, with its session, keys, keys out of use after a
+// 401 and id, else the groups' newest state with the open session and the id 0.
 func (k *keyReporter) next(now time.Time) (rep server.ModelKeysReport, covers, id uint64) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -156,17 +156,17 @@ const lastWait = 10 * time.Second
 
 // run sends reports until ctx ends, or the control plane returns 410 or 404: each
 // boundary report, then one report per burst of changes. A report covers every change
-// up to the group's change count it was made at ([modelkey.Group.Snapshot]). A wake for
-// changes that the last report sent or dropped covers sends nothing: a change that came
-// during the gap or a backoff before that report goes in no second report. A boundary
-// report goes also when nothing changed, and keeps its session, its windows and its
-// keys out of use after a 401 across tries; one that waits takes the place of the next
-// try of a report of changes, which it covers. When ctx ends while a report waits, in
-// the gap, in a backoff or in flight, the waiting boundary reports and the newest state
-// go once more ([keyReporter.last]).
+// up to the sum of the groups' change counts it was made at ([modelkey.Set.Snapshot]).
+// A wake for changes that the last report sent or dropped covers sends nothing: a
+// change that came during the gap or a backoff before that report goes in no second
+// report. A boundary report goes also when nothing changed, and keeps its session, its
+// windows and its keys out of use after a 401 across tries; one that waits takes the
+// place of the next try of a report of changes, which it covers. When ctx ends while a
+// report waits, in the gap, in a backoff or in flight, the waiting boundary reports and
+// the newest state go once more ([keyReporter.last]).
 func (k *keyReporter) run(ctx context.Context) {
 	var last time.Time
-	// sent is the change count the last report sent or dropped covers.
+	// sent is the sum of the change counts the last report sent or dropped covers.
 	var sent uint64
 	for {
 		if !k.waiting() && k.g.Changes() == sent {

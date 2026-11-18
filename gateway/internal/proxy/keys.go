@@ -390,7 +390,7 @@ func (rs *resend) reject(h http.Header) (string, bool) {
 		rs.k.log("model key " + shown + ": the provider returned 401 (unauthorized); the gateway stops setting the key until a renewal returns a value")
 		renew()
 	} else {
-		rs.k.log("model key " + shown + ": the provider returned 401 (unauthorized); the key has no expires_at, so the gateway removes the key from the run's key group")
+		rs.k.log("model key " + shown + ": the provider returned 401 (unauthorized); the key has no expires_at, so the gateway removes the key from its key group")
 	}
 	return g.Pick()
 }
@@ -515,7 +515,7 @@ func (s *streamWatch) dispatch() {
 }
 
 // withResend attaches a [resend] to the context of a request c is set on, a key of the
-// run's key group, and copies the request's body when the group's format is one whose
+// key group k, and copies the request's body when the group's format is one whose
 // requests the proxy sends again ([modelkey.Resends]). creds are the host's
 // credentials, clean is the request's clean path, and scan is true for a POST to the
 // model API's stream path.

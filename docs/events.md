@@ -312,7 +312,7 @@ container could not be removed with `read_needs_setup_removed`, each `failed` wi
 code `-1`. qory closes a run with no session whose access is not read and that has no
 wall with `write_needs_wall`, `failed` with exit code `-1`. A run whose last
 session ended `paused` with `model_key_limit`, after the gateway's answer to a batch
-had `stop` because no model key of the run's key group was left out of cooldown, closes
+had `stop` because no model key of the session's key group was left out of cooldown, closes
 `paused` with `model_key_limit` after its host work; the gateway returns an error for that reason
 in a run with no join, after a last session that ended another way, and with another
 state; and for `paused` with no reason or another reason.

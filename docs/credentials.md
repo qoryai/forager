@@ -448,9 +448,9 @@ subscription login is such a key:
 - The proxy checks no signature, and decodes at most 8 KiB of payload.
 - The header the session sends under that name, in any letter case and with `_` for
   `-`, never reaches the provider.
-- A key whose value has no such string when the run opens leaves the run's key group,
-  and the run's record gets one line that starts with the fix and contains neither the
-  value nor the claim. With no key of the group left, the run stops with
+- A key whose value has no such string when the run opens leaves its key group, and
+  the run's record gets one line that starts with the fix and contains neither the
+  value nor the claim. With no key of the start key's group left, the run stops with
   `run_configuration_invalid`.
 - An `account_header` that frames the request, is hop-by-hop, is one the proxy sets,
   or is `Authorization` stops the run with `run_configuration_invalid`.
