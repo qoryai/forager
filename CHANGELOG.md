@@ -10,6 +10,19 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Give each API credential of a run configuration `group`, the id of its provider as
+  the server sets it, such as `anthropic`: the schema refuses an API credential without
+  it, and a host credential with it. The API credentials with one `group` value are one
+  key group, and a run can have several. Give the keys of one group one `format`,
+  `endpoint` and `auth`, and `chosen` on one key of a group at most:
+  `server.CheckCredentials` refuses others with `run_configuration_invalid`, such as
+  `Give the keys of group "anthropic" one format, endpoint and auth.` with the cause on
+  a second line. `server.KeyGroupDiffers` returns the member in which two keys differ.
+  The run answer's `credential_hosts` entries of an API credential from the server have
+  `group` (`server.LinkCredentialHosts.Group`), and `link.GroupPlaceholder` returns a
+  key's placeholder: that of its group's first key in that list. A session sets the
+  runtime's key variable to it. A run configuration still has at most 6 API
+  credentials, across every group.
 - Read `model.endpoint` of a runtime in `runtimes.json` as one of `variable` and
   `setting`: a descriptor's endpoint may be a setting, such as
   `model_providers.qory.base_url`, and then has no `variable`. Read `resume` of a
@@ -1257,6 +1270,19 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Expect one key group per `group` value of a run's API credentials, each with its
+  rotation, cooldowns and stop apart from the others' (contract README §Credentials,
+  Several model keys). A join request with a key of a group in `model_credential` gets
+  that group's active key, or, for a group no session used yet, that key; a join request
+  with no `model_credential` gets the start key's group. The proxy sets the active key of the session's group alone, on a
+  request with that group's placeholder. With every key of the session's group in
+  cooldown or used up, the session stops, and the run pauses at that session; with every
+  key of the session's group out after a `401`, the session ends
+  `model_key_unauthorized`, `failed`, with no continuation. A key of another group never
+  takes the place of the session's group. The model keys reports list the keys of every
+  group. A model key of `forager.yaml` is in no group, as before. A run whose start key
+  is the machine's has key groups for its keys from the server, and sends model keys
+  reports for them.
 - Write each path of a machine credential's `paths` in `forager.yaml` without a `.` or
   `..` segment, an empty segment, a backslash, or an encoded slash, backslash, dot or
   percent sign, also before a segment's first `;` or `%3B`. The gateway does not start

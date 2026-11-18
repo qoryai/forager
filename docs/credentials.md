@@ -233,10 +233,19 @@ model key.
 
 ### Several keys of one provider
 
-A key group lets a run go on when the model provider returns a limit refusal for a key. When
-the start key comes from the control plane, its key group is the start key and every
-API credential of the run configuration with the same `format`, `auth` and `endpoint`,
-in the order of `credentials`. A key of `forager.yaml` is never in a key group.
+A key group lets a run go on when the model provider returns a limit refusal for a key.
+Each API credential of the run configuration has `group`, the id of its provider, such
+as `anthropic`, and the API credentials with one `group` value are one key group, in the
+order of `credentials`. A run can have several groups, such as one of `anthropic` keys
+and one of `openai` keys, and each group rotates, cools down and stops apart from the
+others. The keys of one group need one `format`, `endpoint` and `auth`: two that differ
+stop the run with `run_configuration_invalid`, such as `Give the keys of group
+"anthropic" one format, endpoint and auth.` A key of `forager.yaml` has no `group` and
+is never in a key group: a session on it gets that key alone.
+
+A session starts on the key in its join request's `model_credential`, or on the start
+key when the request has none. For a key of a group, the session gets the group's active
+key; a group no session used yet starts at the key in the request.
 
 1. Optionally set `pause_for_s` on a key of the group: the cooldown in seconds after a
    refusal with no reset, 1 to 604800. A key without it has a cooldown of 60 seconds
@@ -251,8 +260,9 @@ in the order of `credentials`. A key of `forager.yaml` is never in a key group.
    Set both or neither: a percentage outside 1 to 99, or one of the two alone, stops
    the run with `run_configuration_invalid`.
 
-The keys share the start key's placeholder, and the proxy sets one of them, the active
-key. When the provider returns `429` for the active key, the proxy puts the key in
+The keys of a group share one placeholder, that of the group's first key, and while a
+session runs on the group, the proxy sets one of them, the group's active key, and no key
+of another group. When the provider returns `429` for the active key, the proxy puts the key in
 cooldown until the reset in the answer's headers, makes another key out of cooldown the
 active key, and sends the request again with it. The proxy takes the key with `chosen`
 first, then a key with no known reset, by the order, then the key whose limit resets
@@ -276,14 +286,16 @@ answers to its model keys reports, so a key that another run took to its percent
 in cooldown too. The response that took the key to its percentage reaches the session
 as the provider sent it, and the next request goes with the next key. A key can pass
 its percentage by the requests already in flight on it when that response arrives.
-When every key is in cooldown, the run pauses as below, also when no provider returned
-a `429`.
+When every key of the session's group is in cooldown, the run pauses as below, also
+when no provider returned a `429`.
 
-When no key is left out of cooldown, the session gets the `429`, and the proxy sends no
-more requests with the placeholder until the session's join ends: each gets a `429` from
-the gateway that starts `The gateway sends no more model requests in this session:`. The
-gateway's answer to the session's next batch has `stop`, `model_key_limit`, so the
-session stops the runtime and the run pauses. The next join gets the active key again.
+When no key of the session's group is left out of cooldown, the session gets the
+`429`, and the proxy sends no more requests with the group's placeholder until the
+session's join ends: each gets a `429` from the gateway that starts `The gateway sends
+no more model requests in this session:`. The gateway's answer to the session's next
+batch has `stop`, `model_key_limit`, so the session stops, and the run pauses at that
+session. A key of another group never takes the place of the session's group. The next
+join gets the group's active key again.
 
 The gateway reports each key's limit windows to the control plane, at most once a
 second, and takes the cooldowns other runs found from the answer. A cooldown from
