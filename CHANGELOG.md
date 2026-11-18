@@ -1407,7 +1407,7 @@ release may change what an existing document does, and says so under Upgrading.
 - A run whose run configuration has a push credential gets a push proxy, which sets
   the push credentials alone, on their items' hosts and paths, with each item's branch
   guard, and returns a `403` for every other host and path, with the first line "qory:
-  send only the push and its pull request calls through the push proxy." It stays open
+  send only git's push through the push proxy." It stays open
   until the run closes, a reopened run on a separate gateway opens it again, and its
   decisions are `dev.qory.run.egress` with `channel: push`. The run's proxy never sets a
   push credential.

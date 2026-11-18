@@ -584,8 +584,7 @@ a credential.
 ### The push proxy
 
 `(*session.Run).PushProxy` starts a forwarder of the same kind for qory's push of the
-work item's branch and the pull request calls of its submit step, in a run whose run
-configuration has a push credential
+work item's branch, in a run whose run configuration has a push credential
 ([credentials](credentials.md#push-credentials)). Call it after a `Join` returns, or
 before the first one, with no container of the run that can write its binds running. It returns a `session.HostProxy`:
 
@@ -602,7 +601,7 @@ before the first one, with no container of the run that can write its binds runn
   `403` with this body:
 
   ```
-  qory: send only the push and its pull request calls through the push proxy.
+  qory: send only git's push through the push proxy.
   qory: egress to other.example.net:443 denied by the gateway: no push credential of the run is for this host
   ```
 
@@ -610,7 +609,7 @@ before the first one, with no container of the run that can write its binds runn
   body:
 
   ```
-  qory: send only the push and its pull request calls through the push proxy.
+  qory: send only git's push through the push proxy.
   qory: PUT api.git.example/repos/example-org/app/pulls/12/merge denied by the gateway: no push credential of the run covers this path
   ```
 - Behind a wall or a separate gateway the push proxy is guarded as the run's proxy is.

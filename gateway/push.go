@@ -119,14 +119,14 @@ func pushEgress(d proxy.Decision) map[string]any {
 // pushUnlisted is the body of the 403 a run's push proxy returns for a host that no
 // push credential's item is for.
 func pushUnlisted(host string, port int) string {
-	return fmt.Sprintf("qory: send only the push and its pull request calls through the push proxy.\n"+
+	return fmt.Sprintf("qory: send only git's push through the push proxy.\n"+
 		"qory: egress to %s:%d denied by the gateway: no push credential of the run is for this host\n", host, port)
 }
 
 // pushPathRefused is the body of the 403 a run's push proxy returns for a request on a
 // push credential's host whose path no item of a push credential covers.
 func pushPathRefused(method, host, path string) string {
-	return fmt.Sprintf("qory: send only the push and its pull request calls through the push proxy.\n"+
+	return fmt.Sprintf("qory: send only git's push through the push proxy.\n"+
 		"qory: %s %s%s denied by the gateway: no push credential of the run covers this path\n", method, host, path)
 }
 

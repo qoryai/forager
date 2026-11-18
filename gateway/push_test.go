@@ -319,7 +319,7 @@ func TestThePushProxySetsThePushCredentialAlone(t *testing.T) {
 	}
 	for _, p := range refusedPaths {
 		got := send(t, push, o.port, p.method, p.path, "application/json", "{}")
-		want := "qory: send only the push and its pull request calls through the push proxy.\n" +
+		want := "qory: send only git's push through the push proxy.\n" +
 			"qory: " + p.method + " localhost" + p.path + " denied by the gateway: no push credential of the run covers this path\n"
 		if got.status != http.StatusForbidden || got.body != want {
 			t.Errorf("%s %s through the push proxy got %d %q; want 403 %q", p.method, p.path, got.status, got.body, want)
@@ -331,7 +331,7 @@ func TestThePushProxySetsThePushCredentialAlone(t *testing.T) {
 	}
 	b, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	const unlisted = "qory: send only the push and its pull request calls through the push proxy.\n" +
+	const unlisted = "qory: send only git's push through the push proxy.\n" +
 		"qory: egress to other.example.net:80 denied by the gateway: no push credential of the run is for this host\n"
 	if resp.StatusCode != http.StatusForbidden || string(b) != unlisted {
 		t.Errorf("another host through the push proxy got %d %q", resp.StatusCode, b)

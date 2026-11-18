@@ -5519,8 +5519,8 @@ join request, so no session reaches it. qory also writes the fetch in the run ma
 log.
 
 **The push proxy.** For a run with a push credential, qory pushes the work item's
-branch and makes the pull request calls of its submit step through the push proxy. This
-is a forwarder on loopback that `Run.PushProxy` starts, with a password made for it
+branch through the push proxy. This is a forwarder on loopback that `Run.PushProxy`
+starts, with a password made for it
 alone and checked as the host proxy's is. On one machine it opens every connection to
 the gateway's proxy with `QORY-RELAY` and the run's `push_proxy_secret`. Behind a
 separate gateway it opens them with `QORY-PUSH` and the run key, over TLS, bound. The
@@ -5530,7 +5530,7 @@ the push credentials alone set, on their items' paths, with the branch guard of 
 item's `push_ref` (§Credentials, Push credentials). Behind a wall or a separate gateway
 it is guarded as the run's proxy is. Each decision is one `dev.qory.run.egress` with
 `channel: push`. A host that no push credential is for gets a `403` whose first line is
-`qory: send only the push and its pull request calls through the push proxy.` and whose
+`qory: send only git's push through the push proxy.` and whose
 second ends `no push credential of the run is for this host`; a path that no item
 covers gets one with the same first line and a second that ends `no push credential of
 the run covers this path`. The push proxy stays open from the run's open until its
