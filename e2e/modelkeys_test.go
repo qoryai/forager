@@ -863,7 +863,7 @@ func startKeysControl(t *testing.T) *keysControl {
 // token as a bearer, on the endpoint, with a cooldown of an hour after a refusal with no
 // reset.
 func keysCredential(name, endpoint string) map[string]any {
-	return map[string]any{"name": name, "format": "anthropic-messages", "endpoint": endpoint,
+	return map[string]any{"name": name, "group": "anthropic", "format": "anthropic-messages", "endpoint": endpoint,
 		"auth": map[string]any{"scheme": "bearer", "oauth": true}, "pause_for_s": 3600}
 }
 

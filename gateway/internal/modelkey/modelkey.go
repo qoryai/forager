@@ -1,4 +1,5 @@
-// Package modelkey keeps the state of a run's key group: the model keys of one provider
+// Package modelkey keeps the state of a run's key groups, [Set], one [Group] for each
+// group value of the run configuration's API credentials: the model keys of one provider
 // the run's proxy sets one at a time, the active key, each key's limit windows as the
 // provider's answers show them, each key's cooldown after a limit refusal, and its
 // cooldown at its Use up to percentage while a window in its use_up_to_windows is at or
@@ -75,7 +76,7 @@ type Window struct {
 	ObservedAt                 time.Time
 }
 
-// Group is the state of a run's key group. Its methods are safe for concurrent use.
+// Group is the state of one key group of a run. Its methods are safe for concurrent use.
 type Group struct {
 	keys []Key
 	now  func() time.Time
@@ -239,6 +240,22 @@ func (g *Group) JoinChoice() string {
 	name, _ := g.pick(true)
 	g.active = active
 	return name
+}
+
+// JoinChoiceAt is the key [Group.JoinChoice] returns when the key name is the active
+// key, with no key made active: name, or, when it is in cooldown or out, the first key
+// of [Group.next]. The gateway calls it for a join request whose model_credential is
+// a key of a group no session used yet. A name of no key of the group is [Group.JoinChoice].
+func (g *Group) JoinChoiceAt(name string) string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	active := g.active
+	if i := g.index(name); i >= 0 {
+		g.active = i
+	}
+	choice, _ := g.pick(true)
+	g.active = active
+	return choice
 }
 
 // SetActive makes the key name active, whether or not it is in cooldown or out, for a

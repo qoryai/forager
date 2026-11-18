@@ -202,6 +202,10 @@ type LinkCredentialHosts struct {
 	Auth         *Auth    `json:"auth,omitempty"`
 	Format       string   `json:"format,omitempty"`
 	Endpoint     string   `json:"endpoint,omitempty"`
+	// Group is the key group of an API credential from the server, empty for any other
+	// credential: the session sets the placeholder of the group of its key,
+	// [link.GroupPlaceholder].
+	Group string `json:"group,omitempty"`
 }
 
 // LinkRunAnswer is what the gateway answers a run request it accepts,
@@ -331,7 +335,7 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 				placeholders = []string{}
 			}
 			s.CredentialHosts[i] = LinkCredentialHosts{Name: accesskey.ShownName(c.Name, false), Hosts: hosts, Placeholders: placeholders,
-				Format: accesskey.ShownValue(c.Format, false), Endpoint: accesskey.ShownValue(c.Endpoint, false)}
+				Format: accesskey.ShownValue(c.Format, false), Endpoint: accesskey.ShownValue(c.Endpoint, false), Group: accesskey.ShownName(c.Group, false)}
 			if c.Auth != nil {
 				s.CredentialHosts[i].Auth = &Auth{Scheme: c.Auth.Scheme, Header: accesskey.ShownValue(c.Auth.Header, false), Username: accesskey.ShownValue(c.Auth.Username, false), OAuth: c.Auth.OAuth}
 			}

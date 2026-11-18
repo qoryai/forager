@@ -296,17 +296,20 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 			}
 		}
 	}
-	switch {
-	case !marked || lr.keys == nil:
+	// The mark is of the open session's key group, or of the start key's group when no
+	// session is open: sessions are serial, and the proxy sets the keys of the
+	// session's group alone ([linkRun.watchKeys]).
+	switch marks := lr.sessionKeys(); {
+	case !marked || marks == nil:
 		// A run configuration with no key group now has no key to stop.
 	case reason != "":
 		// The answers to the session had stop before the stop of the gateway: the
 		// first batch's answer has stop again, with the same reason.
-		lr.keys.PassWith(reason)
+		marks.PassWith(reason)
 	default:
 		// The proxy passed a limit refusal or a 401 to the session, and no answer had
 		// the stop yet: the first batch's answer has it, its reason as of then.
-		lr.keys.Pass()
+		marks.Pass()
 	}
 	lr.mu.Lock()
 	open := lr.openJoin()
@@ -316,10 +319,10 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 		lr.px.SetNoModelKey()
 	case open != nil && open.model != "":
 		lr.px.SetModelKey(open.model)
-		if lr.keys.Has(open.model) {
+		if group := lr.keyGroupOf(open.model); group != nil {
 			// The open session goes on with the key it joined with, which the group
-			// made of the start key's state does not know.
-			lr.keys.SetActive(open.model)
+			// made of the run configuration's state does not know.
+			group.SetActive(open.model)
 		}
 	}
 	if numbered {

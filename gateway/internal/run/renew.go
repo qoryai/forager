@@ -68,8 +68,8 @@ type renewer struct {
 	// entries are the credentials the run renews, in the document's order: those with
 	// expires_at, and the model keys of [Config.Pending].
 	entries []*renewal
-	// group is the run's key group, [Run.SetKeyGroup]; nil for none.
-	group *modelkey.Group
+	// group are the run's key groups, [Run.SetKeyGroups]; nil for none.
+	group *modelkey.Set
 }
 
 // renewal is one credential's state: when its value expires, when it was last asked
@@ -304,8 +304,8 @@ func (r *Run) modelKey(name string) bool {
 	return slices.ContainsFunc(r.stored, func(c server.RunCredential) bool { return c.Name == name && c.Format != "" })
 }
 
-// keyGroup is the run's key group, nil for none.
-func (w *renewer) keyGroup() *modelkey.Group {
+// keyGroup are the run's key groups, nil for none.
+func (w *renewer) keyGroup() *modelkey.Set {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.group
@@ -666,10 +666,10 @@ func checkOpened(c server.RunCredential, values sealed.Values, now time.Time) er
 	return nil
 }
 
-// SetKeyGroup gives the run's renewals its key group, g: a model key of g that the
-// model provider returned 401 for is renewed as unauthorized ([renewer]). The gateway
-// calls it once, after the group is made and before the run's first request.
-func (r *Run) SetKeyGroup(g *modelkey.Group) {
+// SetKeyGroups gives the run's renewals its key groups, g: a model key of a group of g
+// that the model provider returned 401 for is renewed as unauthorized ([renewer]). The
+// gateway calls it once, after the groups are made and before the run's first request.
+func (r *Run) SetKeyGroups(g *modelkey.Set) {
 	if r.renew == nil {
 		return
 	}

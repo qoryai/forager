@@ -33,7 +33,7 @@ import (
 // value Qory Apiary seals.
 const (
 	sealedPolicy = `{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"credentials":[{"name":"machine-model"}]}`
-	modelEntry   = `{"name":"model","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`
+	modelEntry   = `{"name":"model","group":"anthropic","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`
 	sealedDoc    = `{"version":1,"security_policy":` + sealedPolicy + `,"credentials":[` + modelEntry + `]}`
 	sealedValue  = "sealed-value-of-the-test"
 	machineValue = "machine-value-of-the-test"
@@ -104,7 +104,7 @@ func TestASealedCredentialTakesThePlaceOfTheMachinesKey(t *testing.T) {
 		t.Errorf("the secrets request %+v; want the run, %s and model", r, digestOf(sealedDoc))
 	}
 	want := []server.LinkCredentialHosts{{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{},
-		Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: &server.Auth{Scheme: "header", Header: "x-api-key"}}}
+		Group: "anthropic", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: &server.Auth{Scheme: "header", Header: "x-api-key"}}}
 	if !reflect.DeepEqual(a.CredentialHosts, want) || len(a.Placeholders) != 0 || a.ModelCredential != "model" {
 		t.Errorf("credential hosts %+v, placeholders %v, model_credential %q; want %+v and model", a.CredentialHosts, a.Placeholders, a.ModelCredential, want)
 	}
@@ -288,7 +288,7 @@ func TestASealedAnswerThatDoesNotOpenIsNoRun(t *testing.T) {
 // no run and has no value in the message; a value that starts with one opens the run,
 // and the proxy sets it.
 func TestASealedModelKeyWithoutItsPrefixIsNoRun(t *testing.T) {
-	entry := `{"name":"model","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"},"key_prefixes":["sk-ant-"]}`
+	entry := `{"name":"model","group":"anthropic","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"},"key_prefixes":["sk-ant-"]}`
 	doc := `{"version":1,"security_policy":` + sealedPolicy + `,"credentials":[` + entry + `]}`
 	const other, matching = "other-fake-value", "sk-ant-fake-value"
 	ctl, h := sealedGateway(t, doc, map[string]string{"model": other})
@@ -664,7 +664,7 @@ func TestEachApplyItemIsACredentialHostsEntry(t *testing.T) {
 	a := h.open(server.LinkRunRequest{Wall: true})
 	want := []server.LinkCredentialHosts{
 		{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{},
-			Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: &server.Auth{Scheme: "header", Header: "x-api-key"}},
+			Group: "anthropic", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: &server.Auth{Scheme: "header", Header: "x-api-key"}},
 		{Name: "forge", Hosts: []string{"git.example"}, Placeholders: []string{"GIT_TOKEN"}, Auth: &server.Auth{Scheme: "basic", Username: "x-access-token"}},
 		{Name: "forge", Hosts: []string{"api.git.example"}, Placeholders: []string{}, Auth: &server.Auth{Scheme: "bearer"}},
 	}

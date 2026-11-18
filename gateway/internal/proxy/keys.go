@@ -20,8 +20,8 @@ import (
 // before it passes the refusal on or sends the request again.
 const maxErrorBody = 64 << 10
 
-// keyGroup is the run's key group as the proxy sets it, the format and the stream path
-// of its model API, and where it writes its log of limit responses.
+// keyGroup is one key group of the run as the proxy sets it, the format and the stream
+// path of its model API, and where it writes its log of limit responses.
 type keyGroup struct {
 	g *modelkey.Group
 	// format is the API format of the group's keys; empty counts as a format whose
@@ -36,35 +36,64 @@ type keyGroup struct {
 	log      func(string)
 }
 
-// SetKeyGroup sets p's key group to g, the run's: of the model keys whose names g has,
-// which share one placeholder, the proxy sets the group's active key on each request with the
-// placeholder. After a limit refusal it sends a request again with the next key, for a
-// format other than openai-responses ([modelkey.Resends]). format is the keys' API
-// format, and stream the clean path of the model API's request whose streamed answers
-// the proxy reads, [modelkey.StreamPath]: the proxy reads the streamed 200 of a POST to
+// KeyGroup is one key group of the run for [Proxy.SetKeyGroups]: its state, the API
+// format of its keys, and Stream, the clean path of the model API's request whose
+// streamed answers the proxy reads, [modelkey.StreamPath].
+type KeyGroup struct {
+	Group          *modelkey.Group
+	Format, Stream string
+}
+
+// keySet are the run's key groups as the proxy sets them, in their order.
+type keySet []*keyGroup
+
+// SetKeyGroups sets p's key groups to groups, the run's: of the model keys of one
+// group, which share one placeholder, the proxy sets the group's active key on each
+// request with the placeholder, while the key the gateway set ([Proxy.SetModelKey]) is
+// of that group. After a limit refusal it sends a request again with the group's next
+// key, for a format other than openai-responses ([modelkey.Resends]). A group's format
+// is its keys' API format, and its stream the clean path of the model API's request
+// whose streamed answers the proxy reads: the proxy reads the streamed 200 of a POST to
 // it with the placeholder for a limit event ([modelkey.StreamLimit]), and no other
 // answer. log gets one line of each limit response: its status, its header names, its
 // error type and code, never a value. The gateway calls it once, after [New] and
 // before the run's first connection.
-func (p *Proxy) SetKeyGroup(g *modelkey.Group, format, stream string, log func(string)) {
+func (p *Proxy) SetKeyGroups(groups []KeyGroup, log func(string)) {
 	if log == nil {
 		log = func(string) {}
 	}
-	p.keys.Store(&keyGroup{g: g, format: format, messages: stream, log: log})
+	set := make(keySet, 0, len(groups))
+	for _, g := range groups {
+		set = append(set, &keyGroup{g: g.Group, format: g.Format, messages: g.Stream, log: log})
+	}
+	p.keys.Store(&set)
 }
 
-// group is the run's key group when name is one of its keys, nil otherwise.
+// group is the key group of the key name, nil when name is no key of a group.
 func (p *Proxy) group(name string) *keyGroup {
 	k := p.keys.Load()
-	if k == nil || !k.g.Has(name) {
+	if k == nil {
 		return nil
 	}
-	return k
+	return k.of(name)
 }
 
-// limitPassed returns a 429 to a request with the key group's placeholder after the
-// proxy passed a limit refusal or a 401 to the session, or while no key of the group is
-// usable: a 429 the provider never gets, until the session's join ends. The 429 has no
+// of is the group of s whose keys include name, nil for none.
+func (s *keySet) of(name string) *keyGroup {
+	if s == nil {
+		return nil
+	}
+	for _, k := range *s {
+		if k.g.Has(name) {
+			return k
+		}
+	}
+	return nil
+}
+
+// limitPassed returns a 429 to a request with a key group's placeholder after the
+// proxy passed a limit refusal or a 401 of the group to the session, or while no key of
+// the group is usable: a 429 the provider never gets, until the session's join ends. The 429 has no
 // Retry-After, which ends a runtime's retries. d is recorded
 // refused, with no credential.
 func (p *Proxy) limitPassed(w http.ResponseWriter, d Decision) {
@@ -72,7 +101,7 @@ func (p *Proxy) limitPassed(w http.ResponseWriter, d Decision) {
 	p.observe(d)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusTooManyRequests)
-	fmt.Fprint(w, "The gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit, at its Use up to percentage, or out of use after a 401 (unauthorized) of its provider, or the gateway could not send a request again with the next key after a limit response (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, whose session keeps one key).\n")
+	fmt.Fprint(w, "The gateway sends no more model requests in this session: every model key of the session's key group is at its provider's limit, at its Use up to percentage, or out of use after a 401 (unauthorized) of its provider, or the gateway could not send a request again with the next key after a limit response (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, whose session keeps one key).\n")
 }
 
 // resendKey marks the context of a request with a key of the group, with its [resend].

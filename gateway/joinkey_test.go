@@ -48,8 +48,20 @@ type openaiRemote struct {
 // start again.
 func startOpenAIRemote(t *testing.T) *openaiRemote {
 	t.Helper()
+	return startOpenAIRemoteOf(t, false)
+}
+
+// startOpenAIRemoteOf is startOpenAIRemote; with other true, the run configuration has
+// a second key group, other, of the keys other and other-2 after model-2, which the
+// provider serves with a 200.
+func startOpenAIRemoteOf(t *testing.T, other bool) *openaiRemote {
+	t.Helper()
 	o := &openaiRemote{}
 	values := map[string]string{"model": "fake-openai-value-0001", "model-2": "fake-openai-value-0002"}
+	if other {
+		values["other"] = "fake-openai-value-0003"
+		values["other-2"] = "fake-openai-value-0004"
+	}
 	certFile, keyFile, roots := testCertificate(t, t.TempDir())
 	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
@@ -88,12 +100,16 @@ func startOpenAIRemote(t *testing.T) *openaiRemote {
 	t.Cleanup(origin.Close)
 	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
 	o.url = "https://localhost:" + port + "/v1"
-	entry := func(name string) string {
-		return `{"name":"` + name + `","format":"openai-responses","endpoint":"` + o.url + `","auth":{"scheme":"bearer"},"pause_for_s":3600}`
+	entry := func(name, group string) string {
+		return `{"name":"` + name + `","group":"` + group + `","format":"openai-responses","endpoint":"` + o.url + `","auth":{"scheme":"bearer"},"pause_for_s":3600}`
+	}
+	entries := entry("model", "openai") + `,` + entry("model-2", "openai")
+	if other {
+		entries += `,` + entry("other", "other") + `,` + entry("other-2", "other")
 	}
 	c := gatewayControl(t)
 	o.c = c
-	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"model_credential":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
+	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"model_credential":"model","credentials":[`+entries+`]}`, 'a')
 	c.mu.Lock()
 	c.secrets = values
 	c.mu.Unlock()
@@ -116,7 +132,17 @@ func (o *openaiRemote) runID() string { return o.e.a.RunID }
 // answer.
 func (o *openaiRemote) join(t *testing.T) (int, string) {
 	t.Helper()
-	a := o.r.do(t, o.key, http.MethodPost, "/qory-link/run-configuration/"+o.runID()+"/sessions", []byte(`{"version":1,"passes":[],"model_key":true}`))
+	return o.joinNaming(t, "")
+}
+
+// joinNaming is join with model_credential name, none for "".
+func (o *openaiRemote) joinNaming(t *testing.T, name string) (int, string) {
+	t.Helper()
+	body := `{"version":1,"passes":[],"model_key":true}`
+	if name != "" {
+		body = `{"version":1,"passes":[],"model_key":true,"model_credential":"` + name + `"}`
+	}
+	a := o.r.do(t, o.key, http.MethodPost, "/qory-link/run-configuration/"+o.runID()+"/sessions", []byte(body))
 	var joined server.LinkJoinAnswer
 	json.Unmarshal(a.body, &joined)
 	return a.status, joined.ModelCredential
@@ -126,10 +152,16 @@ func (o *openaiRemote) join(t *testing.T) (int, string) {
 // status and the keys the provider got since the last send.
 func (o *openaiRemote) send(t *testing.T) (int, []string) {
 	t.Helper()
+	return o.sendAs(t, "model")
+}
+
+// sendAs is send with the placeholder of the model key name.
+func (o *openaiRemote) sendAs(t *testing.T, name string) (int, []string) {
+	t.Helper()
 	agent := o.r.relay(t, o.key)
 	agent.Transport.(*http.Transport).TLSClientConfig = &tls.Config{RootCAs: o.ca}
 	req, _ := http.NewRequest(http.MethodPost, o.url+"/responses", strings.NewReader(`{"model":"m"}`))
-	req.Header.Set("Authorization", "Bearer "+link.KeyPlaceholder("model"))
+	req.Header.Set("Authorization", "Bearer "+link.KeyPlaceholder(name))
 	resp, err := agent.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -372,4 +404,60 @@ func keyOut(t *testing.T, o *openaiRemote) {
 		b, err := os.ReadFile(filepath.Join(o.cfg.Dir, "runs", o.runID(), "model-keys-unauthorized.json"))
 		return err == nil && strings.Contains(string(b), `"out":true`)
 	})
+}
+
+// TestARestartGivesTheStopToTheSessionsGroup pins a restart in a run of two key groups,
+// openai with the start key model, and other. Session 1 joins with other, which no
+// session used, and gets it; the provider's 401 for other reaches the session, and the
+// answer to its next batch has stop, model_key_switch, as other-2 of the session's group
+// is usable. After the restart, the answer to the next batch has the same stop, for the
+// open session's group, and the reopen requests no value of other. Once session 1
+// ended, a join with no key gets model, of the start key's group, with no stop in its
+// batches; a join with other gets other-2, which the proxy sets on a request with
+// other's placeholder, the placeholder of the group's first key, out of the run.
+func TestARestartGivesTheStopToTheSessionsGroup(t *testing.T) {
+	o := startOpenAIRemoteOf(t, true)
+	o.mu.Lock()
+	o.unauthorized = map[string]bool{"other": true}
+	o.mu.Unlock()
+	if status, key := o.joinNaming(t, "other"); status != http.StatusOK || key != "other" {
+		t.Fatalf("join 1 naming other: %d %s; want 200 with other", status, key)
+	}
+	o.posted(t, sessionStarted(o.runID(), 1))
+	if status, calls := o.sendAs(t, "model"); status != http.StatusOK || strings.Join(calls, ",") != "" {
+		t.Errorf("session 1, model's placeholder: %d %v; want no key and no call with a key", status, calls)
+	}
+	if status, calls := o.sendAs(t, "other"); status != http.StatusUnauthorized || strings.Join(calls, ",") != "other" {
+		t.Fatalf("session 1, other's placeholder: %d %v; want the provider's 401 for other", status, calls)
+	}
+	const stop = `{"stop":{"reason":"model_key_switch"}}`
+	if got := o.e.post(t, heartbeat(o.runID())); got.status != http.StatusAccepted || string(got.body) != stop {
+		t.Fatalf("the batch after the 401: %d %q", got.status, got.body)
+	}
+	o.r = o.r.restart(t, o.cfg)
+	o.e.r = o.r
+	if got := o.e.post(t, heartbeat(o.runID())); got.status != http.StatusAccepted || string(got.body) != stop {
+		t.Errorf("the reopened run's first batch: %d %q", got.status, got.body)
+	}
+	if reqs := o.c.requests(t); len(reqs) == 0 || !slices.Equal(reqs[len(reqs)-1].Credentials, []string{"model", "model-2", "other-2"}) {
+		t.Errorf("the secrets requests %+v; want the reopen's without other", reqs)
+	}
+	o.posted(t, ev(o.runID(), event.SessionExited, map[string]any{"session": 1, "state": "paused", "exit_code": 1, "reason": "model_key_switch", "duration_ms": 5}))
+
+	if status, key := o.join(t); status != http.StatusOK || key != "model" {
+		t.Fatalf("join 2: %d %s; want 200 with model", status, key)
+	}
+	o.posted(t, sessionStarted(o.runID(), 2))
+	if got := o.e.post(t, heartbeat(o.runID())); got.status != http.StatusAccepted || len(got.body) != 0 {
+		t.Errorf("a batch of session 2: %d %q; want no stop", got.status, got.body)
+	}
+	o.posted(t, sessionExited(o.runID(), 2))
+
+	if status, key := o.joinNaming(t, "other"); status != http.StatusOK || key != "other-2" {
+		t.Fatalf("join 3 naming other: %d %s; want 200 with other-2", status, key)
+	}
+	o.posted(t, sessionStarted(o.runID(), 3))
+	if status, calls := o.sendAs(t, "other"); status != http.StatusOK || strings.Join(calls, ",") != "other-2" {
+		t.Errorf("session 3, other's placeholder: %d %v; want 200 from other-2", status, calls)
+	}
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/gateway/internal/modelkey"
 	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/server"
 )
@@ -177,8 +178,8 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 	lr.touch()
 	// A join with no model key gets none; the schema has refused one that names one.
 	var model string
-	// grouped is true when model is a key of the run's key group: the group's key for
-	// the join is taken once the join is accepted.
+	// grouped is true when model is a key of one of the run's key groups: that group's
+	// key for the join is taken once the join is accepted.
 	var grouped bool
 	if req.ModelKey {
 		if model, grouped, ok = lr.modelKey(req.ModelCredential); !ok {
@@ -220,11 +221,17 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 		// group's active key. The key the join gets becomes active only once its record
 		// is written and the run is still live. A refused join records the key a
 		// request would get, [modelkey.Group.Active], which keeps an openai-responses
-		// key in cooldown.
-		if conflict == nil {
-			model = lr.keys.JoinChoice()
-		} else {
-			model = lr.keys.Active()
+		// key in cooldown. A group no session used yet starts at the key the join
+		// names.
+		group := lr.keyGroupOf(model)
+		used := lr.usedKeys(group)
+		switch {
+		case conflict == nil && used:
+			model = group.JoinChoice()
+		case conflict == nil:
+			model = group.JoinChoiceAt(model)
+		case used:
+			model = group.Active()
 		}
 	}
 	j := &join{session: len(lr.joins) + 1, accepted: conflict == nil, passes: slices.Clone(req.Passes), model: model, noKey: !req.ModelKey, credential: req.ModelCredential}
@@ -246,7 +253,7 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 	}
 	lr.joins = append(lr.joins, j)
 	if grouped && conflict == nil {
-		lr.keys.SetActive(model)
+		lr.keyGroupOf(model).SetActive(model)
 	}
 	digest := lr.reloadDigest
 	reporter := lr.reporter
@@ -265,12 +272,35 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 		// model key in place of the start key.
 		lr.px.SetModelKey(model)
 	}
-	// A new join starts with no stop: the proxy sets the active key again.
+	// A new join starts with no stop, in every group: the proxy sets the active key
+	// again. Only the group of the session before can have one, or the start key's
+	// group after a gateway that started again between sessions.
 	lr.keys.Resume()
 	if reporter != nil {
 		reporter.opened(j.session)
 	}
 	lr.joinAnswer(s, w, r, digest, j.session, model)
+}
+
+// usedKeys reports whether a session used the key group g: g is the start key's group,
+// whose active key the proxy sets before the first session and between sessions, or a
+// join the gateway accepted has a key of g. Called with lr.mu held.
+func (lr *linkRun) usedKeys(g *modelkey.Group) bool {
+	return g == lr.startKeys || slices.ContainsFunc(lr.joins, func(j *join) bool { return j.accepted && g.Has(j.model) })
+}
+
+// sessionKeys is the key group of the open session, the group of the key it joined
+// with; the start key's group when no session is open, or the open session has no key
+// of a group. Nil when the run has no key group.
+func (lr *linkRun) sessionKeys() *modelkey.Group {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	if j := lr.openJoin(); j != nil {
+		if g := lr.keyGroupOf(j.model); g != nil {
+			return g
+		}
+	}
+	return lr.startKeys
 }
 
 // joinAnswer answers a join 200 with the session's number and its model key.
@@ -288,9 +318,9 @@ const joinWhileOpen = "a join while another join of the run is open"
 
 // modelKey is the model key a join's session starts with: name, when it is one of the
 // model keys the gateway holds for the run, else the run's start key when name is
-// empty; empty when the run has no model key. When that key is one of the run's key
-// group, grouped is true: the caller takes the group's key for the join,
-// [modelkey.Group.JoinKey], once it accepts the join. ok is false for a name of no
+// empty; empty when the run has no model key. When that key is in one of the run's key
+// groups, grouped is true: the caller takes that group's key for the join,
+// [modelkey.Group.JoinChoice], once it accepts the join. ok is false for a name of no
 // model key of the run's.
 func (lr *linkRun) modelKey(name string) (key string, grouped, ok bool) {
 	held := lr.r.Held()

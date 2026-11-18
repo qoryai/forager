@@ -12,15 +12,34 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// storedGroup is the key group of a run configuration's work credentials whose
-// model_credential is model, [credential.KeyGroup]: the start key and every API
-// credential with its format, auth and endpoint, in their order. The start key is model
-// when it is the name of an API credential of creds, or, with model empty, the one API
-// credential of creds; with neither, the run has no key group of creds. With model
-// empty and a model key of the machine's beside the one, the run is refused later, when
-// its start key is decided. The harness credentials are left out, as the proxy's group
-// leaves them out ([Run.storedUses]).
-func storedGroup(creds []server.RunCredential, model string) []server.RunCredential {
+// storedGroups are the key groups of a run configuration's work credentials,
+// [credential.KeyGroups]: the API credentials with one group value each, in their
+// order, groups in the order of their first key. The harness credentials are left
+// out, as the proxy's groups leave them out ([Run.storedUses]).
+func storedGroups(creds []server.RunCredential) [][]server.RunCredential {
+	work := slices.DeleteFunc(slices.Clone(creds), server.RunCredential.Harness)
+	entries := make([]credential.KeyEntry, len(work))
+	for i, c := range work {
+		entries[i] = keyEntry(c)
+	}
+	var out [][]server.RunCredential
+	for _, g := range credential.KeyGroups(entries) {
+		var group []server.RunCredential
+		for _, name := range g.Keys {
+			group = append(group, work[slices.IndexFunc(work, func(c server.RunCredential) bool { return c.Name == name })])
+		}
+		out = append(out, group)
+	}
+	return out
+}
+
+// startGroup is the key group of the start key of a run configuration's work
+// credentials whose model_credential is model, of [storedGroups]: the group of model
+// when it is the name of an API credential of creds, or, with model empty, the group
+// of the one API credential of creds; with neither, nil. With model empty and a model
+// key of the machine's beside the one, the run is refused later, when its start key is
+// decided.
+func startGroup(creds []server.RunCredential, model string) []server.RunCredential {
 	work := slices.DeleteFunc(slices.Clone(creds), server.RunCredential.Harness)
 	if model == "" {
 		api := slices.IndexFunc(work, func(c server.RunCredential) bool { return c.Format != "" })
@@ -28,52 +47,57 @@ func storedGroup(creds []server.RunCredential, model string) []server.RunCredent
 			model = work[api].Name
 		}
 	}
-	entries := make([]credential.KeyEntry, len(work))
-	for i, c := range work {
-		entries[i] = keyEntry(c)
+	for _, group := range storedGroups(creds) {
+		if slices.ContainsFunc(group, func(c server.RunCredential) bool { return c.Name == model }) {
+			return group
+		}
 	}
-	var out []server.RunCredential
-	for _, name := range credential.KeyGroup(entries, model) {
-		out = append(out, work[slices.IndexFunc(work, func(c server.RunCredential) bool { return c.Name == name })])
-	}
-	return out
+	return nil
 }
 
-// keyEntry is c as [credential.KeyGroup] reads it.
+// keyEntry is c as [credential.KeyGroups] reads it.
 func keyEntry(c server.RunCredential) credential.KeyEntry {
-	return credential.KeyEntry{Name: c.Name, Format: c.Format, Endpoint: c.Endpoint, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header, OAuth: c.Auth.OAuth,
-		AccountHeader: c.Auth.AccountHeader, AccountClaim: c.Auth.AccountClaim}
+	return credential.KeyEntry{Name: c.Name, Format: c.Format, Group: c.Group}
 }
 
 // checkKeyGroup returns a run_configuration_invalid error, with the key's name, for a
 // key group of the run configuration the run starts with that has a key with a
 // pause_for_s below 1, a use_up_to_percent outside 1 to 99, or one of use_up_to_percent
-// and use_up_to_windows without the other, which each fail the schema too; a start key
-// in cooldown at now, since the server picks the start key among the keys out of
-// cooldown; and a second key with chosen. A key with no pause_for_s has
+// and use_up_to_windows without the other, which each fail the schema too; a key whose
+// format, endpoint or auth differ from those of the group's first key
+// ([server.KeyGroupDiffers]) and a second key with chosen in one group, which the
+// server's check refuses too; and a start key in cooldown at now, since the server
+// picks the start key among the keys out of cooldown. A key with no pause_for_s has
 // [modelkey.DefaultPauseFor].
 func (r *Run) checkKeyGroup(now time.Time) error {
-	group := storedGroup(r.stored, r.storedModel)
-	chosen := ""
-	for _, c := range group {
-		if c.PauseForS != nil && *c.PauseForS < 1 {
-			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"set pause_for_s on the model key %s to a value from 1 to 604800, or remove it for the default cooldown: pause_for_s is %d", accesskey.ShownName(c.Name, true), *c.PauseForS)
-		}
-		if err := checkUseUpTo(c); err != nil {
-			return err
-		}
-		// The schema has refused a cooldown_until that is no RFC 3339 time.
-		if until, err := time.Parse(time.RFC3339, c.CooldownUntil); err == nil && until.After(now) && c.Name == startName(group, r.storedModel) {
-			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"set model_credential to a model key out of cooldown: the start key %s is in cooldown until %s", accesskey.ShownName(c.Name, true), c.CooldownUntil)
-		}
-		if c.Chosen {
-			if chosen != "" {
+	start := startName(startGroup(r.stored, r.storedModel), r.storedModel)
+	for _, group := range storedGroups(r.stored) {
+		shown := accesskey.ShownName(group[0].Group, true)
+		chosen := ""
+		for _, c := range group {
+			if c.PauseForS != nil && *c.PauseForS < 1 {
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-					"set chosen on one model key of the key group: %s and %s both have it", accesskey.ShownName(chosen, true), accesskey.ShownName(c.Name, true))
+					"set pause_for_s on the model key %s to a value from 1 to 604800, or remove it for the default cooldown: pause_for_s is %d", accesskey.ShownName(c.Name, true), *c.PauseForS)
 			}
-			chosen = c.Name
+			if err := checkUseUpTo(c); err != nil {
+				return err
+			}
+			if member := server.KeyGroupDiffers(group[0], c); member != "" {
+				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+					"Give the keys of group %s one format, endpoint and auth.\nThe credentials %s and %s differ in %s", shown, accesskey.ShownName(group[0].Name, true), accesskey.ShownName(c.Name, true), member)
+			}
+			// The schema has refused a cooldown_until that is no RFC 3339 time.
+			if until, err := time.Parse(time.RFC3339, c.CooldownUntil); err == nil && until.After(now) && c.Name == start {
+				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+					"set model_credential to a model key out of cooldown: the start key %s is in cooldown until %s", accesskey.ShownName(c.Name, true), c.CooldownUntil)
+			}
+			if c.Chosen {
+				if chosen != "" {
+					return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+						"Set chosen on one key of group %s.\nThe credentials %s and %s both have it", shown, accesskey.ShownName(chosen, true), accesskey.ShownName(c.Name, true))
+				}
+				chosen = c.Name
+			}
 		}
 	}
 	return nil
@@ -128,35 +152,55 @@ func startName(group []server.RunCredential, model string) string {
 	return model
 }
 
-// ModelKeys are the keys of the run's key group, [credential.Held.Group], in their
-// order, each with its resets_at, schedule_resets_at, pause_for_s or without it
+// KeyGroup is one key group of the run as the gateway sets it: its group value, its
+// keys in their order, [Run.KeyGroups], the API format of its keys, and the clean path
+// of the request whose streamed answers the proxy reads, [modelkey.StreamPath].
+type KeyGroup struct {
+	Name   string
+	Keys   []modelkey.Key
+	Format string
+	Stream string
+}
+
+// KeyGroups are the run's key groups, [credential.Held.Groups], in their order, each
+// key with its resets_at, schedule_resets_at, pause_for_s or without it
 // [modelkey.DefaultPauseFor] of its auth, cooldown_until, chosen, use_up_to_percent and
-// use_up_to_windows; none when the run's start key is the machine's or the run has
-// none. Call it after [Run.Hold].
-func (r *Run) ModelKeys() []modelkey.Key {
+// use_up_to_windows; none when the run has no API credential. The keys of a group share
+// their format and endpoint, so the group's format and stream path are its first
+// key's. Call it after [Run.Hold].
+func (r *Run) KeyGroups() []KeyGroup {
 	held := r.Held()
 	if held == nil {
 		return nil
 	}
-	var out []modelkey.Key
-	for _, name := range held.Group {
-		i := slices.IndexFunc(r.stored, func(c server.RunCredential) bool { return c.Name == name })
-		if i < 0 {
-			continue
+	var out []KeyGroup
+	for _, g := range held.Groups {
+		group := KeyGroup{Name: g.Name}
+		for _, name := range g.Keys {
+			i := slices.IndexFunc(r.stored, func(c server.RunCredential) bool { return c.Name == name })
+			if i < 0 {
+				continue
+			}
+			c := r.stored[i]
+			if len(group.Keys) == 0 {
+				group.Format, group.Stream = c.Format, modelkey.StreamPath(c.Format, c.Endpoint)
+			}
+			k := modelkey.Key{Name: name, PauseFor: modelkey.DefaultPauseFor(c.Auth.OAuth), Chosen: c.Chosen}
+			if c.PauseForS != nil {
+				k.PauseFor = time.Duration(*c.PauseForS) * time.Second
+			}
+			// The schema has refused a time that is no RFC 3339 time.
+			k.ResetsAt, _ = time.Parse(time.RFC3339, c.ResetsAt)
+			k.ScheduleResetsAt, _ = time.Parse(time.RFC3339, c.ScheduleResetsAt)
+			k.CooldownUntil, _ = time.Parse(time.RFC3339, c.CooldownUntil)
+			if c.UseUpToPercent != nil {
+				k.UseUpToPercent, k.UseUpToWindows = *c.UseUpToPercent, slices.Clone(c.UseUpToWindows)
+			}
+			group.Keys = append(group.Keys, k)
 		}
-		c := r.stored[i]
-		k := modelkey.Key{Name: name, PauseFor: modelkey.DefaultPauseFor(c.Auth.OAuth), Chosen: c.Chosen}
-		if c.PauseForS != nil {
-			k.PauseFor = time.Duration(*c.PauseForS) * time.Second
+		if len(group.Keys) > 0 {
+			out = append(out, group)
 		}
-		// The schema has refused a time that is no RFC 3339 time.
-		k.ResetsAt, _ = time.Parse(time.RFC3339, c.ResetsAt)
-		k.ScheduleResetsAt, _ = time.Parse(time.RFC3339, c.ScheduleResetsAt)
-		k.CooldownUntil, _ = time.Parse(time.RFC3339, c.CooldownUntil)
-		if c.UseUpToPercent != nil {
-			k.UseUpToPercent, k.UseUpToWindows = *c.UseUpToPercent, slices.Clone(c.UseUpToWindows)
-		}
-		out = append(out, k)
 	}
 	return out
 }
@@ -168,20 +212,4 @@ func (r *Run) Resume() *server.LinkResume {
 		return f.Document.Resume
 	}
 	return nil
-}
-
-// ModelAPI is the model API of the run's key group: the start key's format, and the
-// clean path of the request whose streamed answers the proxy reads, [modelkey.StreamPath]
-// of the start key's format and endpoint. Both empty when the run has no key group.
-// Call it after [Run.Hold].
-func (r *Run) ModelAPI() (format, stream string) {
-	held := r.Held()
-	if held == nil || len(held.Group) == 0 {
-		return "", ""
-	}
-	i := slices.IndexFunc(r.stored, func(c server.RunCredential) bool { return c.Name == held.Start })
-	if i < 0 {
-		return "", ""
-	}
-	return r.stored[i].Format, modelkey.StreamPath(r.stored[i].Format, r.stored[i].Endpoint)
 }

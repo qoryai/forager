@@ -30,9 +30,9 @@ func accountOf(id string) string {
 // header, a host credential, files, on other paths of that host, and an API key on
 // another host, under a policy that allows both hosts.
 const accountDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["chat.model.example","api.model.example"]}},"model_credential":"subscription","credentials":[` +
-	`{"name":"subscription","format":"openai-responses","endpoint":"https://chat.model.example/backend-api/codex","auth":{"scheme":"bearer","oauth":true,"account_header":"chatgpt-account-id","account_claim":"/https:~1~1auth.model.example~1auth/account_id"},"paths":["/backend-api/codex/*"],"pause_for_s":18000},` +
-	`{"name":"subscription-2","format":"openai-responses","endpoint":"https://chat.model.example/backend-api/codex","auth":{"scheme":"bearer","oauth":true,"account_header":"chatgpt-account-id","account_claim":"/https:~1~1auth.model.example~1auth/account_id"},"paths":["/backend-api/codex/*"],"pause_for_s":18000},` +
-	`{"name":"api-key","format":"openai-responses","endpoint":"https://api.model.example/v1","auth":{"scheme":"bearer"},"paths":["/v1/responses","/v1/responses/*"]},` +
+	`{"name":"subscription","group":"openai","format":"openai-responses","endpoint":"https://chat.model.example/backend-api/codex","auth":{"scheme":"bearer","oauth":true,"account_header":"chatgpt-account-id","account_claim":"/https:~1~1auth.model.example~1auth/account_id"},"paths":["/backend-api/codex/*"],"pause_for_s":18000},` +
+	`{"name":"subscription-2","group":"openai","format":"openai-responses","endpoint":"https://chat.model.example/backend-api/codex","auth":{"scheme":"bearer","oauth":true,"account_header":"chatgpt-account-id","account_claim":"/https:~1~1auth.model.example~1auth/account_id"},"paths":["/backend-api/codex/*"],"pause_for_s":18000},` +
+	`{"name":"api-key","group":"openai-api","format":"openai-responses","endpoint":"https://api.model.example/v1","auth":{"scheme":"bearer"},"paths":["/v1/responses","/v1/responses/*"]},` +
 	`{"name":"files","apply":[{"hosts":["chat.model.example"],"scheme":"bearer","paths":["/backend-api/files/*"]}],"placeholders":["FILES_TOKEN"]}]}`
 
 // accountValues answers each subscription with a token of its account id, and every
@@ -58,7 +58,7 @@ func accountValues(values map[string]string) func(string, int) (answer, error) {
 func TestAPathLimitedSubscriptionSitsBesideAHostCredential(t *testing.T) {
 	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, accountDoc, digest('1')),
 		Secrets: (&controlPlane{answer: accountValues(nil)}).fetch})
-	if got := r.Held().Group; !slices.Equal(got, []string{"subscription", "subscription-2"}) {
+	if got := keysOf(r, "subscription"); !slices.Equal(got, []string{"subscription", "subscription-2"}) {
 		t.Errorf("Group %v; want the two subscriptions", got)
 	}
 	if out := r.KeysOut(); len(out) != 0 {
@@ -136,7 +136,7 @@ func TestAValueWithoutItsClaimLeavesTheGroup(t *testing.T) {
 			if strings.Contains(lines[0], c.value) || strings.Contains(lines[0], "acct-fake") || strings.Contains(lines[0], "org-fake") {
 				t.Errorf("the line contains the token or a claim: %s", lines[0])
 			}
-			g := modelkey.New(r.ModelKeys(), r.Held().Start, nil)
+			g := modelkey.New(modelKeys(r), r.Held().Start, nil)
 			for _, name := range r.KeysOut() {
 				g.Out(name)
 			}

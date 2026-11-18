@@ -25,14 +25,14 @@ var reportBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Secon
 // keys of 11 windows.
 const maxReportKeys = 66
 
-// keyReporter sends the state of a run's key group to the control plane, signed POST
+// keyReporter sends the state of a run's key groups to the control plane, signed POST
 // <run.url>/<run_id>/model-keys (the contract's §The server, The model keys): one report
 // in flight at most, at most one a second, each with every window of the group and the
 // number of the session open when it was made, and takes the newer states of the answer
-// into the group. Each session's start and end make a report, a boundary report.
+// into the groups. Each session's start and end make a report, a boundary report.
 type keyReporter struct {
 	runID string
-	g     *modelkey.Group
+	g     *modelkey.Set
 	send  func(ctx context.Context, rep server.ModelKeysReport) ([]server.ModelKeyState, error)
 	// reported writes a line to the gateway's log, and logLine one dev.qory.run.log line
 	// to the run's record.
@@ -71,9 +71,9 @@ type boundaryReport struct {
 	covers       uint64
 }
 
-// newKeyReporter makes the reporter of the group g of the run runID, and has g wake it
-// at each change.
-func newKeyReporter(runID, runURL string, g *modelkey.Group, send func(context.Context, server.ModelKeysReport) ([]server.ModelKeyState, error), reported, logLine func(string)) *keyReporter {
+// newKeyReporter makes the reporter of the key groups g of the run runID, and has each
+// group wake it at each change.
+func newKeyReporter(runID, runURL string, g *modelkey.Set, send func(context.Context, server.ModelKeysReport) ([]server.ModelKeyState, error), reported, logLine func(string)) *keyReporter {
 	k := &keyReporter{runID: runID, runURL: runURL, g: g, send: send, reported: reported, logLine: logLine, wake: make(chan struct{}, 1), gap: reportGap, backoff: reportBackoff}
 	g.OnChange(k.poke)
 	return k

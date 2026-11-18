@@ -141,7 +141,7 @@ func openGroupRun(t *testing.T, format string, forge bool) *groupRun {
 		auth = `{"scheme":"bearer"}`
 	}
 	entry := func(name string) string {
-		return `{"name":"` + name + `","format":"` + format + `","endpoint":"` + g.url + `","auth":` + auth + `,"pause_for_s":3600}`
+		return `{"name":"` + name + `","group":"` + format + `","format":"` + format + `","endpoint":"` + g.url + `","auth":` + auth + `,"pause_for_s":3600}`
 	}
 	allow, extra, secrets := `"localhost"`, "", maps.Clone(groupValues)
 	if forge {
@@ -912,7 +912,7 @@ func TestTheOneAddressReportsReplayedAndReopenedJoins(t *testing.T) {
 	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
 	url := "https://localhost:" + port + "/v1"
 	entry := func(name string) string {
-		return `{"name":"` + name + `","format":"anthropic-messages","endpoint":"` + url + `","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
+		return `{"name":"` + name + `","group":"anthropic","format":"anthropic-messages","endpoint":"` + url + `","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
 	}
 	c := gatewayControl(t)
 	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"model_credential":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')

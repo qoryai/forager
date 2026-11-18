@@ -129,8 +129,8 @@ type Stored struct {
 	Format, Endpoint            string
 	OAuth                       bool
 	AccountHeader, AccountClaim string
-	// Entry is the part of the credential's entry that [KeyGroup] reads; its Format is
-	// empty for a host credential.
+	// Entry is the part of the credential's entry that [KeyGroups] reads; its Format
+	// and Group are empty for a host credential.
 	Entry KeyEntry
 	// Value returns a copy of the opened value's bytes, which the caller clears once it
 	// has set them; empty once the run has ended, and once the value expired.
@@ -187,17 +187,18 @@ const (
 )
 
 // Held are a run's credentials, resolved. Start is the name of the model key the
-// runtime starts with, the one model key the proxy sets; empty when the run has none.
+// runtime starts with, which the proxy sets before the first session and between
+// sessions; empty when the run has none.
 type Held struct {
 	Uses         []*Use
 	Placeholders []string
 	Start        string
-	// Group are the names of the start key's key group, in the order of the run
-	// configuration's credentials: the start key and every credential from the server
-	// with its format, auth and endpoint. Empty when the start key is the machine's, or
-	// the run has none.
-	Group []string
-	all   []*held
+	// Groups are the key groups of the run configuration's API credentials, one per
+	// group value, in the order of each group's first key, [KeyGroups]. Empty when the
+	// run has no API credential from the server. A model key of the machine's is in
+	// none.
+	Groups []KeyGroup
+	all    []*held
 	// panics, when set, gets a panic of the renewals' goroutines ([Held.ReportPanics]).
 	panics atomic.Pointer[func(string)]
 }
@@ -219,7 +220,8 @@ func (h *Held) reportPanic(line string) {
 // Credential is one credential a run holds: its name, the hosts of its uses in their
 // order, as the proxy matches them, and the variables the enclosure gets a placeholder in
 // for it, each once. Of a credential from the server, Stored is true. Of a model key,
-// from the server or the machine, Format, Endpoint and OAuth are set. Of both, Scheme,
+// from the server or the machine, Format, Endpoint and OAuth are set; of a model key
+// from the server, Group, its key group. Of both, Scheme,
 // Username and Header are how its value is set on its first use's hosts. Items, of a
 // credential from the server, are its uses in order: each one's hosts with how the value
 // is set there.
@@ -231,6 +233,7 @@ type Credential struct {
 	Scheme, Username, Header string
 	Format, Endpoint         string
 	OAuth                    bool
+	Group                    string
 	Items                    []Item
 }
 
@@ -248,7 +251,7 @@ type Item struct {
 func (h *Held) Credentials() []Credential {
 	out := make([]Credential, 0, len(h.all))
 	for _, c := range h.all {
-		cred := Credential{Name: c.def.Name, Placeholders: append([]string{}, c.placeholders...)}
+		cred := Credential{Name: c.def.Name, Placeholders: append([]string{}, c.placeholders...), Group: c.group}
 		for _, u := range h.Uses {
 			if u.held == c {
 				cred.Hosts = append(cred.Hosts, u.Hosts...)
@@ -364,7 +367,7 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 		}
 	}
 	for _, s := range stored {
-		h := &held{def: Definition{Name: s.Name}, value: s.Value, done: make(chan struct{})}
+		h := &held{def: Definition{Name: s.Name}, value: s.Value, group: s.Entry.Group, done: make(chan struct{})}
 		renewed := s.Rejected != nil
 		if renewed {
 			h.onRejected = s.Rejected
@@ -391,7 +394,7 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 		out.Close()
 		return nil, err
 	}
-	out.Group = keyGroup(stored, out.Start)
+	out.Groups = keyGroups(stored)
 	for _, h := range out.all {
 		h.panics = out.reportPanic
 		routine.Go(h.panics, h.renew)
@@ -433,45 +436,58 @@ func (h *Held) startKey(start string) error {
 }
 
 // KeyEntry is the part of an entry of the run configuration's credentials that
-// [KeyGroup] reads: its name, and an API credential's format, endpoint and auth.
-// Format is empty for a host credential.
+// [KeyGroups] reads: its name, and an API credential's format and group. Format and
+// Group are empty for a host credential.
 type KeyEntry struct {
-	Name, Format, Endpoint      string
-	Scheme, Username, Header    string
-	OAuth                       bool
-	AccountHeader, AccountClaim string
+	Name, Format, Group string
 }
 
-// KeyGroup is the key group of the start key start: the names of entries, in their
-// order, whose format, endpoint and auth are the start key's, the case of the header
-// and of the account header ignored; none when start is no API credential of entries.
-// The gateway sets the key group by it alone: the check of the run configuration and
-// the proxy's group.
-func KeyGroup(entries []KeyEntry, start string) []string {
-	i := slices.IndexFunc(entries, func(e KeyEntry) bool { return e.Name == start })
-	if i < 0 || entries[i].Format == "" {
-		return nil
-	}
-	first := entries[i]
-	var out []string
+// KeyGroup is one key group of a run: its group value, Name, and the names of its keys,
+// the API credentials with that group, in the order of the run configuration's
+// credentials.
+type KeyGroup struct {
+	Name string
+	Keys []string
+}
+
+// KeyGroups are the key groups of entries, one per group value of the API credentials,
+// those with a format, in the order of each group's first key. The server's check of
+// the run configuration and the gateway's refuse a group whose keys differ in format,
+// endpoint or auth ([server.KeyGroupDiffers]) before the groups are read.
+func KeyGroups(entries []KeyEntry) []KeyGroup {
+	var out []KeyGroup
 	for _, e := range entries {
-		if e.Format == first.Format && e.Endpoint == first.Endpoint && e.OAuth == first.OAuth &&
-			e.Scheme == first.Scheme && e.Username == first.Username && strings.EqualFold(e.Header, first.Header) &&
-			strings.EqualFold(e.AccountHeader, first.AccountHeader) && e.AccountClaim == first.AccountClaim {
-			out = append(out, e.Name)
+		if e.Format == "" {
+			continue
 		}
+		i := slices.IndexFunc(out, func(g KeyGroup) bool { return g.Name == e.Group })
+		if i < 0 {
+			out = append(out, KeyGroup{Name: e.Group})
+			i = len(out) - 1
+		}
+		out[i].Keys = append(out[i].Keys, e.Name)
 	}
 	return out
 }
 
-// keyGroup is [KeyGroup] of stored.
-func keyGroup(stored []Stored, start string) []string {
+// keyGroups is [KeyGroups] of stored.
+func keyGroups(stored []Stored) []KeyGroup {
 	entries := make([]KeyEntry, len(stored))
 	for i, s := range stored {
 		entries[i] = s.Entry
 		entries[i].Name = s.Name
 	}
-	return KeyGroup(entries, start)
+	return KeyGroups(entries)
+}
+
+// GroupOf is the key group of the model key name, and false when name is in none.
+func (h *Held) GroupOf(name string) (KeyGroup, bool) {
+	for _, g := range h.Groups {
+		if slices.Contains(g.Keys, name) {
+			return g, true
+		}
+	}
+	return KeyGroup{}, false
 }
 
 // check refuses two uses that claim a host together, unless both are model keys, which
@@ -915,6 +931,9 @@ type held struct {
 	shape  string
 	// placeholders are the definition's placeholders and then the adapter's, each once.
 	placeholders []string
+	// group is the key group of an API credential from the server; empty for every
+	// other credential.
+	group string
 	// value, for a credential from the server, returns its opened value; nil for the
 	// machine's. onRejected, for a value from the server with expires_at, is called on a
 	// host's 401; nil for every other.

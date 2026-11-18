@@ -42,7 +42,7 @@ func newKeyRun(t *testing.T, fail func(call int) error) *keyRun {
 	k := &keyRun{c: &fakeClock{now: start}, s: &controlPlane{answer: expiring, fail: fail}, log: &reports{}, report: &reports{}}
 	k.r = renewRun(t, renewDoc, k.s, k.c, k.report, k.log)
 	k.g = modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}}, "model", k.c.Now)
-	k.r.SetKeyGroup(k.g)
+	k.r.SetKeyGroups(oneGroup(k.g))
 	return k
 }
 
@@ -201,8 +201,8 @@ func TestAKeyThatExpiresWaitingForItsRenewalGoesOut(t *testing.T) {
 
 // twoKeysDoc is renewDoc with a second model key, model-2, in model's key group.
 const twoKeysDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","git.example","api.git.example"]}},"model_credential":"model","credentials":[` +
-	`{"name":"model","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
-	`{"name":"model-2","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
+	`{"name":"model","group":"anthropic","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
+	`{"name":"model-2","group":"anthropic","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
 	`{"name":"forge","apply":[{"hosts":["git.example","api.git.example"],"scheme":"basic","username":"x-access-token"}]}]}`
 
 // TestEachKeyAfterA401IsRenewedAlone pins the requests of renewals due together: each
@@ -219,7 +219,7 @@ func TestEachKeyAfterA401IsRenewedAlone(t *testing.T) {
 	}}
 	r := renewRun(t, twoKeysDoc, s, c, &reports{}, &reports{})
 	g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}, {Name: "model-2", PauseFor: time.Hour}}, "model", c.Now)
-	r.SetKeyGroup(g)
+	r.SetKeyGroups(oneGroup(g))
 	var forge func()
 	for _, u := range r.Uses() {
 		if u.Name == "forge" {
@@ -315,7 +315,7 @@ func TestAPendingKeyIsRenewedAloneAfterTheReopen(t *testing.T) {
 				t.Errorf("model's value before its renewal %s; want none", value(r, "model"))
 			}
 			g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}, {Name: "model-2", PauseFor: time.Hour}}, "model", clock.Now)
-			r.SetKeyGroup(g)
+			r.SetKeyGroups(oneGroup(g))
 			g.Restore([]modelkey.Unauthorized{{Credential: "model", At: start}})
 			n = clock.count()
 			if !r.Renew("model") {
@@ -347,8 +347,8 @@ func TestAPendingKeyIsRenewedAloneAfterTheReopen(t *testing.T) {
 
 // keysOnlyDoc is twoKeysDoc with no credential outside model's key group.
 const keysOnlyDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}},"model_credential":"model","credentials":[` +
-	`{"name":"model","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
-	`{"name":"model-2","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}]}`
+	`{"name":"model","group":"anthropic","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
+	`{"name":"model-2","group":"anthropic","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}]}`
 
 // TestAReopenWithEveryKeyLeftOutSendsNoRequest pins a reopened run whose every
 // credential is out or pending after a 401: the contract's secrets request names at
@@ -369,7 +369,7 @@ func TestAReopenWithEveryKeyLeftOutSendsNoRequest(t *testing.T) {
 		t.Fatalf("the reopen sent %v; want no request", got)
 	}
 	g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}, {Name: "model-2", PauseFor: time.Hour}}, "model", clock.Now)
-	r.SetKeyGroup(g)
+	r.SetKeyGroups(oneGroup(g))
 	g.Restore([]modelkey.Unauthorized{{Credential: "model", At: start}, {Credential: "model-2", At: start}})
 	for _, name := range []string{"model", "model-2"} {
 		n := clock.count()
@@ -424,7 +424,7 @@ func TestAPendingKeysFirstApplyIsTaken(t *testing.T) {
 			log := &reports{}
 			r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: f, Secrets: s.fetch, Clock: clock, Report: (&reports{}).report, Log: log.report, Pending: []string{"model"}})
 			g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}, {Name: "model-2", PauseFor: time.Hour}}, "model", clock.Now)
-			r.SetKeyGroup(g)
+			r.SetKeyGroups(oneGroup(g))
 			g.Restore([]modelkey.Unauthorized{{Credential: "model", At: start}})
 			renew := func() {
 				t.Helper()
@@ -482,7 +482,7 @@ func TestEachModelKeyIsRenewedAlone(t *testing.T) {
 			}
 			r := renewRun(t, twoKeysDoc, s, clock, &reports{}, &reports{})
 			g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}, {Name: "model-2", PauseFor: time.Hour}}, "model", clock.Now)
-			r.SetKeyGroup(g)
+			r.SetKeyGroups(oneGroup(g))
 			clock.step(t, time.Hour-credential.RenewBefore)
 			calls := s.called()
 			s.mu.Lock()

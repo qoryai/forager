@@ -490,7 +490,7 @@ func (r *Run) checkClaims(values sealed.Values) error {
 				accesskey.ShownName(c.Name, true), err))
 		}
 	}
-	group := storedGroup(r.stored, r.storedModel)
+	group := startGroup(r.stored, r.storedModel)
 	left := func(c server.RunCredential) bool {
 		return !slices.Contains(out, c.Name) && !r.leftOut(c.Name)
 	}
@@ -1319,23 +1319,22 @@ func sameSelection(a, b []policy.Selected) bool {
 }
 
 // ProxyUses are held credentials as the proxy sets them, every model key among them
-// with its placeholder's value: the keys of the start key's key group,
-// [credential.Held.Group], share the start key's. The proxy sets one model key at a
-// time, the one the gateway sets with [proxy.Proxy.SetModelKey]: the start key,
-// [credential.Held.Start], or the key a session joined with; for a key of the group, the
+// with its placeholder's value, [link.GroupPlaceholder]: the keys of one key group,
+// [credential.Held.Groups], share the placeholder of the group's first key, and a model
+// key of the machine's has the placeholder of its name. The proxy sets one model key at a time, the
+// one the gateway sets with [proxy.Proxy.SetModelKey]: the start key,
+// [credential.Held.Start], or the key a session joined with; for a key of a group, the
 // group's active key.
 func ProxyUses(held *credential.Held) []proxy.Credential {
 	if held == nil {
 		return nil
 	}
+	keys := GroupKeys(held)
 	uses := make([]proxy.Credential, 0, len(held.Uses))
 	for _, u := range held.Uses {
 		c := proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths, PushRef: u.PushRef}
-		switch {
-		case slices.Contains(held.Group, u.Name):
-			c.Placeholder = link.KeyPlaceholder(held.Start)
-		case u.Format != "":
-			c.Placeholder = link.KeyPlaceholder(u.Name)
+		if u.Format != "" {
+			c.Placeholder = link.GroupPlaceholder(keys, u.Name)
 		}
 		if u.AccountHeader != "" {
 			claim := u.AccountClaim
@@ -1355,6 +1354,22 @@ func ProxyUses(held *credential.Held) []proxy.Credential {
 		uses = append(uses, c)
 	}
 	return uses
+}
+
+// GroupKeys are the model keys of held as [link.GroupPlaceholder] reads them, in the
+// order of [credential.Held.Credentials], the order of the run answer's
+// credential_hosts, each with its key group; none when held is nil.
+func GroupKeys(held *credential.Held) []link.GroupKey {
+	if held == nil {
+		return nil
+	}
+	var out []link.GroupKey
+	for _, c := range held.Credentials() {
+		if c.Format != "" {
+			out = append(out, link.GroupKey{Name: c.Name, Group: c.Group})
+		}
+	}
+	return out
 }
 
 // ProxyTools are running tools as the proxy reaches them.

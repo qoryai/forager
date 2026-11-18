@@ -23,7 +23,7 @@ import (
 
 // credentialDoc is a run configuration with two credentials: an API credential and a
 // host credential.
-const credentialDoc = `{"version":1,"credentials":[{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer","oauth":true},"key_prefixes":["sk-ant-"]},{"name":"forge","apply":[{"hosts":["git.example"],"scheme":"basic","username":"x-access-token"}],"placeholders":["FORGE_TOKEN"]}],"model_credential":"model"}`
+const credentialDoc = `{"version":1,"credentials":[{"name":"model","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer","oauth":true},"key_prefixes":["sk-ant-"]},{"name":"forge","apply":[{"hosts":["git.example"],"scheme":"basic","username":"x-access-token"}],"placeholders":["FORGE_TOKEN"]}],"model_credential":"model"}`
 
 // TestARunConfigurationsCredentialsAndItsComputedDigest pins the reading of
 // credentials: each entry decoded, and Computed the SHA-256 of the bytes as they came,
@@ -37,7 +37,7 @@ func TestARunConfigurationsCredentialsAndItsComputedDigest(t *testing.T) {
 	}
 	sum := sha256.Sum256([]byte(credentialDoc))
 	want := []server.RunCredential{
-		{Name: "model", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: server.Auth{Scheme: "bearer", OAuth: true}, KeyPrefixes: []string{"sk-ant-"}},
+		{Name: "model", Group: "anthropic", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: server.Auth{Scheme: "bearer", OAuth: true}, KeyPrefixes: []string{"sk-ant-"}},
 		{Name: "forge", Apply: []server.Apply{{Hosts: []string{"git.example"}, Scheme: "basic", Username: "x-access-token"}}, Placeholders: []string{"FORGE_TOKEN"}},
 	}
 	if !reflect.DeepEqual(rc.Credentials, want) || rc.ModelCredential != "model" {
@@ -71,9 +71,9 @@ func TestARunConfigurationsCredentialsAreRefused(t *testing.T) {
 	}
 	cases := map[string]struct{ doc, want string }{
 		"a name twice": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `,` + entry("model", "x-other-key") + `]}`, "List the credential \"model\" once.\nThe document lists it twice"},
-		"an endpoint's host": {`{"version":1,"credentials":[{"name":"model","format":"openai-chat","endpoint":"https://bad_host.example/v1","auth":{"scheme":"bearer"}}]}`,
+		"an endpoint's host": {`{"version":1,"credentials":[{"name":"model","group":"openai-chat","format":"openai-chat","endpoint":"https://bad_host.example/v1","auth":{"scheme":"bearer"}}]}`,
 			"Give the credential \"model\" an endpoint whose host is a DNS name or an IP address, port 1 to 65535.\nForager reads no host from its endpoint"},
-		"an endpoint's port": {`{"version":1,"credentials":[{"name":"model","format":"openai-chat","endpoint":"https://api.model.example:99999","auth":{"scheme":"bearer"}}]}`,
+		"an endpoint's port": {`{"version":1,"credentials":[{"name":"model","group":"openai-chat","format":"openai-chat","endpoint":"https://api.model.example:99999","auth":{"scheme":"bearer"}}]}`,
 			"Give the credential \"model\" an endpoint whose host is a DNS name or an IP address, port 1 to 65535.\n"},
 		"a host credential as the start key": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `],"model_credential":"model"}`,
 			"Set model_credential to a credential that has a format.\nThe credential \"model\" has no format, so it is not a model key"},
@@ -91,7 +91,7 @@ func TestARunConfigurationsCredentialsAreRefused(t *testing.T) {
 		}
 	}
 	api := func(name string) string {
-		return `{"name":"` + name + `","format":"anthropic-messages","endpoint":"https://api.model.example","auth":{"scheme":"header","header":"x-api-key"}}`
+		return `{"name":"` + name + `","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example","auth":{"scheme":"header","header":"x-api-key"}}`
 	}
 	v.runDoc = `{"version":1,"credentials":[` + api("model") + `,` + api("backup") + `]}`
 	_, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)

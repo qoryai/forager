@@ -204,8 +204,8 @@ type Proxy struct {
 	guardBody atomic.Pointer[func(host string, port int, never bool) string]
 	// runAPI, when set, is the route to the run API ([Proxy.SetRunAPI]).
 	runAPI atomic.Pointer[RunAPI]
-	// keys, when set, is the run's key group ([Proxy.SetKeyGroup]).
-	keys atomic.Pointer[keyGroup]
+	// keys, when set, are the run's key groups ([Proxy.SetKeyGroups]).
+	keys atomic.Pointer[keySet]
 	// writes, when set, gets each state of each git push the proxy reads
 	// ([Proxy.ObserveWrites]).
 	writes atomic.Pointer[func(Write)]

@@ -155,7 +155,7 @@ func TestCredentialCountBounds(t *testing.T) {
 		var items []string
 		for i, n := range names(api + hosts) {
 			if i < api {
-				items = append(items, `{"name":"`+n+`","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`)
+				items = append(items, `{"name":"`+n+`","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`)
 				continue
 			}
 			items = append(items, `{"name":"`+n+`","apply":[{"hosts":["`+n+`.git.example"],"scheme":"bearer"}]}`)
