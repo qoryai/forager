@@ -63,17 +63,15 @@ func keyEntry(c server.RunCredential) credential.KeyEntry {
 // checkKeyGroup returns a run_configuration_invalid error, with the key's name, for a
 // key group of the run configuration the run starts with that has a key with a
 // pause_for_s below 1, a use_up_to_percent outside 1 to 99, or one of use_up_to_percent
-// and use_up_to_windows without the other, which each fail the schema too; a key whose
-// format, endpoint or auth differ from those of the group's first key
-// ([server.KeyGroupDiffers]) and a second key with chosen in one group, which the
-// server's check refuses too; and a start key in cooldown at now, since the server
-// picks the start key among the keys out of cooldown. A key with no pause_for_s has
-// [modelkey.DefaultPauseFor].
+// and use_up_to_windows without the other, which each fail the schema too; and a start
+// key in cooldown at now, since the server picks the start key among the keys out of
+// cooldown. A key with no pause_for_s has [modelkey.DefaultPauseFor]. A key whose
+// format, endpoint or auth differ from those of its group's first key, and a second key
+// with chosen in one group, are refused before, by [server.CheckCredentials] in
+// [Run.Read].
 func (r *Run) checkKeyGroup(now time.Time) error {
 	start := startName(startGroup(r.stored, r.storedModel), r.storedModel)
 	for _, group := range storedGroups(r.stored) {
-		shown := accesskey.ShownName(group[0].Group, true)
-		chosen := ""
 		for _, c := range group {
 			if c.PauseForS != nil && *c.PauseForS < 1 {
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
@@ -82,21 +80,10 @@ func (r *Run) checkKeyGroup(now time.Time) error {
 			if err := checkUseUpTo(c); err != nil {
 				return err
 			}
-			if member := server.KeyGroupDiffers(group[0], c); member != "" {
-				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-					"Give the keys of group %s one format, endpoint and auth.\nThe credentials %s and %s differ in %s", shown, accesskey.ShownName(group[0].Name, true), accesskey.ShownName(c.Name, true), member)
-			}
 			// The schema has refused a cooldown_until that is no RFC 3339 time.
 			if until, err := time.Parse(time.RFC3339, c.CooldownUntil); err == nil && until.After(now) && c.Name == start {
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
 					"set model_credential to a model key out of cooldown: the start key %s is in cooldown until %s", accesskey.ShownName(c.Name, true), c.CooldownUntil)
-			}
-			if c.Chosen {
-				if chosen != "" {
-					return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-						"Set chosen on one key of group %s.\nThe credentials %s and %s both have it", shown, accesskey.ShownName(chosen, true), accesskey.ShownName(c.Name, true))
-				}
-				chosen = c.Name
 			}
 		}
 	}

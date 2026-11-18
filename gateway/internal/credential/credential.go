@@ -480,16 +480,6 @@ func keyGroups(stored []Stored) []KeyGroup {
 	return KeyGroups(entries)
 }
 
-// GroupOf is the key group of the model key name, and false when name is in none.
-func (h *Held) GroupOf(name string) (KeyGroup, bool) {
-	for _, g := range h.Groups {
-		if slices.Contains(g.Keys, name) {
-			return g, true
-		}
-	}
-	return KeyGroup{}, false
-}
-
 // check refuses two uses that claim a host together, unless both are model keys, which
 // the proxy tells apart by their placeholders, or both have paths and no path of one
 // overlaps a path of the other, so the proxy sets the use whose paths match a request:

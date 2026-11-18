@@ -80,12 +80,6 @@ func (s *Set) Snapshot() ([]Window, uint64) {
 	return out, changes
 }
 
-// Windows are the windows of [Set.Snapshot].
-func (s *Set) Windows() []Window {
-	ws, _ := s.Snapshot()
-	return ws
-}
-
 // Changes is the sum of the groups' change counts, [Group.Changes].
 func (s *Set) Changes() uint64 {
 	var n uint64

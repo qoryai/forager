@@ -42,18 +42,22 @@ func modelKeys(r *run.Run) []modelkey.Key {
 	return out
 }
 
-// keysOf are the names of the keys of the key group of name, [credential.Held.GroupOf];
-// nil when name is in none.
+// keysOf are the names of the keys of the key group of name, of
+// [credential.Held.Groups]; nil when name is in none.
 func keysOf(r *run.Run, name string) []string {
-	g, _ := r.Held().GroupOf(name)
-	return g.Keys
+	for _, g := range r.Held().Groups {
+		if slices.Contains(g.Keys, name) {
+			return g.Keys
+		}
+	}
+	return nil
 }
 
-// TestTheKeyGroupSharesTheStartKeysPlaceholder pins the key group of the contract's
+// TestTheKeyGroupSharesItsFirstKeysPlaceholder pins the key group of the contract's
 // fixture of three API credentials of one provider: the group is the three in the
-// order of credentials, each set with the start key's placeholder, with its
-// schedule_resets_at and pause_for_s; the host credential is outside it.
-func TestTheKeyGroupSharesTheStartKeysPlaceholder(t *testing.T) {
+// order of credentials, each set with the placeholder of the group's first key, model,
+// with its schedule_resets_at and pause_for_s; the host credential is outside it.
+func TestTheKeyGroupSharesItsFirstKeysPlaceholder(t *testing.T) {
 	doc := fixture(t, "fixtures/run-configuration/model-keys.json")
 	r, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')),
 		Secrets: (&controlPlane{answer: harnessValue}).fetch})
