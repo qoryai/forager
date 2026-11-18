@@ -95,6 +95,22 @@ func newHolder(t *testing.T) *holder {
 	return h
 }
 
+// count returns the connections h has once it has want, or after 5 seconds. The proxy's
+// dial returns at the TCP handshake, before h's Accept returns and counts the
+// connection, so a count right after a dial can be one short.
+func (h *holder) count(want int) int {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		h.mu.Lock()
+		n := h.n
+		h.mu.Unlock()
+		if n == want || time.Now().After(deadline) {
+			return n
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // answer is what the proxy answered a CONNECT or a request.
 type answer struct {
 	status     int
@@ -197,11 +213,9 @@ func TestTheConnectionLimitRefusesTheNextAndFreesASlotOnClose(t *testing.T) {
 	if a := get(t, p.Addr(), "http://"+target+"/"); a.status != http.StatusTooManyRequests || a.retryAfter != "1" || a.body != connectionText {
 		t.Errorf("a plain request at the limit: %+v", a)
 	}
-	origin.mu.Lock()
-	if origin.n != 2 {
-		t.Errorf("the origin has %d connections, want 2", origin.n)
+	if n := origin.count(2); n != 2 {
+		t.Errorf("the origin has %d connections, want 2", n)
 	}
-	origin.mu.Unlock()
 	got := seen.refusals(ConnectionLimit)
 	if len(got) != 1 {
 		t.Fatalf("%d refusals recorded in one second, want 1: %+v", len(got), got)
@@ -499,10 +513,8 @@ func TestAReloadDuringTheWaitDecidesTheRequest(t *testing.T) {
 		if a, _ := connect(t, p.Addr(), "", target); a.status != http.StatusForbidden {
 			t.Errorf("a tunnel that waited out a reload denying its host: %+v", a)
 		}
-		origin.mu.Lock()
-		defer origin.mu.Unlock()
-		if origin.n != 1 {
-			t.Errorf("the origin has %d connections, want 1", origin.n)
+		if n := origin.count(1); n != 1 {
+			t.Errorf("the origin has %d connections, want 1", n)
 		}
 	})
 }

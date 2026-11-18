@@ -1,0 +1,6 @@
+{"source":"output","record":{"type":"thread.started","thread_id":"01a1d1f8-0000-7000-8000-00000000f1a1"}}
+{"source":"output","record":{"type":"turn.started"}}
+{"source":"output","record":{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"/bin/bash -lc ls","aggregated_output":"","exit_code":null,"status":"in_progress"}}}
+{"source":"output","record":{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"/bin/bash -lc ls","aggregated_output":"README.md\ngo.mod\n","exit_code":0,"status":"completed"}}}
+{"source":"output","record":{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Two files: README.md and go.mod."}}}
+{"source":"output","record":{"type":"turn.completed","usage":{"input_tokens":1200,"cached_input_tokens":1024,"cache_write_input_tokens":0,"output_tokens":40,"reasoning_output_tokens":0}}}

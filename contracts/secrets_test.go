@@ -1051,7 +1051,7 @@ func TestRunRefusedCodes(t *testing.T) {
 		"differs_from_credential", "engine_unreachable", "image_access_denied", "image_missing", "image_not_allowed",
 		"image_rate_limited", "image_registry_unreachable", "image_unknown", "image_user_root", "instance_limit",
 		"invalid_request", "key_invalid", "key_limit", "labels_changed", "model_key_missing",
-		"mount_contains_forager_files", "mount_mode_conflict", "mount_shared_with_run",
+		"mount_contains_forager_files", "mount_mode_conflict", "mount_shared_with_run", "mount_target_conflict",
 		"mount_through_link", "not_found", "placeholder_conflict", "rate_limited", "run_attached",
 		"run_closed", "run_configuration_invalid", "run_configuration_superseded",
 		"run_credential_refused", "run_id_used", "run_key_expired", "run_key_invalid",
@@ -1060,8 +1060,8 @@ func TestRunRefusedCodes(t *testing.T) {
 		"tool_unknown", "unauthorized", "unavailable", "unsupported_contract_version",
 		"variable_reserved", "workspace_not_served", "wrong_gateway",
 	}
-	if len(want) != 49 {
-		t.Fatalf("%d codes in the test's list; want 49", len(want))
+	if len(want) != 50 {
+		t.Fatalf("%d codes in the test's list; want 50", len(want))
 	}
 	if got := slices.Sorted(slices.Values(s.Then.Properties.Code.Enum)); !slices.Equal(got, want) {
 		t.Errorf("run.refused codes %q; want %q", got, want)

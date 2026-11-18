@@ -60,14 +60,15 @@ type keyReporter struct {
 }
 
 // boundaryReport is the report made at a session's start or end: the session's number,
-// the keys as they were then, and the group's change count they cover. Each try sends
-// them with a new time.
+// the keys and the keys out of use after a 401 as they were then, and the group's change
+// count they cover. Each try sends them with a new time.
 type boundaryReport struct {
 	// id is 1 for the first boundary report of the run, 2 for the next, and so on.
-	id      uint64
-	session int
-	keys    []server.ModelKeyState
-	covers  uint64
+	id           uint64
+	session      int
+	keys         []server.ModelKeyState
+	unauthorized []server.UnauthorizedKey
+	covers       uint64
 }
 
 // newKeyReporter makes the reporter of the group g of the run runID, and has g wake it
@@ -106,7 +107,7 @@ func (k *keyReporter) boundary(n, open int) {
 	}
 	ws, covers := k.g.Snapshot()
 	k.made++
-	k.pending = append(k.pending, boundaryReport{id: k.made, session: n, keys: entries(ws), covers: covers})
+	k.pending = append(k.pending, boundaryReport{id: k.made, session: n, keys: entries(ws), unauthorized: k.unauthorized(), covers: covers})
 	k.mu.Unlock()
 	k.poke()
 }
@@ -119,18 +120,18 @@ func (k *keyReporter) stop() {
 }
 
 // next is the report to send at now, the group's change count it covers, and its id:
-// the oldest boundary report, with its session, keys and id, else the group's newest
-// state with the open session and the id 0.
+// the oldest boundary report, with its session, keys, keys out of use after a 401 and
+// id, else the group's newest state with the open session and the id 0.
 func (k *keyReporter) next(now time.Time) (rep server.ModelKeysReport, covers, id uint64) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	t := server.RegistrationTime(now)
 	if len(k.pending) > 0 {
 		b := k.pending[0]
-		return server.ModelKeysReport{Time: t, Session: b.session, Keys: b.keys}, b.covers, b.id
+		return server.ModelKeysReport{Time: t, Session: b.session, Keys: b.keys, Unauthorized: b.unauthorized}, b.covers, b.id
 	}
 	ws, covers := k.g.Snapshot()
-	return server.ModelKeysReport{Time: t, Session: k.session, Keys: entries(ws)}, covers, 0
+	return server.ModelKeysReport{Time: t, Session: k.session, Keys: entries(ws), Unauthorized: k.unauthorized()}, covers, 0
 }
 
 // done ends the boundary report id, sent or dropped; the id 0 ends none.
@@ -158,10 +159,11 @@ const lastWait = 10 * time.Second
 // up to the group's change count it was made at ([modelkey.Group.Snapshot]). A wake for
 // changes that the last report sent or dropped covers sends nothing: a change that came
 // during the gap or a backoff before that report goes in no second report. A boundary
-// report goes also when nothing changed, and keeps its session and keys across tries;
-// one that waits takes the place of the next try of a report of changes, which it
-// covers. When ctx ends while a report waits, in the gap, in a backoff or in flight,
-// the waiting boundary reports and the newest state go once more ([keyReporter.last]).
+// report goes also when nothing changed, and keeps its session, its windows and its
+// keys out of use after a 401 across tries; one that waits takes the place of the next
+// try of a report of changes, which it covers. When ctx ends while a report waits, in
+// the gap, in a backoff or in flight, the waiting boundary reports and the newest state
+// go once more ([keyReporter.last]).
 func (k *keyReporter) run(ctx context.Context) {
 	var last time.Time
 	// sent is the change count the last report sent or dropped covers.
@@ -229,6 +231,16 @@ func (k *keyReporter) run(ctx context.Context) {
 			break
 		}
 	}
+}
+
+// unauthorized is the report's list of the keys out of use after a 401
+// ([modelkey.Group.Unauthorized]), nil for none.
+func (k *keyReporter) unauthorized() []server.UnauthorizedKey {
+	var out []server.UnauthorizedKey
+	for _, u := range k.g.Unauthorized() {
+		out = append(out, server.UnauthorizedKey{Credential: u.Credential, At: rfc3339(u.At)})
+	}
+	return out
 }
 
 // last sends, once each after the run's end and within [lastWait], the boundary reports
@@ -302,7 +314,8 @@ func sleep(ctx context.Context, d time.Duration) bool {
 }
 
 // entries are the windows ws as a report's keys: at most [maxReportKeys], and as
-// many as fit [server.MaxModelKeysReport] with the report's other members.
+// many as fit [server.MaxModelKeysReport] with the report's other members, its
+// unauthorized among them.
 func entries(ws []modelkey.Window) []server.ModelKeyState {
 	out := make([]server.ModelKeyState, 0, len(ws))
 	for _, w := range ws {
@@ -311,11 +324,11 @@ func entries(ws []modelkey.Window) []server.ModelKeyState {
 	if len(out) > maxReportKeys {
 		out = out[:maxReportKeys]
 	}
-	// The run id, the time, the session and the members around them take less than 200
-	// bytes.
+	// The run id, the time, the session and the members around them take at most 129
+	// bytes, and unauthorized 677: 6 entries of a name of 64 characters and a time.
 	for len(out) > 0 {
 		b, _ := json.Marshal(out)
-		if len(b)+200 <= server.MaxModelKeysReport {
+		if len(b)+806 <= server.MaxModelKeysReport {
 			break
 		}
 		out = out[:len(out)-1]

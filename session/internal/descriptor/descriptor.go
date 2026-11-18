@@ -22,10 +22,12 @@
 // keeps for itself, and its [Model] the API formats the runtime sends, where a composer
 // writes a run's model id, effort value and model endpoint, and the variables it reads
 // a model key from. Its Fixed is the variables the session sets for the runtime in
-// every launch, over every other source, its EgressHosts the hosts the runtime needs
-// to reach, and its InstallRequired whether a session of it needs the caller's
-// installed folder. [Runtimes] renders the five, for every descriptor the contract
-// ships, as runtimes.json, the file a server vendors.
+// every launch, over every other source, its [Config] how the session passes
+// settings to a runtime that reads them as TOML, its EgressHosts the hosts the runtime
+// needs to reach, and its InstallRequired whether a session of it needs the caller's
+// installed folder. [Runtimes] renders the secrets, the model section, the fixed
+// variables, the egress hosts, install_required and the resume's prefix and path, for
+// every descriptor the contract ships, as runtimes.json, the file a server vendors.
 package descriptor
 
 import (
@@ -59,6 +61,10 @@ type Descriptor struct {
 	// walled or not: no other source's value of one applies. Nil when the descriptor
 	// sets none.
 	Fixed map[string]string `yaml:"fixed" json:"fixed,omitempty"`
+	// Config is how the session passes settings to a runtime that reads them as TOML,
+	// and the settings it passes in every launch. Nil when the descriptor has none, and
+	// a setting goes in the JSON settings file the launch passes.
+	Config *Config `yaml:"config" json:"config,omitempty"`
 	// EgressHosts is the hosts the runtime needs to reach, which [Runtimes] lists for a
 	// server to allow for a run. No code of this module applies them to a run's policy.
 	// Nil when the descriptor has none.
@@ -75,21 +81,49 @@ type Descriptor struct {
 	Rules  []Rule  `yaml:"rules" json:"rules"`
 }
 
+// Config is how the session passes settings to a runtime that reads them as TOML: Flag,
+// the argument that takes one key=value pair, such as --config, and Fixed, the
+// settings it passes in every launch.
+type Config struct {
+	Flag string `yaml:"flag" json:"flag"`
+	// Fixed maps a dotted key to a TOML value: a string, a bool or an int64. Nil when
+	// the descriptor sets none.
+	Fixed map[string]any `yaml:"fixed" json:"fixed,omitempty"`
+	// Keys is the keys of Fixed in the descriptor's order, which [Parse] reads from the
+	// document; runtimes.json lists them in that order.
+	Keys []string `yaml:"-" json:"-"`
+}
+
 // Resume is where the runtime writes the transcript of its session, and the arguments
-// that start the runtime again from it. Each path starts with ~/, the runtime's home.
+// that start the runtime again from it. Each path starts with ~/, the runtime's home,
+// with /, an absolute path, or with ${HomeVar}/, the value of HomeVar in the launch's
+// environment.
 type Resume struct {
+	// HomeVar is the variable of the launch's environment that contains the runtime's
+	// home, such as CODEX_HOME; empty when Prefix and Path start with ~/ or /.
+	HomeVar string `yaml:"home_var" json:"home_var,omitempty"`
 	// PathFrom is the member of a hook's input that contains the transcript's path,
-	// such as transcript_path.
-	PathFrom string `yaml:"path_from" json:"path_from"`
+	// such as transcript_path; empty when the session takes the path from Path alone.
+	PathFrom string `yaml:"path_from" json:"path_from,omitempty"`
 	// Path is the transcript's path while no hook input contains PathFrom: a template
-	// with {session_id} and {cwd_slug}. It starts with Prefix.
+	// with {session_id} and {cwd_slug}, in which a * matches any characters other than
+	// / inside one path name. It starts with Prefix.
 	Path string `yaml:"path" json:"path"`
-	// Prefix is the directory the transcript must lie under, ending in /.
+	// Prefix is the directory the transcript must lie under, ending in /, with no *.
 	Prefix string `yaml:"prefix" json:"prefix"`
 	// Args are the arguments the session adds when it resumes, with {session_id} in
 	// place of the runtime's session id.
 	Args []string `yaml:"args" json:"args"`
+	// After is the argument Args follow, such as exec; empty when Args go at the end.
+	After string `yaml:"after" json:"after,omitempty"`
+	// Place is PlaceBeforeLast for Args that go before the launch's last argument after
+	// After, or before the first -- after After; empty for right after After.
+	Place string `yaml:"place" json:"place,omitempty"`
 }
+
+// PlaceBeforeLast is the resume.place whose arguments go before the launch's last
+// argument after resume.after, the prompt, or before the first -- after resume.after.
+const PlaceBeforeLast = "before_last"
 
 // Tools is what the session copies from a tool's input onto the runtime's tool events.
 // Nil when the descriptor has no tools member.
@@ -157,7 +191,8 @@ type Key struct {
 
 // Place is where a value goes, exactly one of its fields set: Flag, an argument the
 // runtime is started with, which takes the value; Setting, a dotted key in the JSON
-// settings file the launch passes; Variable, an environment variable.
+// settings file the launch passes, or with [Config] a key=value pair of its Flag;
+// Variable, an environment variable.
 type Place struct {
 	Flag     string `yaml:"flag" json:"flag,omitempty"`
 	Setting  string `yaml:"setting" json:"setting,omitempty"`
@@ -184,9 +219,12 @@ type Effort struct {
 	Agent *AgentPlace `yaml:"agent" json:"agent,omitempty"`
 }
 
-// Endpoint is the variable the runtime reads the base URL of its model API from.
+// Endpoint is where the base URL of the runtime's model API goes, exactly one of its
+// fields set: Variable, the variable the runtime reads it from, or Setting, a dotted
+// key of the runtime's settings, written as a [Place]'s setting.
 type Endpoint struct {
-	Variable string `yaml:"variable" json:"variable"`
+	Variable string `yaml:"variable" json:"variable,omitempty"`
+	Setting  string `yaml:"setting" json:"setting,omitempty"`
 }
 
 // Secrets is what the runtime needs of a run's secrets and the variables it keeps for
@@ -220,7 +258,8 @@ type Declaration struct {
 
 // Auth is how a value is set on a request: Scheme is bearer, header or basic, Header
 // the header of header, Username the fixed user of basic, and OAuth marks a bearer as
-// an OAuth token.
+// an OAuth token. A descriptor's auth has no account_header or account_claim: only an
+// API credential of a run configuration has them.
 type Auth struct {
 	Scheme   string `yaml:"scheme" json:"scheme"`
 	Header   string `yaml:"header" json:"header,omitempty"`
@@ -285,6 +324,13 @@ type Rule struct {
 	// Data holds the event's fields and the record paths their values are copied from.
 	// A field with dots, such as usage.input, is a member of a nested object.
 	Data map[string]string `yaml:"data" json:"data"`
+	// Set maps event fields to values of the descriptor's, a string, a number or a
+	// bool, for a field the record has no member for, such as source: startup.
+	Set map[string]any `yaml:"set" json:"set,omitempty"`
+	// FromStarted lists the event's fields the session copies from the session's last
+	// dev.qory.runtime.started of the main agent, for a record that does not contain
+	// them, such as session_id. Only a rule of the output source has it.
+	FromStarted []string `yaml:"from_started" json:"from_started,omitempty"`
 	// Sum, when set, adds more fields, each a sum over the members of an object.
 	Sum *Sum `yaml:"sum" json:"sum,omitempty"`
 }
@@ -299,10 +345,12 @@ type Sum struct {
 	Fields map[string]string `yaml:"fields" json:"fields"`
 }
 
-// Event is one event a rule produces: its type and its data.
+// Event is one event a rule produces: its type, its data, and FromStarted, the rule's
+// fields the session copies from its dev.qory.runtime.started.
 type Event struct {
-	Type string
-	Data map[string]any
+	Type        string
+	Data        map[string]any
+	FromStarted []string
 }
 
 // Record is one unit of runtime output as a descriptor reads it.
@@ -369,20 +417,69 @@ func Parse(name string, b []byte) (*Descriptor, error) {
 	if err := d.Resume.check(); err != nil {
 		return nil, fmt.Errorf("%s: %w", shown, err)
 	}
+	if err := d.checkConfig(); err != nil {
+		return nil, fmt.Errorf("%s: %w", shown, err)
+	}
+	if d.Config != nil {
+		if d.Config.Keys, err = fixedKeys(b); err != nil {
+			return nil, fmt.Errorf("%s: %w", shown, accesskey.ShownError(err))
+		}
+	}
 	if err := d.checkRules(); err != nil {
 		return nil, fmt.Errorf("%s: %w", shown, err)
 	}
 	return &d, nil
 }
 
-// checkRules checks what the schema cannot express of each rule's fields, those of data
-// and of sum together: no field is set twice, and none is the object of another, as
-// usage is of usage.input.
+// fixedKeys is the keys of config.fixed in the document's order. A JSON document is
+// YAML too, so one reader serves both.
+func fixedKeys(b []byte) ([]string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return nil, err
+	}
+	node := &doc
+	if node.Kind == yaml.DocumentNode && len(node.Content) == 1 {
+		node = node.Content[0]
+	}
+	for _, key := range []string{"config", "fixed"} {
+		node = member(node, key)
+		if node == nil {
+			return nil, nil
+		}
+	}
+	var keys []string
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		keys = append(keys, node.Content[i].Value)
+	}
+	return keys, nil
+}
+
+// member is the value of key in the mapping node, nil when node is no mapping or has
+// no such key.
+func member(node *yaml.Node, key string) *yaml.Node {
+	if node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// checkRules checks what the schema cannot express of each rule's fields. Those of data
+// and of sum together are set once each, and none is the object of another, as usage
+// is of usage.input. A field also comes from one of data, sum, set and from_started,
+// and no field of one of them is the object of a field of another.
 func (d *Descriptor) checkRules() error {
 	for i, r := range d.Rules {
 		fields := slices.Collect(maps.Keys(r.Data))
+		var sum []string
 		if r.Sum != nil {
-			fields = append(fields, slices.Collect(maps.Keys(r.Sum.Fields))...)
+			sum = slices.Sorted(maps.Keys(r.Sum.Fields))
+			fields = append(fields, sum...)
 		}
 		slices.Sort(fields)
 		for j := 1; j < len(fields); j++ {
@@ -390,28 +487,131 @@ func (d *Descriptor) checkRules() error {
 				return fmt.Errorf("rules[%d]: set %s once, and set no member of it: a rule's data and sum write each field once", i, a)
 			}
 		}
+		seen := map[string]string{}
+		for _, m := range []struct {
+			member string
+			fields []string
+		}{
+			{"data", slices.Sorted(maps.Keys(r.Data))},
+			{"sum", sum},
+			{"set", slices.Sorted(maps.Keys(r.Set))},
+			{"from_started", r.FromStarted},
+		} {
+			for _, f := range m.fields {
+				if other, ok := seen[f]; ok {
+					return fmt.Errorf("rules[%d]: set the field %s in one of data, sum, set or from_started, not in %s and %s",
+						i, accesskey.ShownName(f, false), other, m.member)
+				}
+				// In the order of the names, so that the error is the same on every parse.
+				for _, g := range slices.Sorted(maps.Keys(seen)) {
+					other := seen[g]
+					if strings.HasPrefix(f, g+".") || strings.HasPrefix(g, f+".") {
+						return fmt.Errorf("rules[%d]: set %s in %s or %s in %s, not both: one is a member of the other",
+							i, accesskey.ShownName(g, false), other, accesskey.ShownName(f, false), m.member)
+					}
+				}
+				seen[f] = m.member
+			}
+		}
 	}
 	return nil
 }
 
-// check checks what the schema cannot express of resume: path starts with prefix, and
-// neither has a .. segment. A nil Resume passes.
+// checkConfig checks what the schema cannot express of the settings, and makes each
+// fixed value of config a string, a bool or an int64, whether the document was YAML or
+// JSON. The settings of the model section, the model id's, the run's effort's and the
+// endpoint's, are distinct, and none is a dotted prefix of another; with config, no
+// fixed key is a setting of the model section, and no fixed key and no other fixed key
+// or model setting is a dotted prefix of the other. A TOML key, or a key of the JSON
+// settings file, has a value or a table of keys, not both.
+func (d *Descriptor) checkConfig() error {
+	var settings []string
+	if m := d.Model; m != nil {
+		settings = append(settings, m.Model.Setting, m.Endpoint.Setting)
+		if m.Effort != nil {
+			settings = append(settings, m.Effort.Run.Setting)
+		}
+		settings = slices.DeleteFunc(settings, func(s string) bool { return s == "" })
+	}
+	for i, a := range settings {
+		for _, b := range settings[i+1:] {
+			if a == b || strings.HasPrefix(a, b+".") || strings.HasPrefix(b, a+".") {
+				return fmt.Errorf("model: place the values of %s and %s in two settings, neither inside the other: a TOML key has a value or a table of keys, not both",
+					accesskey.ShownName(a, false), accesskey.ShownName(b, false))
+			}
+		}
+	}
+	if d.Config == nil {
+		return nil
+	}
+	keys := slices.Sorted(maps.Keys(d.Config.Fixed))
+	for _, k := range keys {
+		switch v := d.Config.Fixed[k].(type) {
+		case int:
+			d.Config.Fixed[k] = int64(v)
+		case float64:
+			d.Config.Fixed[k] = int64(v)
+		}
+		shown := accesskey.ShownName(k, false)
+		if slices.Contains(settings, k) {
+			return fmt.Errorf("config.fixed: remove %s: it is a setting of the model section", shown)
+		}
+		for _, o := range settings {
+			if strings.HasPrefix(o, k+".") || strings.HasPrefix(k, o+".") {
+				return fmt.Errorf("config.fixed: remove %s: a TOML key has a value or a table of keys, not both, and %s is a setting of the model section",
+					shown, accesskey.ShownName(o, false))
+			}
+		}
+		for _, o := range keys {
+			if strings.HasPrefix(o, k+".") {
+				return fmt.Errorf("config.fixed: remove %s or %s: a TOML key has a value or a table of keys, not both, and %s lies inside %s",
+					shown, accesskey.ShownName(o, false), accesskey.ShownName(o, false), shown)
+			}
+		}
+	}
+	return nil
+}
+
+// check checks what the schema cannot express of resume: path starts with prefix,
+// neither has a .. segment, and the only variable either has is home_var's, as
+// ${<home_var>}/ at its start, which each has when home_var is set. It also checks
+// place, which the schema checks too: before_last or empty, and with after. A nil
+// Resume passes.
 func (r *Resume) check() error {
 	if r == nil {
 		return nil
 	}
 	for _, p := range []string{r.Prefix, r.Path} {
 		if slices.Contains(strings.Split(p, "/"), "..") {
-			return fmt.Errorf("resume: remove the .. segment from %s: the transcript lies under the runtime's home", accesskey.ShownValue(p, true))
+			return fmt.Errorf("resume: remove the .. segment from %s: the transcript lies under resume.prefix", accesskey.ShownValue(p, true))
+		}
+		rest := p
+		if r.HomeVar != "" {
+			lead := "${" + r.HomeVar + "}/"
+			var ok bool
+			if rest, ok = strings.CutPrefix(p, lead); !ok {
+				return fmt.Errorf("resume: start %s with %s: home_var is %s, and the transcript lies below its value",
+					accesskey.ShownValue(p, true), accesskey.ShownValue(lead, true), accesskey.ShownName(r.HomeVar, false))
+			}
+		}
+		if strings.Contains(rest, "$") {
+			return fmt.Errorf("resume: remove the $ from %s: resume.prefix and resume.path take no variable other than home_var, as ${<home_var>}/ at their start",
+				accesskey.ShownValue(p, true))
 		}
 	}
 	if !strings.HasPrefix(r.Path, r.Prefix) {
 		return fmt.Errorf("resume: start path %s with prefix %s: the transcript lies under prefix", accesskey.ShownValue(r.Path, true), accesskey.ShownValue(r.Prefix, true))
 	}
+	switch {
+	case r.Place != "" && r.Place != PlaceBeforeLast:
+		return fmt.Errorf("resume: set place to %s or leave it out: %s is not a value of place", PlaceBeforeLast, accesskey.ShownValue(r.Place, true))
+	case r.Place != "" && r.After == "":
+		return fmt.Errorf("resume: set resume.after when resume.place is %s: the resume arguments go before the first -- after the value of resume.after, or else before the last argument after it", r.Place)
+	}
 	return nil
 }
 
-// checkFixed holds the fixed variables to what the schema cannot express: no name of
+// checkFixed checks what the schema cannot express of the fixed variables: no name of
 // fixed matches the built-in deny list, denied-variables.json, whose names Forager, the
 // wall and the gateway set or leave out; and none is a variable that secrets declares,
 // reserves or denies, or that model reads a key or its endpoint from or lists in
@@ -441,7 +641,9 @@ func (d *Descriptor) checkFixed() error {
 		for _, k := range m.Keys {
 			add("model.keys", k.Variable)
 		}
-		add("model.endpoint", m.Endpoint.Variable)
+		if m.Endpoint.Variable != "" {
+			add("model.endpoint", m.Endpoint.Variable)
+		}
 		add("model.overrides", m.Overrides...)
 	}
 	for _, name := range slices.Sorted(maps.Keys(d.Fixed)) {
@@ -489,7 +691,7 @@ func (m *Model) check(s *Secrets) error {
 				accesskey.ShownName(k.Format, false), strings.Join(m.Formats, ", "))
 		case slices.ContainsFunc(m.Keys[:i], func(o Key) bool { return o.Format == k.Format && sameAuth(o.Auth, k.Auth) }):
 			return fmt.Errorf("model.keys: list %s with %s once: two keys have it", accesskey.ShownName(k.Format, false), authWords(k.Auth))
-		case slices.Contains(secrets.Denies, k.Variable) || slices.Contains(m.Overrides, k.Variable) || k.Variable == m.Endpoint.Variable:
+		case slices.Contains(secrets.Denies, k.Variable) || slices.Contains(m.Overrides, k.Variable) || (m.Endpoint.Variable != "" && k.Variable == m.Endpoint.Variable):
 			return fmt.Errorf("model.keys: read the key from a variable outside denies, overrides and the endpoint: %s is %s", v, place(m, k.Variable))
 		}
 		if j := slices.IndexFunc(secrets.Declares, func(d Declaration) bool { return d.Name == k.Variable }); j >= 0 && !sameAuth(secrets.Declares[j].Auth, k.Auth) {
@@ -581,7 +783,7 @@ func (d *Descriptor) Map(r Record) []Event {
 		}
 		if rule.Each == "" {
 			if matches(rule.Match, r.Record, nil) {
-				return []Event{{Type: rule.Type, Data: rule.data(r.Record, nil)}}
+				return []Event{rule.event(r.Record, nil)}
 			}
 			continue
 		}
@@ -596,7 +798,7 @@ func (d *Descriptor) Map(r Record) []Event {
 			for j := i; j < len(d.Rules); j++ {
 				other := &d.Rules[j]
 				if other.Source == r.Source && other.Each == rule.Each && matches(other.Match, r.Record, element) {
-					events = append(events, Event{Type: other.Type, Data: other.data(r.Record, element)})
+					events = append(events, other.event(r.Record, element))
 					break
 				}
 			}
@@ -626,6 +828,17 @@ func (d *Descriptor) Link(r Record) (agentID, toolUseID string, ok bool) {
 
 // eachPrefix is how a path of a rule with each starts when it reads the element.
 const eachPrefix = "each."
+
+// event is the rule's event for the record, or for the element when it is not nil:
+// the fields of Data whose path exists, with their values, each field of Sum that has a
+// sum, and the fields of Set.
+func (rule *Rule) event(record map[string]any, element *any) Event {
+	data := rule.data(record, element)
+	for field, v := range rule.Set {
+		data[field] = v
+	}
+	return Event{Type: rule.Type, Data: data, FromStarted: slices.Clone(rule.FromStarted)}
+}
 
 // data is the data of a rule's event: each field of Data whose path exists, with its
 // value, and each field of Sum that has a sum.

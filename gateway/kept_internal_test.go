@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qoryai/forager/gateway/internal/modelkey"
 	"github.com/qoryai/forager/gateway/internal/stream"
 	"github.com/qoryai/forager/server"
 )
@@ -19,7 +20,7 @@ import (
 // the kept files that failed: the files to remove by hand and where come first.
 func TestTheReportOfKeptFilesNotRemovedStartsWithTheFix(t *testing.T) {
 	got := keptNotRemoved("run-1", "/var/lib/forager/runs/run-1", errors.New("permission denied"))
-	want := "run run-1: remove request.json, ca.pem, ca.key, given.jsonl, joins.jsonl, model-key-limit and held.jsonl from /var/lib/forager/runs/run-1 by hand: removing them failed: permission denied"
+	want := "run run-1: remove request.json, ca.pem, ca.key, given.jsonl, joins.jsonl, model-key-limit, model-keys-unauthorized.json, model-keys-unauthorized.json.tmp and held.jsonl from /var/lib/forager/runs/run-1 by hand: removing them failed: permission denied"
 	if got != want {
 		t.Errorf("the report: %q; want %q", got, want)
 	}
@@ -96,9 +97,66 @@ func TestTheKeptFilesReadBack(t *testing.T) {
 		if err := markLimit(dir, passed); err != nil {
 			t.Fatal(err)
 		}
-		if marked, err := limitMarked(dir); err != nil || marked != passed {
-			t.Errorf("after markLimit(%v): marked %v, %v", passed, marked, err)
+		if reason, marked, err := limitMarked(dir); err != nil || marked != passed || reason != "" {
+			t.Errorf("after markLimit(%v): marked %v, reason %q, %v", passed, marked, reason, err)
 		}
+	}
+	// The stop's reason in the mark: a Pass after it keeps it, a Resume removes it, and
+	// a mark whose contents are no reason is a mark with none.
+	for _, want := range []string{"model_key_limit", "model_key_switch", "model_key_unauthorized"} {
+		if err := markStop(dir, want); err != nil {
+			t.Fatal(err)
+		}
+		if err := markLimit(dir, true); err != nil {
+			t.Fatal(err)
+		}
+		if reason, marked, err := limitMarked(dir); err != nil || !marked || reason != want {
+			t.Errorf("after markStop(%s): marked %v, reason %q, %v", want, marked, reason, err)
+		}
+	}
+	if err := writeKept(dir, limitMark, []byte("model_key_lim")); err != nil {
+		t.Fatal(err)
+	}
+	if reason, marked, err := limitMarked(dir); err != nil || !marked || reason != "" {
+		t.Errorf("a torn mark: marked %v, reason %q, %v; want marked with no reason", marked, reason, err)
+	}
+	if err := markLimit(dir, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, marked, err := limitMarked(dir); err != nil || marked {
+		t.Errorf("after the Resume: marked %v, %v", marked, err)
+	}
+
+	// The keys out of use after a 401: written and read back, and removed when none is left.
+	at := time.Date(2026, 11, 13, 12, 0, 4, 0, time.UTC)
+	keys := []modelkey.Unauthorized{{Credential: "model", At: at, Out: true}, {Credential: "model-2", At: at.Add(time.Second)}}
+	// A temporary file a crash left is replaced, and none is left after the write.
+	if err := os.WriteFile(filepath.Join(dir, unauthorizedTemp), []byte(`{"version":1,"ke`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeUnauthorized(dir, keys); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, unauthorizedTemp)); !os.IsNotExist(err) {
+		t.Errorf("the temporary file is left: %v", err)
+	}
+	if got, err := readUnauthorized(dir); err != nil || !reflect.DeepEqual(got, keys) {
+		t.Errorf("model-keys-unauthorized.json read back as %+v, %v; want %+v", got, err, keys)
+	}
+	if info, err := os.Stat(filepath.Join(dir, unauthorizedFile)); err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("%s: %v %v", unauthorizedFile, info, err)
+	}
+	if err := writeUnauthorized(dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readUnauthorized(dir); err != nil || got != nil {
+		t.Errorf("after every key came back: %+v, %v; want none", got, err)
+	}
+	if err := writeKept(dir, unauthorizedFile, []byte(`{"version":1,"keys":[`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readUnauthorized(dir); err == nil {
+		t.Error("a torn model-keys-unauthorized.json reads with no error")
 	}
 	for _, name := range []string{requestFile, joinsFile, givenFile} {
 		info, err := os.Stat(filepath.Join(dir, name))

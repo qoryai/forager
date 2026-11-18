@@ -269,7 +269,7 @@ func TestTheCheckAndTheProxyShareTheGroup(t *testing.T) {
 	if got := r.Held().Group; !slices.Equal(got, []string{"model", "model-2"}) {
 		t.Errorf("Group %v; want model and model-2", got)
 	}
-	if got := r.MessagesPath(); got != "/anthropic/v1/messages" {
-		t.Errorf("MessagesPath %q; want /anthropic/v1/messages", got)
+	if format, stream := r.ModelAPI(); format != "anthropic-messages" || stream != "/anthropic/v1/messages" {
+		t.Errorf("ModelAPI %q, %q; want anthropic-messages and /anthropic/v1/messages", format, stream)
 	}
 }

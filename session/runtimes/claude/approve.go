@@ -21,15 +21,16 @@ const ApproveScript = "approve-key.sh"
 // characters, after trimming the space around it.
 const approvedLen = 20
 
-// approved is the entry Claude Code keeps, under customApiKeyResponses.approved in the
-// configuration it reads, for the stand-in once a person approves it: the stand-in's
-// last 20 characters.
-func approved() string {
+// ApprovedKey returns the entry Claude Code keeps, under customApiKeyResponses.approved
+// in the configuration it reads, for the stand-in once a person approves it: the
+// stand-in's last 20 characters. approve-key.sh writes this value, and so does a
+// composer that writes the approval into a fresh Claude Code home.
+func ApprovedKey() string {
 	s := strings.TrimSpace(runtimes.Placeholder)
 	return s[len(s)-approvedLen:]
 }
 
-// approveScript adds the entry of approved, written in place of @APPROVED@, to the
+// approveScript adds the entry of ApprovedKey, written in place of @APPROVED@, to the
 // configuration Claude Code reads, and then starts the command its arguments hold.
 // Claude Code 2.1.316 reads ~/.claude/.config.json when that regular file has content,
 // or is empty with a write bit set and no ~/.claude.json exists, and ~/.claude.json
@@ -102,7 +103,7 @@ func approve(a runtimes.Attach, launch runtimes.Launch) (runtimes.Launch, error)
 	if !a.Interactive || !a.Walled || !slices.Contains(a.Placeholders, apiKeyVar) {
 		return launch, nil
 	}
-	script := strings.Replace(approveScript, "@APPROVED@", approved(), 1)
+	script := strings.Replace(approveScript, "@APPROVED@", ApprovedKey(), 1)
 	path := filepath.Join(a.SessionDir, ApproveScript)
 	if err := runfile.Replace(path, []byte(script), 0o644); err != nil {
 		return runtimes.Launch{}, accesskey.ShownError(err)

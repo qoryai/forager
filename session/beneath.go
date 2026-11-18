@@ -23,9 +23,6 @@ const maxTranscript = server.MaxTranscript
 // a walled runtime's transcript only under a session id of this shape.
 var walledSessionID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
-// slugShape is the shape of a working directory's slug, [cwdSlug].
-var slugShape = regexp.MustCompile(`^[A-Za-z0-9-]{1,255}$`)
-
 // beneathRefused is a transcript that the session does not read or write: fix is the
 // change that lets it, and why the cause.
 type beneathRefused struct{ fix, why string }
@@ -37,35 +34,32 @@ func (e *beneathRefused) Error() string { return e.why }
 // O_DIRECTORY of a link fails with ELOOP on Linux and ENOTDIR on macOS.
 var errBeneathLinked = &beneathRefused{"Replace the symbolic link or file on the transcript's path with a directory", "a name on its path is a symbolic link or no directory"}
 
-// splitTranscript is the slug directory and the file name of rel, <slug>/<session
-// id>.jsonl, the one path below a transcript directory the session reads or writes; an
-// error for any other path.
-func splitTranscript(rel string) (string, string, error) {
-	slug, name, ok := strings.Cut(rel, "/")
-	id, isJSONL := strings.CutSuffix(name, ".jsonl")
-	if !ok || !slugShape.MatchString(slug) || !isJSONL || !walledSessionID.MatchString(id) {
-		return "", "", &beneathRefused{"Use a runtime that writes its transcript at <slug>/<session id>.jsonl below resume.prefix", "the path is not <slug>/<session id>.jsonl with a session id that is a UUID in lower case"}
+// belowNames is the names of rel, a path below a transcript directory, the path the
+// session reads or writes there; an error for an empty path, or one with an empty, .
+// or .. name. The caller has checked rel against resume.path.
+func belowNames(rel string) ([]string, error) {
+	if rel == "" || dotted(rel) || strings.ContainsRune(rel, 0) {
+		return nil, &beneathRefused{"Use a runtime whose resume.path lies below resume.prefix", "the path has an empty, . or .. name"}
 	}
-	return slug, name, nil
+	return strings.Split(rel, "/"), nil
 }
 
-// readBeneath reads the transcript at rel, <slug>/<session id>.jsonl, below the
-// transcript directory root, from offset on, and returns its bytes and the file's size.
-// It opens the file with no symbolic link among its names and without waiting for a
-// writer ([openBeneath]), and reads it only when it is a regular file with one link of
-// at most [maxTranscript] bytes, in one read of at most that many bytes. A file
-// that does not exist yet is an error of [fs.ErrNotExist]; a file the session does not
-// read is a *beneathRefused.
+// readBeneath reads the transcript at rel below the transcript directory root, from
+// offset on, and returns its bytes and the file's size. It opens the file with no
+// symbolic link among its names and without waiting for a writer ([openBeneath]), and
+// reads it only when it is a regular file with one link of at most [maxTranscript]
+// bytes, in one read of at most that many bytes. A file that does not exist yet is an
+// error of [fs.ErrNotExist]; a file the session does not read is a *beneathRefused.
 func readBeneath(root, rel string, offset int64) ([]byte, int64, error) {
-	slug, name, err := splitTranscript(rel)
+	names, err := belowNames(rel)
 	if err != nil {
 		return nil, 0, err
 	}
-	fd, err := openBeneath(root, slug, name)
+	fd, err := openBeneath(root, names)
 	if err != nil {
 		return nil, 0, beneathError(err)
 	}
-	f := os.NewFile(uintptr(fd), name)
+	f := os.NewFile(uintptr(fd), names[len(names)-1])
 	defer f.Close()
 	var st unix.Stat_t
 	if err := unix.Fstat(fd, &st); err != nil {
@@ -88,28 +82,33 @@ func readBeneath(root, rel string, offset int64) ([]byte, int64, error) {
 // errTooLarge is the refusal of a transcript over [maxTranscript] bytes.
 var errTooLarge = &beneathRefused{"Keep the session's transcript at most 64 MiB, the most a continuation restores", fmt.Sprintf("it is over %d bytes (64 MiB)", maxTranscript)}
 
-// writeBeneath writes b as the transcript at rel, <slug>/<session id>.jsonl, below the
-// transcript directory root: it makes the slug directory, mode 0700, when it does not
-// exist, opens it with no symbolic link among its names, and creates the file, mode
-// 0600, where none exists, never through a link.
+// writeBeneath writes b as the transcript at rel below the transcript directory root:
+// it makes each directory of rel, mode 0700, that does not exist, opens each with no
+// symbolic link among its names, and creates the file, mode 0600, where none exists,
+// never through a link.
 func writeBeneath(root, rel string, b []byte) error {
-	slug, name, err := splitTranscript(rel)
+	names, err := belowNames(rel)
 	if err != nil {
 		return err
 	}
-	rootFD, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	dirFD, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return beneathError(err)
 	}
-	defer unix.Close(rootFD)
-	if err := unix.Mkdirat(rootFD, slug, 0o700); err != nil && !errors.Is(err, unix.EEXIST) {
-		return beneathError(err)
-	}
-	dirFD, err := unix.Openat(rootFD, slug, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return beneathError(err)
+	for _, name := range names[:len(names)-1] {
+		if err := unix.Mkdirat(dirFD, name, 0o700); err != nil && !errors.Is(err, unix.EEXIST) {
+			unix.Close(dirFD)
+			return beneathError(err)
+		}
+		next, err := unix.Openat(dirFD, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		unix.Close(dirFD)
+		if err != nil {
+			return beneathError(err)
+		}
+		dirFD = next
 	}
 	defer unix.Close(dirFD)
+	name := names[len(names)-1]
 	fd, err := unix.Openat(dirFD, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
 	if err != nil {
 		return beneathError(err)
@@ -122,22 +121,25 @@ func writeBeneath(root, rel string, b []byte) error {
 	return f.Close()
 }
 
-// walkBeneath opens slug/name below root one name at a time: each directory with
-// O_NOFOLLOW and O_DIRECTORY, the file with O_NOFOLLOW and O_NONBLOCK, so that no name
-// is a symbolic link and a FIFO opens without a writer. It returns the file's
+// walkBeneath opens the path of names below root one name at a time: each directory
+// with O_NOFOLLOW and O_DIRECTORY, the file with O_NOFOLLOW and O_NONBLOCK, so that no
+// name is a symbolic link and a FIFO opens without a writer. It returns the file's
 // descriptor.
-func walkBeneath(root, slug, name string) (int, error) {
-	rootFD, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+func walkBeneath(root string, names []string) (int, error) {
+	dirFD, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return -1, err
 	}
-	defer unix.Close(rootFD)
-	dirFD, err := unix.Openat(rootFD, slug, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return -1, err
+	for _, name := range names[:len(names)-1] {
+		next, err := unix.Openat(dirFD, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		unix.Close(dirFD)
+		if err != nil {
+			return -1, err
+		}
+		dirFD = next
 	}
 	defer unix.Close(dirFD)
-	return unix.Openat(dirFD, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
+	return unix.Openat(dirFD, names[len(names)-1], unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
 }
 
 // beneathError is err of an open below a transcript directory: a name that does not

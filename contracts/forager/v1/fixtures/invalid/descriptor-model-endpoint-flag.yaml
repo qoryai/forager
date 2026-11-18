@@ -1,4 +1,4 @@
-# The endpoint is a variable; a setting is not accepted there.
+# The endpoint is a variable or a setting; a flag is not accepted there.
 version: 1
 runtime: amp
 sources: {output: {format: jsonl}}
@@ -6,4 +6,4 @@ rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data:
 model:
   formats: [anthropic-messages]
   model: {flag: --model}
-  endpoint: {setting: apiBaseUrl}
+  endpoint: {flag: --base-url}

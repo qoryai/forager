@@ -198,39 +198,48 @@ func TestAfterRunsAfterTheRuntimesTimeout(t *testing.T) {
 	}
 }
 
-// TestAfterRunsAtAPause pins that a session that ends at the model key limit gets After
-// on the path of any exit: the session writes paused with the runtime's exit code, after
+// TestAfterRunsAtAPause pins that a session stopped by a batch's answer gets After on
+// the path of any exit: at model_key_limit and model_key_switch the session writes
+// paused, at model_key_unauthorized failed, each with the runtime's exit code, after
 // the after step.
 func TestAfterRunsAtAPause(t *testing.T) {
-	file := filepath.Join(t.TempDir(), "pid")
-	sp, g, w, _ := afterRemote(t, fmt.Sprintf(`trap 'exit 143' TERM; echo $$ > %q; echo working; while :; do sleep 0.05; done`, file),
-		"/bin/sh", "-c", "echo committed > after-ran")
-	sp.StopGrace = 5 * time.Second
-	g.OnBatch(func(evs []map[string]any) linktest.Reply {
-		if hasLog(evs, "working") {
-			return keyStop
-		}
-		return linktest.Reply{Status: 200}
-	})
-	res, err := run(context.Background(), sp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.State != "paused" || res.Reason != "model_key_limit" || res.ExitCode != 143 {
-		t.Errorf("result %+v", res)
-	}
-	if res.After == nil || res.After.State != event.StateSucceeded {
-		t.Errorf("Result.After %+v; want succeeded", res.After)
-	}
-	if b, err := os.ReadFile(filepath.Join(sp.Dir, "after-ran")); err != nil || string(b) != "committed\n" {
-		t.Errorf("After left %q, %v", b, err)
-	}
-	want := []string{"after started", "after exited succeeded 0 <nil>", "session exited paused 143"}
-	if got := afterOrder(events(t, res)); !slices.Equal(got, want) {
-		t.Errorf("the events %q, want %q", got, want)
-	}
-	if got := w.calls(); !slices.Equal(got, []string{"unwrap", "wrap after", "unwrap after"}) {
-		t.Errorf("the wall's calls %q", got)
+	for _, c := range []struct{ reason, state string }{
+		{"model_key_limit", "paused"},
+		{"model_key_switch", "paused"},
+		{"model_key_unauthorized", "failed"},
+	} {
+		t.Run(c.reason, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "pid")
+			sp, g, w, _ := afterRemote(t, fmt.Sprintf(`trap 'exit 143' TERM; echo $$ > %q; echo working; while :; do sleep 0.05; done`, file),
+				"/bin/sh", "-c", "echo committed > after-ran")
+			sp.StopGrace = 5 * time.Second
+			g.OnBatch(func(evs []map[string]any) linktest.Reply {
+				if hasLog(evs, "working") {
+					return stopWith(c.reason)
+				}
+				return linktest.Reply{Status: 200}
+			})
+			res, err := run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.State != c.state || res.Reason != c.reason || res.ExitCode != 143 {
+				t.Errorf("result %+v", res)
+			}
+			if res.After == nil || res.After.State != event.StateSucceeded {
+				t.Errorf("Result.After %+v; want succeeded", res.After)
+			}
+			if b, err := os.ReadFile(filepath.Join(sp.Dir, "after-ran")); err != nil || string(b) != "committed\n" {
+				t.Errorf("After left %q, %v", b, err)
+			}
+			want := []string{"after started", "after exited succeeded 0 <nil>", "session exited " + c.state + " 143"}
+			if got := afterOrder(events(t, res)); !slices.Equal(got, want) {
+				t.Errorf("the events %q, want %q", got, want)
+			}
+			if got := w.calls(); !slices.Equal(got, []string{"unwrap", "wrap after", "unwrap after"}) {
+				t.Errorf("the wall's calls %q", got)
+			}
+		})
 	}
 }
 

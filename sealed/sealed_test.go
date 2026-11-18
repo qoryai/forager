@@ -236,7 +236,7 @@ func TestTheFixtureOpens(t *testing.T) {
 // TestReplaceClearsTheOldValue pins Replace: the renewed value, its expires_at and its
 // apply take the old one's place, the old bytes are zeros, the other values stay, and
 // the source no longer has the value, so clearing it leaves the replaced one. A source
-// without the credential changes nothing.
+// without the credential, and a source that is the target, change nothing.
 func TestReplaceClearsTheOldValue(t *testing.T) {
 	digest := "sha256=" + strings.Repeat("ab", 32)
 	open := func(values ...Value) Values {
@@ -287,6 +287,13 @@ func TestReplaceClearsTheOldValue(t *testing.T) {
 	}
 	if b, _ := held.Value("model"); string(b) != "model-fake-value" {
 		t.Errorf("model is %q after a Replace from a source without it", b)
+	}
+	// A Replace from the same Values keeps the value whole.
+	if !held.Replace("model", held) {
+		t.Error("Replace from itself reports no value")
+	}
+	if b, _ := held.Value("model"); string(b) != "model-fake-value" {
+		t.Errorf("model is %q after a Replace from itself", b)
 	}
 }
 
