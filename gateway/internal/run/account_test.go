@@ -160,6 +160,36 @@ func TestAValueWithoutItsClaimLeavesTheGroup(t *testing.T) {
 	})
 }
 
+// TestAnotherGroupWithoutTheClaimIsRefused pins a key group other than the start
+// key's: with no key of it left, the run is refused at the start,
+// run_configuration_invalid, with the group's first key, as the start key's group is.
+// With one key of it left, the run opens, and KeysOut has the other key.
+func TestAnotherGroupWithoutTheClaimIsRefused(t *testing.T) {
+	// The start key is api-key, of the group openai-api; the two subscriptions are the
+	// group openai.
+	doc := strings.Replace(accountDoc, `"model_credential":"subscription"`, `"model_credential":"api-key"`, 1)
+	none := fakeToken(`{"sub":"fake"}`)
+	t.Run("no key left", func(t *testing.T) {
+		r, err := run.Open(t.Context(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')),
+			Secrets: (&controlPlane{answer: accountValues(map[string]string{"subscription": none, "subscription-2": none})}).fetch})
+		if err == nil {
+			r.Close()
+			t.Fatal("the run opened")
+		}
+		if code, names := refusalOf(err); code != "run_configuration_invalid" || !slices.Equal(names, []string{"subscription"}) ||
+			!strings.Contains(err.Error(), `store in the control plane a value of a model key of the key group of "subscription" with a string at its account_claim: no key of the group has one`) {
+			t.Errorf("%v (%s %v)", err, code, names)
+		}
+	})
+	t.Run("one key left", func(t *testing.T) {
+		r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')),
+			Secrets: (&controlPlane{answer: accountValues(map[string]string{"subscription": none})}).fetch})
+		if out := r.KeysOut(); !slices.Equal(out, []string{"subscription"}) {
+			t.Errorf("KeysOut %v; want subscription", out)
+		}
+	})
+}
+
 // TestARenewalWithoutTheClaimKeepsTheValue pins a renewal of a subscription key whose
 // renewed value has no account claim: the renewal is refused as one with another
 // apply is, the report has why and no value, and the run keeps the value it had.

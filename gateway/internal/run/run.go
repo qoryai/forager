@@ -470,9 +470,10 @@ func (r *Run) open(ctx context.Context) error {
 // checkClaims sets keysOut: each model key with account_claim whose opened value in
 // values has no string at it ([credential.AccountClaim]), with a line in the run's
 // record that contains why, never the value or the claim. It refuses the run,
-// run_configuration_invalid, when no key of the start key's group is left and none is
+// run_configuration_invalid, when no key of a key group of the run is left and none is
 // out or pending after a 401 ([Config.Revoked], [Config.Pending]): a reopened run
-// whose keys a 401 took out stops with model_key_unauthorized.
+// whose keys a 401 took out stops with model_key_unauthorized. The refusal names the
+// start key for the start key's group, and the group's first key for another group.
 func (r *Run) checkClaims(values sealed.Values) error {
 	var out []string
 	for _, c := range r.stored {
@@ -490,15 +491,30 @@ func (r *Run) checkClaims(values sealed.Values) error {
 				accesskey.ShownName(c.Name, true), err))
 		}
 	}
-	group := startGroup(r.stored, r.storedModel)
 	left := func(c server.RunCredential) bool {
 		return !slices.Contains(out, c.Name) && !r.leftOut(c.Name)
 	}
-	after401 := slices.ContainsFunc(group, func(c server.RunCredential) bool { return r.leftOut(c.Name) })
-	if len(group) > 0 && !after401 && !slices.ContainsFunc(group, left) {
-		start := startName(group, r.storedModel)
-		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(start),
-			"run configuration %s: store in the control plane a value of a model key of the key group of %s with a string at its account_claim: no key of the group has one", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(start, true))
+	refuse := func(group []server.RunCredential, name string) error {
+		after401 := slices.ContainsFunc(group, func(c server.RunCredential) bool { return r.leftOut(c.Name) })
+		if len(group) == 0 || after401 || slices.ContainsFunc(group, left) {
+			return nil
+		}
+		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
+			"run configuration %s: store in the control plane a value of a model key of the key group of %s with a string at its account_claim: no key of the group has one", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(name, true))
+	}
+	// The start key's group first, by its start key, so its refusal is the one a run
+	// gets when another group has no key left too.
+	start := startGroup(r.stored, r.storedModel)
+	if err := refuse(start, startName(start, r.storedModel)); err != nil {
+		return err
+	}
+	for _, group := range storedGroups(r.stored) {
+		if len(start) > 0 && group[0].Name == start[0].Name {
+			continue
+		}
+		if err := refuse(group, group[0].Name); err != nil {
+			return err
+		}
 	}
 	r.keysOut = out
 	return nil

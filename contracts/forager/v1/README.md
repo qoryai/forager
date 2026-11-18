@@ -1303,9 +1303,10 @@ as:
 Store in the control plane a value of the model key "subscription" with a string at its account_claim; the run does not set the key: the value's JWT payload has no string at account_claim "/https:~1~1api.openai.com~1auth/chatgpt_account_id"
 ```
 
-When no key of the group is left, the run is refused, `run_configuration_invalid`. A
-renewed value without the claim is a renewal refused for its form: the run keeps the
-value it had, and the gateway reports the renewal that failed.
+When no key is left in a key group of the run, the start key's group or another, the
+run is refused at its start, `run_configuration_invalid`. A renewed value without the
+claim is a renewal refused for its form: the run keeps the value it had, and the
+gateway reports the renewal that failed.
 
 **Keys out after a 401.** A model provider may return `401` for a key that a person
 revoked or whose subscription ended. The contract has three parts for such a key:

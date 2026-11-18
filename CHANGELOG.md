@@ -1422,9 +1422,9 @@ release may change what an existing document does, and says so under Upgrading.
   every request to the key's host. A key whose value has no such string when the run
   opens leaves the key group: the proxy never sets it, and the run's record has one
   line that starts with the fix and contains neither the value nor the claim. With no
-  key of the group left, the run is refused, `run_configuration_invalid`. A renewed
-  value without the string is a renewal refused for its form, and the run keeps the
-  value it had.
+  key left in a key group of the run, the start key's group or another, the run is
+  refused at its start, `run_configuration_invalid`. A renewed value without the
+  string is a renewal refused for its form, and the run keeps the value it had.
 - The link's host calls, `POST <run.url>/<run_id>/next-session` and `POST
   <run.url>/<run_id>/pushed-commits`: the gateway reads the body, at most 4 KiB and
   64 KiB, before it looks up or reopens the run, and sends it unread to Qory Apiary with
