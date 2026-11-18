@@ -473,8 +473,8 @@ func (r *Run) open(ctx context.Context) error {
 // run_configuration_invalid, when no key of a key group of the run is left and none of
 // that group's keys is out or pending after a 401 ([Config.Revoked], [Config.Pending]):
 // a reopened run whose keys a 401 took out stops with model_key_unauthorized. The
-// refusal's text has the group's group value. Its names are the start key for the
-// start key's group, and the group's first key for another group.
+// refusal contains the group's `group` value; its shown names are the start key for
+// the start key's group, and the group's first key for another group.
 func (r *Run) checkClaims(values sealed.Values) error {
 	var out []string
 	for _, c := range r.stored {

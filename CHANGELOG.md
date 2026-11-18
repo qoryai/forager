@@ -1282,7 +1282,8 @@ release may change what an existing document does, and says so under Upgrading.
   yet, it gets that key, or, when that key is in cooldown or out, the key a limit
   refusal switches to: the key with `chosen`, then a key with no known reset by the
   order, then the key whose reset is closest. With no key of the group usable, it gets
-  that key, and its first request gets the gateway's `429`, which stops the session. A
+  that key: the session's first request gets the gateway's `429` with no
+  `Retry-After`, and the answer to its next batch has `stop` `model_key_limit`. A
   join request with no `model_credential` gets the start key's group. The proxy sets the active key of the session's group alone, on a
   request with that group's placeholder. With every key of the session's group in
   cooldown or used up, the session stops, and the run pauses at that session; with every

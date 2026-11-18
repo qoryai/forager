@@ -5011,8 +5011,12 @@ document:
   model keys the gateway holds for the run, from the server or the machine. Absent, it
   means the start key, or, when the start key is in a key group, that group's active
   key. The name of a key of a key group means that group's active key: the key the proxy
-  switched to after a limit refusal, or, for a group no session used yet, the named key,
-  or, when it is in cooldown or out, the key a limit refusal switches to (§Credentials,
+  switched to after a limit refusal. The name of a key of the start key's group that is
+  not active means the active key too. For a group other than the start key's that no
+  session used yet, it means the named key, or, when it is in cooldown or out, the key a
+  limit refusal switches to. When no key of that group is usable, it means the named
+  key: the session's first request with the group's placeholder gets the gateway's `429`
+  with no `Retry-After`, and the answer to its next batch has `stop` (§Credentials,
   Several model keys). The name of a model key of the machine's means that
   key alone. A request with `model_key` `false` may not contain it.
 

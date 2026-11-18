@@ -156,3 +156,21 @@ func TestJoinChoiceAtStartsAtTheNamedKey(t *testing.T) {
 		t.Errorf("JoinChoiceAt of no key %s; want JoinChoice %s", got, g.JoinChoice())
 	}
 }
+
+// TestJoinChoiceAtKeepsTheNamedKeyWithNoKeyUsable pins the join choice of a group no
+// session used when every key of the group is in cooldown: the named key, with no key
+// made active. The session's first request then gets the gateway's 429.
+func TestJoinChoiceAtKeepsTheNamedKeyWithNoKeyUsable(t *testing.T) {
+	at := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	g := modelkey.New([]modelkey.Key{{Name: "a", PauseFor: time.Hour}, {Name: "b", PauseFor: time.Hour}, {Name: "c", PauseFor: time.Hour}}, "", func() time.Time { return at })
+	for _, name := range []string{"a", "b", "c"} {
+		g.Refused(name, http.Header{}, "")
+	}
+	active := g.Active()
+	if got := g.JoinChoiceAt("b"); got != "b" {
+		t.Errorf("JoinChoiceAt b with every key in cooldown: %s; want b, the named key", got)
+	}
+	if got := g.Active(); got != active {
+		t.Errorf("active after JoinChoiceAt b: %s; want %s, unchanged", got, active)
+	}
+}
