@@ -223,3 +223,82 @@ func TestARenewalWithoutTheClaimKeepsTheValue(t *testing.T) {
 		}
 	}
 }
+
+// TestAGroupWithoutTheClaimIsRefusedBesideAMachineKey pins a run whose start key is a
+// model key of the machine's, in no key group, beside the key groups of accountDoc:
+// with no key of the group openai left, the run is refused at the start,
+// run_configuration_invalid, with the group's first key in the refusal's names.
+func TestAGroupWithoutTheClaimIsRefusedBesideAMachineKey(t *testing.T) {
+	t.Setenv("QORY_TEST_MACHINE_KEY", "fake-machine-value")
+	doc := strings.Replace(accountDoc, `"model_credential":"subscription"`, `"model_credential":"machine"`, 1)
+	doc = strings.Replace(doc, `"allow":["chat.model.example","api.model.example"]}}`,
+		`"allow":["chat.model.example","api.model.example","api.machine.example"]},"credentials":[{"name":"machine"}]}`, 1)
+	none := fakeToken(`{"sub":"fake"}`)
+	r, err := run.Open(t.Context(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')),
+		Credentials: []run.Credential{{Name: "machine", Env: "QORY_TEST_MACHINE_KEY", Format: "anthropic-messages", Endpoint: "https://api.machine.example/v1", Scheme: "header", Header: "x-api-key"}},
+		Secrets:     (&controlPlane{answer: accountValues(map[string]string{"subscription": none, "subscription-2": none})}).fetch})
+	if err == nil {
+		r.Close()
+		t.Fatal("the run opened")
+	}
+	if code, names := refusalOf(err); code != "run_configuration_invalid" || !slices.Equal(names, []string{"subscription"}) ||
+		!strings.HasPrefix(err.Error(), claimRefusal) {
+		t.Errorf("%v (%s %v)", err, code, names)
+	}
+}
+
+// TestAGroupAfterA401IsNotRefusedForTheClaim pins a reopened run whose start key is
+// api-key, of the group openai-api, and in which a 401 took out subscription, of the
+// group openai. subscription-2, the other key of that group, has no string at its
+// account_claim. The run opens with no refusal: checkClaims skips the group, and
+// KeysOut has subscription-2. Built as the gateway builds it, the group openai has
+// no key left, and its stop's reason is model_key_unauthorized.
+func TestAGroupAfterA401IsNotRefusedForTheClaim(t *testing.T) {
+	doc := strings.Replace(accountDoc, `"model_credential":"subscription"`, `"model_credential":"api-key"`, 1)
+	none := fakeToken(`{"sub":"fake"}`)
+	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')), Revoked: []string{"subscription"},
+		Secrets: (&controlPlane{answer: accountValues(map[string]string{"subscription-2": none})}).fetch})
+	if out := r.KeysOut(); !slices.Equal(out, []string{"subscription-2"}) {
+		t.Errorf("KeysOut %v; want subscription-2", out)
+	}
+	var groups []*modelkey.Group
+	for _, kg := range r.KeyGroups() {
+		g := modelkey.New(kg.Keys, r.Held().Start, nil)
+		g.SetFormat(kg.Format)
+		groups = append(groups, g)
+	}
+	set := modelkey.NewSet(groups, nil)
+	for _, name := range r.KeysOut() {
+		set.Of(name).Out(name)
+	}
+	set.Restore([]modelkey.Unauthorized{{Credential: "subscription", At: start, Out: true}})
+	openai := set.Of("subscription")
+	if active, ok := openai.Pick(); ok {
+		t.Errorf("the group openai's active key %s is usable; want no key left", active)
+	}
+	openai.Pass()
+	if reason, ok := openai.Stop(); !ok || reason != "model_key_unauthorized" {
+		t.Errorf("the group openai's stop %q, %v; want model_key_unauthorized", reason, ok)
+	}
+	if reason, ok := set.Of("api-key").Stop(); ok {
+		t.Errorf("the group openai-api stops with %q; want no stop", reason)
+	}
+}
+
+// TestAGroupWithoutAnAccountClaimIsNeverRefused pins key groups whose keys have no
+// account_claim: values that are no JWT open, and KeysOut is empty.
+func TestAGroupWithoutAnAccountClaimIsNeverRefused(t *testing.T) {
+	doc := strings.ReplaceAll(accountDoc, `,"account_header":"chatgpt-account-id","account_claim":"/https:~1~1auth.model.example~1auth/account_id"`, ``)
+	if strings.Contains(doc, "account_claim") {
+		t.Fatal("the run configuration still has an account_claim")
+	}
+	opaque := map[string]string{"subscription": "opaque-fake-token", "subscription-2": "opaque-fake-token-2", "api-key": "opaque-fake-key"}
+	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')),
+		Secrets: (&controlPlane{answer: accountValues(opaque)}).fetch})
+	if out := r.KeysOut(); len(out) != 0 {
+		t.Errorf("KeysOut %v; want none", out)
+	}
+	if got := keysOf(r, "subscription"); !slices.Equal(got, []string{"subscription", "subscription-2"}) {
+		t.Errorf("Group %v; want the two subscriptions", got)
+	}
+}
