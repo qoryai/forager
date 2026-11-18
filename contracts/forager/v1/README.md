@@ -5623,12 +5623,12 @@ closed connection, so the caller gets a read error, never a clean end of body. T
 bytes of a file as unverified until the read ends cleanly.
 
 **The transcript of a paused run.** A run whose run configuration has `resume` continues
-the runtime session of a paused run, one that ended `paused` with `model_key_limit` or
-`model_key_switch` (§The events, How a run ends). The run answer contains the run
-configuration's `resume` (§The gateway's link, Opening a run). Before the runtime of the
-run's first session whose runtime has `resume` in its descriptor starts, the session
-reads the transcript over the gateway's link, `GET <run.url>/<run_id>/transcript` (§The
-gateway's link, The transcript request). The run API's route never serves `GET
+the runtime session of a paused run, one that ended `paused` with `model_key_limit`
+(§The events, How a run ends). The run answer contains the run configuration's
+`resume` (§The gateway's link, Opening a run). Before the runtime of the run's first
+session whose runtime has `resume` in its descriptor starts, the session reads the
+transcript over the gateway's link, `GET <run.url>/<run_id>/transcript` (§The gateway's
+link, The transcript request). The run API's route never serves `GET
 /resume/transcript`: a request for it through `QORY_RUN_API`, from behind a wall or from
 any other program, gets `404` `not_found`, and nothing is sent. For the link's request
 the gateway sends Qory Apiary `GET <run.url>/<run_id>/resume/transcript` with this run's
