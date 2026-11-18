@@ -965,10 +965,11 @@ the run's policy selects. A run with two or more model keys, the server's and th
 machine's together, needs it; in a run with one, that one is the start key, and
 `model_credential` may name it. Each of these is `run_configuration_invalid`: a
 `model_credential` that names a host credential of the document; none beside two or
-more API credentials, `the document is refused: set model_credential to the model key
-the runtime starts with: the document lists the model keys model, backup`; and, when
-the gateway resolves the run's credentials, a name of no model key of the run, and none
-beside two or more model keys of the server's and the machine's together.
+more API credentials, whose message is `Set model_credential to the model key the
+runtime starts with.` with `The document lists the model keys model, backup` on a
+second line; and, when the gateway resolves the run's credentials, a name of no model
+key of the run, and none beside two or more model keys of the server's and the
+machine's together.
 
 The gateway sets these credentials for every run, with or without a wall. A run
 configuration with `credentials` from a server whose discovery lists no `secrets` is

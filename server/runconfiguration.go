@@ -108,11 +108,11 @@ func CheckCredentials(creds []RunCredential, model string) error {
 	for i, c := range creds {
 		name := accesskey.ShownName(c.Name, true)
 		if slices.ContainsFunc(creds[:i], func(o RunCredential) bool { return o.Name == c.Name }) {
-			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name), "the document is refused: list the credential %s once; the document lists it twice", name)
+			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name), "List the credential %s once.\nThe document lists it twice", name)
 		}
 		if _, ok := policy.EndpointHost(c.Endpoint); c.Format != "" && !ok {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"the document is refused: give the credential %s an endpoint whose host is a DNS name or an IP address, port 1 to 65535: Forager reads no host from its endpoint", name)
+				"Give the credential %s an endpoint whose host is a DNS name or an IP address, port 1 to 65535.\nForager reads no host from its endpoint", name)
 		}
 		if a := c.Auth; (a.AccountHeader != "") != (a.AccountClaim != "") || (a.AccountHeader != "" && !a.OAuth) {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
@@ -126,8 +126,8 @@ func CheckCredentials(creds []RunCredential, model string) error {
 			for _, p := range a.Paths {
 				if policy.UnclearPath(p) {
 					return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-						"Remove empty, . and .. segments, backslashes, %%2F, %%5C, %%2E and %%25 from path %s of the credential %s.\n"+
-							"The proxy reads each segment up to its first ; or %%3B, takes each %%-code in either case, such as %%2f, and denies a control character too. "+
+						"Remove the unclear parts from path %s of the credential %s.\n"+
+							"A path may have no empty, . or .. segment, backslash, %%2F, %%5C, %%2E or %%25; the proxy reads each segment up to its first ; or %%3B, takes each %%-code in either case, such as %%2f, and denies a control character too. "+
 							"It denies every request whose path has one of these parts, so the path matches no request", accesskey.ShownValue(p, true), name)
 				}
 			}
@@ -135,13 +135,13 @@ func CheckCredentials(creds []RunCredential, model string) error {
 		for _, a := range c.Applies() {
 			if a.Scheme == "header" && ReservedHeader(a.Header) {
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-					"the document is refused: set the credential %s in another header than %s; that header frames the request, or the proxy sets it", name, accesskey.ShownName(a.Header, true))
+					"Set the credential %s in a header other than %s.\nThat header frames the request, or the proxy sets it", name, accesskey.ShownName(a.Header, true))
 			}
 		}
 		for _, p := range c.Placeholders {
 			if DeniedPlaceholder(p) {
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-					"the document is refused: give the credential %s another placeholder than %s; the built-in deny list, denied-variables.json, covers that variable", name, accesskey.ShownName(p, true))
+					"Give the credential %s a placeholder other than %s.\nThe built-in deny list, denied-variables.json, covers that variable", name, accesskey.ShownName(p, true))
 			}
 		}
 	}
@@ -154,10 +154,10 @@ func CheckCredentials(creds []RunCredential, model string) error {
 	switch i := slices.IndexFunc(creds, func(c RunCredential) bool { return c.Name == model }); {
 	case model == "" && len(keys) > 1:
 		return refusal.New(refusal.RunConfigurationInvalid, nil,
-			"the document is refused: set model_credential to the model key the runtime starts with: the document lists the model keys %s", strings.Join(keys, ", "))
+			"Set model_credential to the model key the runtime starts with.\nThe document lists the model keys %s", strings.Join(keys, ", "))
 	case i >= 0 && creds[i].Format == "":
 		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(model),
-			"the document is refused: set model_credential to an API credential, one with format: the credential %s has none, so it is no model key", accesskey.ShownName(model, true))
+			"Set model_credential to an API credential, one with format.\nThe credential %s has none, so it is no model key", accesskey.ShownName(model, true))
 	}
 	return nil
 }

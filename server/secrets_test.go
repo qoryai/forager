@@ -70,16 +70,16 @@ func TestARunConfigurationsCredentialsAreRefused(t *testing.T) {
 		return `{"name":"` + name + `","apply":[{"hosts":["api.model.example"],"scheme":"header","header":"` + header + `"}]}`
 	}
 	cases := map[string]struct{ doc, want string }{
-		"a name twice": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `,` + entry("model", "x-other-key") + `]}`, `list the credential "model" once; the document lists it twice`},
+		"a name twice": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `,` + entry("model", "x-other-key") + `]}`, "List the credential \"model\" once.\nThe document lists it twice"},
 		"an endpoint's host": {`{"version":1,"credentials":[{"name":"model","format":"openai-chat","endpoint":"https://bad_host.example/v1","auth":{"scheme":"bearer"}}]}`,
-			`give the credential "model" an endpoint whose host is a DNS name or an IP address, port 1 to 65535: Forager reads no host from its endpoint`},
+			"Give the credential \"model\" an endpoint whose host is a DNS name or an IP address, port 1 to 65535.\nForager reads no host from its endpoint"},
 		"an endpoint's port": {`{"version":1,"credentials":[{"name":"model","format":"openai-chat","endpoint":"https://api.model.example:99999","auth":{"scheme":"bearer"}}]}`,
-			`give the credential "model" an endpoint whose host is a DNS name or an IP address, port 1 to 65535`},
+			"Give the credential \"model\" an endpoint whose host is a DNS name or an IP address, port 1 to 65535.\n"},
 		"a host credential as the start key": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `],"model_credential":"model"}`,
-			`set model_credential to an API credential, one with format: the credential "model" has none, so it is no model key`},
+			"Set model_credential to an API credential, one with format.\nThe credential \"model\" has none, so it is no model key"},
 	}
 	for _, h := range []string{"Host", "content-length", "Transfer-Encoding", "Connection", "TE", "Trailer", "Upgrade", "Keep-Alive", "Cookie", "Proxy-Authorization", "proxy_authorization", "X-Qory-Credential-Set", "x_qory_credential_set", "Qory-Anything"} {
-		cases["the header "+h] = struct{ doc, want string }{`{"version":1,"credentials":[` + entry("model", h) + `]}`, `set the credential "model" in another header than "` + h + `"; that header frames the request, or the proxy sets it`}
+		cases["the header "+h] = struct{ doc, want string }{`{"version":1,"credentials":[` + entry("model", h) + `]}`, "Set the credential \"model\" in a header other than \"" + h + "\".\nThat header frames the request, or the proxy sets it"}
 	}
 	v := newVerified(t)
 	for name, c := range cases {
@@ -95,7 +95,7 @@ func TestARunConfigurationsCredentialsAreRefused(t *testing.T) {
 	}
 	v.runDoc = `{"version":1,"credentials":[` + api("model") + `,` + api("backup") + `]}`
 	_, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)
-	if want := "set model_credential to the model key the runtime starts with: the document lists the model keys model, backup"; code(err) != "run_configuration_invalid" || !strings.Contains(err.Error(), want) {
+	if want := "Set model_credential to the model key the runtime starts with.\nThe document lists the model keys model, backup"; code(err) != "run_configuration_invalid" || !strings.Contains(err.Error(), want) {
 		t.Errorf("two model keys without model_credential: %v; want %q", err, want)
 	}
 	for _, doc := range []string{
@@ -314,7 +314,7 @@ func TestAPlaceholderTheDenyListCoversIsRefused(t *testing.T) {
 	for _, p := range []string{"GIT_SSL_CAINFO", "git_ssl_cainfo", "HTTPS_PROXY", "no_proxy", "QORY_RUN_ID", "PATH", "NODE_OPTIONS", "ld_preload", "BASH_ENV", "HOME"} {
 		v.runDoc = doc(p)
 		_, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)
-		want := `the document is refused: give the credential "model" another placeholder than "` + p + `"; the built-in deny list, denied-variables.json, covers that variable`
+		want := "Give the credential \"model\" a placeholder other than \"" + p + "\".\nThe built-in deny list, denied-variables.json, covers that variable"
 		var r *accesskey.Refusal
 		if !errors.As(err, &r) || r.Code != "run_configuration_invalid" || len(r.Names) != 1 || r.Names[0] != "model" || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v", p, err)

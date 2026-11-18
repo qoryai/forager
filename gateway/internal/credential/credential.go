@@ -524,8 +524,8 @@ func checkPaths(name string, paths []string) error {
 			return fmt.Errorf("Write each credential path from /, with { and } only as the segment {} and * only at the end.\nThe path %s of credential %s is not in that form.", accesskey.ShownValue(p, true), accesskey.ShownName(name, false))
 		}
 		if policy.UnclearPath(p) {
-			return fmt.Errorf("Remove empty, . and .. segments, backslashes, %%2F, %%5C, %%2E and %%25 from path %s of credential %s.\n"+
-				"The proxy reads each segment up to its first ; or %%3B, takes each %%-code in either case, such as %%2f, and denies a control character too. "+
+			return fmt.Errorf("Remove the unclear parts from path %s of credential %s.\n"+
+				"A path may have no empty, . or .. segment, backslash, %%2F, %%5C, %%2E or %%25; the proxy reads each segment up to its first ; or %%3B, takes each %%-code in either case, such as %%2f, and denies a control character too. "+
 				"It denies every request whose path has one of these parts, so the path matches no request.", accesskey.ShownValue(p, true), accesskey.ShownName(name, false))
 		}
 	}

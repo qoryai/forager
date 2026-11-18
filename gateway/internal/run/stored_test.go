@@ -138,8 +138,8 @@ func TestCredentialsFromTheServerAreRefusedBeforeTheyOpen(t *testing.T) {
 		called bool
 	}{
 		"no secrets":        {storedDoc, true, nil, "run_configuration_invalid", "enrol an access key allowed stored secrets", false},
-		"a name twice":      {twice, true, &secrets{value: "v"}, "run_configuration_invalid", `list the credential "model" once`, false},
-		"a reserved header": {reserved, true, &secrets{value: "v"}, "run_configuration_invalid", `in another header than "Proxy-Authorization"`, false},
+		"a name twice":      {twice, true, &secrets{value: "v"}, "run_configuration_invalid", "List the credential \"model\" once.\nThe document lists it twice", false},
+		"a reserved header": {reserved, true, &secrets{value: "v"}, "run_configuration_invalid", "Set the credential \"model\" in a header other than \"Proxy-Authorization\".\nThat header frames the request", false},
 		"Secrets fails":     {storedDoc, true, &secrets{err: errors.New("secrets https://apiary.example/v1/secrets: the envelope is for another run configuration")}, "", "for another run configuration", true},
 		"a carriage return": {storedDoc, true, &secrets{value: "opened\rvalue"}, "run_configuration_invalid", `store another value of the credential "model" in the control plane`, true},
 		"a trailing tab":    {storedDoc, true, &secrets{value: "opened-value\t"}, "run_configuration_invalid", "which a header value cannot have", true},
@@ -266,7 +266,7 @@ func TestARunConfigurationURLWithASecretIsAPhrase(t *testing.T) {
 	entry := `{"name":"model","apply":[{"hosts":["api.model.example"],"scheme":"bearer"}]}`
 	twice := `{"version":1,"credentials":[` + entry + `,` + entry + `]}`
 	_, err = run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: at(computed(t, twice, digest('1'))), Secrets: (&secrets{value: "opened-value"}).fetch})
-	check(`list the credential "model" once`, err)
+	check("List the credential \"model\" once.\nThe document lists it twice", err)
 	r, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, storedDoc, digest('1')), Secrets: (&secrets{value: "opened-value"}).fetch})
 	if err != nil {
 		t.Fatal(err)
