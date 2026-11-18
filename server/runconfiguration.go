@@ -90,6 +90,10 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 	return &rc, nil
 }
 
+// maxAPICredentials is the most API credentials a run configuration has, across every
+// key group: the schema's limit, which a document not read from bytes is held to too.
+const maxAPICredentials = 6
+
 // CheckCredentials refuses what the schema cannot state of a run configuration's
 // credentials, each [refusal.RunConfigurationInvalid] with the credential's name, a
 // name that contains a secret as its phrase ([refusal.Shown]): a name twice, a header
@@ -103,9 +107,20 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 // document's model_credential, it refuses a name of a host credential, and an empty
 // one beside two or more API credentials; a name of none of creds may be a model key
 // of the machine's, which the gateway checks. Of the key groups it refuses what
-// [checkKeyGroups] refuses. The reader of a document calls it, and so
-// does whoever holds a document not read from bytes.
+// [checkKeyGroups] refuses, and more than [maxAPICredentials] API credentials across
+// every group, as the schema does for a document read from bytes. The reader of a
+// document calls it, and so does whoever holds a document not read from bytes.
 func CheckCredentials(creds []RunCredential, model string) error {
+	api := 0
+	for _, c := range creds {
+		if c.Format != "" {
+			api++
+		}
+	}
+	if api > maxAPICredentials {
+		return refusal.New(refusal.RunConfigurationInvalid, nil,
+			"Remove API credentials until the run has %d at most.\nThe document lists %d", maxAPICredentials, api)
+	}
 	for i, c := range creds {
 		name := accesskey.ShownName(c.Name, true)
 		if slices.ContainsFunc(creds[:i], func(o RunCredential) bool { return o.Name == c.Name }) {
@@ -180,7 +195,7 @@ func checkKeyGroups(creds []RunCredential) error {
 				"Give the API credential %s a group, the id of its provider.\nThe credential has no group", name)
 		case c.Format == "" && c.Group != "":
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"Remove group from the credential %s, or give it a format.\nOnly an API credential has a group", name)
+				"Remove group from the credential %s.\nOnly an API credential, one with format, has a group", name)
 		case c.Format == "":
 			continue
 		}
