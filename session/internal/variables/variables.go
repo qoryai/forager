@@ -17,7 +17,7 @@
 // credential. What loses never stops the run, and [Resolved.Applied] lists each name
 // with its source and its losses, as dev.qory.run.policy_applied reports them.
 //
-// The deny list is the contract's denied-variables.json, the run's runtime's denies
+// The deny list is the contract's denied-variables.json, the session's runtime's denies
 // and the node's own entries. An entry is a name or a pattern in which * matches any
 // run of characters, the empty run included; it matches a whole name, regardless of
 // case, because programs read http_proxy and HTTP_PROXY alike. Every other comparison
@@ -112,13 +112,13 @@ type Inputs struct {
 	Unwalled string
 	// Deny is the node's own entries for the deny list.
 	Deny []string
-	// RuntimeDenies is the run's runtime's denies.
+	// RuntimeDenies is the session's runtime's denies.
 	RuntimeDenies []string
-	// Overrides is the run's runtime's model overrides: the variables that would
+	// Overrides is the session's runtime's model overrides: the variables that would
 	// override the model id or effort value a composer writes. Only a walled run
 	// applies them.
 	Overrides []string
-	// Runtime is the variables the run's runtime declares or reserves.
+	// Runtime is the variables the session's runtime declares or reserves.
 	Runtime []string
 	// Placeholders is the names of the run's placeholders.
 	Placeholders []string
@@ -127,7 +127,7 @@ type Inputs struct {
 	// Own is the names Forager, the wall and the runtime's preparation set: with
 	// the placeholders and Fixed, the run's fixed names.
 	Own []string
-	// Endpoint is the variable the run's runtime reads the base URL of its model API
+	// Endpoint is the variable the session's runtime reads the base URL of its model API
 	// from, its descriptor's model.endpoint.variable; empty when it has none. A walled
 	// run applies the endpoint rule to it, and an unwalled one with Credentials.
 	Endpoint string
@@ -135,7 +135,7 @@ type Inputs struct {
 	// value of it is left out as [WhyFixed], the harness's computed ones included, and
 	// the endpoint rule does not apply.
 	EndpointFixed bool
-	// KeysFixed is the variables the run's runtime reads a model key from other than
+	// KeysFixed is the variables the session's runtime reads a model key from other than
 	// the one the start key sets: a value of each, from every source the inherited
 	// environment included, is left out as [WhyFixed], and none of them is set.
 	KeysFixed []string

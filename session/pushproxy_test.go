@@ -25,7 +25,7 @@ import (
 )
 
 // The tests of this file start a run's push proxy forwarder, the forwarder on loopback
-// that qory pushes and calls its submit step through.
+// that qory pushes the work item's branch through.
 
 // The texts PushProxy returns for a run with no push credential and during a Join.
 const (

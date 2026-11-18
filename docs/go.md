@@ -47,9 +47,9 @@ The module is a library with two entry points: the gateway and the session.
   walled or not: see [the host proxy](#the-host-proxy). qory fetches the run's harness
   definition through `(*session.Run).StackProxy` instead, which reaches the hosts of
   `gateway.stack_hosts` and of the run configuration's `stack_hosts` alone, and pushes
-  and makes the pull request calls of its submit step through
-  `(*session.Run).PushProxy`, which reaches the run's push proxy: see
-  [the push proxy](#the-push-proxy).
+  the work item's branch through `(*session.Run).PushProxy`, which reaches the run's
+  push proxy: see [the push proxy](#the-push-proxy). Qory Apiary lists only the
+  repository's git paths in the push credential's items.
 - It joins a session to the run, `(*session.Run).Join`, with a
   [`session.SessionSpec`](../session/spec.go): the program to start, and how. It gets a
   [`session.Result`](../session/spec.go) back once the runtime has exited and the
@@ -605,12 +605,12 @@ before the first one, with no container of the run that can write its binds runn
   qory: egress to other.example.net:443 denied by the gateway: no push credential of the run is for this host
   ```
 
-  A path of such a host that no item covers, such as a merge, gets a `403` with this
-  body:
+  A path of such a host that no item covers, such as `/repos/example-org/app/pulls/12`
+  or a path of another repository, gets a `403` with this body:
 
   ```
   qory: send only git's push through the push proxy.
-  qory: PUT api.git.example/repos/example-org/app/pulls/12/merge denied by the gateway: no push credential of the run covers this path
+  qory: GET git.example/repos/example-org/app/pulls/12 denied by the gateway: no push credential of the run covers this path
   ```
 - Behind a wall or a separate gateway the push proxy is guarded as the run's proxy is.
 - The gateway keeps the push proxy open from the run's open until its close, so qory

@@ -11,8 +11,7 @@
     "data": {
       "mode": "enforce",
       "allow": [
-        "git.example",
-        "api.git.example"
+        "git.example"
       ],
       "source": "fetched",
       "url": "https://apiary.example/v1/run-configuration",
@@ -37,18 +36,6 @@
           "scheme": "basic",
           "paths": [
             "/example-org/app.git/*"
-          ],
-          "purpose": "push"
-        },
-        {
-          "name": "push-1",
-          "hosts": [
-            "api.git.example"
-          ],
-          "scheme": "bearer",
-          "paths": [
-            "/repos/example-org/app/pulls",
-            "/repos/example-org/app/pulls/{}"
           ],
           "purpose": "push"
         }
@@ -95,17 +82,17 @@
     "sequence": "0000000004",
     "dataschema": "https://qory.dev/contracts/forager/v1/events/run.egress.schema.json",
     "data": {
-      "host": "api.git.example",
+      "host": "git.example",
       "port": 443,
       "method": "HTTPS",
-      "request_method": "PUT",
-      "path": "/repos/example-org/app/pulls/12/merge",
+      "request_method": "GET",
+      "path": "/example-org/other.git/info/refs",
       "request_id": "0123456789abcdef0123456789abcdf0",
       "channel": "push",
       "decision": "denied",
       "outcome": "refused",
       "mode": "enforce",
-      "rule": "api.git.example"
+      "rule": "git.example"
     }
   }
 ]

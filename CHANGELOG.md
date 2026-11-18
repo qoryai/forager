@@ -328,15 +328,18 @@ release may change what an existing document does, and says so under Upgrading.
   `control_plane_unavailable` when no valid answer came. No container reaches either
   call: they go over the link alone, and the run API's route returns `404` for both
   paths (§The gateway's link, The host calls).
-- A host credential may have `purpose: push`, for qory's push and the pull request
-  calls of its submit step through the run's push proxy (§Credentials, Push
-  credentials). The run answer has `push_proxy_secret` on the local link for such a
-  run, `QORY-PUSH` and the run key open the push proxy on a separate gateway's one
-  address, `dev.qory.run.egress` has `channel: push`, and
-  `dev.qory.run.policy_applied` lists each push credential's items with `purpose:
-  push`. A push credential with `placeholders`, on a host the policy in force does not
-  allow or a path rule of the node's covers, or whose items overlap on a host is
-  `run_configuration_invalid`; a reload that does not allow a push host fails.
+- A host credential may have `purpose: push`, for qory's push of the work item's branch
+  through the run's push proxy (§Credentials, Push credentials). Qory Apiary lists only
+  the repository's git paths, such as `/example-org/app.git/*`, in a push credential's
+  items: the forge's adapter opens the pull request. Forager does not check which paths
+  the items list; the push proxy sets the push value on every path an item covers. The
+  run answer has `push_proxy_secret` on the local link for such a run, `QORY-PUSH` and
+  the run key open the push proxy on a separate gateway's one address,
+  `dev.qory.run.egress` has `channel: push`, and `dev.qory.run.policy_applied` lists
+  each push credential's items with `purpose: push`. A push credential with
+  `placeholders`, on a host the policy in force does not allow or a path rule of the
+  node's covers, or whose items overlap on a host is `run_configuration_invalid`; a
+  reload that does not allow a push host fails.
 - An apply item of a host credential, in the run configuration, the secrets answer and
   an adapter's output, may have `push_ref`, the one branch a git push through it may
   change (§Credentials, The push branch). A renewal keeps it.
@@ -2388,14 +2391,14 @@ release may change what an existing document does, and says so under Upgrading.
   it, or else before the last argument, with a wall and without one. A launch with no
   argument after `after` starts without a resume, with one line that starts with the
   fix. Codex resumes as `codex exec --json resume <session id> "<prompt>"`.
-- `(*session.Run).PushProxy` starts a forwarder on loopback for qory's push and the
-  pull request calls of its submit step, which reaches the run's push proxy: on one
-  machine with the run answer's `push_proxy_secret`, behind a separate gateway with
-  `QORY-PUSH` and the run key (`server.Link.DialPush`). It has the host proxy's rules,
-  returns an error while the setup container is up or `ContainerKept` is true, and ends
-  at the next `Join`, at `Setup` and at `Close`. For a run with no push credential it
-  returns "Add a push credential to the run configuration: this run has no push
-  proxy." The push proxy secret and the run key reach no wall and no container.
+- `(*session.Run).PushProxy` starts a forwarder on loopback for qory's push of the work
+  item's branch, which reaches the run's push proxy: on one machine with the run
+  answer's `push_proxy_secret`, behind a separate gateway with `QORY-PUSH` and the run
+  key (`server.Link.DialPush`). It has the host proxy's rules, returns an error while
+  the setup container is up or `ContainerKept` is true, and ends at the next `Join`, at
+  `Setup` and at `Close`. For a run with no push credential it returns "Add a push
+  credential to the run configuration: this run has no push proxy." The push proxy
+  secret and the run key reach no wall and no container.
 - `SessionSpec.After` and `AfterTimeout`: a command that runs in a new container of the
   wall once the runtime exits, such as a commit of what the agent left. The session
   first removes the agent's container (`Unwrap`), so no process of the agent is left,

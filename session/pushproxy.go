@@ -10,8 +10,8 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// PushProxy starts a forwarder on loopback with a fresh password for qory's push and the
-// calls of its submit step. Every request through it reaches the run's push proxy at
+// PushProxy starts a forwarder on loopback with a fresh password for qory's push of the
+// work item's branch. Every request through it reaches the run's push proxy at
 // the gateway, which allows the hosts and paths of the run configuration's push
 // credentials alone, sets those credentials, with the branch guard of each item's
 // push_ref, and returns a 403 for every other request; the run's policy does not apply
