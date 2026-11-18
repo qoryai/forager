@@ -1501,10 +1501,12 @@ then lists each harness credential by `name` and `purpose` alone, and the stack 
 run starts: a reload's `harness_hidden` is ignored.
 
 **Push credentials.** A host credential with `purpose: push` is for qory's push of the
-work item's branch. Qory Apiary lists git's push paths of the repository alone in its
-items, since the forge's adapter opens the pull request. Forager has no access level:
-Qory Apiary sends a push credential only for a `write` run, beside a read work
-credential, and a run with no push credential opens no push proxy.
+work item's branch. Qory Apiary lists only the repository's git paths, such as
+`/example-org/app.git/*`, in a push credential's items: the forge's adapter opens the
+pull request. Forager does not check which paths the items list; the push proxy sets
+the push value on every path an item covers. Forager has no access level: Qory Apiary
+sends a push credential only for a `write` run, beside a read work credential, and a
+run with no push credential opens no push proxy.
 
 ```json
 {"name": "push-1", "purpose": "push",
@@ -1523,12 +1525,13 @@ hosts that no item covers. It checks paths, not methods: on a path an item cover
 method gets the push value, so under the item `/example-org/app.git/*` a `GET` of
 `/example-org/app.git/info/refs` and a `POST` of `/example-org/app.git/git-receive-pack`
 pass, while `/example-org/other.git/info/refs` gets a `403`. The branch guard limits
-each git push to the item's `push_ref`. The paths of the push items pin the repository: an item
-with no paths covers every path on its hosts. Its decisions are `dev.qory.run.egress` records with `channel:
-push`. It opens with the run and stays open until the run closes, through every join,
-since qory pushes after each session. A run with a push credential has a certificate
-authority, and the push proxy ends TLS with it on every host. The gateway fetches and
-renews the value as any other credential's from the server.
+each git push to the item's `push_ref`. The paths of the push items pin the repository:
+an item with no paths covers every path on its hosts. Its decisions are
+`dev.qory.run.egress` records with `channel: push`. It opens with the run and stays open
+until the run closes, through every join, since qory pushes after each session. A run
+with a push credential has a certificate authority, and the push proxy ends TLS with it
+on every host. The gateway fetches and renews the value as any other credential's from
+the server.
 
 Each of these is `run_configuration_invalid`, with the credential's name in `names`.
 At the start: a push credential with `placeholders`, `Remove placeholders from push
@@ -5620,12 +5623,12 @@ closed connection, so the caller gets a read error, never a clean end of body. T
 bytes of a file as unverified until the read ends cleanly.
 
 **The transcript of a paused run.** A run whose run configuration has `resume` continues
-the runtime session of a paused run, one that ended `paused` with `model_key_limit`
-(§The events, How a run ends). The run answer contains the run configuration's
-`resume` (§The gateway's link, Opening a run). Before the runtime of the run's first
-session whose runtime has `resume` in its descriptor starts, the session reads the
-transcript over the gateway's link, `GET <run.url>/<run_id>/transcript` (§The gateway's
-link, The transcript request). The run API's route never serves `GET
+the runtime session of a paused run, one that ended `paused` with `model_key_limit` or
+`model_key_switch` (§The events, How a run ends). The run answer contains the run
+configuration's `resume` (§The gateway's link, Opening a run). Before the runtime of the
+run's first session whose runtime has `resume` in its descriptor starts, the session
+reads the transcript over the gateway's link, `GET <run.url>/<run_id>/transcript` (§The
+gateway's link, The transcript request). The run API's route never serves `GET
 /resume/transcript`: a request for it through `QORY_RUN_API`, from behind a wall or from
 any other program, gets `404` `not_found`, and nothing is sent. For the link's request
 the gateway sends Qory Apiary `GET <run.url>/<run_id>/resume/transcript` with this run's

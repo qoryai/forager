@@ -291,12 +291,17 @@ func TestASessionsRequestsGetOnlyTheWorkCredential(t *testing.T) {
 // push-1's value, and a push of another branch gets the branch guard's 403; a pull
 // request call, a merge, a REST write of a ref, a GraphQL mutation and a path of
 // another repository, each outside push-1's items, get the push proxy's 403 and reach
-// nothing; another host gets the push proxy's 403. Each decision is a
-// dev.qory.run.egress with channel push; the open's dev.qory.run.policy_applied lists
-// push-1's item with purpose push, and a join's lists it too. After the run's end
-// the push proxy secret opens nothing.
+// nothing; a path outside git's that push-1's second item lists reaches the origin with
+// push-1's value, since the push proxy does not check which paths the items list;
+// another host gets the push proxy's 403. Each decision is a dev.qory.run.egress with
+// channel push; the open's dev.qory.run.policy_applied lists push-1's two items with
+// purpose push, and a join's lists them too. After the run's end the push proxy secret
+// opens nothing.
 func TestThePushProxySetsThePushCredentialAlone(t *testing.T) {
-	o := newPushOrigin(t, pushRunDoc(true))
+	// push-1's second item lists a path outside git's, as no item from Qory Apiary does.
+	doc := strings.Replace(pushRunDoc(true), `"push_ref":"`+pushWorkItem+`"}]`,
+		`"push_ref":"`+pushWorkItem+`"},{"hosts":["localhost"],"scheme":"basic","username":"x-access-token","paths":["/repos/example-org/app/issues/*"]}]`, 1)
+	o := newPushOrigin(t, doc)
 	h := o.h
 	a := h.open(server.LinkRunRequest{})
 	if len(a.CredentialHosts) != 1 || a.CredentialHosts[0].Name != "work-1" {
@@ -325,6 +330,9 @@ func TestThePushProxySetsThePushCredentialAlone(t *testing.T) {
 			t.Errorf("%s %s through the push proxy got %d %q; want 403 %q", p.method, p.path, got.status, got.body, want)
 		}
 	}
+	if got := send(t, push, o.port, http.MethodGet, "/repos/example-org/app/issues/3", "", ""); got.status != http.StatusOK {
+		t.Errorf("a path push-1's second item lists: %+v", got)
+	}
 	resp, err := push.Get("http://other.example.net/")
 	if err != nil {
 		t.Fatal(err)
@@ -336,16 +344,17 @@ func TestThePushProxySetsThePushCredentialAlone(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden || string(b) != unlisted {
 		t.Errorf("another host through the push proxy got %d %q", resp.StatusCode, b)
 	}
-	want := []string{"POST /example-org/app.git/git-receive-pack " + basic}
+	want := []string{"POST /example-org/app.git/git-receive-pack " + basic, "GET /repos/example-org/app/issues/3 " + basic}
 	if got := o.requests(); !slices.Equal(got, want) {
 		t.Errorf("the origin got\n%q\nwant\n%q", got, want)
 	}
 	pushEntries := []any{
 		map[string]any{"name": "push-1", "hosts": []any{"localhost"}, "scheme": "basic", "paths": []any{"/example-org/app.git/*"}, "purpose": "push"},
+		map[string]any{"name": "push-1", "hosts": []any{"localhost"}, "scheme": "basic", "paths": []any{"/repos/example-org/app/issues/*"}, "purpose": "push"},
 	}
 	listed, _ := members(a.Applied)["credentials"].([]any)
-	if len(listed) != 2 || !reflect.DeepEqual(listed[1:], pushEntries) || listed[0].(map[string]any)["purpose"] != nil {
-		t.Errorf("the open's applied credentials %v; want work-1, then push-1's item with purpose push", listed)
+	if len(listed) != 3 || !reflect.DeepEqual(listed[1:], pushEntries) || listed[0].(map[string]any)["purpose"] != nil {
+		t.Errorf("the open's applied credentials %v; want work-1, then push-1's two items with purpose push", listed)
 	}
 	if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {
 		t.Fatalf("the open's batch: %+v", d)
@@ -392,6 +401,7 @@ func TestThePushProxySetsThePushCredentialAlone(t *testing.T) {
 		"PATCH /repos/example-org/app/git/refs/heads/main denied <nil>  localhost",
 		"POST /graphql denied <nil>  localhost",
 		"GET /example-org/other.git/info/refs denied <nil>  localhost",
+		"GET /repos/example-org/app/issues/3 allowed push-1 /repos/example-org/app/issues/* localhost",
 		"<nil> <nil> denied <nil> <nil> ",
 		"GET /example-org/app.git/info/refs allowed push-1 /example-org/app.git/* localhost",
 	}

@@ -48,7 +48,8 @@ The module is a library with two entry points: the gateway and the session.
   definition through `(*session.Run).StackProxy` instead, which reaches the hosts of
   `gateway.stack_hosts` and of the run configuration's `stack_hosts` alone, and pushes
   the work item's branch through `(*session.Run).PushProxy`, which reaches the run's
-  push proxy and is for that push alone: see [the push proxy](#the-push-proxy).
+  push proxy: see [the push proxy](#the-push-proxy). Qory Apiary lists only the
+  repository's git paths in the push credential's items.
 - It joins a session to the run, `(*session.Run).Join`, with a
   [`session.SessionSpec`](../session/spec.go): the program to start, and how. It gets a
   [`session.Result`](../session/spec.go) back once the runtime has exited and the
@@ -604,8 +605,8 @@ before the first one, with no container of the run that can write its binds runn
   qory: egress to other.example.net:443 denied by the gateway: no push credential of the run is for this host
   ```
 
-  A path of such a host that no item covers, such as a pull request call or a path of
-  another repository, gets a `403` with this body:
+  A path of such a host that no item covers, such as `/repos/example-org/app/pulls/12`
+  or a path of another repository, gets a `403` with this body:
 
   ```
   qory: send only git's push through the push proxy.
