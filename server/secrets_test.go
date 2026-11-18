@@ -76,7 +76,7 @@ func TestARunConfigurationsCredentialsAreRefused(t *testing.T) {
 		"an endpoint's port": {`{"version":1,"credentials":[{"name":"model","format":"openai-chat","endpoint":"https://api.model.example:99999","auth":{"scheme":"bearer"}}]}`,
 			"Give the credential \"model\" an endpoint whose host is a DNS name or an IP address, port 1 to 65535.\n"},
 		"a host credential as the start key": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `],"model_credential":"model"}`,
-			"Set model_credential to an API credential, one with format.\nThe credential \"model\" has none, so it is no model key"},
+			"Set model_credential to a credential that has a format.\nThe credential \"model\" has no format, so it is not a model key"},
 	}
 	for _, h := range []string{"Host", "content-length", "Transfer-Encoding", "Connection", "TE", "Trailer", "Upgrade", "Keep-Alive", "Cookie", "Proxy-Authorization", "proxy_authorization", "X-Qory-Credential-Set", "x_qory_credential_set", "Qory-Anything"} {
 		cases["the header "+h] = struct{ doc, want string }{`{"version":1,"credentials":[` + entry("model", h) + `]}`, "Set the credential \"model\" in a header other than \"" + h + "\".\nThat header frames the request, or the proxy sets it"}

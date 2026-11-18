@@ -157,7 +157,7 @@ func CheckCredentials(creds []RunCredential, model string) error {
 			"Set model_credential to the model key the runtime starts with.\nThe document lists the model keys %s", strings.Join(keys, ", "))
 	case i >= 0 && creds[i].Format == "":
 		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(model),
-			"Set model_credential to an API credential, one with format.\nThe credential %s has none, so it is no model key", accesskey.ShownName(model, true))
+			"Set model_credential to a credential that has a format.\nThe credential %s has no format, so it is not a model key", accesskey.ShownName(model, true))
 	}
 	return nil
 }
