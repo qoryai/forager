@@ -1705,7 +1705,7 @@ with no control plane has no such variable.
 
 **Denied names.** The deny list leaves out a value of the server, the run, the machine
 or the harness's defaults whose name it matches: the built-in list
-`denied-variables.json`, the run's runtime's `denies` (§The descriptor), and the names
+`denied-variables.json`, the session's runtime's `denies` (§The descriptor), and the names
 the node's owner adds in the launch spec, `SessionSpec.Variables.Deny` in Go, such as `[NAME,
 PREFIX_*]`. The built-in entries apply to the harness's computed values as well, so a
 computed `DOCKER_HOST` or `NODE_EXTRA_CA_CERTS` is left out too; the runtime's `denies`
@@ -1755,8 +1755,8 @@ lists.
 | `HOME` | the image sets it to a writable place (§Images), and the agent and its tools read their configuration under it |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, and every variable a runtime descriptor reads a model key from | a model key passed in is the agent's to read and send anywhere; the gateway holds it and the session sets the variable to its placeholder (§Credentials) |
 | `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITLAB_TOKEN`, `GL_TOKEN`, `BITBUCKET_TOKEN` | a forge token passed in is the agent's; a credential's placeholder takes the variable instead |
-| the run's runtime's `denies` | they move the runtime's model credential or run its commands (§The descriptor) |
-| behind a wall, the run's runtime's model `overrides` | they would override the model id or effort value a composer writes (§The descriptor) |
+| the session's runtime's `denies` | they move the runtime's model credential or run its commands (§The descriptor) |
+| behind a wall, the session's runtime's model `overrides` | they would override the model id or effort value a composer writes (§The descriptor) |
 
 **The model endpoint.** In a run with a start key, the model key the runtime starts
 with (§Credentials, The start key), the session sets the variable of the runtime's model
@@ -1854,7 +1854,7 @@ as one of these two still masks it.
 
 **Also left out.** A value of any source below the fixed names for a fixed name is left
 out and recorded as `fixed`: the fixed value applies. The server's value of a variable
-the run's runtime declares, reserves or reads a model key from (its descriptor's
+the session's runtime declares, reserves or reads a model key from (its descriptor's
 `model.keys`), where the stand-in goes or which is unset, and of
 one a value of the machine's is read from, such as a credential's `env` (§Credentials),
 whose value stays outside the enclosure, is left out and recorded as `denied`. A value
