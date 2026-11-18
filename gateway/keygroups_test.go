@@ -547,3 +547,38 @@ func TestASessionOnAnotherGroupGetsThatGroupsPlaceholder(t *testing.T) {
 		t.Errorf("session 2: %d %q; want b-2", status, calls)
 	}
 }
+
+// TestALaterJoinOnAGroupInCooldownStops pins a join on a key group whose keys are all in
+// cooldown, in a run whose start key is a-1, of group a. Session 1 joins with b-2, and
+// the provider refuses b-2 and b-1 at their limit: both keys of group b are in cooldown
+// for an hour, and session 1 pauses with model_key_limit. Session 2 then joins with
+// b-1: the gateway accepts the join with b-1, the group's active key, and a request
+// with group b's placeholder gets the gateway's 429 with no call to the provider. The
+// answer to session 2's next batch has stop, model_key_limit.
+func TestALaterJoinOnAGroupInCooldownStops(t *testing.T) {
+	m := startKeyGroupsRun(t, false, "a-1")
+	if key := m.join(t, "b-2"); key != "b-2" {
+		t.Fatalf("join 1 naming b-2: %q; want b-2", key)
+	}
+	m.h.post(sessionStarted(m.runID, 1))
+	m.limit("b-1", "b-2")
+	if status, calls := m.sendWith(t, m.placeholder("b-2")); status != http.StatusTooManyRequests || calls != "b-2,b-1" {
+		t.Errorf("session 1: %d %q; want the refusal after b-2 and b-1", status, calls)
+	}
+	if status, body := m.batch(t); status != http.StatusAccepted || body != `{"stop":{"reason":"model_key_limit"}}` {
+		t.Errorf("a batch of session 1: %d %q; want stop, model_key_limit", status, body)
+	}
+	m.h.post(ev(m.runID, event.SessionExited, map[string]any{"session": 1, "state": "paused", "exit_code": -1, "signal": "SIGTERM", "reason": "model_key_limit", "duration_ms": 5}))
+
+	key := m.join(t, "b-1")
+	if key != "b-1" {
+		t.Fatalf("join 2 naming b-1: %q; want b-1, group b's active key", key)
+	}
+	m.h.post(sessionStarted(m.runID, 2))
+	if status, calls := m.sendWith(t, m.placeholder(key)); status != http.StatusTooManyRequests || calls != "" {
+		t.Errorf("session 2: %d %q; want the gateway's 429 and no call", status, calls)
+	}
+	if status, body := m.batch(t); status != http.StatusAccepted || body != `{"stop":{"reason":"model_key_limit"}}` {
+		t.Errorf("a batch of session 2: %d %q; want stop, model_key_limit", status, body)
+	}
+}
