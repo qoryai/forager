@@ -1,0 +1,1 @@
+{"version": 1, "model_credential": "subscription", "credentials": [{"name": "subscription", "format": "openai-responses", "endpoint": "https://chatgpt.example/backend-api/codex", "auth": {"scheme": "bearer", "oauth": true}, "paths": ["/backend-api/{}/x", "/backend-api/codex/*"]}]}

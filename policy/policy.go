@@ -787,7 +787,10 @@ func OverlapPaths(a, b string) bool {
 // read one way only. escaped is the path as sent. It is refused when it holds an
 // encoded slash, backslash, dot or percent sign, a backslash, an empty segment, or a
 // dot segment: a proxy and a server that disagree on any of those disagree on which
-// rule applies.
+// rule applies. A segment counts by its part before its first ; or %3B, since a server
+// such as Tomcat drops a segment's parameters from the ; on: /a/..;/b and /a/.;x/b have
+// a dot segment there, and /a/;x/b an empty one. The empty part after a final slash is
+// no segment.
 func CleanPath(escaped string) (string, bool) {
 	if escaped == "" {
 		return "/", true
@@ -806,5 +809,26 @@ func CleanPath(escaped string) (string, bool) {
 			return "", false
 		}
 	}
+	for segment := range strings.SplitSeq(lower[1:], "/") {
+		name, _, _ := strings.Cut(segment, ";")
+		name, _, _ = strings.Cut(name, "%3b")
+		if segment != "" && (name == "" || name == "." || name == "..") {
+			return "", false
+		}
+	}
 	return escaped, true
+}
+
+// UnclearPath reports whether a path of a credential's paths has a part
+// [CleanPath] refuses in a request's path, such as /a/../b, /a/..;/b, // or %2e:
+// a request path with one is denied before any credential's paths are read, so the
+// path matches none. A path that ends in * is read as the request paths it matches: the
+// text after its last slash is the start of a segment, so /a/.* and /a/..* match /a/.x
+// and /a/..x, and /a/../* and /a/..;* match none.
+func UnclearPath(path string) bool {
+	if prefix, ok := strings.CutSuffix(path, "*"); ok {
+		path = prefix + "x"
+	}
+	_, ok := CleanPath(path)
+	return !ok
 }

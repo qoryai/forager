@@ -43,8 +43,11 @@ passes. `qory` keeps them under its state directory and prints the path:
   Claude Code's `settings.json` and `approve-key.sh`. A join that writes no
   `dev.qory.session.started`, such as one the gateway refuses, leaves no directory.
 - `transcripts/<n>/`: behind a wall, a directory per session whose runtime has
-  `resume`, such as Claude Code, bound writable at `~/.claude/projects/` inside. The
-  agent writes it, and the session reads the transcript from it.
+  `resume`, such as Claude Code or Codex, bound writable at the descriptor's
+  `resume.prefix` inside, `~/.claude/projects/` for Claude Code. The agent writes it,
+  and the session reads the transcript from it. A session whose `resume.prefix` is
+  absolute and lies in a writable mount's place inside has no such directory: the
+  session reads the transcript in that mount.
 
 The files the session writes for the runtime, these and `ca-bundle.pem`, are each
 written to a new file beside it and renamed, so a link at its path is replaced, not
@@ -105,7 +108,8 @@ of the run at its gateway, before any session. Each session then has a
 `dev.qory.session.started`, with its number from 1 in `session`, the runtime, the
 command and the image, and a `dev.qory.session.exited`, with how the session ended: the
 runtime's exit sets `succeeded` or `failed`, `cancelled` comes with `timeout` or
-`interrupted`, and `paused` with `model_key_limit`. A join that is refused has only a `dev.qory.session.exited`, `failed`
+`interrupted`, `paused` with `model_key_limit` or `model_key_switch`, and `failed` with
+`model_key_unauthorized`. A join that is refused has only a `dev.qory.session.exited`, `failed`
 with exit code -1 and the refusal's code, such as `mount_mode_conflict`, as its reason.
 A session whose wall fails to start has its `dev.qory.session.started`, then its
 `dev.qory.session.exited`, `failed` with exit code -1 and no reason, or the refusal's
@@ -131,31 +135,64 @@ exits still counts. The run stays open for its host work, such as a push, and it
 caller closes it `paused` with `model_key_limit`: a pause of the run, which a control
 plane can continue.
 
-A runtime whose descriptor has `resume`, such as Claude Code, writes the transcript of
-its session to a file, `~/.claude/projects/<working directory as a slug>/<session
-id>.jsonl` for Claude Code. The session sends that file as
-`dev.qory.session.transcript` events: whole lines as the runtime appends them, each
-masked as a `dev.qory.run.log` chunk is, in chunks of at most 32 KiB, with `session`,
-`session_id`, `path`, `offset` from 0 and `bytes`. The session reads the file once more
-to its end before the session's `dev.qory.session.exited`. Behind a wall the wall binds
-the session's transcript directory, `transcripts/<n>/` in the run directory, at
-`~/.claude/projects/` inside, and the session reads the file there: only
-`<slug>/<session id>.jsonl`, under a session id that is a UUID in lower case, and only a
-regular file with one link and at most 64 MiB, with no symbolic link on its path. For
-anything else it sends nothing and writes one line on `stderr` that starts with the fix
-and then shows the cause. When the
-run answer has `resume`, the run's first session whose runtime has `resume` reads the
-paused run's transcript over the gateway's link, `GET <run.url>/<run_id>/transcript`. In
-a run with no wall it writes it in the session's directory as `resume.jsonl`, and starts
-the runtime through `resume.sh`, which copies it under the runtime's home and adds the
+A model provider's `401` to a request with a model key on the model API's path takes
+the key out of use; a key with `expires_at` is renewed first. For `anthropic-messages`
+the proxy sends the request again with the next usable key, and the session goes on.
+Otherwise the gateway's answer to the session's next batch has `stop`, and the session
+stops the runtime:
+
+- `model_key_switch`, `paused`, when the key's format is `openai-responses` and
+  another key of the run is usable. The caller closes the run `paused` with
+  `model_key_switch`, and a control plane can continue it at once on another key.
+- `model_key_unauthorized`, `failed`, when every key of the run is out and a `401`
+  took at least one out. The caller closes the run `failed` with
+  `model_key_unauthorized`.
+
+When the runtime exits by itself, the session posts at least one batch after the exit,
+a `dev.qory.run.heartbeat` when it has nothing else to post, and reads the answer, so
+a stop that comes as the runtime exits still counts.
+
+A runtime whose descriptor has `resume`, such as Claude Code or Codex, writes the
+transcript of its session to a file, `~/.claude/projects/<working directory as a
+slug>/<session id>.jsonl` for Claude Code, and
+`${CODEX_HOME}/sessions/<year>/<month>/<day>/rollout-<time>-<session id>.jsonl` for
+Codex, with `CODEX_HOME` from the launch's environment. A `*` in the descriptor's
+`resume.path` matches inside one name, and the session reads the one file that matches;
+more than one writes one line and sends nothing. `path` in each event is the file's path
+as the runtime sees it: below `~/`, or absolute, such as
+`/var/lib/qory-codex-home/sessions/2026/11/13/rollout-<time>-<session id>.jsonl`. When
+the descriptor's `resume.home_var` has no usable value in the launch, the runtime starts
+without a resume, and the session writes one line on `stderr` that starts with the fix.
+The session sends that file as `dev.qory.session.transcript` events: whole lines as the
+runtime appends them, each masked as a `dev.qory.run.log` chunk is, in chunks of at most
+32 KiB, with `session`, `session_id`, `path`, `offset` from 0 and `bytes`. The session
+reads the file once more to its end before the session's `dev.qory.session.exited`.
+Behind a wall the wall binds the session's transcript directory, `transcripts/<n>/` in
+the run directory, at `resume.prefix` inside, and the session reads the file there: only
+the file of `resume.path`, such as `<slug>/<session id>.jsonl`, under a session id that
+is a UUID in lower case, and only a regular file with one link and at most 64 MiB, with
+no symbolic link on its path. For anything else it sends nothing and writes one line on
+`stderr` that starts with the fix and then shows the cause. When the run answer has
+`resume`, the run's first session whose runtime has `resume` reads the paused run's
+transcript over the gateway's link, `GET <run.url>/<run_id>/transcript`. In a run with
+no wall it writes it in the session's directory as `resume.jsonl`, and starts the
+runtime through `resume.sh`, which copies it under the runtime's home and adds the
 descriptor's arguments, such as `--resume <session id>`. Behind a wall it writes it in
 the transcript directory before the agent's container starts, and adds the arguments
-itself.
-When the read or the copy fails, the runtime starts without a resume, after one line
-on `stderr` that starts with the fix and then shows the cause, a `404` from the gateway among the
-causes. Behind a wall the same happens when the wall cannot bind the transcript
-directory where the agent's user writes it. See the
-contract's §The events, A session's transcript.
+itself. The arguments go at the end, or right after the argument that equals
+`resume.after`. With `resume.place: before_last` they go right before the first `--`
+after `resume.after`, or else right before the last argument: `codex exec --json
+"<prompt>"` resumes as `codex exec --json resume <session id> "<prompt>"`, and `codex
+exec --json -- "<prompt>"` as `codex exec --json resume <session id> -- "<prompt>"`. A
+session that resumes checks the launch's arguments again with the resume arguments at
+their place, and the join fails when the launch's arguments then set a setting the
+session passes. The runtime's first `dev.qory.runtime.started` then has `source`
+`resume` where its rule sets `startup`, when its `session_id` is the restored one. When
+the read or the copy fails, or the paused run's session id starts with `-`, the runtime
+starts without a resume, after one line on `stderr` that starts with the fix and then
+shows the cause, a `404` from the gateway among the causes. Behind a wall the same
+happens when the wall cannot bind the transcript directory where the agent's user writes
+it. See the contract's §The events, A session's transcript.
 
 Behind a wall, the `dev.qory.session.exited` of a runtime that exited also has the
 enclosure's peak memory and CPU time, as measured inside the enclosure, to size machine

@@ -36,7 +36,10 @@ import (
 	"github.com/qoryai/forager/receiver"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/session/runtimes/catalog"
 	"github.com/qoryai/forager/session/runtimes/claude"
+	"github.com/qoryai/forager/session/runtimes/codex"
 	"github.com/qoryai/forager/wall"
 )
 
@@ -526,14 +529,30 @@ type keysSession struct {
 	// home. link are the verb's words between the kept file and --.
 	qory *qoryRun
 	link []string
+	// joinFails, when set, expects the join to return an error: run returns it in
+	// keysOutcome.joined in place of failing the test.
+	joinFails bool
+	// codex, when set, is a folder that [codexFolder] makes: the launch starts Codex
+	// 0.167.2 through its codex-run script, as codex exec --json with the prompt last,
+	// in place of Claude Code, with CODEX_HOME at [codexHome] as a fixed value of the
+	// launch, as qory sets it.
+	codex string
+	// codexArgs, when set, replaces [codexArgs] for Codex.
+	codexArgs []string
 }
 
-// run opens the run, joins one session of Claude Code and closes the run as qory does:
-// paused with model_key_limit and the session's exit code after a session the
-// session stopped for that reason, else with the session's state and exit code.
+// run opens the run, joins one session of Claude Code, or of Codex, and closes the run
+// as qory does: paused with model_key_limit or model_key_switch, or failed with
+// model_key_unauthorized, and the session's exit code after a session the session
+// stopped for that reason, else with the session's state and exit code.
 func (s keysSession) run(t *testing.T) keysOutcome {
 	t.Helper()
-	rt, err := claude.New()
+	newRuntime := claude.New
+	if s.codex != "" {
+		// Codex comes by its name, as qory resolves a run's runtime.
+		newRuntime = func() (runtimes.Runtime, error) { return catalog.Lookup(codex.Name, "") }
+	}
+	rt, err := newRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -556,15 +575,27 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 		dir = t.TempDir()
 	}
 	open := session.OpenSpec{RunsDir: runs, Gateway: g, RunID: s.runID, ForagerVersion: "walltest", Report: report}
-	install := claudeInstall(t)
 	join := session.SessionSpec{
-		Runtime:        rt,
-		RuntimeInstall: install,
-		Command:        claudeProgram(install),
-		Args:           append([]string{"-p", s.prompt, "--output-format", "stream-json", "--verbose"}, s.args...),
-		Env:            s.env,
-		Dir:            dir,
-		Stdin:          strings.NewReader(""),
+		Runtime: rt,
+		Args:    append([]string{"-p", s.prompt, "--output-format", "stream-json", "--verbose"}, s.args...),
+		Env:     s.env,
+		Dir:     dir,
+		Stdin:   strings.NewReader(""),
+	}
+	if s.codex != "" {
+		// Codex's descriptor sets no install_required: the session starts it as the
+		// launch names it, with no installed folder.
+		join.Command = filepath.Join(s.codex, codexRun)
+		launch := codexArgs
+		if s.codexArgs != nil {
+			launch = s.codexArgs
+		}
+		join.Args = slices.Concat(launch, s.args, []string{s.prompt})
+		join.Mounts = append(join.Mounts, wall.Mount{Path: s.codex, ReadOnly: true})
+		join.LaunchFixed = []string{"CODEX_HOME=" + codexHome}
+	} else {
+		join.RuntimeInstall = claudeInstall(t)
+		join.Command = claudeProgram(join.RuntimeInstall)
 	}
 	if s.qory != nil {
 		// qory starts the agent at the helper's path with the program after --, as
@@ -592,6 +623,9 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 		}
 		join.Forwarder = []string{exe, modeForward}
 	}
+	if join.Env == nil && s.codex != "" {
+		join.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+	}
 	if join.Env == nil {
 		join.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "DISABLE_AUTOUPDATER=1",
 			"ANTHROPIC_AUTH_TOKEN=", apiKeyStandIn + "="}
@@ -607,16 +641,21 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 	outcome := session.Outcome{State: event.StateFailed, ExitCode: -1}
 	switch {
 	case o.joined != nil || o.res.RunClosed:
-	case o.res.Reason == event.ReasonModelKeyLimit:
-		outcome = session.Outcome{State: event.StatePaused, Reason: event.ReasonModelKeyLimit, ExitCode: o.res.ExitCode}
+	case o.res.Reason == event.ReasonModelKeyLimit || o.res.Reason == event.ReasonModelKeySwitch:
+		outcome = session.Outcome{State: event.StatePaused, Reason: o.res.Reason, ExitCode: o.res.ExitCode}
+	case o.res.Reason == event.ReasonModelKeyUnauthorized:
+		outcome = session.Outcome{State: event.StateFailed, Reason: o.res.Reason, ExitCode: o.res.ExitCode}
 	default:
 		outcome = session.Outcome{State: o.res.State, ExitCode: o.res.ExitCode}
 	}
 	_, o.closed = r.Close(ctx, outcome)
 	closeGateway()
 	o.out, o.errs, o.lines = out.String(), errs.String(), lines.String()
-	if o.joined != nil {
-		t.Fatalf("the join: %v\nstdout:\n%s\nstderr:\n%s", o.joined, o.out, o.errs)
+	if o.joined != nil && s.joinFails {
+		return o
+	}
+	if o.joined != nil || s.joinFails {
+		t.Fatalf("the join: %v, want an error %v\nstdout:\n%s\nstderr:\n%s", o.joined, s.joinFails, o.out, o.errs)
 	}
 	f, err := os.Open(filepath.Join(o.res.Dir, "events.jsonl"))
 	if err != nil {
@@ -967,7 +1006,7 @@ func TestDockerClaudeCodeHooksReachTheSessionBehindTheWall(t *testing.T) {
 // B. The proxy passes nothing of the refusal on: it puts model in cooldown and sends the
 // same body again with B. The session ends succeeded; the stub got the request with A,
 // then the same bytes with B; Claude Code printed no retry and no API error; the record
-// lists one request to the stub, with model-b and 200; the gateway's log of limit answers
+// lists one request to the stub, with model-b and 200; the gateway's log of limit responses
 // has model's 429; and no file of the run and no output contains a key's value.
 func TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain(t *testing.T) {
 	k := newKeysWall(t)
@@ -988,8 +1027,8 @@ func TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain(t *testing.T) {
 	if got := o.egress(host); !slices.Equal(got, []string{"model-b 200"}) {
 		t.Errorf("the record lists %q to the stub; want one request with model-b and 200", got)
 	}
-	if !strings.Contains(o.lines, `model key "model": limit answer, status 429`) {
-		t.Errorf("the gateway's log has no limit answer of model:\n%s", o.lines)
+	if !strings.Contains(o.lines, `model key "model": limit response, status 429`) {
+		t.Errorf("the gateway's log has no limit response of model:\n%s", o.lines)
 	}
 	noKeyValue(t, o, s.dir)
 }
@@ -1099,8 +1138,8 @@ func TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun(t *testing.T) {
 	if got := o.egress(host); len(got) < 2 || got[0] != "model 200" || got[1] != "model-b 200" {
 		t.Errorf("the record lists %q to the stub; want a request with model and 200, then one with model-b and 200", got)
 	}
-	if strings.Contains(o.lines, "limit answer, status 429") {
-		t.Errorf("the gateway's log has a limit answer of the provider:\n%s", o.lines)
+	if strings.Contains(o.lines, "limit response, status 429") {
+		t.Errorf("the gateway's log has a limit response of the provider:\n%s", o.lines)
 	}
 	noKeyValue(t, o, s.dir)
 }

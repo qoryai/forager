@@ -244,7 +244,10 @@ variable the runtime reads a model key from, its descriptor's `model.keys`. Only
 start key, the model key the runtime starts with, gets that variable. The session sets
 the runtime's model endpoint variable, `ANTHROPIC_BASE_URL` for Claude Code, to the
 start key's endpoint, and leaves out every value of it from `Env`, `LaunchFixed`,
-`LaunchDefaults`, `Variables.Run` and `Variables.Machine`.
+`LaunchDefaults`, `Variables.Run` and `Variables.Machine`. For a runtime whose
+descriptor places the endpoint in a setting, such as Codex's
+`model_providers.qory.base_url`, the session sets no endpoint variable and passes the
+endpoint in that setting: for Codex as a `--config` pair right after the command.
 
 After it resolves the variables, the session refuses a run whose gateway holds
 credentials for it and that has no model key for its runtime, `model_key_missing`:

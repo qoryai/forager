@@ -112,10 +112,14 @@ type answer struct {
 }
 
 // controlPlane is a Config.Secrets that answers each name with answer, and records each
-// call's digest and names. answer gets the call's number, from 0, the start's.
+// call's digest and names, and its unauthorized names. answer gets the call's number,
+// from 0, the start's. fail, when set, is the error of each call after the start's that
+// it returns one for, before any name is answered.
 type controlPlane struct {
 	mu     sync.Mutex
 	calls  [][]string
+	unauth [][]string
+	fail   func(call int) error
 	answer func(name string, call int) (answer, error)
 	// opened are the Values of each call, so a test can see the bytes it handed out.
 	opened []sealed.Values
@@ -123,15 +127,22 @@ type controlPlane struct {
 	block bool
 }
 
-func (s *controlPlane) fetch(ctx context.Context, digest string, names []string) (sealed.Values, error) {
+func (s *controlPlane) fetch(ctx context.Context, digest string, names, unauthorized []string) (sealed.Values, error) {
 	s.mu.Lock()
 	call := len(s.calls)
 	s.calls = append(s.calls, append([]string{digest}, names...))
+	s.unauth = append(s.unauth, unauthorized)
 	block := s.block && call > 0
+	fail := s.fail
 	s.mu.Unlock()
 	if block {
 		<-ctx.Done()
 		return sealed.Values{}, ctx.Err()
+	}
+	if fail != nil && call > 0 {
+		if err := fail(call); err != nil {
+			return sealed.Values{}, err
+		}
 	}
 	sl := sealed.Sealing{AccessKeyID: "ak_0123456789abcdef", RunID: runID, RunConfiguration: digest, Credentials: names, Exp: 1}
 	var yearOne []string

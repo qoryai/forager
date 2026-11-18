@@ -16,6 +16,12 @@
 // The enclosure runs Linux, so the helper is the test binary only on Linux, built with
 // CGO_ENABLED=0; elsewhere QORY_WALL_HELPER names a test binary built for Linux, go
 // test -c with GOOS=linux, and without it the suite is skipped.
+//
+// The tests of a real runtime take its image from a variable: QORY_WALL_CLAUDE_IMAGE,
+// an image with Claude Code 2.1.316 at claude on its PATH, and QORY_WALL_CODEX_IMAGE,
+// an image with Codex 0.167.2 at codex on its PATH. Without the variable a test skips;
+// QORY_WALL_REQUIRE turns that skip into a failure for every such test but
+// TestDockerClaudeCodeThroughTheWall.
 package e2e
 
 import (

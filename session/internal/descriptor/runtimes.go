@@ -13,9 +13,9 @@ import (
 )
 
 // RuntimesFile is the path, in the contract directory, of the file that lists the
-// secrets, the model section, the fixed variables, the egress hosts and
-// install_required of every runtime the contract ships a descriptor for, the file a
-// server vendors.
+// secrets, the model section, the fixed variables, the egress hosts, install_required
+// and the transcript paths of every runtime the contract ships a descriptor for, the
+// file a server vendors.
 const RuntimesFile = "runtimes.json"
 
 // runtimesFile is the document of [RuntimesFile].
@@ -27,7 +27,7 @@ type runtimesFile struct {
 // runtimeEntry is one runtime of [RuntimesFile]. Every list is present, empty when the
 // descriptor has none, so a reader finds the same members for every runtime, and so is
 // fixed, an empty object when the descriptor has none, and install_required, false
-// when the descriptor has none. Model is the one member that is
+// when the descriptor has none. Model, Config and Resume are the members that are
 // absent when the descriptor has none.
 type runtimeEntry struct {
 	Name            string             `json:"name"`
@@ -38,9 +38,26 @@ type runtimeEntry struct {
 	Declares        []declarationEntry `json:"declares"`
 	OneOf           []groupEntry       `json:"one_of"`
 	Model           *modelEntry        `json:"model,omitempty"`
+	Config          *configEntry       `json:"config,omitempty"`
 	Fixed           map[string]string  `json:"fixed"`
 	EgressHosts     []string           `json:"egress_hosts"`
 	InstallRequired bool               `json:"install_required"`
+	Resume          *resumeEntry       `json:"resume,omitempty"`
+}
+
+// resumeEntry is where a runtime of [RuntimesFile] writes the transcript of its
+// session: the descriptor's resume.prefix and resume.path, for a server to check a
+// transcript's path against.
+type resumeEntry struct {
+	Prefix string `json:"prefix"`
+	Path   string `json:"path"`
+}
+
+// configEntry is a descriptor's config in [RuntimesFile]: its flag, and the keys of
+// its fixed settings in the descriptor's order, without their values.
+type configEntry struct {
+	Flag  string   `json:"flag"`
+	Fixed []string `json:"fixed"`
 }
 
 // modelEntry is the model section of a runtime in [RuntimesFile], in the descriptor's
@@ -78,10 +95,11 @@ type groupEntry struct {
 // Runtimes renders [RuntimesFile] from the descriptors of a contract directory, such as
 // contracts.FS: every runtimes/<name>/descriptor.yaml, sorted by name, with its name,
 // its title, its secrets, the lists in the descriptor's order, its model section
-// when it has one, its fixed variables, by name, its egress hosts and its
-// install_required. The output is indented JSON ending in a newline, the same bytes
-// for the same descriptors. A descriptor without a title, or whose runtime is not its
-// directory's name, is an error.
+// when it has one, its config's flag and fixed keys when it has a config, its fixed
+// variables, by name, its egress hosts, its install_required, and its resume's prefix
+// and path when it has a resume. The output is indented JSON ending in a newline, the
+// same bytes for the same descriptors. A descriptor without a title, or whose runtime
+// is not its directory's name, is an error.
 func Runtimes(fsys fs.FS) ([]byte, error) {
 	dirs, err := fs.ReadDir(fsys, "runtimes")
 	if err != nil {
@@ -149,6 +167,12 @@ func entry(d *Descriptor) runtimeEntry {
 	}
 	if m := d.Model; m != nil {
 		e.Model = &modelEntry{Formats: m.Formats, Model: m.Model, Effort: m.Effort, Endpoint: m.Endpoint, Keys: m.Keys, Overrides: m.Overrides}
+	}
+	if c := d.Config; c != nil {
+		e.Config = &configEntry{Flag: c.Flag, Fixed: list(c.Keys)}
+	}
+	if r := d.Resume; r != nil {
+		e.Resume = &resumeEntry{Prefix: r.Prefix, Path: r.Path}
 	}
 	return e
 }

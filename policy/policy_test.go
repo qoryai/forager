@@ -912,3 +912,46 @@ func TestAPolicyErrorPrintsAPhraseForASecret(t *testing.T) {
 		t.Errorf("a clean error: %v", e)
 	}
 }
+
+// TestCleanPathReadsASegmentUpToItsSemicolon pins CleanPath on the segments a server
+// such as Tomcat reads differently from the path as sent: it drops a segment's
+// parameters from the ; on, so a segment whose part before its first ; or %3B is ., ..
+// or empty is a dot segment or an empty one there, and the path is refused, raw or
+// percent-encoded. A ; after a name, and the empty part after a final slash, pass.
+func TestCleanPathReadsASegmentUpToItsSemicolon(t *testing.T) {
+	for _, p := range []string{"/a/..;/b", "/a/.;/b", "/a/..;x/b", "/a/.;x=1", "/a/..;", "/..;", "/;x", "/a/;x/b", "/a/;",
+		"/a/..%3b/b", "/a/..%3B/b", "/a/.%3bx/b", "/a/%3bx/b", "/a/%2e%2e;/b", "/a/%2E;/b", "/a/../b", "/a/./b", "/a//b", "/a/.."} {
+		if _, ok := policy.CleanPath(p); ok {
+			t.Errorf("%s passed, want it refused", p)
+		}
+	}
+	for _, p := range []string{"/", "/a/", "/a/b;jsessionid=0123/c", "/a/b;jsessionid=0123", "/a/..b;x/c", "/a/.well-known;x", "/a/b%3bx", "/a/...;x"} {
+		if clean, ok := policy.CleanPath(p); !ok || clean != p {
+			t.Errorf("%s: %q %v, want it passed as it is", p, clean, ok)
+		}
+	}
+}
+
+// TestUnclearPath pins UnclearPath on a credential's paths: a dot segment, an empty
+// segment, a backslash, a control character, or an encoded slash, backslash, dot or
+// percent sign makes a path unclear, and so does a segment that is one of those before
+// its first ; or %3B. A dot
+// inside a name, after the last slash of a path that ends in *, or in a name before a ;
+// is no dot segment, and a {} segment is a normal one.
+func TestUnclearPath(t *testing.T) {
+	for _, p := range []string{"/a/../b", "/a/./b", "/..", "/.", "/a/..", "/a/../*", "/a/./*", "/./*", "/a//b", "//*",
+		"/a/%2e%2e/b", "/a%2Fb", "/a%5cb", "/a%25b", `/a\b`, "/a/%2e*", "/v1/../responses",
+		"/a/..;/b", "/a/.;/b", "/a/..;x/b", "/a/..;", "/a/..;*", "/a/;x/b", "/a/..%3b/b", "/a/..%3B/b", "/a/%2e%2e;/b", "/a/%2e;/b",
+		"/a\x01b", "/a\x7fb"} {
+		if !policy.UnclearPath(p) {
+			t.Errorf("UnclearPath(%s) is false; want true", p)
+		}
+	}
+	for _, p := range []string{"/a/.well-known", "/a/.*", "/a/..*", "/a/..b", "/a.b/c", "/backend-api/codex/*", "/a/", "/*",
+		"/a/b;jsessionid=0123/c", "/a/b;jsessionid=0123", "/a/..b;x/c", "/a/b%3bx/c",
+		"/backend-api/{}/responses", "/repos/example-org/app/pulls/{}", "/a/{}/*", "/{}"} {
+		if policy.UnclearPath(p) {
+			t.Errorf("UnclearPath(%s) is true; want false", p)
+		}
+	}
+}

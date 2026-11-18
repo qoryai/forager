@@ -79,6 +79,8 @@ type Window struct {
 type Group struct {
 	keys []Key
 	now  func() time.Time
+	// format is the API format of the keys, [Group.SetFormat]; empty for none set.
+	format string
 	// made is the clock's time when the group was made, after the claim.
 	made time.Time
 
@@ -87,12 +89,30 @@ type Group struct {
 	windows [][]*Window
 	// claim is each key's cooldown_until of the run configuration, by the key's place,
 	// zero once a later state of the key allows it.
-	claim  []time.Time
+	claim []time.Time
+	// out is true for each key, by the key's place, that left the group ([Group.Out],
+	// [Group.Revoked]).
+	out []bool
+	// unauth is, for each key by its place, when the provider's 401 to a request with
+	// it arrived ([Group.Reject]), zero for none: such a key is set no more until a
+	// renewal brings it back ([Group.Renewed]).
+	unauth []time.Time
 	active int
-	// passed is true once the proxy passed a limit refusal to the session: until
-	// [Group.Resume], the proxy sends no request with the placeholder and the gateway's
-	// answer to each batch has stop.
+	// passed is true once the proxy passed a limit refusal or a 401 to the session:
+	// until [Group.Resume], the proxy sends no request with the placeholder and the
+	// gateway's answer to each batch has stop.
 	passed bool
+	// rejected is true when a 401 is the cause of the pass ([Group.Reject],
+	// [Group.PassRejected]) since the last [Group.Resume].
+	rejected bool
+	// reason is the stop's reason, fixed by the first [Group.Stop] after the pass;
+	// empty before it.
+	reason string
+	// onStop, when set, is called with the reason once [Group.Stop] fixes it.
+	onStop func(string)
+	// onUnauthorized, when set, is called with [Group.Unauthorized] after each change
+	// of it.
+	onUnauthorized func([]Unauthorized)
 	// changed, when set, is called after a change a report sends, and changes counts
 	// those changes.
 	changed func()
@@ -102,6 +122,9 @@ type Group struct {
 	// passing is held from a change of passed to the end of the call of onPassed for
 	// it, so the calls come in the order of the changes. mu is not held during the call.
 	passing sync.Mutex
+	// noting is held from a change of unauth or out by [Group.change] to the end of
+	// the calls of its hooks, so the calls come in the order of the changes.
+	noting sync.Mutex
 }
 
 // New makes the group of keys, in their order, with the key start active, the first
@@ -110,12 +133,23 @@ func New(keys []Key, start string, now func() time.Time) *Group {
 	if now == nil {
 		now = time.Now
 	}
-	g := &Group{keys: slices.Clone(keys), now: now, made: now(), windows: make([][]*Window, len(keys)), claim: make([]time.Time, len(keys))}
+	g := &Group{keys: slices.Clone(keys), now: now, made: now(), windows: make([][]*Window, len(keys)), claim: make([]time.Time, len(keys)), out: make([]bool, len(keys)), unauth: make([]time.Time, len(keys))}
 	for i, k := range keys {
 		g.claim[i] = k.CooldownUntil
 	}
 	g.active = max(g.index(start), 0)
 	return g
+}
+
+// SetFormat sets the API format of the group's keys, before the group's first use. The
+// limit headers of the format are read: x-codex-* and x-ratelimit-* for openai-responses
+// alone. For a format whose requests the proxy does not send again ([Resends]), the
+// active key changes only at [Group.JoinKey]: while it is in cooldown, [Group.Pick]
+// reports false, so a session goes on with one key or with none.
+func (g *Group) SetFormat(format string) {
+	g.mu.Lock()
+	g.format = format
+	g.mu.Unlock()
 }
 
 // OnChange sets f, called with no lock held after each change of a window's status,
@@ -154,6 +188,19 @@ func (g *Group) index(name string) int {
 	return slices.IndexFunc(g.keys, func(k Key) bool { return k.Name == name })
 }
 
+// Out takes the key name out of the group for the rest of the run: [Group.Pick] and
+// [Group.next] pass over it as over a key in cooldown that never ends. A name that is
+// no key of the group changes nothing.
+func (g *Group) Out(name string) {
+	i := g.index(name)
+	if i < 0 {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.out[i] = true
+}
+
 // Active is the active key's name, as [Group.Pick] returns it.
 func (g *Group) Active() string {
 	name, _ := g.Pick()
@@ -161,14 +208,59 @@ func (g *Group) Active() string {
 }
 
 // Pick returns the active key's name, and false when every key of the group is in
-// cooldown. When the active key is in cooldown, the first key of [Group.next] becomes
-// active first; when every key is in cooldown, the active key stays, and the proxy sets
-// no key.
+// cooldown, out ([Group.Out]) or unauthorized ([Group.Reject]). When the active key
+// is in cooldown or out, the first key of [Group.next] becomes active first; when no
+// key is left, the active key stays, and the proxy sets no key. For a format whose
+// requests the proxy does not send again ([Resends]), the active key stays while it
+// is in cooldown or out, and Pick reports false: only [Group.JoinKey] makes another
+// key active.
 func (g *Group) Pick() (string, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	return g.pick(Resends(g.format))
+}
+
+// JoinKey is the key a session starts with, at its join: the active key, or, when it is
+// in cooldown or out, the first key of [Group.next], which becomes active, for any
+// format.
+func (g *Group) JoinKey() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	name, _ := g.pick(true)
+	return name
+}
+
+// JoinChoice is the key [Group.JoinKey] returns, with no key made active: the caller
+// makes it active with [Group.SetActive] once the join is accepted for good.
+func (g *Group) JoinChoice() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	active := g.active
+	name, _ := g.pick(true)
+	g.active = active
+	return name
+}
+
+// SetActive makes the key name active, whether or not it is in cooldown or out, for a
+// gateway that reopens a run whose session joined with name: the session goes on with
+// the key it has. A key in cooldown or out then gets no request, as [Group.Pick]
+// reports. A name of no key of the group changes nothing.
+func (g *Group) SetActive(name string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if i := g.index(name); i >= 0 {
+		g.active = i
+	}
+}
+
+// pick is [Group.Pick], with another key made active only when move is true. Called
+// with g.mu held.
+func (g *Group) pick(move bool) (string, bool) {
 	now := g.now()
-	if g.coolingUntil(g.active, now).After(now) {
+	if !g.usable(g.active, now) {
+		if !move {
+			return g.keys[g.active].Name, false
+		}
 		next, ok := g.next(now)
 		if !ok {
 			return g.keys[g.active].Name, false
@@ -178,14 +270,15 @@ func (g *Group) Pick() (string, bool) {
 	return g.keys[g.active].Name, true
 }
 
-// next is the key a switch makes active, among the keys not in cooldown at now: the
-// chosen key first; then the keys with no known reset, or one that has passed, by the
-// order; then the key with the closest reset, keys whose resets fall in the same minute
-// by the order. It reports false when every key is in cooldown. Called with g.mu held.
+// next is the key a switch makes active, among the keys usable at now
+// ([Group.usable]): the chosen key first; then the keys with no known reset, or one
+// that has passed, by the order; then the key with the closest reset, keys whose
+// resets fall in the same minute by the order. It reports false when every key is out
+// or in cooldown. Called with g.mu held.
 func (g *Group) next(now time.Time) (int, bool) {
 	best, bestReset := -1, time.Time{}
 	for i, k := range g.keys {
-		if g.coolingUntil(i, now).After(now) {
+		if !g.usable(i, now) {
 			continue
 		}
 		if k.Chosen {
@@ -202,6 +295,12 @@ func (g *Group) next(now time.Time) (int, bool) {
 		best, bestReset = i, reset
 	}
 	return best, best >= 0
+}
+
+// usable reports whether key i may be set at now: neither out, nor unauthorized, nor in
+// cooldown. Called with g.mu held.
+func (g *Group) usable(i int, now time.Time) bool {
+	return !g.out[i] && g.unauth[i].IsZero() && !g.coolingUntil(i, now).After(now)
 }
 
 // knownReset is key i's closest reset after now, the earliest of: the resets_at of its
@@ -270,7 +369,7 @@ func (g *Group) Answered(name string, status int, h http.Header) {
 
 // Refused records a limit refusal of the provider to a request with key name, with its
 // headers and the error_code of its body: the key goes into cooldown. When name is the
-// active key, the first key of [Group.next] becomes active. It
+// active key, the first key of [Group.next] becomes active, as [Group.Pick] allows. It
 // returns the active key and whether it is out of cooldown, which a resend needs.
 func (g *Group) Refused(name string, h http.Header, code string) (string, bool) {
 	g.record(name, h, true, false, code)
@@ -278,10 +377,10 @@ func (g *Group) Refused(name string, h http.Header, code string) (string, bool) 
 }
 
 // Streamed records a stream of an answer to a request with key name that ended with a
-// rate_limit_error event: the key goes into cooldown as after a limit refusal, with the
-// answer's headers, and the next key becomes active.
-func (g *Group) Streamed(name string, h http.Header) {
-	g.record(name, h, true, false, "")
+// limit event ([StreamLimit]), with the event's error code: the key goes into cooldown
+// as after a limit refusal, with the answer's headers, and the next key becomes active.
+func (g *Group) Streamed(name string, h http.Header, code string) {
+	g.record(name, h, true, false, code)
 	g.switched()
 }
 
@@ -290,12 +389,13 @@ func (g *Group) Streamed(name string, h http.Header) {
 func (g *Group) switched() (string, bool) { return g.Pick() }
 
 // Pass records that the proxy passed a limit refusal to the session: no key of the
-// group is left, or the refused body had no copy. A nil group records nothing.
+// group is left, the refused body had no copy, or the group's format is one whose
+// requests the proxy does not send again ([Resends]). A nil group records nothing.
 func (g *Group) Pass() {
 	if g == nil {
 		return
 	}
-	g.setPassed(true)
+	g.setPassed(true, nil)
 }
 
 // Passed reports whether the proxy passed a limit refusal to the session since the
@@ -309,22 +409,29 @@ func (g *Group) Passed() bool {
 	return g.passed
 }
 
-// Resume clears [Group.Pass]: the gateway calls it when a join opens and when its
-// session ends.
+// Resume clears [Group.Pass] and [Group.PassRejected], and the reason [Group.Stop]
+// fixed: the gateway calls it when a join opens and when its session ends.
 func (g *Group) Resume() {
 	if g == nil {
 		return
 	}
-	g.setPassed(false)
+	g.setPassed(false, nil)
 }
 
-// setPassed sets passed to v, and calls onPassed with v when passed changed.
-func (g *Group) setPassed(v bool) {
+// setPassed sets passed to v, and calls onPassed with v when passed changed. then, when
+// set, runs with g.mu held after the change, with the value passed had before it.
+func (g *Group) setPassed(v bool, then func(was bool)) {
 	g.passing.Lock()
 	defer g.passing.Unlock()
 	g.mu.Lock()
 	was := g.passed
 	g.passed = v
+	if !v {
+		g.rejected, g.reason = false, ""
+	}
+	if then != nil {
+		then(was)
+	}
 	f := g.onPassed
 	g.mu.Unlock()
 	if was != v && f != nil {
@@ -341,7 +448,10 @@ func (g *Group) record(name string, h http.Header, limit, served bool, code stri
 		return
 	}
 	now := g.now()
-	r := readHeaders(h, now)
+	g.mu.Lock()
+	format := g.format
+	g.mu.Unlock()
+	r := readHeaders(h, now, format)
 	if limit {
 		g.cool(i, &r, code, now)
 	}
@@ -393,8 +503,10 @@ func (g *Group) record(name string, h http.Header, limit, served bool, code stri
 }
 
 // cool sets the cooldown of a limit refusal of key i on the windows of r it rejects:
-// the windows the subscription's headers mark rejected, an API key's families with 0
-// remaining, and spend_limit for a spend cap; key when the refusal rejects no window.
+// the windows the subscription's headers mark rejected, a ChatGPT subscription's
+// windows at 100 percent or more, an API key's families with 0 remaining, and
+// spend_limit for a spend cap or an OpenAI quota ([SpendLimit]); key when the refusal
+// rejects no window.
 // The cooldown ends at the latest reset of those windows; with none, retry-after after
 // now; with none, at the key's schedule_resets_at, moved by 7 days until it is after
 // now; with none, pause_for_s after now.
@@ -408,7 +520,7 @@ func (g *Group) cool(i int, r *read, code string, now time.Time) {
 			rejected = append(rejected, s)
 		}
 	}
-	if code == SpendLimitCode {
+	if SpendLimit(code) {
 		s := r.window(WindowSpendLimit)
 		s.status = StatusRejected
 		rejected = append(rejected, s)
@@ -566,10 +678,10 @@ func (g *Group) Merge(entries []Window) {
 	}
 }
 
-// Shown is the line of the gateway's log of one limit answer of key name: its status,
-// the names of its headers and its error type, never a value, and the limit headers of
-// no window the gateway reads.
-func Shown(name string, status int, h http.Header, kind string) string {
+// Shown is the line of the gateway's log of one limit response of key name: its status,
+// the names of its headers, its error type and, when it has one, its error code, never
+// a value, and the limit headers of the group's format of no window the gateway reads.
+func (g *Group) Shown(name string, status int, h http.Header, kind, code string) string {
 	names := make([]string, 0, len(h))
 	for n := range h {
 		names = append(names, strings.ToLower(n))
@@ -578,8 +690,15 @@ func Shown(name string, status int, h http.Header, kind string) string {
 	if kind == "" {
 		kind = "none"
 	}
-	line := "model key " + name + ": limit answer, status " + strconv.Itoa(status) + ", error type " + kind + ", headers " + strings.Join(names, " ")
-	if u := readHeaders(h, time.Time{}).unknown; len(u) > 0 {
+	line := "model key " + name + ": limit response, status " + strconv.Itoa(status) + ", error type " + kind
+	if code != "" {
+		line += ", error code " + code
+	}
+	line += ", headers " + strings.Join(names, " ")
+	g.mu.Lock()
+	format := g.format
+	g.mu.Unlock()
+	if u := readHeaders(h, time.Time{}, format).unknown; len(u) > 0 {
 		line += "; no window for " + strings.Join(u, " ")
 	}
 	return line

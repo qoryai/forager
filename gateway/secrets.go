@@ -22,13 +22,13 @@ import (
 // lists a published fixture key, and an access key that is one, are refused before
 // anything is sent: anyone can sign under the one and open what is sealed to the other.
 // Each refusal of the open is one code, [sealedCode].
-func (g *Gateway) secrets(runID string) func(context.Context, string, []string) (sealed.Values, error) {
+func (g *Gateway) secrets(runID string) func(context.Context, string, []string, []string) (sealed.Values, error) {
 	conf, _ := g.config()
 	if conf == nil || conf.Secrets == nil {
 		return nil
 	}
 	u := conf.Secrets.URL
-	return func(ctx context.Context, digest string, names []string) (sealed.Values, error) {
+	return func(ctx context.Context, digest string, names, unauthorized []string) (sealed.Values, error) {
 		s := g.cfg.Server
 		b, err := json.Marshal(s.ApiaryPublicKey)
 		if err != nil {
@@ -46,7 +46,7 @@ func (g *Gateway) secrets(runID string) func(context.Context, string, []string) 
 			return sealed.Values{}, refusal.New(refusal.RunConfigurationInvalid, nil,
 				"secrets %s: enrol another access key: this access key is a published fixture key, and anyone can open what is sealed to it", accesskey.ShownValue(u, false))
 		}
-		body, err := server.SecretsRequest{Version: 1, RunID: runID, RunConfiguration: digest, Credentials: names, Timestamp: time.Now().Unix()}.Body()
+		body, err := server.SecretsRequest{Version: 1, RunID: runID, RunConfiguration: digest, Credentials: names, Unauthorized: unauthorized, Timestamp: time.Now().Unix()}.Body()
 		if err != nil {
 			return sealed.Values{}, err
 		}

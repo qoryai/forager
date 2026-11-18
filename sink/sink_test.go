@@ -891,17 +891,21 @@ func TestFlushReturnsOnceTheBatchIsAccepted(t *testing.T) {
 }
 
 // TestAStopInABatchsAnswerReachesTheCaller pins stop in the body of a 2xx on the link:
-// its reason, model_key_limit, reaches OnStop once per answer before Flush returns, the
-// batch is accepted and the deliveries go on; an empty body, one without stop, one with
-// a reason outside Forager's list and one that is no JSON reach OnStop not at all.
+// its reason, model_key_limit, model_key_switch or model_key_unauthorized, reaches
+// OnStop once per answer before Flush returns, the batch is accepted and the
+// deliveries go on; an empty body, one without stop, one with a reason outside
+// Forager's list and one that is no JSON reach OnStop not at all.
 func TestAStopInABatchsAnswerReachesTheCaller(t *testing.T) {
 	for body, want := range map[string]string{
 		`{"stop":{"reason":"model_key_limit"}}`:           "[model_key_limit]",
 		`{"stop":{"reason":"model_key_limit"},"other":1}`: "[model_key_limit]",
-		``:                        "[]",
-		`{}`:                      "[]",
-		`{"stop":{"reason":"x"}}`: "[]",
-		`ok`:                      "[]",
+		`{"stop":{"reason":"model_key_switch"}}`:          "[model_key_switch]",
+		`{"stop":{"reason":"model_key_unauthorized"}}`:    "[model_key_unauthorized]",
+		`{"stop":{"reason":"timeout"}}`:                   "[]",
+		``:                                                "[]",
+		`{}`:                                              "[]",
+		`{"stop":{"reason":"x"}}`:                         "[]",
+		`ok`:                                              "[]",
 	} {
 		g := &linkGateway{answer: func(int) (int, string) { return http.StatusOK, body }}
 		var mu sync.Mutex

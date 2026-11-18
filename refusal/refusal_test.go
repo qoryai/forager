@@ -14,7 +14,7 @@ func TestDeciders(t *testing.T) {
 	forager := []string{
 		RunConfigurationInvalid, ToolUnknown, ImageUnknown, ImageNotAllowed, ImageUserRoot, ImageMissing,
 		ImageAccessDenied, ImageRateLimited, ImageRegistryUnreachable,
-		VariableReserved, PlaceholderConflict, ModelKeyMissing, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
+		VariableReserved, PlaceholderConflict, ModelKeyMissing, MountContainsForagerFiles, MountModeConflict, MountTargetConflict, MountSharedWithRun,
 		MountThroughLink, EngineUnreachable,
 	}
 	gateway := []string{RunIDUsed}

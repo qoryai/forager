@@ -13,7 +13,7 @@
       "required": ["state"],
       "properties": {
         "state": {
-          "description": "How the starter says the run ended: succeeded, failed or cancelled, dev.qory.run.exited's vocabulary but paused, which only Forager writes, with model_key_limit.",
+          "description": "How the starter says the run ended: succeeded, failed or cancelled, dev.qory.run.exited's vocabulary but paused, which only Forager writes, with model_key_limit or model_key_switch.",
           "enum": ["succeeded", "failed", "cancelled"]
         },
         "reason": {

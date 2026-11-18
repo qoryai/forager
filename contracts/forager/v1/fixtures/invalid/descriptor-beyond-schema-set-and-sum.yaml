@@ -1,0 +1,17 @@
+# A rule sets outcome in one of data, sum, set and from_started: in sum and in set is
+# twice. Only the session's reader checks it.
+version: 1
+runtime: example
+sources:
+  output: {format: jsonl}
+rules:
+  - source: output
+    match: {type: result}
+    type: dev.qory.runtime.result
+    data:
+      session_id: session_id
+    set:
+      outcome: success
+    sum:
+      over: modelUsage
+      fields: {outcome: outputTokens}

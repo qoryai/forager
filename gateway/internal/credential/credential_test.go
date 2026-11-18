@@ -179,6 +179,10 @@ func TestCredentialsWithPathsThatDoNotOverlapShareAHost(t *testing.T) {
 			"give the credentials product and harness paths that do not overlap on github.com, or claim it in only one of them: their paths /repos/* and /repos/{}/app overlap"},
 		"a stray brace": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/repos/{owner}/app"), def("harness", "HARNESS_TOKEN", github, "/operator-org/*")},
 			"Write each credential path from /, with { and } only as the segment {} and * only at the end.\nThe path \"/repos/{owner}/app\" of credential product is not in that form."},
+		"an unclear path": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/v1/../responses"), def("harness", "HARNESS_TOKEN", github, "/operator-org/*")},
+			"Remove the unclear parts from path \"/v1/../responses\" of credential product.\n" +
+				"A path may have no empty, . or .. segment, backslash, %2F, %5C, %2E or %25; the proxy reads each segment up to its first ; or %3B, takes each %-code in either case, such as %2f, and denies a control character too. " +
+				"It denies every request whose path has one of these parts, so the path matches no request."},
 		"the second without paths": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/example-org/*"), def("harness", "HARNESS_TOKEN", github)}, alone},
 		"the first without paths":  {[]Definition{def("product", "PRODUCT_TOKEN", github), def("harness", "HARNESS_TOKEN", github, "/operator-org/*")}, alone},
 	} {
@@ -1156,5 +1160,46 @@ func TestAnAdaptersLineHasNoKey(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("no renewal was reported")
+	}
+}
+
+// TestCheckPathsRefusesAnUnclearPath pins Check on the paths of a machine credential
+// that can have paths, from an adapter or from env: a path that policy.UnclearPath
+// reports is refused with the fix on the first line and the cause on the second, a path
+// outside the path grammar is refused with the grammar text first, even when it is also
+// unclear, and a clean path and a path with a {} segment pass.
+func TestCheckPathsRefusesAnUnclearPath(t *testing.T) {
+	unclear := func(p string) string {
+		return `Remove the unclear parts from path "` + p + `" of credential forge.` + "\n" +
+			"A path may have no empty, . or .. segment, backslash, %2F, %5C, %2E or %25; the proxy reads each segment up to its first ; or %3B, takes each %-code in either case, such as %2f, and denies a control character too. " +
+			"It denies every request whose path has one of these parts, so the path matches no request."
+	}
+	grammar := func(p string) string {
+		return "Write each credential path from /, with { and } only as the segment {} and * only at the end.\n" +
+			`The path "` + p + `" of credential forge is not in that form.`
+	}
+	for source, def := range map[string]func(...string) Definition{
+		"adapter": func(paths ...string) Definition {
+			return Definition{Name: "forge", Adapter: []string{"/opt/forge-adapter"}, Paths: paths}
+		},
+		"env": func(paths ...string) Definition {
+			return Definition{Name: "forge", Env: "FORGE_TOKEN", Hosts: []string{"api.git.example"}, Scheme: "bearer", Paths: paths}
+		},
+	} {
+		for _, c := range []struct{ path, want string }{
+			{"/v1/../responses", unclear("/v1/../responses")},
+			{"/a//b", unclear("/a//b")},
+			{"/a/..;x/b", unclear("/a/..;x/b")},
+			{"/a%2fb", unclear("/a%2fb")},
+			{"/a/{x}/../b", grammar("/a/{x}/../b")},
+		} {
+			err := def("/v1/responses", c.path).Check()
+			if err == nil || err.Error() != c.want {
+				t.Errorf("%s, path %s: %v; want %s", source, c.path, err, c.want)
+			}
+		}
+		if err := def("/v1/responses", "/repos/{}/app", "/v1/*").Check(); err != nil {
+			t.Errorf("%s, a clean path and a {} path: %v", source, err)
+		}
 	}
 }

@@ -193,11 +193,11 @@ func TestCredentialsNeedTheSecretsEndpoint(t *testing.T) {
 func TestARefusedDocumentOpensNoRun(t *testing.T) {
 	for name, c := range map[string]struct{ doc, message string }{
 		"a name twice": {`{"version":1,"credentials":[` + modelEntry + `,` + modelEntry + `]}`,
-			`the document is refused: list the credential "model" once; the document lists it twice`},
+			"List the credential \"model\" once.\nThe document lists it twice"},
 		"Host": {`{"version":1,"credentials":[{"name":"model","apply":[{"hosts":["api.model.example"],"scheme":"header","header":"Host"}]}]}`,
-			`the document is refused: set the credential "model" in another header than "Host"; that header frames the request, or the proxy sets it`},
+			"Set the credential \"model\" in a header other than \"Host\".\nThat header frames the request, or the proxy sets it"},
 		"X-Qory-": {`{"version":1,"credentials":[{"name":"model","apply":[{"hosts":["api.model.example"],"scheme":"header","header":"x_qory_credential_set"}]}]}`,
-			`the document is refused: set the credential "model" in another header than "x_qory_credential_set"; that header frames the request, or the proxy sets it`},
+			"Set the credential \"model\" in a header other than \"x_qory_credential_set\".\nThat header frames the request, or the proxy sets it"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctl, h := sealedGateway(t, c.doc, map[string]string{"model": sealedValue})
