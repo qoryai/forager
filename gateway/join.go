@@ -222,7 +222,8 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 		// is written and the run is still live. A refused join records the key a
 		// request would get, [modelkey.Group.Active], which keeps an openai-responses
 		// key in cooldown. A group no session used yet starts at the key the join
-		// names.
+		// names, or at the key [modelkey.Group.JoinChoiceAt] picks when that key is in
+		// cooldown or out.
 		group := lr.keyGroupOf(model)
 		used := lr.usedKeys(group)
 		switch {
