@@ -209,7 +209,7 @@ func TestTheReservedCodesAreTheContracts(t *testing.T) {
 }
 
 // TestQorysEndCodesAreStarterReasons pins the end codes qory sets in a failed run's
-// outcome, $defs end_codes of integrations' contracts/run/v1/outcome.schema.json, as
+// outcome, $defs/end_codes of integrations' contracts/run/v1/outcome.schema.json, as
 // starter's reasons: none is one of Forager's reserved codes, so none is dropped. A
 // code of the pattern outside that list, push_window_closed, is a starter's reason too.
 func TestQorysEndCodesAreStarterReasons(t *testing.T) {

@@ -799,10 +799,10 @@ type Closed struct {
 	RunID string
 	// Dir is the run directory.
 	Dir string
-	// State, Reason and ExitCode are those of the run's dev.qory.run.exited: the
-	// caller's outcome, failed with no_session and -1 for a failed run no session joined,
-	// or, when RunClosed, the state and the reason the gateway's 410 says, with the exit
-	// code of the last session, -1 when a session was open at the 410.
+	// State, Reason and ExitCode are those of the run's dev.qory.run.exited: the caller's
+	// outcome, failed with no_session and -1 for a failed run with no reason that no
+	// session joined, or, when RunClosed, the state and the reason the gateway's 410 says,
+	// with the exit code of the last session, -1 when a session was open at the 410.
 	State    string
 	Reason   string
 	ExitCode int

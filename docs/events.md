@@ -251,13 +251,14 @@ a reason, `dev.qory.run.exited` contains why in `reason`: an open code, Forager'
 starter's, carried as given. A starter's code is none of Forager's reserved codes and
 none of the image, workflow, `read_needs_*` and `write_needs_wall` codes, which the
 close takes only before a join. The gateway accepts a starter's code in the close only
-`failed`, before or after the gateway numbered a join of the run. qory closes a failed
-run with one of its end codes, listed in `$defs/end_codes` of integrations'
-`contracts/run/v1/outcome.schema.json`, whether or not a session joined it. The
-close writes `timeout`, `cancelled`, `interrupted`, `cancelled`, a run stopped from
-where it was started (a Ctrl-C), and `no_session`, `failed`, a run closed with no
-session after its host work failed, such as a fetch, and `model_key_limit`, `paused`, a
-run whose last session ended `paused` with `model_key_limit`, which a control plane
+`failed`, before or after the gateway numbered a join of the run. When qory knows the
+cause, it closes a failed run with one of its end codes, listed in `$defs/end_codes` of
+integrations' `contracts/run/v1/outcome.schema.json`, whether or not a session joined
+it. The close writes `timeout`, `cancelled`, `interrupted`, `cancelled`, a run stopped
+from where it was started (a Ctrl-C), and `no_session`, `failed`, a run closed with no
+session and no reason after its host work failed, such as a fetch, and
+`model_key_limit`, `paused`, a run whose last session ended `paused` with
+`model_key_limit`, which a control plane
 reads as a pause of the run, and posts them. The close writes and posts `image_missing`,
 `failed` with exit code `-1`, when its caller gives it for a run with no session after
 the fetch of the run's image found that its registry, or the registry's mirror, does not

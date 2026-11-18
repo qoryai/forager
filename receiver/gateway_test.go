@@ -1090,7 +1090,7 @@ func TestTheEndMember(t *testing.T) {
 }
 
 // TestQorysEndCodesPassTheReceiver pins the end codes qory sets in a failed run's
-// outcome, $defs end_codes of integrations' contracts/run/v1/outcome.schema.json, and
+// outcome, $defs/end_codes of integrations' contracts/run/v1/outcome.schema.json, and
 // push_window_closed, a code of the pattern outside that list, at the receiver: an
 // outcome failed with the code is kept as it came, and the end member of the next 2xx
 // to a batch is failed with the code, which ReadEnd reads unchanged. So is push_refused

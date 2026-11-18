@@ -106,10 +106,10 @@ const (
 // names quiet, credential_expired, credential_check_unreachable,
 // credential_check_invalid, run_ended_at_issuer, issuer_unreachable and
 // issuer_answer_invalid, which Forager never writes. The session writes timeout,
-// interrupted and run_closed, the close of a run with no join writes no_session, the
-// close after a join writes model_key_limit, and the session in the session's record
-// the code of the gateway's 410, batch_refused among them; the resend of a record
-// writes gateway_lost; the gateway writes the others.
+// interrupted and run_closed, the close of a failed run with no join and no reason
+// writes no_session, the close after a join writes model_key_limit, and the session in
+// the session's record the code of the gateway's 410, batch_refused among them; the
+// resend of a record writes gateway_lost; the gateway writes the others.
 const (
 	ReasonTimeout = "timeout"
 	// ReasonInterrupted is a session's run stopped from where it was started, cancelled:
@@ -125,8 +125,8 @@ const (
 	// gateway's 410 to the session's later requests, the reason of the gateway's own
 	// dev.qory.run.exited, and of the session's in its own record after it.
 	ReasonBatchRefused = "batch_refused"
-	// ReasonNoSession is a run closed with no join, failed with exit code -1: its host
-	// work, such as a fetch or a compose, failed before the first session.
+	// ReasonNoSession is a run closed failed with no join and no reason, with exit code
+	// -1: its host work, such as a fetch or a compose, failed before the first session.
 	ReasonNoSession = "no_session"
 	// ReasonModelKeyLimit is a session the session stopped after the gateway's answer to
 	// a batch had stop with this reason, paused: the gateway's proxy passed a model

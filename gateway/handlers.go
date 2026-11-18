@@ -596,8 +596,8 @@ var stopModelKeyLimit = []byte(`{"stop":{"reason":"` + event.ReasonModelKeyLimit
 // whose last dev.qory.session.exited has that reason. It accepts a starter's reason, a
 // code of the reason's pattern that is none of Forager's reserved codes and none of the
 // eleven codes from image_missing to write_needs_wall, only failed, before or after the
-// gateway numbered a join of the run: qory closes a failed run with one of its end
-// codes, listed in $defs/end_codes of integrations'
+// gateway numbered a join of the run. When qory knows the cause, it closes a failed run
+// with one of its end codes, listed in $defs/end_codes of integrations'
 // contracts/run/v1/outcome.schema.json, whether or not a session joined it. The gateway
 // writes the event of every other end itself. joined is true when the gateway numbered
 // a join of the run, and last is the reason of the last dev.qory.session.exited the

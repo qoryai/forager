@@ -63,20 +63,18 @@ func TestTheLinkRefusesARunExitedBeyondItsSchema(t *testing.T) {
 	}
 }
 
-// TestTheRunExitedIsTheClosesOutcome pins a session's dev.qory.run.exited, the
-// close's: any state, with no reason, timeout or interrupted, no_session only in a run
-// with no join, and image_missing, image_user_root, image_access_denied,
-// image_rate_limited, image_registry_unreachable, workflow_not_in_harness,
-// read_needs_wall, read_needs_setup_outside, read_needs_no_nested_docker,
-// read_needs_setup_removed and write_needs_wall only failed with exit_code -1 in a run
-// with no join, and a starter's reason only failed, before or after the gateway
-// numbered a join of the run, such as push_credential_missing, push_refused,
-// prebuilt_image_too_large, push_not_recorded, environment_image_missing and
-// push_head_changed, end codes qory closes a run with, are taken; a reason the gateway
-// decides, a reserved reason out of its place, a reason that is no code, and a
-// starter's reason with another state are refused, and the run ends failed,
-// batch_refused, its reason in the report. environment_image_missing is none of the
-// image codes, which the gateway takes only in a run with no join.
+// TestTheRunExitedIsTheClosesOutcome pins a session's dev.qory.run.exited, the close's:
+// any state, with no reason, timeout or interrupted, no_session only in a run with no
+// join, and image_missing, image_user_root, image_access_denied, image_rate_limited,
+// image_registry_unreachable, workflow_not_in_harness, read_needs_wall,
+// read_needs_setup_outside, read_needs_no_nested_docker, read_needs_setup_removed and
+// write_needs_wall only failed with exit_code -1 in a run with no join, and a starter's
+// reason only failed, such as push_refused, one of qory's end codes, before or after
+// the gateway numbered a join of the run, are taken; a reason the gateway decides, a
+// reserved reason out of its place, a reason that is no code, and a starter's reason
+// with another state are refused, and the run ends failed, batch_refused, its reason in
+// the report. environment_image_missing is none of the image codes, which the gateway
+// takes only in a run with no join.
 func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 	h := start(t, gateway.Config{})
 	for _, c := range []struct {
@@ -165,6 +163,10 @@ func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 		{map[string]any{"state": "failed", "exit_code": 1, "reason": "checks_failed"}, false, ""},
 		{map[string]any{"state": "failed", "exit_code": -1, "reason": "push_credential_missing"}, false, ""},
 		{map[string]any{"state": "failed", "exit_code": -1, "reason": "environment_image_missing"}, false, ""},
+		// No exit_code condition for a starter's reason, with or without a join.
+		{map[string]any{"state": "failed", "exit_code": 0, "reason": "push_refused"}, false, ""},
+		{map[string]any{"state": "failed", "reason": "push_refused"}, false, ""},
+		{map[string]any{"state": "failed", "reason": "push_refused"}, true, ""},
 	} {
 		a := h.open(server.LinkRunRequest{})
 		if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {

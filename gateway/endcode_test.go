@@ -13,7 +13,7 @@ import (
 )
 
 // TestAPushRefusedOutcomeReachesTheReceiver runs the end code push_refused, one of the
-// codes of $defs end_codes of integrations' contracts/run/v1/outcome.schema.json, from
+// codes of $defs/end_codes of integrations' contracts/run/v1/outcome.schema.json, from
 // the run's starter to the receiver's record of the run, behind a separate gateway and
 // against the reference receiver, without Docker. It pins the code unchanged at the
 // control plane, and does not reach closeRule: the starter's outcome ends the run, and
@@ -93,17 +93,17 @@ func TestAPushRefusedOutcomeReachesTheReceiver(t *testing.T) {
 }
 
 // TestAStartersEndCodeInTheCloseReachesTheControl pins a session's dev.qory.run.exited
-// with a starter's reason: each of the end codes qory closes a run with, $defs end_codes
-// of integrations' contracts/run/v1/outcome.schema.json, and push_window_closed, a code
-// of the pattern outside that list, failed after a session. The run's push step exits
-// failed with exit code 1 before each push code, and the close is failed with exit code
-// 1, as qory's push step closes a run. prebuilt_image_too_large and
-// environment_image_missing come from inside the prebuild's step session, with no push
-// step, and the close is failed with exit code -1. push_credential_missing closes a run
-// with no join too, failed with exit code -1, as qory closes a run that fails before
-// any session. The link accepts the batch, and the run's dev.qory.run.exited, in the
-// gateway's record and at the control, is failed with the code and the exit code
-// unchanged.
+// with a starter's reason: each of the end codes qory closes a run with,
+// $defs/end_codes of integrations' contracts/run/v1/outcome.schema.json, and
+// push_window_closed, a code of the pattern outside that list, failed after a session.
+// The run's push step exits failed with exit code 1 before each push code, and the
+// close is failed with exit code 1, as qory's push step closes a run.
+// prebuilt_image_too_large and environment_image_missing come from inside the
+// prebuild's step session, with no push step, and the close is failed with exit code
+// -1. push_credential_missing closes a run with no join too, failed with exit code -1,
+// as qory closes a run that fails before any session. The link accepts the batch, and
+// the run's dev.qory.run.exited, in the gateway's record and at the control, is failed
+// with the code and the exit code unchanged.
 func TestAStartersEndCodeInTheCloseReachesTheControl(t *testing.T) {
 	ctl := newControl(t)
 	h := start(t, gateway.Config{Server: ctl.server()})

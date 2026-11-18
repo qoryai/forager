@@ -1832,15 +1832,16 @@ the gateway does. Close a run whose last session ended with `model_key_limit` wi
 pause of the run. `Close` returns an error for `model_key_limit` with another state, for
 `paused` with no reason or another reason, in a run with no join, and after a last
 session that ended otherwise.
-Close a run that failed with `failed` and a code of yours, before or after the gateway
-numbered a join of the run: a lower-case letter, then lower-case letters, digits and
-`_`, up to 64 characters, none of Forager's reserved codes and none of the eleven codes
-from `image_missing` to `write_needs_wall`, which close a run only before the gateway
-numbered a join of it. qory closes a failed run with one of its end codes, listed in
-`$defs/end_codes` of integrations' `contracts/run/v1/outcome.schema.json`, whether or
-not a session joined it. The gateway accepts such a code only `failed`; otherwise it
-ends the run `failed` with `batch_refused`. `Close` refuses an outcome the contract
-refuses, and a close while a `Join` runs. `session.Closed` is what the run came to:
+Close a failed run with `failed` and a code of yours, before or after the gateway
+numbered a join of the run. The code is a lower-case letter, then lower-case letters,
+digits and `_`, up to 64 characters, none of Forager's reserved codes and none of the
+eleven codes from `image_missing` to `write_needs_wall`, which close a run only before
+the gateway numbered a join of it. When qory knows the cause, it closes a failed run
+with one of its end codes, listed in `$defs/end_codes` of integrations'
+`contracts/run/v1/outcome.schema.json`, whether or not a session joined it. The gateway
+accepts such a code only `failed`; otherwise it ends the run `failed` with
+`batch_refused`. `Close` refuses an outcome the contract refuses, and a close while a
+`Join` runs. `session.Closed` is what the run came to:
 
 - `RunID` and `Dir`, the run directory with the record.
 - `State`, `Reason` and `ExitCode`, those of the run's `dev.qory.run.exited`.
