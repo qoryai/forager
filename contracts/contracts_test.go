@@ -137,7 +137,7 @@ func TestDocumentFixturesValidate(t *testing.T) {
 // values passes, and one with 17 credentials or 17 values fails.
 func TestCredentialCountBounds(t *testing.T) {
 	s := compile(t, "run-configuration.schema.json", "secrets-request.schema.json", "sealed-plaintext.schema.json")
-	const digest = "sha256=96da611217314d4a1f43ab4212d4e795aab7ba4b59fdc7e3ed587496a40ba124"
+	const digest = "sha256=5fabfa57d28e2ac9da0c2f825a1ff3bd4cc07a7a8359adbda86d9d6dd3a43b38"
 	names := func(n int) []string {
 		out := make([]string, n)
 		for i := range out {
@@ -155,7 +155,7 @@ func TestCredentialCountBounds(t *testing.T) {
 		var items []string
 		for i, n := range names(api + hosts) {
 			if i < api {
-				items = append(items, `{"name":"`+n+`","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`)
+				items = append(items, `{"name":"`+n+`","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`)
 				continue
 			}
 			items = append(items, `{"name":"`+n+`","apply":[{"hosts":["`+n+`.git.example"],"scheme":"bearer"}]}`)

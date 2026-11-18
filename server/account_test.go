@@ -17,7 +17,7 @@ import (
 // subscription is a model key with paths and an account header, as the contract's
 // fixture model-keys-openai.json has it.
 func subscription() server.RunCredential {
-	return server.RunCredential{Name: "subscription", Format: "openai-responses", Endpoint: "https://chat.model.example/backend-api/codex",
+	return server.RunCredential{Name: "subscription", Group: "openai", Format: "openai-responses", Endpoint: "https://chat.model.example/backend-api/codex",
 		Auth:  server.Auth{Scheme: "bearer", OAuth: true, AccountHeader: "chatgpt-account-id", AccountClaim: "/https:~1~1auth.model.example~1auth/account_id"},
 		Paths: []string{"/backend-api/codex/*"}}
 }

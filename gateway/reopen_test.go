@@ -110,7 +110,7 @@ func TestAMarkWithNoKeyGroupIsIgnored(t *testing.T) {
 	before := startRemote(t, c, cfg)
 	runID := event.NewRunID()
 	e := before.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{})
-	if err := os.WriteFile(filepath.Join(cfg.Dir, "runs", runID, "model-key-limit"), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(cfg.Dir, "runs", runID, "model-key-limit"), []byte(`{"version":1,"groups":[{"group":"anthropic"}]}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	e.r = before.restart(t, cfg)

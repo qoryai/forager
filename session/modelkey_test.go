@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/internal/linktest"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/server"
@@ -281,6 +282,59 @@ func TestAStartKeyTheRuntimeDoesNotReadIsRefused(t *testing.T) {
 			refusedWith(t, err, "run_configuration_invalid", []string{"model"}, tc.detail)
 			joinRefusedOnLink(t, g, "run_configuration_invalid")
 		})
+	}
+}
+
+// TestEachJoinChecksItsStartKeyAgainstItsRuntime pins the check of a start key at each
+// join, against the joining session's runtime alone. The run has two API credentials:
+// model, of anthropic-messages, the run's start key, and codex-key, of
+// openai-responses, for which Claude Code lists no key. The run opens, and session 1,
+// of Claude Code with model, starts. Session 2, of Codex, joins with codex-key and
+// starts. Session 3, of Claude Code, joins with codex-key: the join is refused,
+// run_configuration_invalid with codex-key's name, and its dev.qory.session.exited is
+// failed with exit code -1 and that reason. Session 4, of Claude Code with model,
+// joins and starts after it.
+func TestEachJoinChecksItsStartKeyAgainstItsRuntime(t *testing.T) {
+	sp, g := specGateway(t)
+	answeringStart(g, []map[string]any{model(), apiKey("codex-key", "openai-responses", "https://api.openai.example/v1", "bearer")}, nil, "model")
+	ctx := context.Background()
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatalf("the open: %v", err)
+	}
+	claude := func(key string) session.SessionSpec {
+		s := sp.SessionSpec
+		s.ModelCredential = key
+		return s
+	}
+	codexSession := codexSpec(t, false, filepath.Join(t.TempDir(), "codex-home"), "").SessionSpec
+	codexSession.ModelCredential = "codex-key"
+	for i, s := range []session.SessionSpec{claude(""), codexSession} {
+		res, err := r.Join(ctx, s)
+		if err != nil || res.State != event.StateSucceeded {
+			t.Fatalf("session %d: %+v, %v; want it to start and succeed", i+1, res, err)
+		}
+	}
+	_, err = r.Join(ctx, claude("codex-key"))
+	refusedWith(t, err, "run_configuration_invalid", []string{"codex-key"},
+		`give the model key "codex-key" a provider whose API the runtime claude reads keys for: the descriptor of the runtime lists keys for anthropic-messages, and the key's API is openai-responses`)
+	if res, err := r.Join(ctx, claude("model")); err != nil || res.State != event.StateSucceeded {
+		t.Fatalf("session 4: %+v, %v; want it to start and succeed", res, err)
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range ofType(g.Events(), event.SessionExited) {
+		d := data(e)
+		got = append(got, fmt.Sprintf("%v %v %v %v", d["session"], d["state"], d["exit_code"], d["reason"]))
+	}
+	want := []string{"1 succeeded 0 <nil>", "2 succeeded 0 <nil>", "3 failed -1 run_configuration_invalid", "4 succeeded 0 <nil>"}
+	if !slices.Equal(got, want) {
+		t.Errorf("the link got session.exited %q; want %q", got, want)
+	}
+	if started := ofType(g.Events(), event.SessionStarted); len(started) != 3 {
+		t.Errorf("the link got %d session.started; want 3, for sessions 1, 2 and 4", len(started))
 	}
 }
 

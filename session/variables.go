@@ -268,9 +268,9 @@ func shownNames(names []string) []string {
 }
 
 // keyed is what the run's start key sets in the runtime's environment, NAME=value
-// each: Variable, the variable the runtime reads the key from, set to the key's
-// placeholder, [link.KeyPlaceholder]; and Endpoint, the runtime's endpoint variable set
-// to the key's endpoint. Others is the names of the runtime's other model-key
+// each: Variable, the variable the runtime reads the key from, set to the placeholder
+// of the key's group, [link.GroupPlaceholder]; and Endpoint, the runtime's endpoint
+// variable set to the key's endpoint. Others is the names of the runtime's other model-key
 // variables, which no value reaches: the runtime would send such a value to the start
 // key's endpoint. For a runtime whose endpoint is a setting, Endpoint is empty, and
 // Setting is the setting's dotted key and URL the key's endpoint, which the launch
@@ -411,7 +411,7 @@ func chosen(rt runtimes.Runtime, bare bool, credentials []server.LinkCredentialH
 		if !slices.Contains(names, variable) {
 			names = append(names, variable)
 		}
-		key = keyed{Variable: variable + "=" + link.KeyPlaceholder(c.Name)}
+		key = keyed{Variable: variable + "=" + link.GroupPlaceholder(groupKeys(out), c.Name)}
 		// An endpoint that is a setting sets no variable: it goes in the runtime's
 		// settings.
 		if places.Endpoint.Variable != "" {
@@ -429,6 +429,18 @@ func chosen(rt runtimes.Runtime, bare bool, credentials []server.LinkCredentialH
 		return nil, nil, keyed{}, err
 	}
 	return out, names, key, nil
+}
+
+// groupKeys are the model keys of credentials, a run answer's credential_hosts, as
+// [link.GroupPlaceholder] reads them, in their order, each with its key group.
+func groupKeys(credentials []server.LinkCredentialHosts) []link.GroupKey {
+	var out []link.GroupKey
+	for _, c := range credentials {
+		if c.Format != "" {
+			out = append(out, link.GroupKey{Name: c.Name, Group: c.Group})
+		}
+	}
+	return out
 }
 
 // modelOf is rt's model section and true, or false when it has none.

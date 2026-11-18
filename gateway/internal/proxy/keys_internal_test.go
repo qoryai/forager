@@ -151,7 +151,7 @@ func newKeyFixtureWith(t *testing.T, format, stream string, rejected func(name s
 	}
 	f.g = modelkey.New(keys, "model", nil)
 	f.g.SetFormat(format)
-	f.p.SetKeyGroup(f.g, format, stream, func(line string) { f.mu.Lock(); f.logged = append(f.logged, line); f.mu.Unlock() })
+	f.p.SetKeyGroups([]KeyGroup{{Group: f.g, Format: format, Stream: stream}}, func(line string) { f.mu.Lock(); f.logged = append(f.logged, line); f.mu.Unlock() })
 	ca, err := NewCA("test")
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +247,7 @@ func TestNoKeyLeftPassesTheRefusalAndHoldsTheRest(t *testing.T) {
 		t.Error("the group is not stopped")
 	}
 	status, body = f.post(t, "{}")
-	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "The gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit") || len(f.up.taken()) != 0 {
+	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "The gateway sends no more model requests in this session: every model key of the session's key group is at its provider's limit") || len(f.up.taken()) != 0 {
 		t.Errorf("after the stop: %d %q; want the gateway's 429 and no call", status, body)
 	}
 	if d := f.seen.at(-1); d.Outcome != Refused || d.Credential != "" || d.Status != 0 {
@@ -426,7 +426,7 @@ func TestEveryKeyCoolingGetsTheProxys429(t *testing.T) {
 	}
 	f.g.Merge(entries)
 	status, body := f.post(t, "{}")
-	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "The gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit") {
+	if status != http.StatusTooManyRequests || !strings.HasPrefix(body, "The gateway sends no more model requests in this session: every model key of the session's key group is at its provider's limit") {
 		t.Errorf("the session got %d %q; want the gateway's 429", status, body)
 	}
 	if calls := f.up.taken(); len(calls) != 0 {
@@ -462,7 +462,7 @@ func TestKeysAtTheirUseUpToPercentGetTheProxys429(t *testing.T) {
 		}
 	}
 	status, body := f.post(t, "{}")
-	if want := "The gateway sends no more model requests in this session: every model key of the run's key group is at its provider's limit, at its Use up to percentage, or out of use after a 401 (unauthorized) of its provider, or the gateway could not send a request again with the next key after a limit response (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, whose session keeps one key).\n"; status != http.StatusTooManyRequests || body != want {
+	if want := "The gateway sends no more model requests in this session: every model key of the session's key group is at its provider's limit, at its Use up to percentage, or out of use after a 401 (unauthorized) of its provider, or the gateway could not send a request again with the next key after a limit response (a request over 8 MiB, a key whose credential does not cover the path, or an openai-responses request, whose session keeps one key).\n"; status != http.StatusTooManyRequests || body != want {
 		t.Errorf("the session got %d %q; want the gateway's 429", status, body)
 	}
 	if calls := f.up.taken(); len(calls) != 0 {

@@ -43,10 +43,23 @@ type linkRun struct {
 	r      *run.Run
 	st     *stream.Run
 	px     *proxy.Proxy
-	// keys is the run's key group, nil when the run has none: the start key's, from the
-	// run configuration's credentials.
-	keys *modelkey.Group
-	// reporter sends the key group's reports, nil when the run has no key group or no
+	// keys are the run's key groups, one per group value of the run configuration's API
+	// credentials; nil when the run has none.
+	keys *modelkey.Set
+	// startKeys is the key group of the run's start key, nil when the run has none or
+	// its start key is the machine's.
+	startKeys *modelkey.Group
+	// groupNames is the group value of each key group of keys, [run.KeyGroup.Name].
+	groupNames map[*modelkey.Group]string
+	// marking takes one write of the record's model key marks at a time, so the last
+	// write has the state of every group ([linkRun.watchKeys]).
+	marking sync.Mutex
+	// marked are the key groups of keys for which the run's proxy passed a limit
+	// refusal or a 401 to the session since the group's last Resume, by group value,
+	// each with the stop's reason, empty until an answer had it; nil when no record
+	// keeps them. Under marking.
+	marked map[string]string
+	// reporter sends the key groups' reports, nil when the run has no key group or no
 	// control plane. Set under mu.
 	reporter *keyReporter
 	// writes numbers the git pushes the run's proxy reads, nil until the proxy is made.
@@ -615,8 +628,8 @@ func (e holdError) Unwrap() error { return e.error }
 // [holdError]), its tools, its proxy, guarded on a wall or the one address, with the
 // run API, its limits and the node's path rules; the run's authority from authority,
 // called when the run's policy needs one, which the proxy ends TLS with; the start key;
-// and the key group, which on the one address keeps the mark of a passed limit refusal
-// in the run's record ([markLimit]). It returns the authority, nil for none. ctx is the
+// and the key groups, which on the one address keep the mark of a passed limit refusal
+// in the run's record ([markKeys]). It returns the authority, nil for none. ctx is the
 // run's, which the key reporter runs under; steps is that of the fetch of the run's
 // values and of the wait for its tools to listen, which the caller ends as Close starts,
 // so Close does not wait for them.
@@ -705,62 +718,171 @@ func (lr *linkRun) decide(ctx, steps context.Context, d decision, authority func
 		// of a key group, the group's active key.
 		lr.px.SetModelKey(held.Start)
 	}
-	if keys := r.ModelKeys(); len(keys) > 0 {
-		// The run's key group: the proxy sets its active key, sends a refused request
-		// again with the next key, for a format other than openai-responses, whose
-		// active key changes only at a join, and the reporter shares each key's state
-		// with the control plane.
-		lr.keys = modelkey.New(keys, r.Held().Start, nil)
-		for _, name := range r.KeysOut() {
-			lr.keys.Out(name)
-		}
-		format, stream := r.ModelAPI()
-		lr.keys.SetFormat(format)
-		// A key the model provider returns 401 for is renewed as unauthorized.
-		r.SetKeyGroup(lr.keys)
-		if lr.remote {
-			// The mark that the proxy passed a limit refusal or a 401 to the session,
-			// with the stop's reason once an answer has it, and the keys out of use
-			// after a 401, for a gateway that starts again. Called on the proxy's
-			// request path, the batch's and the renewal's: a write that fails is
-			// reported, and the request goes on.
-			dir, runID := lr.st.Dir(), lr.id
-			lr.keys.OnPassed(func(passed bool) {
-				if err := markLimit(dir, passed); err != nil {
-					g.report(fmt.Sprintf("run %s: writing its model key mark: %v", runID, err))
-				}
-			})
-			lr.keys.OnStop(func(reason string) {
-				if err := markStop(dir, reason); err != nil {
-					g.report(fmt.Sprintf("run %s: check the run's record directory: writing the reason for the run's stop failed: %v", runID, err))
-				}
-			})
-			lr.keys.OnUnauthorized(func(keys []modelkey.Unauthorized) {
-				if err := writeUnauthorized(dir, keys); err != nil {
-					g.report(fmt.Sprintf("run %s: check the run's record directory: writing the run's model keys out of use after a 401 (unauthorized) failed: %v", runID, err))
-				}
-			})
-		}
-		runID := lr.id
-		lr.px.SetKeyGroup(lr.keys, format, stream, func(line string) { g.report("run " + runID + ": " + line) })
-		if g.client != nil {
-			conf, _ := g.config()
-			rep := newKeyReporter(runID, conf.Run.URL, lr.keys, func(ctx context.Context, m server.ModelKeysReport) ([]server.ModelKeyState, error) {
-				conf, _ := g.config()
-				return g.client.PostModelKeys(ctx, conf.Run.URL, runID, m)
-			}, g.report, lr.logLine)
-			lr.mu.Lock()
-			// A run that a gateway reopens may have a session open.
-			if j := lr.openJoin(); j != nil {
-				rep.session = j.session
-			}
-			lr.reporter = rep
-			lr.mu.Unlock()
-			routine.Go(routine.ForRun(g.report, runID), func() { rep.run(ctx) })
-		}
+	if groups := r.KeyGroups(); len(groups) > 0 {
+		lr.setKeyGroups(ctx, groups)
 	}
 	return ca, nil
 }
+
+// setKeyGroups makes the run's key groups of groups: each group's proxy sets its active
+// key, sends a refused request again with its next key, for a format other than
+// openai-responses, whose active key changes only at a join, and the reporter shares
+// each key's state with the control plane. The start key's group starts on the start
+// key, every other group on its first key. The reporter runs under ctx, the run's.
+func (lr *linkRun) setKeyGroups(ctx context.Context, groups []run.KeyGroup) {
+	g, r, runID := lr.g, lr.r, lr.id
+	held := r.Held()
+	var made []*modelkey.Group
+	lr.groupNames = make(map[*modelkey.Group]string, len(groups))
+	px := make([]proxy.KeyGroup, 0, len(groups))
+	for _, kg := range groups {
+		group := modelkey.New(kg.Keys, held.Start, nil)
+		group.SetFormat(kg.Format)
+		if group.Has(held.Start) {
+			lr.startKeys = group
+		}
+		made = append(made, group)
+		lr.groupNames[group] = kg.Name
+		px = append(px, proxy.KeyGroup{Group: group, Format: kg.Format, Stream: kg.Stream})
+	}
+	// The keys in the order of the run configuration's credentials, which the reports
+	// and the record of the keys out after a 401 follow, whatever the order of the
+	// groups.
+	var order []string
+	for _, c := range held.Credentials() {
+		if slices.ContainsFunc(made, func(group *modelkey.Group) bool { return group.Has(c.Name) }) {
+			order = append(order, c.Name)
+		}
+	}
+	lr.keys = modelkey.NewSet(made, order)
+	for _, name := range r.KeysOut() {
+		if group := lr.keys.Of(name); group != nil {
+			group.Out(name)
+		}
+	}
+	// A key the model provider returns 401 for is renewed as unauthorized.
+	r.SetKeyGroups(lr.keys)
+	if lr.remote {
+		lr.watchKeys()
+	}
+	lr.px.SetKeyGroups(px, func(line string) { g.report("run " + runID + ": " + line) })
+	if g.client == nil {
+		return
+	}
+	conf, _ := g.config()
+	rep := newKeyReporter(runID, conf.Run.URL, lr.keys, func(ctx context.Context, m server.ModelKeysReport) ([]server.ModelKeyState, error) {
+		conf, _ := g.config()
+		return g.client.PostModelKeys(ctx, conf.Run.URL, runID, m)
+	}, g.report, lr.logLine)
+	lr.mu.Lock()
+	// A run that a gateway reopens may have a session open.
+	if j := lr.openJoin(); j != nil {
+		rep.session = j.session
+	}
+	lr.reporter = rep
+	lr.mu.Unlock()
+	routine.Go(routine.ForRun(g.report, runID), func() { rep.run(ctx) })
+}
+
+// watchKeys writes the marks of the run's key groups to its record, for a gateway that
+// starts again: each key group for which the run's proxy passed a limit refusal or a
+// 401 to the session, by its group value, with the stop's reason once an answer has
+// it ([markKeys]), and the keys of every group out of use after a 401. A group may
+// pass while a session of another group is open: a stream of a session before can end
+// in a limit after the next join. The reopen gives the mark to each group it lists, so
+// the open session's group gets a stop only when that group passed ([Gateway.reopen]).
+// Each hook writes the state of every group under lr.marking, so the last write has
+// the newest state.
+// The hooks are called on the proxy's request path, the batch's and the renewal's: a
+// write that fails is reported, and the request goes on.
+func (lr *linkRun) watchKeys() {
+	g, dir, runID := lr.g, lr.st.Dir(), lr.id
+	lr.marked = map[string]string{}
+	mark := func() {
+		var groups []markedGroup
+		for _, group := range lr.keys.Groups() {
+			name := lr.groupNames[group]
+			if reason, ok := lr.marked[name]; ok {
+				groups = append(groups, markedGroup{Group: name, Reason: reason})
+			}
+		}
+		if err := markKeys(dir, groups); err != nil {
+			g.report(fmt.Sprintf("run %s: check the run's record directory: writing the model key mark failed: %v", runID, err))
+		}
+	}
+	for _, group := range lr.keys.Groups() {
+		name := lr.groupNames[group]
+		group.OnPassed(func(passed bool) {
+			lr.marking.Lock()
+			defer lr.marking.Unlock()
+			if _, ok := lr.marked[name]; passed && !ok {
+				lr.marked[name] = ""
+			} else if !passed {
+				delete(lr.marked, name)
+			}
+			mark()
+		})
+		group.OnStop(func(reason string) {
+			lr.marking.Lock()
+			defer lr.marking.Unlock()
+			lr.marked[name] = reason
+			mark()
+		})
+		group.OnUnauthorized(func([]modelkey.Unauthorized) {
+			lr.marking.Lock()
+			defer lr.marking.Unlock()
+			if err := writeUnauthorized(dir, lr.keys.Unauthorized()); err != nil {
+				g.report(fmt.Sprintf("run %s: check the run's record directory: writing the run's model keys out of use after a 401 (unauthorized) failed: %v", runID, err))
+			}
+		})
+	}
+}
+
+// passMarks gives each key group of groups, the mark of a record a gateway reopens the
+// run with, a pass, with the stop's reason fixed at the group's reason when it has one
+// ([modelkey.Group.PassWith]). A group the run configuration no longer has gets
+// nothing. Every group that gets a pass goes into lr.marked with its reason before the
+// first pass, so the first write of the record's mark has each of them.
+func (lr *linkRun) passMarks(groups []markedGroup) {
+	type pass struct {
+		group  *modelkey.Group
+		reason string
+	}
+	var passes []pass
+	lr.marking.Lock()
+	for _, m := range groups {
+		group := lr.keyGroupNamed(m.Group)
+		if group == nil {
+			continue
+		}
+		if lr.marked != nil {
+			lr.marked[m.Group] = m.Reason
+		}
+		passes = append(passes, pass{group: group, reason: m.Reason})
+	}
+	lr.marking.Unlock()
+	// After the unlock: the hooks of a pass take lr.marking.
+	for _, p := range passes {
+		if p.reason == "" {
+			p.group.Pass()
+		} else {
+			p.group.PassWith(p.reason)
+		}
+	}
+}
+
+// keyGroupNamed is the key group whose group value is name, nil for none.
+func (lr *linkRun) keyGroupNamed(name string) *modelkey.Group {
+	for _, group := range lr.keys.Groups() {
+		if lr.groupNames[group] == name {
+			return group
+		}
+	}
+	return nil
+}
+
+// keyGroupOf is the key group of the model key name, nil when name is in none.
+func (lr *linkRun) keyGroupOf(name string) *modelkey.Group { return lr.keys.Of(name) }
 
 // keepRegistration is how long a registration built for a run id is kept for a retry
 // of the run id, by the wall clock from the time it holds: half the window a server
@@ -1392,8 +1514,8 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 // credentialHosts are the run answer's credential_hosts: one entry per credential held,
 // and per apply item of a host credential from the server, from the same uses as
 // appliedOf's credentials, with the auth of a credential from the
-// server and of a model key, and the format and endpoint of a model key; nil when the
-// run holds none.
+// server and of a model key, the format and endpoint of a model key, and the key group
+// of a model key from the server; nil when the run holds none.
 func credentialHosts(held *credential.Held) []server.LinkCredentialHosts {
 	if held == nil {
 		return nil
@@ -1413,7 +1535,7 @@ func credentialHosts(held *credential.Held) []server.LinkCredentialHosts {
 			}
 			continue
 		}
-		e := server.LinkCredentialHosts{Name: c.Name, Hosts: c.Hosts, Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint}
+		e := server.LinkCredentialHosts{Name: c.Name, Hosts: c.Hosts, Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint, Group: c.Group}
 		if c.Stored || c.Format != "" {
 			e.Auth = &server.Auth{Scheme: c.Scheme, Header: c.Header, Username: c.Username, OAuth: c.OAuth}
 		}

@@ -105,7 +105,7 @@ type Config struct {
 	// pending ([modelkey.Group.Pending]). The secrets request leaves both out, since the
 	// server returns 409 with no value to a whole request that has a name it cannot
 	// seal. A revoked key gets no value and no renewal; a pending key gets its value
-	// from its renewal, once the run's key group has it pending ([renewer]). Nil for
+	// from its renewal, once its key group has it pending ([renewer]). Nil for
 	// an open.
 	Revoked, Pending []string
 	// StackHosts are the gateway's gateway.stack_hosts, which the run's stack proxy
@@ -470,9 +470,11 @@ func (r *Run) open(ctx context.Context) error {
 // checkClaims sets keysOut: each model key with account_claim whose opened value in
 // values has no string at it ([credential.AccountClaim]), with a line in the run's
 // record that contains why, never the value or the claim. It refuses the run,
-// run_configuration_invalid, when no key of the run's key group is left and none is
-// out or pending after a 401 ([Config.Revoked], [Config.Pending]): a reopened run
-// whose keys a 401 took out stops with model_key_unauthorized.
+// run_configuration_invalid, when no key of a key group of the run is left and none of
+// that group's keys is out or pending after a 401 ([Config.Revoked], [Config.Pending]):
+// a reopened run whose keys a 401 took out stops with model_key_unauthorized. The
+// refusal contains the group's `group` value; its shown names are the start key for
+// the start key's group, and the group's first key for another group.
 func (r *Run) checkClaims(values sealed.Values) error {
 	var out []string
 	for _, c := range r.stored {
@@ -490,15 +492,30 @@ func (r *Run) checkClaims(values sealed.Values) error {
 				accesskey.ShownName(c.Name, true), err))
 		}
 	}
-	group := storedGroup(r.stored, r.storedModel)
 	left := func(c server.RunCredential) bool {
 		return !slices.Contains(out, c.Name) && !r.leftOut(c.Name)
 	}
-	after401 := slices.ContainsFunc(group, func(c server.RunCredential) bool { return r.leftOut(c.Name) })
-	if len(group) > 0 && !after401 && !slices.ContainsFunc(group, left) {
-		start := startName(group, r.storedModel)
-		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(start),
-			"run configuration %s: store in the control plane a value of a model key of the key group of %s with a string at its account_claim: no key of the group has one", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(start, true))
+	refuse := func(group []server.RunCredential, name string) error {
+		after401 := slices.ContainsFunc(group, func(c server.RunCredential) bool { return r.leftOut(c.Name) })
+		if len(group) == 0 || after401 || slices.ContainsFunc(group, left) {
+			return nil
+		}
+		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
+			"Store in the control plane a value of a key of group %s with a string at its account_claim.\nNo key of the group has one in the run configuration %s", accesskey.ShownName(group[0].Group, true), accesskey.ShownValue(r.cfg.Fetched.URL, false))
+	}
+	// The start key's group first, by its start key, so its refusal is the one a run
+	// gets when another group has no key left too.
+	start := startGroup(r.stored, r.storedModel)
+	if err := refuse(start, startName(start, r.storedModel)); err != nil {
+		return err
+	}
+	for _, group := range storedGroups(r.stored) {
+		if len(start) > 0 && group[0].Name == start[0].Name {
+			continue
+		}
+		if err := refuse(group, group[0].Name); err != nil {
+			return err
+		}
 	}
 	r.keysOut = out
 	return nil
@@ -1319,23 +1336,22 @@ func sameSelection(a, b []policy.Selected) bool {
 }
 
 // ProxyUses are held credentials as the proxy sets them, every model key among them
-// with its placeholder's value: the keys of the start key's key group,
-// [credential.Held.Group], share the start key's. The proxy sets one model key at a
-// time, the one the gateway sets with [proxy.Proxy.SetModelKey]: the start key,
-// [credential.Held.Start], or the key a session joined with; for a key of the group, the
+// with its placeholder's value, [link.GroupPlaceholder]: the keys of one key group,
+// [credential.Held.Groups], share the placeholder of the group's first key, and a model
+// key of the machine's has the placeholder of its name. The proxy sets one model key at a time, the
+// one the gateway sets with [proxy.Proxy.SetModelKey]: the start key,
+// [credential.Held.Start], or the key a session joined with; for a key of a group, the
 // group's active key.
 func ProxyUses(held *credential.Held) []proxy.Credential {
 	if held == nil {
 		return nil
 	}
+	keys := GroupKeys(held)
 	uses := make([]proxy.Credential, 0, len(held.Uses))
 	for _, u := range held.Uses {
 		c := proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths, PushRef: u.PushRef}
-		switch {
-		case slices.Contains(held.Group, u.Name):
-			c.Placeholder = link.KeyPlaceholder(held.Start)
-		case u.Format != "":
-			c.Placeholder = link.KeyPlaceholder(u.Name)
+		if u.Format != "" {
+			c.Placeholder = link.GroupPlaceholder(keys, u.Name)
 		}
 		if u.AccountHeader != "" {
 			claim := u.AccountClaim
@@ -1355,6 +1371,22 @@ func ProxyUses(held *credential.Held) []proxy.Credential {
 		uses = append(uses, c)
 	}
 	return uses
+}
+
+// GroupKeys are the model keys of held as [link.GroupPlaceholder] reads them, in the
+// order of [credential.Held.Credentials], the order of the run answer's
+// credential_hosts, each with its key group; none when held is nil.
+func GroupKeys(held *credential.Held) []link.GroupKey {
+	if held == nil {
+		return nil
+	}
+	var out []link.GroupKey
+	for _, c := range held.Credentials() {
+		if c.Format != "" {
+			out = append(out, link.GroupKey{Name: c.Name, Group: c.Group})
+		}
+	}
+	return out
 }
 
 // ProxyTools are running tools as the proxy reaches them.

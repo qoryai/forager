@@ -150,6 +150,37 @@ func KeyPlaceholder(name string) string {
 	return "qory-" + name + Placeholder[len("qory"):]
 }
 
+// GroupKey is a model key as [GroupPlaceholder] reads it: its name, and its key group,
+// empty for a key of no group, such as a model key of the machine's.
+type GroupKey struct {
+	Name, Group string
+}
+
+// GroupPlaceholder is the value of the placeholder variable of the model key name among
+// keys, a run's model keys in the order of its run answer's credential_hosts: the
+// [KeyPlaceholder] of the first key of keys in the key group of name, so the keys of one
+// group have one value; the KeyPlaceholder of name itself for a key of no group or one
+// not in keys. The gateway's proxy and the session compute it from the same list. A run's
+// credential names are unique and a key is in one group, so two groups never have one
+// value, and neither has the value of a key of no group.
+func GroupPlaceholder(keys []GroupKey, name string) string {
+	group := ""
+	for _, k := range keys {
+		if k.Name == name {
+			group = k.Group
+			break
+		}
+	}
+	if group != "" {
+		for _, k := range keys {
+			if k.Group == group {
+				return KeyPlaceholder(k.Name)
+			}
+		}
+	}
+	return KeyPlaceholder(name)
+}
+
 // LinkDirPrefix begins the name of the private directory the gateway makes, in the
 // system's temporary directory, for the local link's socket. Every such directory on
 // the machine is one of Forager's files, which no walled run binds.

@@ -379,7 +379,7 @@ func codexCredential(name, endpoint string, login bool) map[string]any {
 	if login {
 		auth = map[string]any{"scheme": "bearer", "oauth": true, "account_header": codexAccountHeader, "account_claim": codexAccountClaim}
 	}
-	return map[string]any{"name": name, "format": "openai-responses", "endpoint": endpoint, "auth": auth,
+	return map[string]any{"name": name, "group": "openai", "format": "openai-responses", "endpoint": endpoint, "auth": auth,
 		"paths": []string{codexPath}, "pause_for_s": 3600}
 }
 

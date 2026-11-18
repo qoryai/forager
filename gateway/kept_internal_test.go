@@ -20,7 +20,7 @@ import (
 // the kept files that failed: the files to remove by hand and where come first.
 func TestTheReportOfKeptFilesNotRemovedStartsWithTheFix(t *testing.T) {
 	got := keptNotRemoved("run-1", "/var/lib/forager/runs/run-1", errors.New("permission denied"))
-	want := "run run-1: remove request.json, ca.pem, ca.key, given.jsonl, joins.jsonl, model-key-limit, model-keys-unauthorized.json, model-keys-unauthorized.json.tmp and held.jsonl from /var/lib/forager/runs/run-1 by hand: removing them failed: permission denied"
+	want := "run run-1: remove request.json, ca.pem, ca.key, given.jsonl, joins.jsonl, model-key-limit, model-key-limit.tmp, model-keys-unauthorized.json, model-keys-unauthorized.json.tmp and held.jsonl from /var/lib/forager/runs/run-1 by hand: removing them failed: permission denied"
 	if got != want {
 		t.Errorf("the report: %q; want %q", got, want)
 	}
@@ -93,38 +93,66 @@ func TestTheKeptFilesReadBack(t *testing.T) {
 		t.Errorf("given.jsonl: %v %d %v", got, torn, err)
 	}
 
-	for _, passed := range []bool{true, true, false, false} {
-		if err := markLimit(dir, passed); err != nil {
-			t.Fatal(err)
-		}
-		if reason, marked, err := limitMarked(dir); err != nil || marked != passed || reason != "" {
-			t.Errorf("after markLimit(%v): marked %v, reason %q, %v", passed, marked, reason, err)
-		}
-	}
-	// The stop's reason in the mark: a Pass after it keeps it, a Resume removes it, and
-	// a mark whose contents are no reason is a mark with none.
-	for _, want := range []string{"model_key_limit", "model_key_switch", "model_key_unauthorized"} {
-		if err := markStop(dir, want); err != nil {
-			t.Fatal(err)
-		}
-		if err := markLimit(dir, true); err != nil {
-			t.Fatal(err)
-		}
-		if reason, marked, err := limitMarked(dir); err != nil || !marked || reason != want {
-			t.Errorf("after markStop(%s): marked %v, reason %q, %v", want, marked, reason, err)
-		}
-	}
-	if err := writeKept(dir, limitMark, []byte("model_key_lim")); err != nil {
+	// The mark of the key groups: written whole and read back with each group and its
+	// reason, mode 0600, and removed with no group left. A reason that is none of
+	// Stop's reads as none. A temporary file a crash left is replaced, and none is left
+	// after the write.
+	if err := os.WriteFile(filepath.Join(dir, limitMarkTemp), []byte(`{"version":1,"gr`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if reason, marked, err := limitMarked(dir); err != nil || !marked || reason != "" {
-		t.Errorf("a torn mark: marked %v, reason %q, %v; want marked with no reason", marked, reason, err)
+	for _, groups := range [][]markedGroup{
+		{{Group: "anthropic"}},
+		{{Group: "anthropic", Reason: "model_key_limit"}, {Group: "openai", Reason: "model_key_switch"}},
+		{{Group: "openai", Reason: "model_key_unauthorized"}},
+	} {
+		if err := markKeys(dir, groups); err != nil {
+			t.Fatal(err)
+		}
+		if got, torn, err := limitMarked(dir); err != nil || torn || !reflect.DeepEqual(got, groups) {
+			t.Errorf("after markKeys(%+v): groups %+v, torn %v, %v", groups, got, torn, err)
+		}
+		if _, err := os.Lstat(filepath.Join(dir, limitMarkTemp)); !os.IsNotExist(err) {
+			t.Errorf("the temporary file of the mark is left: %v", err)
+		}
 	}
-	if err := markLimit(dir, false); err != nil {
+	if fi, err := os.Lstat(filepath.Join(dir, limitMark)); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("the mark: %v, %v; want mode 0600", fi, err)
+	}
+	if err := writeKept(dir, limitMark, []byte(`{"version":1,"groups":[{"group":"openai","reason":"model_key_lim"}]}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, marked, err := limitMarked(dir); err != nil || marked {
-		t.Errorf("after the Resume: marked %v, %v", marked, err)
+	if got, torn, err := limitMarked(dir); err != nil || torn || !reflect.DeepEqual(got, []markedGroup{{Group: "openai"}}) {
+		t.Errorf("a group with no reason of Stop's: groups %+v, torn %v, %v", got, torn, err)
+	}
+	// A file that is no version 1 mark with a group, or is longer than maxMark, has no
+	// group: a reason and a newline, a cut mark, and a valid mark padded with spaces to
+	// maxMark+1 bytes among them.
+	valid := `{"version":1,"groups":[{"group":"openai"}]}`
+	for _, content := range []string{
+		"",
+		"model_key_limit\n",
+		"model_key_switch\n",
+		"model_key_unauthorized\n",
+		"model_key_lim",
+		`{"version":1,"groups":[{"gr`,
+		`{"version":1,"groups":[]}`,
+		`{"version":2,"groups":[{"group":"openai"}]}`,
+		valid + strings.Repeat(" ", maxMark+1-len(valid)),
+	} {
+		if err := writeKept(dir, limitMark, []byte(content)); err != nil {
+			t.Fatal(err)
+		}
+		if got, torn, err := limitMarked(dir); err != nil || !torn || got != nil {
+			t.Errorf("the mark %q: groups %+v, torn %v, %v; want torn with no group", content, got, torn, err)
+		}
+	}
+	for range 2 {
+		if err := markKeys(dir, nil); err != nil {
+			t.Fatal(err)
+		}
+		if got, torn, err := limitMarked(dir); err != nil || torn || got != nil {
+			t.Errorf("after the Resume: groups %+v, torn %v, %v", got, torn, err)
+		}
 	}
 
 	// The keys out of use after a 401: written and read back, and removed when none is left.

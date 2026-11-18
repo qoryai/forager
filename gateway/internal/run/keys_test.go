@@ -27,11 +27,37 @@ func fixture(t *testing.T, path string) string {
 	return string(b)
 }
 
-// TestTheKeyGroupSharesTheStartKeysPlaceholder pins the key group of the contract's
+// oneGroup is the set of the one key group g.
+func oneGroup(g *modelkey.Group) *modelkey.Set {
+	return modelkey.NewSet([]*modelkey.Group{g}, g.Names())
+}
+
+// modelKeys are the keys of every key group of r, [run.Run.KeyGroups], in the order of
+// the groups.
+func modelKeys(r *run.Run) []modelkey.Key {
+	var out []modelkey.Key
+	for _, g := range r.KeyGroups() {
+		out = append(out, g.Keys...)
+	}
+	return out
+}
+
+// keysOf are the names of the keys of the key group of name, of
+// [credential.Held.Groups]; nil when name is in none.
+func keysOf(r *run.Run, name string) []string {
+	for _, g := range r.Held().Groups {
+		if slices.Contains(g.Keys, name) {
+			return g.Keys
+		}
+	}
+	return nil
+}
+
+// TestTheKeyGroupSharesItsFirstKeysPlaceholder pins the key group of the contract's
 // fixture of three API credentials of one provider: the group is the three in the
-// order of credentials, each set with the start key's placeholder, with its
-// schedule_resets_at and pause_for_s; the host credential is outside it.
-func TestTheKeyGroupSharesTheStartKeysPlaceholder(t *testing.T) {
+// order of credentials, each set with the placeholder of the group's first key, model,
+// with its schedule_resets_at and pause_for_s; the host credential is outside it.
+func TestTheKeyGroupSharesItsFirstKeysPlaceholder(t *testing.T) {
 	doc := fixture(t, "fixtures/run-configuration/model-keys.json")
 	r, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')),
 		Secrets: (&controlPlane{answer: harnessValue}).fetch})
@@ -39,7 +65,7 @@ func TestTheKeyGroupSharesTheStartKeysPlaceholder(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if got := r.Held().Group; !slices.Equal(got, []string{"model", "model-2", "model-3"}) {
+	if got := keysOf(r, "model"); !slices.Equal(got, []string{"model", "model-2", "model-3"}) {
 		t.Errorf("Group %v; want model, model-2 and model-3", got)
 	}
 	placeholder := link.KeyPlaceholder("model")
@@ -58,33 +84,51 @@ func TestTheKeyGroupSharesTheStartKeysPlaceholder(t *testing.T) {
 		{Name: "model-2", PauseFor: 5 * time.Hour},
 		{Name: "model-3", ScheduleResetsAt: time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC), PauseFor: 5 * time.Hour},
 	}
-	if got := r.ModelKeys(); !slices.EqualFunc(got, want, func(a, b modelkey.Key) bool {
+	if got := modelKeys(r); !slices.EqualFunc(got, want, func(a, b modelkey.Key) bool {
 		return a.Name == b.Name && a.ScheduleResetsAt.Equal(b.ScheduleResetsAt) && a.PauseFor == b.PauseFor
 	}) {
-		t.Errorf("ModelKeys %+v; want %+v", got, want)
+		t.Errorf("the keys %+v; want %+v", got, want)
 	}
 }
 
-// TestAKeyOfAnotherEndpointIsOutsideTheGroup pins that an API credential with another
-// endpoint, or another auth, keeps the placeholder of that key.
-func TestAKeyOfAnotherEndpointIsOutsideTheGroup(t *testing.T) {
+// TestEachGroupHasThePlaceholderOfItsFirstKey pins the key groups of API credentials
+// with three group values, whose keys differ in auth or endpoint between groups: the
+// groups follow the group member alone, in the order of their first key, and each key
+// is set with the placeholder of its group's first key, so two groups never share one.
+// A run whose start key is in one group has key groups of the others too, each with its
+// format and stream path.
+func TestEachGroupHasThePlaceholderOfItsFirstKey(t *testing.T) {
 	doc := `{"version":1,"model_credential":"model","credentials":[` +
-		`{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer","oauth":true},"pause_for_s":60},` +
-		`{"name":"api-key","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
-		`{"name":"other","format":"anthropic-messages","endpoint":"https://api.other.example/anthropic","auth":{"scheme":"bearer","oauth":true}}]}`
+		`{"name":"model","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer","oauth":true},"pause_for_s":60},` +
+		`{"name":"api-key","group":"anthropic-api","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
+		`{"name":"other","group":"other","format":"openai-responses","endpoint":"https://api.other.example/v1","auth":{"scheme":"bearer"}},` +
+		`{"name":"other-2","group":"other","format":"openai-responses","endpoint":"https://api.other.example/v1","auth":{"scheme":"bearer"}}]}`
 	r, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')),
 		Secrets: (&controlPlane{answer: harnessValue}).fetch})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if got := r.Held().Group; !slices.Equal(got, []string{"model"}) {
-		t.Errorf("Group %v; want model alone", got)
+	var got []string
+	for _, g := range r.Held().Groups {
+		got = append(got, g.Name+"="+strings.Join(g.Keys, ","))
 	}
+	if want := []string{"anthropic=model", "anthropic-api=api-key", "other=other,other-2"}; !slices.Equal(got, want) {
+		t.Errorf("Groups %q; want %q", got, want)
+	}
+	want := map[string]string{"model": link.KeyPlaceholder("model"), "api-key": link.KeyPlaceholder("api-key"),
+		"other": link.KeyPlaceholder("other"), "other-2": link.KeyPlaceholder("other")}
 	for _, u := range r.Uses() {
-		if want := link.KeyPlaceholder(u.Name); u.Placeholder != want {
-			t.Errorf("%s: placeholder %q; want %q", u.Name, u.Placeholder, want)
+		if u.Placeholder != want[u.Name] {
+			t.Errorf("%s: placeholder %q; want %q", u.Name, u.Placeholder, want[u.Name])
 		}
+	}
+	got = nil
+	for _, g := range r.KeyGroups() {
+		got = append(got, g.Name+" "+g.Format+" "+g.Stream)
+	}
+	if want := []string{"anthropic anthropic-messages /anthropic/v1/messages", "anthropic-api anthropic-messages /anthropic/v1/messages", "other openai-responses /v1/responses"}; !slices.Equal(got, want) {
+		t.Errorf("KeyGroups %q; want %q", got, want)
 	}
 }
 
@@ -118,28 +162,28 @@ func TestAKeyWithoutPauseForHasTheDefaultCooldown(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer r.Close()
-		return r.ModelKeys()
+		return modelKeys(r)
 	}
 	subscription := keys(fixture(t, "fixtures/run-configuration/model-keys-no-pause-for.json"))
 	if len(subscription) != 2 || subscription[0].PauseFor != 5*time.Hour || subscription[1].PauseFor != time.Hour {
-		t.Errorf("ModelKeys %+v; want pause_for_s 18000 on model and 1 hour on model-2", subscription)
+		t.Errorf("the keys %+v; want pause_for_s 18000 on model and 1 hour on model-2", subscription)
 	}
 	if d, source := cooldown(t, subscription, "model-2", at); d != time.Hour || source != modelkey.SourcePauseFor {
 		t.Errorf("model-2 cools for %v from %s; want 1h from pause_for", d, source)
 	}
 	entry := func(name string) string {
-		return `{"name":"` + name + `","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`
+		return `{"name":"` + name + `","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`
 	}
 	api := keys(`{"version":1,"model_credential":"model","credentials":[` + entry("model") + `,` + entry("model-2") + `]}`)
 	if len(api) != 2 || api[0].PauseFor != time.Minute || api[1].PauseFor != time.Minute {
-		t.Errorf("ModelKeys %+v; want 1 minute on both API keys", api)
+		t.Errorf("the keys %+v; want 1 minute on both API keys", api)
 	}
 	if d, source := cooldown(t, api, "model", at); d != time.Minute || source != modelkey.SourcePauseFor {
 		t.Errorf("model cools for %v from %s; want 1m0s from pause_for", d, source)
 	}
 	one := keys(`{"version":1,"credentials":[` + entry("model") + `]}`)
 	if len(one) != 1 || one[0].PauseFor != time.Minute {
-		t.Errorf("ModelKeys %+v; want one API key with 1 minute", one)
+		t.Errorf("the keys %+v; want one API key with 1 minute", one)
 	}
 }
 
@@ -162,8 +206,9 @@ func TestAPauseForBelowOneIsRefused(t *testing.T) {
 
 // TestAKeyGroupInCooldownAtTheClaim pins the fixture of a key group with a chosen key and
 // a key in cooldown at the claim: the keys have resets_at, cooldown_until and chosen;
-// a start key in cooldown is refused, and so are two chosen keys, each
-// run_configuration_invalid with the key's name and before any secrets request.
+// a start key in cooldown is refused, and so are two chosen keys of one group and two
+// keys of one group with two endpoints, each run_configuration_invalid with the key's
+// name and before any secrets request.
 func TestAKeyGroupInCooldownAtTheClaim(t *testing.T) {
 	doc := fixture(t, "fixtures/run-configuration/model-keys-cooling.json")
 	r, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')),
@@ -172,14 +217,15 @@ func TestAKeyGroupInCooldownAtTheClaim(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	keys := r.ModelKeys()
+	keys := modelKeys(r)
 	if len(keys) != 3 || !keys[0].Chosen || keys[1].Chosen || !keys[1].ResetsAt.Equal(time.Date(2026, 11, 10, 14, 0, 0, 0, time.UTC)) ||
 		!keys[2].CooldownUntil.Equal(time.Date(2026, 11, 10, 16, 30, 0, 0, time.UTC)) || !keys[0].CooldownUntil.IsZero() {
-		t.Errorf("ModelKeys %+v", keys)
+		t.Errorf("the keys %+v", keys)
 	}
 	for _, c := range []struct{ fixture, name, line string }{
 		{"run-configuration-beyond-schema-model-keys-start-cooling.json", "model", `set model_credential to a model key out of cooldown: the start key "model" is in cooldown until 2099-01-01T00:00:00Z`},
-		{"run-configuration-beyond-schema-model-keys-two-chosen.json", "model-2", `set chosen on one model key of the key group: "model" and "model-2" both have it`},
+		{"run-configuration-beyond-schema-model-keys-two-chosen.json", "model-2", "run configuration https://apiary.example/v1/run-configuration: Set chosen on one key of group \"anthropic\".\nThe credentials \"model\" and \"model-2\" both have it"},
+		{"run-configuration-beyond-schema-model-keys-group-mixed.json", "model-2", "run configuration https://apiary.example/v1/run-configuration: Give the keys of group \"anthropic\" one format, endpoint and auth.\nThe credentials \"model\" and \"model-2\" differ in endpoint"},
 	} {
 		s := &controlPlane{answer: harnessValue}
 		_, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, fixture(t, "fixtures/invalid/"+c.fixture), digest('1')), Secrets: s.fetch})
@@ -207,10 +253,10 @@ func TestAKeyGroupWithUseUpTo(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	keys := r.ModelKeys()
+	keys := modelKeys(r)
 	if len(keys) != 2 || keys[0].UseUpToPercent != 90 || !slices.Equal(keys[0].UseUpToWindows, []string{"five_hour", "seven_day"}) ||
 		keys[1].UseUpToPercent != 80 || !slices.Equal(keys[1].UseUpToWindows, []string{"five_hour"}) {
-		t.Errorf("ModelKeys %+v; want 90 of five_hour and seven_day on model, 80 of five_hour on model-2", keys)
+		t.Errorf("the keys %+v; want 90 of five_hour and seven_day on model, 80 of five_hour on model-2", keys)
 	}
 	for _, c := range []struct{ fixture, line string }{
 		{"zero", `set use_up_to_percent on the model key "model" to a value from 1 to 99, or remove it and use_up_to_windows to use the key up to its limit: use_up_to_percent is 0`},
@@ -241,7 +287,7 @@ func TestAKeyGroupWithUseUpTo(t *testing.T) {
 // it too.
 func TestTheCheckAndTheProxyShareTheGroup(t *testing.T) {
 	entry := func(name, header, pause string) string {
-		return `{"name":"` + name + `","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"` + header + `"}` + pause + `}`
+		return `{"name":"` + name + `","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"` + header + `"}` + pause + `}`
 	}
 	doc := `{"version":1,"model_credential":"model","credentials":[` + entry("model", "x-api-key", `,"pause_for_s":60`) + `,` + entry("model-2", "X-Api-Key", `,"pause_for_s":0`) + `]}`
 	_, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')), Secrets: (&controlPlane{answer: harnessValue}).fetch})
@@ -266,10 +312,10 @@ func TestTheCheckAndTheProxyShareTheGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if got := r.Held().Group; !slices.Equal(got, []string{"model", "model-2"}) {
+	if got := keysOf(r, "model"); !slices.Equal(got, []string{"model", "model-2"}) {
 		t.Errorf("Group %v; want model and model-2", got)
 	}
-	if format, stream := r.ModelAPI(); format != "anthropic-messages" || stream != "/anthropic/v1/messages" {
-		t.Errorf("ModelAPI %q, %q; want anthropic-messages and /anthropic/v1/messages", format, stream)
+	if groups := r.KeyGroups(); len(groups) != 1 || groups[0].Format != "anthropic-messages" || groups[0].Stream != "/anthropic/v1/messages" {
+		t.Errorf("KeyGroups %+v; want one of anthropic-messages and /anthropic/v1/messages", groups)
 	}
 }

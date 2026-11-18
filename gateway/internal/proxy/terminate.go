@@ -139,35 +139,55 @@ func (p *Proxy) SetModelKey(name string) { p.model.Store(&modelKey{name: name}) 
 func (p *Proxy) SetNoModelKey() { p.model.Store(&modelKey{none: true}) }
 
 // keyChoice is the model key the proxy sets on one request, read once per request so a
-// switch of the group's active key while the request is decided changes nothing of it:
-// the key [Proxy.SetModelKey] set, the run's key group, its active key, and whether
-// that key is out of cooldown.
+// switch of a group's active key while the request is decided changes nothing of it:
+// the key [Proxy.SetModelKey] set, the run's key groups, and of the groups it reads,
+// each one's active key and whether that key is usable.
 type keyChoice struct {
-	m      *modelKey
-	k      *keyGroup
+	m     *modelKey
+	k     *keySet
+	picks map[*keyGroup]keyPick
+}
+
+// keyPick is a group's active key as [modelkey.Group.Pick] returned it.
+type keyPick struct {
 	active string
 	ready  bool
 }
 
-// choice reads the model key the proxy sets on a request.
+// choice reads the model key the proxy sets on a request: the active key of the group
+// of the key [Proxy.SetModelKey] set, or of every group before either it or
+// [Proxy.SetNoModelKey] is called. A group no session runs on is not read, so its
+// active key moves only when a request of a session on it reads it.
 func (p *Proxy) choice() keyChoice {
-	c := keyChoice{m: p.model.Load(), k: p.keys.Load(), ready: true}
-	if c.k != nil {
-		c.active, c.ready = c.k.g.Pick()
+	c := keyChoice{m: p.model.Load(), k: p.keys.Load(), picks: map[*keyGroup]keyPick{}}
+	if c.k == nil {
+		return c
+	}
+	for _, g := range *c.k {
+		if c.m == nil || (!c.m.none && g.g.Has(c.m.name)) {
+			var pk keyPick
+			pk.active, pk.ready = g.g.Pick()
+			c.picks[g] = pk
+		}
 	}
 	return c
 }
 
+// ready reports whether the group g's active key is usable, as the choice read it: true
+// for a group the choice did not read.
+func (c keyChoice) ready(g *keyGroup) bool {
+	pk, ok := c.picks[g]
+	return !ok || pk.ready
+}
+
 // sets reports whether the proxy sets the model key of that name: the one
 // [Proxy.SetModelKey] set, none after [Proxy.SetNoModelKey], or any before either is
-// called. Of the run's key group, it sets the group's active key alone, when the key
-// set is one of the group or none was set.
+// called. Of a key group, it sets the group's active key alone, when the key set is one
+// of that group or none was set.
 func (c keyChoice) sets(name string) bool {
-	if c.k != nil && c.k.g.Has(name) {
-		if c.m != nil && (c.m.none || !c.k.g.Has(c.m.name)) {
-			return false
-		}
-		return c.active == name
+	if g := c.k.of(name); g != nil {
+		pk, ok := c.picks[g]
+		return ok && pk.active == name
 	}
 	return c.m == nil || (!c.m.none && c.m.name == name)
 }
@@ -559,7 +579,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		if c != nil && allowed && tl == nil && c.carries(r.Header) {
 			group = t.p.group(c.Name)
 		}
-		if group != nil && (group.g.Passed() || !keys.ready) {
+		if group != nil && (group.g.Passed() || !keys.ready(group)) {
 			// The proxy passed a limit refusal or a 401 to the session, or no key of the
 			// group is usable, which stops the session as a passed refusal does: until its
 			// join ends, no request with the placeholder reaches the provider.

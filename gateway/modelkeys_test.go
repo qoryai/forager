@@ -141,7 +141,7 @@ func openGroupRun(t *testing.T, format string, forge bool) *groupRun {
 		auth = `{"scheme":"bearer"}`
 	}
 	entry := func(name string) string {
-		return `{"name":"` + name + `","format":"` + format + `","endpoint":"` + g.url + `","auth":` + auth + `,"pause_for_s":3600}`
+		return `{"name":"` + name + `","group":"` + format + `","format":"` + format + `","endpoint":"` + g.url + `","auth":` + auth + `,"pause_for_s":3600}`
 	}
 	allow, extra, secrets := `"localhost"`, "", maps.Clone(groupValues)
 	if forge {
@@ -593,7 +593,7 @@ func TestAnAnthropicGroupEndsWhenEveryKeyGets401(t *testing.T) {
 	if status, body := g.batch(t, exitedWith(g.runID, map[string]any{"state": "failed", "exit_code": -1, "signal": "SIGTERM", "reason": "model_key_unauthorized"})); status != http.StatusAccepted {
 		t.Errorf("the close: %d %q", status, body)
 	}
-	if lines := g.h.reportsWith(`: the provider returned 401 (unauthorized); the key has no expires_at, so the gateway removes the key from the run's key group`); len(lines) != 3 {
+	if lines := g.h.reportsWith(`: the provider returned 401 (unauthorized); the key has no expires_at, so the gateway removes the key from its key group`); len(lines) != 3 {
 		t.Errorf("the log of 401 answers: %q; want 3 lines", lines)
 	}
 }
@@ -912,7 +912,7 @@ func TestTheOneAddressReportsReplayedAndReopenedJoins(t *testing.T) {
 	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
 	url := "https://localhost:" + port + "/v1"
 	entry := func(name string) string {
-		return `{"name":"` + name + `","format":"anthropic-messages","endpoint":"` + url + `","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
+		return `{"name":"` + name + `","group":"anthropic","format":"anthropic-messages","endpoint":"` + url + `","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
 	}
 	c := gatewayControl(t)
 	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"model_credential":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')

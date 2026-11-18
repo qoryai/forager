@@ -321,7 +321,7 @@ with `read_needs_setup_removed`, each `failed` with exit code `-1`. qory closes 
 with no session whose access is not read and that has no wall with `write_needs_wall`,
 `failed` with exit code `-1`. A run whose last session ended `paused` with
 `model_key_limit`, after the gateway's answer to a batch had `stop` because no model key
-of the run's key group was left out of cooldown, closes `paused` with `model_key_limit`
+of the session's key group was left out of cooldown, closes `paused` with `model_key_limit`
 after its host work. The gateway returns an error for `model_key_limit`,
 `model_key_switch` and `model_key_unauthorized` in a run with no join, after a last
 session that ended another way, and with a state other than the one listed beside the

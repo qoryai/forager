@@ -551,9 +551,10 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	digest := lr.reloadDigest
 	lr.mu.Unlock()
 	g.answerHeaders(s, w, r, digest)
-	if reason, ok := lr.keys.Stop(); ok {
-		// The proxy passed a model provider's limit refusal or 401 to the session: the
-		// session stops the runtime, and the run pauses, or fails when no key is left.
+	if reason, ok := lr.sessionKeys().Stop(); ok {
+		// The proxy passed a model provider's limit refusal or 401 of the session's key
+		// group to the session: the session stops, and the run pauses at that session, or
+		// fails when every key of the session's group is out after a 401.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		w.Write(stopBody(reason))
@@ -911,7 +912,8 @@ func (lr *linkRun) joined(ev event.Event) {
 		}
 		j.exited = true
 		j.reason, _ = data["reason"].(string)
-		// The session's join ended: a stop after a limit refusal ends with it.
+		// The session's join ended: a stop after a limit refusal ends with it, in every
+		// group.
 		lr.keys.Resume()
 		if held := lr.r.Held(); j.accepted && (j.model != "" || j.noKey) && held != nil && held.Start != "" {
 			// The session ended: the proxy sets the start key again, after a session's

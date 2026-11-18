@@ -175,7 +175,7 @@ func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
 		return `{"version":1,"credentials":[{"name":"forge","apply":[{"hosts":["api.model.example"],"scheme":"bearer"}]` + extra + `}]}`
 	}
 	api := func(extra string) string {
-		return `{"version":1,"credentials":[{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer"}` + extra + `}]}`
+		return `{"version":1,"credentials":[{"name":"model","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer"}` + extra + `}]}`
 	}
 	// counted has api API credentials, the first the start key, and then hosts host
 	// credentials, each on the host <name>.git.example.
@@ -184,7 +184,7 @@ func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
 		for i := range api + hosts {
 			name := fmt.Sprintf("cred-%02d", i)
 			if i < api {
-				items = append(items, `{"name":"`+name+`","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`)
+				items = append(items, `{"name":"`+name+`","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`)
 				continue
 			}
 			items = append(items, `{"name":"`+name+`","apply":[{"hosts":["`+name+`.git.example"],"scheme":"bearer"}]}`)
@@ -206,7 +206,7 @@ func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
 		}
 	}
 	v := newVerified(t)
-	v.runDoc = `{"version":1,"credentials":[{"name":"model","format":"anthropic-messages","endpoint":"https://10.0.0.5:4443/anthropic","auth":{"scheme":"header","header":"x-api-key"},"key_prefixes":["sk-ant-"]},{"name":"forge","apply":[{"hosts":["git.example","fd00::5"],"scheme":"basic","username":"x-access-token","paths":["/v1/*"]}],"placeholders":["FORGE_TOKEN"]}]}`
+	v.runDoc = `{"version":1,"credentials":[{"name":"model","group":"anthropic","format":"anthropic-messages","endpoint":"https://10.0.0.5:4443/anthropic","auth":{"scheme":"header","header":"x-api-key"},"key_prefixes":["sk-ant-"]},{"name":"forge","apply":[{"hosts":["git.example","fd00::5"],"scheme":"basic","username":"x-access-token","paths":["/v1/*"]}],"placeholders":["FORGE_TOKEN"]}]}`
 	if _, _, err := v.client().Register(context.Background(), v.srv.URL+"/v1/runs", registration(t)); err != nil {
 		t.Fatalf("a run configuration with credentials: %v", err)
 	}
@@ -251,6 +251,152 @@ func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
 		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v; want run_configuration_invalid with %s", name, err, c.want)
 		}
+	}
+}
+
+// TestKeyGroupsAreChecked pins the key groups of a run configuration's API credentials:
+// the fixture of two groups is read; an API credential without group, and a host
+// credential with one, fail the schema; and CheckCredentials refuses, with the fix on
+// the first line and the cause on the second, two keys of one group that differ in a
+// member KeyGroupDiffers compares, as the fixture
+// run-configuration-beyond-schema-model-keys-group-mixed.json has, and two keys of one
+// group with chosen, as run-configuration-beyond-schema-model-keys-two-chosen.json has.
+// Two groups with a chosen key each, and two keys of two groups that differ, are read.
+func TestKeyGroupsAreChecked(t *testing.T) {
+	read := func(path string) string {
+		b, err := fs.ReadFile(contracts.FS, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	register := func(doc string) error {
+		v := newVerified(t)
+		v.runDoc = doc
+		_, _, err := v.client().Register(context.Background(), v.srv.URL+"/v1/runs", registration(t))
+		return err
+	}
+	if err := register(read("fixtures/run-configuration/model-keys-groups.json")); err != nil {
+		t.Errorf("model-keys-groups.json: %v", err)
+	}
+	for _, f := range []string{"run-configuration-credentials-api-no-group.json", "run-configuration-credentials-host-group.json"} {
+		var r *accesskey.Refusal
+		if err := register(read("fixtures/invalid/" + f)); !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !strings.Contains(err.Error(), "/credentials") {
+			t.Errorf("%s: %v; want run_configuration_invalid at /credentials", f, err)
+		}
+	}
+	for f, want := range map[string]string{
+		"run-configuration-beyond-schema-model-keys-group-mixed.json": "Give the keys of group \"anthropic\" one format, endpoint and auth.\nThe credentials \"model\" and \"model-2\" differ in endpoint",
+		"run-configuration-beyond-schema-model-keys-two-chosen.json":  "Set chosen on one key of group \"anthropic\".\nThe credentials \"model\" and \"model-2\" both have it",
+	} {
+		var r *accesskey.Refusal
+		if err := register(read("fixtures/invalid/" + f)); !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v; want run_configuration_invalid with %q", f, err, want)
+		}
+		if first, _, _ := strings.Cut(want, "\n"); len(first) > 100 {
+			t.Errorf("%s: the first line has %d characters", f, len(first))
+		}
+	}
+	key := func(name, group, extra string) server.RunCredential {
+		c := server.RunCredential{Name: name, Group: group, Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: server.Auth{Scheme: "header", Header: "x-api-key"}}
+		switch extra {
+		case "header case":
+			c.Auth.Header = "X-Api-Key"
+		case "scheme":
+			c.Auth = server.Auth{Scheme: "bearer"}
+		case "format":
+			c.Format = "openai-responses"
+		case "oauth":
+			c.Auth = server.Auth{Scheme: "header", Header: "x-api-key", OAuth: true}
+		}
+		return c
+	}
+	for extra, want := range map[string]string{"header case": "", "scheme": "auth.scheme", "format": "format", "oauth": "auth.oauth"} {
+		if got := server.KeyGroupDiffers(key("a", "g", ""), key("b", "g", extra)); got != want {
+			t.Errorf("KeyGroupDiffers with another %s: %q; want %q", extra, got, want)
+		}
+	}
+	if err := server.CheckCredentials([]server.RunCredential{key("a", "one", ""), key("b", "two", "scheme")}, "a"); err != nil {
+		t.Errorf("two groups that differ: %v", err)
+	}
+	// One pair of keys of one group per member KeyGroupDiffers compares, each pair valid
+	// but for that member; a header's name in another case is the same header.
+	auth := func(scheme, header string) server.Auth { return server.Auth{Scheme: scheme, Header: header} }
+	account := func(header, claim string) server.Auth {
+		return server.Auth{Scheme: "bearer", OAuth: true, AccountHeader: header, AccountClaim: claim}
+	}
+	basic := func(username string) server.Auth { return server.Auth{Scheme: "basic", Username: username} }
+	for _, p := range []struct {
+		member string
+		a, b   server.RunCredential
+	}{
+		{"format", server.RunCredential{Format: "anthropic-messages"}, server.RunCredential{Format: "openai-responses"}},
+		{"endpoint", server.RunCredential{Endpoint: "https://api.model.example/anthropic"}, server.RunCredential{Endpoint: "https://api.model.example/v2"}},
+		{"auth.scheme", server.RunCredential{Auth: auth("header", "x-api-key")}, server.RunCredential{Auth: auth("bearer", "")}},
+		{"auth.username", server.RunCredential{Auth: basic("one")}, server.RunCredential{Auth: basic("two")}},
+		{"auth.header", server.RunCredential{Auth: auth("header", "x-api-key")}, server.RunCredential{Auth: auth("header", "x-model-key")}},
+		{"", server.RunCredential{Auth: auth("header", "x-api-key")}, server.RunCredential{Auth: auth("header", "X-Api-Key")}},
+		{"auth.oauth", server.RunCredential{Auth: server.Auth{Scheme: "bearer"}}, server.RunCredential{Auth: server.Auth{Scheme: "bearer", OAuth: true}}},
+		{"auth.account_header", server.RunCredential{Auth: account("x-account-one", "account_id")}, server.RunCredential{Auth: account("x-account-two", "account_id")}},
+		{"", server.RunCredential{Auth: account("x-account-id", "account_id")}, server.RunCredential{Auth: account("X-Account-Id", "account_id")}},
+		{"auth.account_claim", server.RunCredential{Auth: account("x-account-id", "account_id")}, server.RunCredential{Auth: account("x-account-id", "org_id")}},
+	} {
+		fill := func(c server.RunCredential, name string) server.RunCredential {
+			c.Name, c.Group = name, "g"
+			if c.Format == "" {
+				c.Format = "anthropic-messages"
+			}
+			if c.Endpoint == "" {
+				c.Endpoint = "https://api.model.example/anthropic"
+			}
+			if c.Auth.Scheme == "" {
+				c.Auth = auth("header", "x-api-key")
+			}
+			return c
+		}
+		a, b := fill(p.a, "a"), fill(p.b, "b")
+		err := server.CheckCredentials([]server.RunCredential{a, b}, "a")
+		if p.member == "" {
+			if err != nil {
+				t.Errorf("two keys whose auth %+v and %+v differ in a header's case alone: %v; want them read", a.Auth, b.Auth, err)
+			}
+			continue
+		}
+		want := "Give the keys of group \"g\" one format, endpoint and auth.\nThe credentials \"a\" and \"b\" differ in " + p.member
+		if err == nil || !strings.HasPrefix(err.Error(), want+": ") {
+			t.Errorf("two keys that differ in %s: %v; want %q", p.member, err, want)
+		}
+	}
+	host := server.RunCredential{Name: "forge", Group: "g", Apply: []server.Apply{{Hosts: []string{"git.example"}, Scheme: "bearer"}}}
+	if err := server.CheckCredentials([]server.RunCredential{host}, ""); err == nil ||
+		!strings.HasPrefix(err.Error(), "Remove group from the credential \"forge\".\nOnly an API credential, one with format, has a group: ") {
+		t.Errorf("a host credential with group: %v", err)
+	}
+	if err := server.CheckCredentials([]server.RunCredential{{Name: "a", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: server.Auth{Scheme: "bearer"}}}, "a"); err == nil ||
+		!strings.HasPrefix(err.Error(), "Give the API credential \"a\" a group, the id of its provider.\n") {
+		t.Errorf("an API credential without group: %v", err)
+	}
+}
+
+// TestARunHasSixAPICredentialsAtMost pins CheckCredentials on a document not read
+// from bytes: 6 API credentials across two key groups are read, and a seventh is
+// run_configuration_invalid with the count, as the schema refuses it for a document
+// read from bytes. Host credentials do not count.
+func TestARunHasSixAPICredentialsAtMost(t *testing.T) {
+	var creds []server.RunCredential
+	for i := range 7 {
+		creds = append(creds, server.RunCredential{Name: fmt.Sprintf("key-%d", i+1), Group: []string{"one", "two"}[i%2], Format: "anthropic-messages",
+			Endpoint: "https://api.model.example/anthropic", Auth: server.Auth{Scheme: "header", Header: "x-api-key"}})
+	}
+	host := server.RunCredential{Name: "forge", Apply: []server.Apply{{Hosts: []string{"git.example"}, Scheme: "bearer"}}}
+	if err := server.CheckCredentials(append(slices.Clone(creds[:6]), host), "key-1"); err != nil {
+		t.Errorf("6 API credentials and a host credential: %v", err)
+	}
+	err := server.CheckCredentials(creds, "key-1")
+	var r *accesskey.Refusal
+	const want = "Remove API credentials until the run has 6 at most.\nThe document lists 7"
+	if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !strings.HasPrefix(err.Error(), want+": ") {
+		t.Errorf("7 API credentials: %v; want run_configuration_invalid %q", err, want)
 	}
 }
 

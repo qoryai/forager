@@ -43,7 +43,7 @@ func (f *fakeControl) sent() ([]time.Time, []bool) {
 // reporterOf is a reporter of a group of two keys that sends to f, with a gap of gap.
 func reporterOf(f *fakeControl, gap time.Duration) (*keyReporter, *modelkey.Group) {
 	g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}, {Name: "model-2", PauseFor: time.Hour}}, "model", nil)
-	k := newKeyReporter("run", "https://control.example/v1/runs", g, f.send, func(string) {}, func(string) {})
+	k := newKeyReporter("run", "https://control.example/v1/runs", oneGroup(g), f.send, func(string) {}, func(string) {})
 	k.gap = gap
 	return k, g
 }
@@ -131,7 +131,7 @@ func TestAChangeDuringASendGoesInTheNextReport(t *testing.T) {
 		return nil, nil
 	}
 	g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}}, "model", nil)
-	k := newKeyReporter("run", "https://control.example/v1/runs", g, send, func(string) {}, func(string) {})
+	k := newKeyReporter("run", "https://control.example/v1/runs", oneGroup(g), send, func(string) {}, func(string) {})
 	k.gap = 50 * time.Millisecond
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
@@ -249,7 +249,7 @@ func fiveHour(rep server.ModelKeysReport) int {
 // the test's cleanup.
 func startedReporter(t *testing.T, r *recorder, gap time.Duration) (*keyReporter, func(string), func()) {
 	g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}}, "model", nil)
-	k := newKeyReporter("run", "https://control.example/v1/runs", g, r.send, func(string) {}, func(string) {})
+	k := newKeyReporter("run", "https://control.example/v1/runs", oneGroup(g), r.send, func(string) {}, func(string) {})
 	k.gap = gap
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
@@ -382,7 +382,7 @@ func TestNoReportAfterA404OrA410(t *testing.T) {
 	for _, ae := range []*server.ModelKeysAnswerError{{Status: http.StatusNotFound}, {Status: http.StatusGone, Signed: true}} {
 		r := &recorder{fail: func(int, server.ModelKeysReport) bool { return true }}
 		g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}}, "model", nil)
-		k := newKeyReporter("run", "https://control.example/v1/runs", g, func(ctx context.Context, rep server.ModelKeysReport) ([]server.ModelKeyState, error) {
+		k := newKeyReporter("run", "https://control.example/v1/runs", oneGroup(g), func(ctx context.Context, rep server.ModelKeysReport) ([]server.ModelKeyState, error) {
 			r.send(ctx, rep)
 			return nil, ae
 		}, func(string) {}, func(string) {})
@@ -412,7 +412,7 @@ func TestTheRunsEndLogsTheReportsThatDidNotGo(t *testing.T) {
 	g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}}, "model", nil)
 	var mu sync.Mutex
 	var lines []string
-	k := newKeyReporter("run", "https://control.example/v1/runs", g, r.send, func(line string) { mu.Lock(); lines = append(lines, line); mu.Unlock() }, func(string) {})
+	k := newKeyReporter("run", "https://control.example/v1/runs", oneGroup(g), r.send, func(line string) { mu.Lock(); lines = append(lines, line); mu.Unlock() }, func(string) {})
 	k.gap, k.backoff = 0, []time.Duration{time.Hour}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
@@ -462,7 +462,7 @@ func TestANewReportStartsTheBackoffAgain(t *testing.T) {
 func TestASessionExitedAfterTheRunsEndMakesNoSecondEndReport(t *testing.T) {
 	for _, ended := range []bool{false, true} {
 		g := modelkey.New([]modelkey.Key{{Name: "model", PauseFor: time.Hour}}, "model", nil)
-		k := newKeyReporter("run", "https://control.example/v1/runs", g, (&recorder{}).send, func(string) {}, func(string) {})
+		k := newKeyReporter("run", "https://control.example/v1/runs", oneGroup(g), (&recorder{}).send, func(string) {}, func(string) {})
 		lr := &linkRun{id: "run", seen: map[string]bool{}, r: &run.Run{}, reporter: k, ended: ended,
 			joins: []*join{{session: 1, accepted: true, started: true}}}
 		lr.mu.Lock()
@@ -477,4 +477,9 @@ func TestASessionExitedAfterTheRunsEndMakesNoSecondEndReport(t *testing.T) {
 		}
 		k.mu.Unlock()
 	}
+}
+
+// oneGroup is the set of the one key group g.
+func oneGroup(g *modelkey.Group) *modelkey.Set {
+	return modelkey.NewSet([]*modelkey.Group{g}, g.Names())
 }

@@ -2,6 +2,7 @@ package credential
 
 import (
 	"encoding/base64"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -94,22 +95,25 @@ func TestAccountClaimRefusesWhatHasNoClaim(t *testing.T) {
 	}
 }
 
-// TestAnAccountHeaderSplitsTheKeyGroup pins that the key group compares the account
-// header, case ignored, and the account claim: a key with another claim, or none, is
-// outside the start key's group.
-func TestAnAccountHeaderSplitsTheKeyGroup(t *testing.T) {
-	key := func(name, header, claim string) KeyEntry {
-		return KeyEntry{Name: name, Format: "openai-responses", Endpoint: "https://chat.model.example/backend-api/codex", Scheme: "bearer", OAuth: true,
-			AccountHeader: header, AccountClaim: claim}
-	}
+// TestKeyGroupsFollowTheGroupMember pins the key groups of a run configuration's
+// entries: one group per group value of the API credentials, each with its keys in
+// their order, the groups in the order of their first key, and a host credential in
+// none.
+func TestKeyGroupsFollowTheGroupMember(t *testing.T) {
 	entries := []KeyEntry{
-		key("one", "account-id", accountPointer),
-		key("two", "Account-Id", accountPointer),
-		key("other-claim", "account-id", "/https:~1~1auth.model.example~1auth/org_id"),
-		key("no-header", "", ""),
+		{Name: "one", Format: "openai-responses", Group: "openai"},
+		{Name: "claude", Format: "anthropic-messages", Group: "anthropic"},
+		{Name: "forge"},
+		{Name: "two", Format: "openai-responses", Group: "openai"},
+		{Name: "claude-2", Format: "anthropic-messages", Group: "anthropic"},
 	}
-	if got := KeyGroup(entries, "one"); strings.Join(got, ",") != "one,two" {
-		t.Errorf("KeyGroup %v; want one and two", got)
+	want := []KeyGroup{{Name: "openai", Keys: []string{"one", "two"}}, {Name: "anthropic", Keys: []string{"claude", "claude-2"}}}
+	got := KeyGroups(entries)
+	if !slices.EqualFunc(got, want, func(a, b KeyGroup) bool { return a.Name == b.Name && slices.Equal(a.Keys, b.Keys) }) {
+		t.Errorf("KeyGroups %v; want %v", got, want)
+	}
+	if got := KeyGroups([]KeyEntry{{Name: "forge"}}); got != nil {
+		t.Errorf("KeyGroups of a host credential alone: %v; want none", got)
 	}
 }
 

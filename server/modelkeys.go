@@ -15,8 +15,9 @@ import (
 // of 64 characters take about 19 KiB.
 const MaxModelKeysReport = 32 << 10
 
-// ModelKeyState is the state of one limit window of one model key of a run's key group,
-// an entry of model-keys-report.schema.json's keys and of model-keys-answer.schema.json's.
+// ModelKeyState is the state of one limit window of one model key of a key group of a
+// run, an entry of model-keys-report.schema.json's keys and of
+// model-keys-answer.schema.json's.
 // Times are RFC 3339 in UTC; ResetsAt and CooldownUntil are empty when the state has
 // none, and Utilization nil.
 type ModelKeyState struct {
@@ -36,7 +37,7 @@ const MaxUnauthorized = 6
 
 // ModelKeysReport is a model keys report: the time it is sent, RFC 3339 in UTC with
 // whole seconds, empty for the clock's now; the number of the session open when the
-// gateway made it, 0 for none; every window the gateway has of the run's key group;
+// gateway made it, 0 for none; every window the gateway has of the run's key groups;
 // and the keys the gateway no longer sets after a 401 of the model provider, none for
 // an empty list.
 type ModelKeysReport struct {
@@ -46,8 +47,8 @@ type ModelKeysReport struct {
 	Unauthorized []UnauthorizedKey
 }
 
-// UnauthorizedKey is an entry of a model keys report's unauthorized: a key of the
-// run's key group, and when the model provider's 401 to a request with it arrived,
+// UnauthorizedKey is an entry of a model keys report's unauthorized: a key of a key
+// group of the run, and when the model provider's 401 to a request with it arrived,
 // RFC 3339 in UTC.
 type UnauthorizedKey struct {
 	Credential string `json:"credential"`
@@ -82,9 +83,9 @@ func (e *ModelKeysAnswerError) Error() string {
 	return fmt.Sprintf("%s: %s status %d", e.What, signed, e.Status)
 }
 
-// PostModelKeys posts the state of a run's key group, rep, to
+// PostModelKeys posts the state of a run's key groups, rep, to
 // <runURL>/<runID>/model-keys, signed by the access key, and returns the answer's
-// keys: for each key of the group, the newest state per window from every gateway. A
+// keys: for each key of the groups, the newest state per window from every gateway. A
 // body over [MaxModelKeysReport], or with more than [MaxUnauthorized] unauthorized
 // entries, is refused before anything is sent. A transport failure
 // is an error with no answer; any answer other than a signed 200 is a

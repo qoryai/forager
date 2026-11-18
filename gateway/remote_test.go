@@ -1240,7 +1240,7 @@ func TestCloseStopsTheTriesOfARunThatOpens(t *testing.T) {
 // reopen fetches with a secrets request.
 func serveToolAndKeys(c *control) {
 	entry := func(name string) string {
-		return `{"name":"` + name + `","format":"anthropic-messages","endpoint":"https://localhost:9/v1","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
+		return `{"name":"` + name + `","group":"anthropic","format":"anthropic-messages","endpoint":"https://localhost:9/v1","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
 	}
 	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost","svc.example"]},"tools":[{"name":"svc"}]},`+
 		`"model_credential":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
@@ -2300,7 +2300,7 @@ func TestEachFirstRequestReopensARun(t *testing.T) {
 // and model-2, at an endpoint on localhost, with fake values.
 func serveKeyGroup(c *control) {
 	entry := func(name string) string {
-		return `{"name":"` + name + `","format":"anthropic-messages","endpoint":"https://localhost:9/v1","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
+		return `{"name":"` + name + `","group":"anthropic","format":"anthropic-messages","endpoint":"https://localhost:9/v1","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
 	}
 	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"model_credential":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
 	c.mu.Lock()
@@ -2321,7 +2321,7 @@ func TestAReopenedRunKeepsItsStop(t *testing.T) {
 	m := before.open(t, runKeyFor(t, marked, nil), server.LinkRunRequest{Wall: true})
 	p := before.open(t, runKeyFor(t, plain, nil), server.LinkRunRequest{Wall: true})
 	// The mark as the key group's Pass makes it.
-	if err := os.WriteFile(filepath.Join(cfg.Dir, "runs", marked, "model-key-limit"), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(cfg.Dir, "runs", marked, "model-key-limit"), []byte(`{"version":1,"groups":[{"group":"anthropic"}]}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	after := before.restart(t, cfg)

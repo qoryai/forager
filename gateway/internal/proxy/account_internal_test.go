@@ -114,7 +114,7 @@ func newAccountFixture(t *testing.T, paths map[string][]string, g *modelkey.Grou
 	f.p.TrustUpstream(roots)
 	if g != nil {
 		// No format: a group whose requests the proxy sends again with the next key.
-		f.p.SetKeyGroup(g, "", "/backend-api/codex/responses", nil)
+		f.p.SetKeyGroups([]KeyGroup{{Group: g, Stream: "/backend-api/codex/responses"}}, nil)
 	}
 	ca, err := NewCA("test")
 	if err != nil {

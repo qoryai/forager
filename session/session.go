@@ -253,7 +253,7 @@ func withoutNames(env, names []string) []string {
 
 // placeholders are the variables a program wants set before it starts, with a value
 // that is no credential: [link.Placeholder], and the start key's variable its
-// placeholder, [link.KeyPlaceholder].
+// placeholder, the placeholder of its key group, [link.GroupPlaceholder].
 func placeholders(names []string, key keyed) []string {
 	variable, _, _ := strings.Cut(key.Variable, "=")
 	out := make([]string, len(names))

@@ -10,6 +10,22 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Give each API credential of a run configuration `group`, the id of its provider as
+  the server sets it, such as `anthropic`: the schema refuses an API credential without
+  it, and a host credential with it. The API credentials with one `group` value are one
+  key group, and a run can have several. Give the keys of one group one `format`,
+  `endpoint` and `auth`, and `chosen` on one key of a group at most:
+  `server.CheckCredentials` refuses others with `run_configuration_invalid`, such as
+  `Give the keys of group "anthropic" one format, endpoint and auth.` with the cause on
+  a second line. `server.KeyGroupDiffers` returns the member in which two keys differ.
+  The run answer's `credential_hosts` entries of an API credential from the server have
+  `group` (`server.LinkCredentialHosts.Group`), and `link.GroupPlaceholder` returns a
+  key's placeholder: that of its group's first key in that list. A session sets the
+  runtime's key variable to it. A run configuration still has at most 6 API
+  credentials, across every group, and `server.CheckCredentials` refuses a seventh in
+  a document built in Go too: `Remove API credentials until the run has 6 at most.`
+  A separate gateway's `model-key-limit` lists each key group that passed, by its
+  `group` value, with the stop's reason, as JSON.
 - Read `model.endpoint` of a runtime in `runtimes.json` as one of `variable` and
   `setting`: a descriptor's endpoint may be a setting, such as
   `model_providers.qory.base_url`, and then has no `variable`. Read `resume` of a
@@ -449,10 +465,9 @@ release may change what an existing document does, and says so under Upgrading.
   it ends, before `dev.qory.run.exited`. `request_id` is that of the request's
   `dev.qory.run.egress`. A link batch with the type is refused, as one with
   `dev.qory.run.egress` is. README §The events, Writes to a target.
-- Several model keys per run. When the start key is an API credential, the key group is
-  the start key and every API credential with its `format`, `auth` and `endpoint`, in the
-  order of `credentials`. The keys of the group share the start key's placeholder, and
-  the proxy sets one of them, the active key. The proxy keeps a copy of each request body
+- Several model keys per run. The API credentials with one `group` value are one key
+  group, in the order of `credentials`. The keys of a group share the placeholder of the
+  group's first key, and the proxy sets one of them, the group's active key. The proxy keeps a copy of each request body
   to the model endpoint, up to 8 MiB, until the answer's status arrives. On a `429` from
   the provider it puts the key in cooldown, makes the next key of the group the active
   key, and sends the request again from the copy, so the session does not see the
@@ -461,10 +476,10 @@ release may change what an existing document does, and says so under Upgrading.
   after the refusal: without it, 60 seconds for an API key and 3600 for a subscription.
   An `error` event of the type `rate_limit_error` in the streamed `200` of a `POST` to
   the model API's messages path, `/v1/messages` under the endpoint, puts the key in
-  cooldown and switches the active key too. The active key stays across sessions, and a
-  join request without `model_credential` gets it. The run configuration's API
-  credential has `resets_at`, `schedule_resets_at` and `pause_for_s`. README §Credentials,
-  Several model keys.
+  cooldown and switches the active key too. A group's active key stays across sessions,
+  and a join request without `model_credential` gets the active key of the start key's
+  group. The run configuration's API credential has `resets_at`, `schedule_resets_at` and
+  `pause_for_s`. README §Credentials, Several model keys.
 - A key's Use up to percentage: the run configuration's API credential has
   `use_up_to_percent`, 1 to 99, and `use_up_to_windows`, the limit windows it applies
   to, such as `five_hour` and `seven_day`. Runs use the key while every listed window's
@@ -1260,6 +1275,25 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Expect one key group per `group` value of a run's API credentials, each with its
+  rotation, cooldowns and stop apart from the others' (contract README §Credentials,
+  Several model keys). A join request with a key of a group in `model_credential` gets
+  that group's active key. For a group other than the start key's that no session used
+  yet, it gets that key, or, when that key is in cooldown or out, the key a limit
+  refusal switches to: the key with `chosen`, then a key with no known reset by the
+  order, then the key whose reset is closest. With no key of the group usable, it gets
+  that key: the session's first request gets the gateway's `429` with no
+  `Retry-After`, and the answer to its next batch has `stop`: `model_key_limit`, or
+  `model_key_unauthorized` when a 401 took the group's last key out. A
+  join request with no `model_credential` gets the start key's group. The proxy sets the active key of the session's group alone, on a
+  request with that group's placeholder. With every key of the session's group in
+  cooldown or used up, the session stops, and the run pauses at that session; with every
+  key of the session's group out after a `401`, the session ends
+  `model_key_unauthorized`, `failed`, with no continuation. A key of another group never
+  takes the place of the session's group. The model keys reports list the keys of every
+  group. A model key of `forager.yaml` is in no group, as before. A run whose start key
+  is the machine's has key groups for its keys from the server, and sends model keys
+  reports for them.
 - Write each path of a machine credential's `paths` in `forager.yaml` without a `.` or
   `..` segment, an empty segment, a backslash, or an encoded slash, backslash, dot or
   percent sign, also before a segment's first `;` or `%3B`. The gateway does not start
@@ -1394,9 +1428,9 @@ release may change what an existing document does, and says so under Upgrading.
   every request to the key's host. A key whose value has no such string when the run
   opens leaves the key group: the proxy never sets it, and the run's record has one
   line that starts with the fix and contains neither the value nor the claim. With no
-  key of the group left, the run is refused, `run_configuration_invalid`. A renewed
-  value without the string is a renewal refused for its form, and the run keeps the
-  value it had.
+  key left in a key group of the run, the start key's group or another, the run is
+  refused at its start, `run_configuration_invalid`. A renewed value without the
+  string is a renewal refused for its form, and the run keeps the value it had.
 - The link's host calls, `POST <run.url>/<run_id>/next-session` and `POST
   <run.url>/<run_id>/pushed-commits`: the gateway reads the body, at most 4 KiB and
   64 KiB, before it looks up or reopens the run, and sends it unread to Qory Apiary with
@@ -1453,7 +1487,7 @@ release may change what an existing document does, and says so under Upgrading.
   no key is left; the gateway's answer to the session's next batch then has `stop`,
   `model_key_limit`. From then until the session's join ends, each request with the
   placeholder gets the proxy's `429`, `The gateway sends no more model requests in this
-  session: every model key of the run's key group is at its provider's limit, at its
+  session: every model key of the session's key group is at its provider's limit, at its
   Use up to percentage, or out of use after a 401 (unauthorized) of its provider, or
   the gateway could not send a request again with the next key after a limit response
   (a request over 8 MiB, a key whose credential does not cover the path, or an
