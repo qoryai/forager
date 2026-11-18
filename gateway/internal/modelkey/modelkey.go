@@ -244,8 +244,9 @@ func (g *Group) JoinChoice() string {
 
 // JoinChoiceAt is the key [Group.JoinChoice] returns when the key name is the active
 // key, with no key made active: name, or, when it is in cooldown or out, the first key
-// of [Group.next], or name again when no key of the group is usable. The gateway calls it for a join request whose model_credential is
-// a key of a group no session used yet. A name of no key of the group is [Group.JoinChoice].
+// of [Group.next], or name again when no key of the group is usable. The gateway calls
+// it for a join request whose model_credential is a key of a group no session used
+// yet. A name of no key of the group is [Group.JoinChoice].
 func (g *Group) JoinChoiceAt(name string) string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
