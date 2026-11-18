@@ -10,8 +10,7 @@
     "egress": {
       "mode": "enforce",
       "allow": [
-        "git.example",
-        "api.git.example"
+        "git.example"
       ]
     }
   },
@@ -22,8 +21,7 @@
   "applied": {
     "mode": "enforce",
     "allow": [
-      "git.example",
-      "api.git.example"
+      "git.example"
     ],
     "source": "config",
     "digest": "fba84d8241c88aa4214824cc7bb83ad149d7076d92d183808220842ad75240d4",
@@ -46,18 +44,6 @@
         "scheme": "basic",
         "paths": [
           "/example-org/app.git/*"
-        ],
-        "purpose": "push"
-      },
-      {
-        "name": "push-1",
-        "hosts": [
-          "api.git.example"
-        ],
-        "scheme": "bearer",
-        "paths": [
-          "/repos/example-org/app/pulls",
-          "/repos/example-org/app/pulls/{}"
         ],
         "purpose": "push"
       }

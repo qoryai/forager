@@ -152,7 +152,7 @@ func TestThePushProxyBehindASeparateGateway(t *testing.T) {
 			}
 			other := runKeyFor(t, event.NewRunID(), nil)
 			for what, line := range map[string]string{"another run's key": link.PushLine(other), "no run key": link.PushPreamble + " qrk_not.a-run-key\n"} {
-				if _, err := p.client(t, e, line).Get("https://localhost:" + p.port + "/repos/example-org/app/pulls/12"); err == nil {
+				if _, err := p.client(t, e, line).Get("https://localhost:" + p.port + pushRefs); err == nil {
 					t.Errorf("QORY-PUSH with %s was answered", what)
 				}
 			}
@@ -237,7 +237,7 @@ func TestAReopenedRunKeepsItsPushProxy(t *testing.T) {
 				if tokens, proxied := gateway.PushTokens(p.r.g, runID); proxied || len(tokens) != 0 {
 					t.Errorf("the reopened run has a push proxy: %v with %v", proxied, tokens)
 				}
-				if resp, err := p.client(t, e, link.PushLine(key)).Get("https://localhost:" + p.port + "/repos/example-org/app/pulls/12"); err == nil {
+				if resp, err := p.client(t, e, link.PushLine(key)).Get("https://localhost:" + p.port + pushRefs); err == nil {
 					resp.Body.Close()
 					t.Errorf("QORY-PUSH of the reopened write-no-push run got %d", resp.StatusCode)
 				}

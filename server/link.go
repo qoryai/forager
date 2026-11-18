@@ -192,7 +192,7 @@ type LinkImage struct {
 // placeholder for it. Auth is how the proxy sets its value, for a credential from the
 // server and for a model key of the machine's; nil for every other. Format and Endpoint
 // are an API credential's, a model key's, whose Hosts are the endpoint's host alone:
-// the session gives the key to the variable the run's runtime lists for Format and
+// the session gives the key to the variable the session's runtime lists for Format and
 // Auth, and sets the runtime's endpoint variable to Endpoint. Names and hosts alone,
 // never a secret.
 type LinkCredentialHosts struct {

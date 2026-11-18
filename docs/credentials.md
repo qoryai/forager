@@ -531,16 +531,19 @@ fixed when the run starts: a reload ignores it.
 
 ### Push credentials
 
-A host credential with `purpose: push` is for qory's push of the work item's branch and
-the pull request calls of its submit step. Forager has no access level: Qory Apiary sends
-a push credential only for a `write` run, beside a read work credential. A run with no
-push credential, such as a `write-no-push` run, which gets a read work credential alone,
-has no push proxy: `PushProxy` returns "Add a push credential to the run configuration:
-this run has no push proxy."
+A host credential with `purpose: push` is for qory's push of the work item's branch.
+Qory Apiary lists only the repository's git paths, such as `/example-org/app.git/*`, in
+a push credential's items: the forge's adapter opens the pull request. Forager does not
+check which paths the items list; the push proxy sets the push value on every path an
+item covers. Forager has no access level: Qory Apiary sends a push credential only for
+a `write` run, beside a read work credential. A run with no push credential, such as a
+`write-no-push` run, which gets a read work credential alone, has no push proxy:
+`PushProxy` returns "Add a push credential to the run configuration: this run has no
+push proxy."
 
 ```json
 {"version": 1,
- "security_policy": {"version": 1, "egress": {"mode": "enforce", "allow": ["git.example", "api.git.example"]}},
+ "security_policy": {"version": 1, "egress": {"mode": "enforce", "allow": ["git.example"]}},
  "credentials": [
    {"name": "work-1",
     "apply": [{"hosts": ["git.example"], "scheme": "basic",
@@ -548,9 +551,7 @@ this run has no push proxy."
     "placeholders": ["GIT_TOKEN"]},
    {"name": "push-1", "purpose": "push",
     "apply": [{"hosts": ["git.example"], "scheme": "basic", "username": "x-access-token",
-               "paths": ["/example-org/app.git/*"], "push_ref": "refs/heads/qory/wi_01"},
-              {"hosts": ["api.git.example"], "scheme": "bearer",
-               "paths": ["/repos/example-org/app/pulls", "/repos/example-org/app/pulls/{}"]}]}]}
+               "paths": ["/example-org/app.git/*"], "push_ref": "refs/heads/qory/wi_01"}]}]}
 ```
 
 - Only the run's push proxy sets a push credential, on its items' hosts and paths, with
@@ -566,10 +567,11 @@ this run has no push proxy."
   hosts alone. It sets the push value only on the paths of the push items, and returns
   a `403` for a path that no item covers.
 - The push proxy checks paths, not methods. On a path an item covers, every method gets
-  the push value: under the item `/repos/example-org/app/pulls/{}`, a `PATCH` of
-  `/repos/example-org/app/pulls/12` passes, and `PUT
-  /repos/example-org/app/pulls/12/merge` gets a `403`. The branch guard limits each git
-  push to the item's `push_ref`.
+  the push value: under the item `/example-org/app.git/*`, a `GET` of
+  `/example-org/app.git/info/refs` and a `POST` of
+  `/example-org/app.git/git-receive-pack` pass, and `GET
+  /example-org/other.git/info/refs` gets a `403`. The branch guard limits each git push
+  to the item's `push_ref`.
 - The paths of the push items pin the repository. An item with no paths covers every
   path on its hosts.
 - The push proxy stays open from the run's open until its close, through every join.

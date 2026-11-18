@@ -280,64 +280,74 @@ characters.
 `SessionSpec.Runtime` is nil, and no `bare` otherwise, also for a bare runtime the caller
 set. The command may still be an agent, because Forager does not inspect it.
 
-Every `dev.qory.run.exited` shows how the run ended in `state`: `succeeded`, `failed` or
-`cancelled`, stopped before it said how it went. The close of the run writes the
-outcome its caller gives. A run its starter ends with an outcome has that outcome. When
-the close's outcome has a reason, or the run ends without a close, or its starter gives
-a reason, `dev.qory.run.exited` contains why in `reason`: an open code, Forager's or the
+Every `dev.qory.run.exited` shows how the run ended in `state`: `succeeded`, `failed`,
+`cancelled`, stopped before it said how it went, or `paused`, stopped at the model key
+limit or to continue on another model key. The close of the run writes the outcome its
+caller gives. A run its starter ends with an outcome has that outcome. When the close's
+outcome has a reason, or the run ends without a close, or its starter gives a reason,
+`dev.qory.run.exited` contains why in `reason`: an open code, Forager's or the
 starter's, carried as given. A starter's code is none of Forager's reserved codes and
 none of the image, workflow, `read_needs_*` and `write_needs_wall` codes, which the
 close takes only before a join. The gateway accepts a starter's code in the close only
 `failed`, before or after the gateway numbered a join of the run. When qory knows the
 cause, it closes a failed run with one of its end codes, listed in `$defs/end_codes` of
 integrations' `contracts/run/v1/outcome.schema.json`, whether or not a session joined
-it. The close writes `timeout`, `cancelled`, `interrupted`, `cancelled`, a run stopped
-from where it was started (a Ctrl-C), and `no_session`, `failed`, a run closed with no
-session and no reason after its host work failed, such as a fetch, and
-`model_key_limit`, `paused`, a run whose last session ended `paused` with
-`model_key_limit`, which a control plane
-reads as a pause of the run, and posts them. The close writes and posts `image_missing`,
-`failed` with exit code `-1`, when its caller gives it for a run with no session after
-the fetch of the run's image found that its registry, or the registry's mirror, does not
-have it, and the same for `image_user_root`, after the fetch found that the image's user
-is root, and for `image_access_denied`, `image_rate_limited` and
-`image_registry_unreachable`, after the check of the image at its registry got 401 or
-403, got 429, or did not reach the registry. qory closes a run with no session whose
-workflow is not in the harness with `workflow_not_in_harness`, `failed` with exit code
-`-1`. qory closes a read run (the contract's §The events, How a run ends) with no
-session that has no wall with `read_needs_wall`, a read run whose setup is set to run
-inside the agent's container with `read_needs_setup_outside`, a read run whose image
-runs nested Docker with `read_needs_no_nested_docker`, and a read run whose setup
-container could not be removed with `read_needs_setup_removed`, each `failed` with exit
-code `-1`. qory closes a run with no session whose access is not read and that has no
-wall with `write_needs_wall`, `failed` with exit code `-1`. A run whose last
-session ended `paused` with `model_key_limit`, after the gateway's answer to a batch
-had `stop` because no model key of the session's key group was left out of cooldown, closes
-`paused` with `model_key_limit` after its host work; the gateway returns an error for that reason
-in a run with no join, after a last session that ended another way, and with another
-state; and for `paused` with no reason or another reason.
-The gateway writes the others: `session_lost`, `failed`, the session was silent;
-`batch_refused`, `failed`, the gateway refused a batch from the run's session
-(see the contract's §The gateway's link); `stopped`, `cancelled`, the starter ended the run and
-gave no outcome, or the starter's outcome and reason when it gave one; and sending a
-record again writes `gateway_lost`, `failed`. Forager's codes are reserved, and so are
-the old names `quiet`, `credential_expired`, `credential_check_unreachable` and
-`credential_check_invalid`, which Forager no longer writes: a starter's reason that
-equals one is dropped. When the gateway ends a session's run, the gateway writes the
-open session's `dev.qory.session.exited` and then the run's `dev.qory.run.exited`, and
-answers the session's next request with a `410`, a code, and the state and the reason
-of that end. Sending a record again writes the open session's `dev.qory.session.exited`
-the same way before its `gateway_lost`. The session records its
-`dev.qory.session.exited` and its `dev.qory.run.exited` in `session.jsonl` alone, with
-them and exit code -1, and posts nothing more:
-`stopped`, `run_closed`, `session_lost` or `batch_refused` as the gateway ended the
-run. A refusal of the run request with a
-code other than `wall_required` is recorded the same way: the session records
-`dev.qory.run.refused` only in the session's record, since the gateway opened no run. A
-code of the server's comes with its status, and is recorded as the server sent it,
-`not_found` among them, and one the contract does not list yet too. A run the gateway
-could not open for a reason without a code, a `5xx` `internal`, is recorded nowhere: the
-run returns the error the gateway's message says. The contract describes each.
+it. The close writes each of these reasons with its state, and posts them:
+
+- `timeout`, `cancelled`, with exit code `124`;
+- `interrupted`, `cancelled`, a run stopped from where it was started (a Ctrl-C);
+- `no_session`, `failed`, a run closed with no session and no reason after its host work
+  failed, such as a fetch;
+- `model_key_limit`, `paused`, a run whose last session ended `paused` with
+  `model_key_limit`, which a control plane reads as a pause of the run;
+- `model_key_switch`, `paused`, a run whose last session ended `paused` with
+  `model_key_switch`;
+- `model_key_unauthorized`, `failed`, a run whose last session ended `failed` with
+  `model_key_unauthorized`.
+
+The close writes and posts `image_missing`, `failed` with exit code `-1`, when its
+caller gives it for a run with no session after the fetch of the run's image found that
+its registry, or the registry's mirror, does not have it, and the same for
+`image_user_root`, after the fetch found that the image's user is root, and for
+`image_access_denied`, `image_rate_limited` and `image_registry_unreachable`, after the
+check of the image at its registry got 401 or 403, got 429, or did not reach the
+registry. qory closes a run with no session whose workflow is not in the harness with
+`workflow_not_in_harness`, `failed` with exit code `-1`. qory closes a read run (the
+contract's §The events, How a run ends) with no session that has no wall with
+`read_needs_wall`, a read run whose setup is set to run inside the agent's container
+with `read_needs_setup_outside`, a read run whose image runs nested Docker with
+`read_needs_no_nested_docker`, and a read run whose setup container could not be removed
+with `read_needs_setup_removed`, each `failed` with exit code `-1`. qory closes a run
+with no session whose access is not read and that has no wall with `write_needs_wall`,
+`failed` with exit code `-1`. A run whose last session ended `paused` with
+`model_key_limit`, after the gateway's answer to a batch had `stop` because no model key
+of the session's key group was left out of cooldown, closes `paused` with `model_key_limit`
+after its host work. The gateway returns an error for `model_key_limit`,
+`model_key_switch` and `model_key_unauthorized` in a run with no join, after a last
+session that ended another way, and with a state other than the one listed beside the
+reason; and for `paused` with no reason or with a reason other than `model_key_limit`
+and `model_key_switch`. The gateway writes the others: `session_lost`, `failed`, the
+session was silent; `batch_refused`, `failed`, the gateway refused a batch from the
+run's session (see the contract's §The gateway's link); `stopped`, `cancelled`, the
+starter ended the run and gave no outcome, or the starter's outcome and reason when it
+gave one; and sending a record again writes `gateway_lost`, `failed`. Forager's codes
+are reserved, and so are the old names `quiet`, `credential_expired`,
+`credential_check_unreachable` and `credential_check_invalid`, which Forager no longer
+writes: a starter's reason that equals one is dropped. When the gateway ends a session's
+run, the gateway writes the open session's `dev.qory.session.exited` and then the run's
+`dev.qory.run.exited`, and answers the session's next request with a `410`, a code, and
+the state and the reason of that end. Sending a record again writes the open session's
+`dev.qory.session.exited` the same way before its `gateway_lost`. The session records
+its `dev.qory.session.exited` and its `dev.qory.run.exited` in `session.jsonl` alone,
+with them and exit code -1, and posts nothing more: `stopped`, `run_closed`,
+`session_lost` or `batch_refused` as the gateway ended the run. A refusal of the run
+request with a code other than `wall_required` is recorded the same way: the session
+records `dev.qory.run.refused` only in the session's record, since the gateway opened no
+run. A code of the server's comes with its status, and is recorded as the server sent
+it, `not_found` among them, and one the contract does not list yet too. A run the
+gateway could not open for a reason without a code, a `5xx` `internal`, is recorded
+nowhere: the run returns the error the gateway's message says. The contract describes
+each.
 
 ## The runtime's events
 
