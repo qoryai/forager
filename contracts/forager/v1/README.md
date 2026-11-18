@@ -6901,7 +6901,11 @@ up in its parent, so two binds of one root are allowed:
   through another bind, and its path on the machine is, contains and lies inside no
   other place's: `mount_mode_conflict` for the other mode, otherwise
   `mount_target_conflict`. So the agent cannot change a read-only file through a
-  writable directory of the machine.
+  writable directory of the machine. A walled Codex run's hooks file is such a mount,
+  read-only at `/etc/codex/hooks.json`, which Codex 0.167.2 reads as managed hooks
+  because of that path; the file has the owner it has on the machine, and in an image
+  with no `/etc/codex` the agent cannot change, rename or replace it, or add a file
+  beside it (docs/wall.md, Codex's hooks file).
   Inside, places are nested by their places inside, when one of them has a target: a
   read-only place may lie one name inside a writable one, such as a read-only
   `/var/lib/agent-home/hooks.json` in a writable `/var/lib/agent-home`, or deeper when

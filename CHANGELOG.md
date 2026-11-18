@@ -2115,6 +2115,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- docs/wall.md, Codex's hooks file: `qory` passes a walled Codex run's hooks file
+  read-only at `/etc/codex/hooks.json`, with the owner it has on the node, and the wall
+  copies nothing. Codex 0.167.2 reads that path as managed hooks, and the agent cannot
+  change, rename or replace the file, or add a file beside it when the image has no
+  `/etc/codex`. In an image with `/etc/codex`, give it to root, with no write for the
+  group or others. The contract's wall section has the same in one sentence.
 - `SessionSpec.Mounts[].Target`, `wall.Mount.Target` from a caller: the place inside
   where the wall shows a mount, such as a composed home at `/var/lib/agent-home` and a
   read-only `/var/lib/agent-home/hooks.json` inside it (docs/wall.md, No bind from a
@@ -3204,6 +3210,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `TestDockerConforms` has the case "a read-only file at /etc/codex/hooks.json stays
+  as it is": in busybox, with the file at mode `0666` on this machine, the agent reads
+  it exactly, cannot write, append to, chmod, remove, rename or replace it, cannot add a
+  file or a symbolic link in `/etc/codex`, which is root's with mode `0755`, and cannot
+  rename or replace `/etc/codex`; the file is the same afterwards, inside and on this
+  machine. Both Wall conformance jobs run it.
 - Five tests run Codex 0.167.2 behind the wall, against a stub of the Responses API,
   with the image in `QORY_WALL_CODEX_IMAGE`; each skips without it, and fails under
   `QORY_WALL_REQUIRE`:

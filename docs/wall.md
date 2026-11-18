@@ -866,6 +866,37 @@ is `/qory/runtime/claude/bin/claude` inside. Claude Code's descriptor sets
   which Sysbox in shiftfs mode adds. And it exits 125 when the program lies below
   `/qory/runtime/<runtime>` and no mount lies there.
 
+### Codex's hooks file
+
+`qory` passes a walled Codex run's hooks file as a read-only mount in
+`SessionSpec.Mounts`, with `Target: /etc/codex/hooks.json`. The wall binds the file as
+it is on the node: it copies nothing, and the file has the owner and mode it has on the
+node. The read-only bind is enough for two reasons:
+
+- Codex 0.167.2 reads `hooks.json` in `/etc/codex`, its system configuration folder,
+  as managed hooks because of that path, and runs them with no check against a stored
+  hash. The file's owner plays no part in this. In the source of Codex 0.167.2 this is
+  `hook_metadata_for_config_layer_source` and `hook_trusted_hash` in
+  `codex-rs/hooks/src/engine/discovery.rs`.
+- The agent cannot change the file. The bind is read-only, so a write, an append and a
+  `chmod` fail. The file is a mount point, so a remove, a rename and a replace with
+  another file fail. In an image with no `/etc/codex`, the engine makes `/etc/codex` as
+  root's with mode `0755`, so the agent, which is not root and has no capability,
+  cannot add a file or a link beside `hooks.json`. The
+  [image rename check](#no-bind-from-a-place-an-agent-can-change) fails the session
+  when the agent can rename names in `/etc`, so the agent cannot rename or replace
+  `/etc/codex` either.
+
+If your image has `/etc/codex`, give it to root with no write for the group or others.
+The rename check does not read that folder, the parent of the mount, and an agent that
+can write it can add files beside `hooks.json`, such as `/etc/codex/config.toml`.
+
+The case "a read-only file at /etc/codex/hooks.json stays as it is" of the
+[conformance suite](../e2e/docker_test.go) checks this against Docker, with the file
+at mode `0666` on the node, so the read-only bind alone stops a write. Under nested
+Docker this is unverified, as for every mount at a target
+([Mounts at a target](#no-bind-from-a-place-an-agent-can-change)).
+
 ### The measure of the enclosure
 
 When the runtime exits, `session.Exec` reads the enclosure's peak memory and CPU time
