@@ -180,9 +180,9 @@ func TestCredentialsWithPathsThatDoNotOverlapShareAHost(t *testing.T) {
 		"a stray brace": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/repos/{owner}/app"), def("harness", "HARNESS_TOKEN", github, "/operator-org/*")},
 			"Write each credential path from /, with { and } only as the segment {} and * only at the end.\nThe path \"/repos/{owner}/app\" of credential product is not in that form."},
 		"an unclear path": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/v1/../responses"), def("harness", "HARNESS_TOKEN", github, "/operator-org/*")},
-			"Remove empty, . and .. segments, backslashes, %2F, %5C, %2E, %25 from the path \"/v1/../responses\" of the credential product.\n" +
-				"Each segment is read up to its first ; or %3B, and %2f counts as %2F. " +
-				"The proxy denies every request whose path has one of these parts, so the path matches no request."},
+			"Remove empty, . and .. segments, backslashes, %2F, %5C, %2E and %25 from path \"/v1/../responses\" of credential product.\n" +
+				"The proxy reads each segment up to its first ; or %3B, takes each %-code in either case, such as %2f, and denies a control character too. " +
+				"It denies every request whose path has one of these parts, so the path matches no request."},
 		"the second without paths": {[]Definition{def("product", "PRODUCT_TOKEN", github, "/example-org/*"), def("harness", "HARNESS_TOKEN", github)}, alone},
 		"the first without paths":  {[]Definition{def("product", "PRODUCT_TOKEN", github), def("harness", "HARNESS_TOKEN", github, "/operator-org/*")}, alone},
 	} {
