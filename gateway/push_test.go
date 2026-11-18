@@ -25,7 +25,7 @@ import (
 )
 
 // The tests of this file pin a run configuration's push credentials: the push proxy
-// sets them for qory's push and the calls of its submit step, and the run's proxy, which
+// sets them for qory's push of the work item's branch, and the run's proxy, which
 // the sessions, the setup step, After, the image step and the host proxy go through,
 // never does.
 
@@ -38,17 +38,19 @@ const (
 // pushWorkItem is the branch push-1's branch guard lets a push change.
 const pushWorkItem = "refs/heads/qory/wi_01"
 
+// pushRefs is the first request of a git push, which push-1's git paths cover.
+const pushRefs = "/example-org/app.git/info/refs?service=git-receive-pack"
+
 // pushRunDoc is the run configuration of a write run, with a read work credential,
 // work-1, on the repository's git paths, its REST paths and /graphql of localhost, and
-// a push credential, push-1, on the same git paths with the branch guard's ref, and on
-// the pull request paths. Without push, it is the run configuration of a write-no-push
-// run: the read work credential alone.
+// a push credential, push-1, on the same git paths alone, with the branch guard's ref.
+// Without push, it is the run configuration of a write-no-push run: the read work
+// credential alone.
 func pushRunDoc(push bool) string {
 	d := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"credentials":[` +
 		`{"name":"work-1","apply":[{"hosts":["localhost"],"scheme":"basic","username":"x-access-token","paths":["/example-org/app.git/*","/repos/example-org/app","/repos/example-org/app/*","/graphql"]}]}`
 	if push {
-		d += `,{"name":"push-1","purpose":"push","apply":[{"hosts":["localhost"],"scheme":"basic","username":"x-access-token","paths":["/example-org/app.git/*"],"push_ref":"` + pushWorkItem + `"},` +
-			`{"hosts":["localhost"],"scheme":"bearer","paths":["/repos/example-org/app/pulls","/repos/example-org/app/pulls/{}"]}]}`
+		d += `,{"name":"push-1","purpose":"push","apply":[{"hosts":["localhost"],"scheme":"basic","username":"x-access-token","paths":["/example-org/app.git/*"],"push_ref":"` + pushWorkItem + `"}]}`
 	}
 	return d + `]}`
 }
@@ -176,15 +178,15 @@ const pushRefused = "qory: push through qory's push step, with a credential that
 // pushSplit checks the credentials of a run of [pushRunDoc]. Without push, it pins the
 // document of a write-no-push run: applied, the members of the open's
 // dev.qory.run.policy_applied, lists work-1 alone with no purpose, and each secrets
-// request c got is for work-1 alone. With push, applied lists work-1, then push-1's two
-// items with purpose push, and each secrets request is for work-1 and push-1. Behind a
+// request c got is for work-1 alone. With push, applied lists work-1, then push-1's
+// item with purpose push, and each secrets request is for work-1 and push-1. Behind a
 // separate gateway no other test checks a write run's applied, which a session reads
 // to start its push proxy.
 func pushSplit(t *testing.T, c *control, applied json.RawMessage, push bool) {
 	t.Helper()
 	wantApplied, wantAsked := []string{"work-1 <nil>"}, []string{"work-1"}
 	if push {
-		wantApplied, wantAsked = append(wantApplied, "push-1 push", "push-1 push"), append(wantAsked, "push-1")
+		wantApplied, wantAsked = append(wantApplied, "push-1 push"), append(wantAsked, "push-1")
 	}
 	listed, _ := members(applied)["credentials"].([]any)
 	var got []string
@@ -287,11 +289,11 @@ func TestASessionsRequestsGetOnlyTheWorkCredential(t *testing.T) {
 // TestThePushProxySetsThePushCredentialAlone pins the push proxy on the local link: a
 // push of the work item's branch through the push_proxy_secret reaches the origin with
 // push-1's value, and a push of another branch gets the branch guard's 403; a pull
-// request call gets push-1's bearer value; a merge, a REST write of a ref, a GraphQL
-// mutation and a path of the repository outside push-1's items get the push proxy's 403
-// and reach nothing; another host gets the push proxy's 403. Each decision is a
+// request call, a merge, a REST write of a ref, a GraphQL mutation and a path of
+// another repository, each outside push-1's items, get the push proxy's 403 and reach
+// nothing; another host gets the push proxy's 403. Each decision is a
 // dev.qory.run.egress with channel push; the open's dev.qory.run.policy_applied lists
-// push-1's items with purpose push, and a join's lists them too. After the run's end
+// push-1's item with purpose push, and a join's lists it too. After the run's end
 // the push proxy secret opens nothing.
 func TestThePushProxySetsThePushCredentialAlone(t *testing.T) {
 	o := newPushOrigin(t, pushRunDoc(true))
@@ -308,10 +310,8 @@ func TestThePushProxySetsThePushCredentialAlone(t *testing.T) {
 	if got := send(t, push, o.port, http.MethodPost, "/example-org/app.git/git-receive-pack", "application/x-git-receive-pack-request", receivePack("refs/heads/main")); got.status != http.StatusForbidden || !strings.HasPrefix(got.body, "qory: push only "+pushWorkItem+".\n") {
 		t.Errorf("the push of another branch: %+v", got)
 	}
-	if got := send(t, push, o.port, http.MethodGet, "/repos/example-org/app/pulls/12", "", ""); got.status != http.StatusOK {
-		t.Errorf("the pull request call: %+v", got)
-	}
 	refusedPaths := []struct{ method, path string }{
+		{http.MethodGet, "/repos/example-org/app/pulls/12"},
 		{http.MethodPut, "/repos/example-org/app/pulls/12/merge"},
 		{http.MethodPatch, "/repos/example-org/app/git/refs/heads/main"},
 		{http.MethodPost, "/graphql"},
@@ -336,18 +336,16 @@ func TestThePushProxySetsThePushCredentialAlone(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden || string(b) != unlisted {
 		t.Errorf("another host through the push proxy got %d %q", resp.StatusCode, b)
 	}
-	bearer := "Bearer " + pushSecretWord
-	want := []string{"POST /example-org/app.git/git-receive-pack " + basic, "GET /repos/example-org/app/pulls/12 " + bearer}
+	want := []string{"POST /example-org/app.git/git-receive-pack " + basic}
 	if got := o.requests(); !slices.Equal(got, want) {
 		t.Errorf("the origin got\n%q\nwant\n%q", got, want)
 	}
 	pushEntries := []any{
 		map[string]any{"name": "push-1", "hosts": []any{"localhost"}, "scheme": "basic", "paths": []any{"/example-org/app.git/*"}, "purpose": "push"},
-		map[string]any{"name": "push-1", "hosts": []any{"localhost"}, "scheme": "bearer", "paths": []any{"/repos/example-org/app/pulls", "/repos/example-org/app/pulls/{}"}, "purpose": "push"},
 	}
 	listed, _ := members(a.Applied)["credentials"].([]any)
-	if len(listed) != 3 || !reflect.DeepEqual(listed[1:], pushEntries) || listed[0].(map[string]any)["purpose"] != nil {
-		t.Errorf("the open's applied credentials %v; want work-1, then push-1's items with purpose push", listed)
+	if len(listed) != 2 || !reflect.DeepEqual(listed[1:], pushEntries) || listed[0].(map[string]any)["purpose"] != nil {
+		t.Errorf("the open's applied credentials %v; want work-1, then push-1's item with purpose push", listed)
 	}
 	if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {
 		t.Fatalf("the open's batch: %+v", d)
@@ -357,15 +355,15 @@ func TestThePushProxySetsThePushCredentialAlone(t *testing.T) {
 		t.Fatalf("the join's batch: %+v", d)
 	}
 	// The push proxy stays open after the session: qory pushes after each one.
-	if got := send(t, push, o.port, http.MethodGet, "/repos/example-org/app/pulls/12", "", ""); got.status != http.StatusOK {
-		t.Errorf("the pull request call after the session: %+v", got)
+	if got := send(t, push, o.port, http.MethodGet, pushRefs, "", ""); got.status != http.StatusOK {
+		t.Errorf("the push's first request after the session: %+v", got)
 	}
 	if d := h.post(exited(a.RunID)); !d.Accepted() {
 		t.Fatalf("the last batch: %+v", d)
 	}
 	// The run's end closes the push proxy while the gateway runs on.
 	eventually(t, "the push proxy secret opens nothing after the run's end", func() bool {
-		_, err := push.Get("https://localhost:" + o.port + "/repos/example-org/app/pulls/12")
+		_, err := push.Get("https://localhost:" + o.port + pushRefs)
 		return err != nil
 	})
 	h.close()
@@ -389,13 +387,13 @@ func TestThePushProxySetsThePushCredentialAlone(t *testing.T) {
 	wantRecords := []string{
 		"POST /example-org/app.git/git-receive-pack allowed push-1 /example-org/app.git/* localhost",
 		"POST /example-org/app.git/git-receive-pack denied push-1 wall:push-ref localhost",
-		"GET /repos/example-org/app/pulls/12 allowed push-1 /repos/example-org/app/pulls/{} localhost",
+		"GET /repos/example-org/app/pulls/12 denied <nil>  localhost",
 		"PUT /repos/example-org/app/pulls/12/merge denied <nil>  localhost",
 		"PATCH /repos/example-org/app/git/refs/heads/main denied <nil>  localhost",
 		"POST /graphql denied <nil>  localhost",
 		"GET /example-org/other.git/info/refs denied <nil>  localhost",
 		"<nil> <nil> denied <nil> <nil> ",
-		"GET /repos/example-org/app/pulls/12 allowed push-1 /repos/example-org/app/pulls/{} localhost",
+		"GET /example-org/app.git/info/refs allowed push-1 /example-org/app.git/* localhost",
 	}
 	// The push of the work item's branch through the push proxy is a target write: one
 	// record when it begins, and one when it ends, cut since the stand-in host returns
@@ -552,7 +550,7 @@ func TestAWalledRunsPushProxyIsGuarded(t *testing.T) {
 	o := newPushOrigin(t, pushRunDoc(true))
 	a := o.h.open(server.LinkRunRequest{Wall: true})
 	// The guard ends the CONNECT with a 403, which the client returns as its error.
-	resp, err := o.client(t, a, a.PushProxySecret).Get("https://localhost:" + o.port + "/repos/example-org/app/pulls/12")
+	resp, err := o.client(t, a, a.PushProxySecret).Get("https://localhost:" + o.port + pushRefs)
 	if err == nil {
 		resp.Body.Close()
 		t.Errorf("the push proxy of a walled run got %d; want the guard's 403", resp.StatusCode)
@@ -581,8 +579,8 @@ func TestAReloadSetsThePushProxysGuard(t *testing.T) {
 	first := h.digests[len(h.digests)-1].RunConfiguration
 	h.mu.Unlock()
 	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied))
-	pull := func() error {
-		resp, err := o.client(t, a, a.PushProxySecret).Get("https://localhost:" + o.port + "/repos/example-org/app/pulls/12")
+	refs := func() error {
+		resp, err := o.client(t, a, a.PushProxySecret).Get("https://localhost:" + o.port + pushRefs)
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode != http.StatusOK {
@@ -591,7 +589,7 @@ func TestAReloadSetsThePushProxysGuard(t *testing.T) {
 		}
 		return err
 	}
-	if err := pull(); err == nil || !strings.Contains(err.Error(), "Forbidden") {
+	if err := refs(); err == nil || !strings.Contains(err.Error(), "Forbidden") {
 		t.Fatalf("the push proxy before the reload: %v; want the guard's 403", err)
 	}
 	o.c.serveDocument(doc(`"localhost"`), 'b')
@@ -600,10 +598,11 @@ func TestAReloadSetsThePushProxysGuard(t *testing.T) {
 		d := h.post(heartbeat(a.RunID))
 		return d.Accepted() && d.Digests.RunConfiguration != first
 	})
-	if err := pull(); err != nil {
+	if err := refs(); err != nil {
 		t.Errorf("the push proxy after the reload: %v", err)
 	}
-	if got := o.requests(); !slices.Equal(got, []string{"GET /repos/example-org/app/pulls/12 Bearer " + pushSecretWord}) {
+	basic := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+pushSecretWord))
+	if got := o.requests(); !slices.Equal(got, []string{"GET /example-org/app.git/info/refs " + basic}) {
 		t.Errorf("the origin got %q", got)
 	}
 	h.post(exited(a.RunID))

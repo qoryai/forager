@@ -17,13 +17,11 @@ import (
 )
 
 // pushDoc is a run configuration of a write run: a read work credential, work-1, on the
-// repository's paths of git.example, and a push credential, push-1, whose first item
-// is for the same paths with the branch guard's ref and whose second item is for the
-// pull request paths of api.git.example.
-const pushDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["git.example","api.git.example"]}},"credentials":[` +
+// repository's paths of git.example, and a push credential, push-1, whose one item is
+// for the same paths with the branch guard's ref.
+const pushDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["git.example"]}},"credentials":[` +
 	`{"name":"work-1","apply":[{"hosts":["git.example"],"scheme":"basic","username":"x-access-token","paths":["/example-org/app.git/*"]}],"placeholders":["GIT_TOKEN"]},` +
-	`{"name":"push-1","purpose":"push","apply":[{"hosts":["git.example"],"scheme":"basic","username":"x-access-token","paths":["/example-org/app.git/*"],"push_ref":"refs/heads/qory/wi_01"},` +
-	`{"hosts":["api.git.example"],"scheme":"bearer","paths":["/repos/example-org/app/pulls","/repos/example-org/app/pulls/{}"]}]}]}`
+	`{"name":"push-1","purpose":"push","apply":[{"hosts":["git.example"],"scheme":"basic","username":"x-access-token","paths":["/example-org/app.git/*"],"push_ref":"refs/heads/qory/wi_01"}]}]}`
 
 // pushValueOf is the value the push proxy sets for the credential name now, "(none)"
 // when it sets none.
@@ -42,8 +40,7 @@ func pushValueOf(r *run.Run, name string) string {
 // one secrets request opens both; the run's proxy, which the sessions, the setup step,
 // After, the image step and the host proxy go through, sets work-1 alone, though push-1
 // is for the same paths, and the run's placeholders are work-1's; the push proxy sets
-// push-1 alone, on each of its items, with the branch guard's ref; the run needs its
-// authority.
+// push-1 alone, on its item, with the branch guard's ref; the run needs its authority.
 func TestAPushCredentialIsThePushProxysAlone(t *testing.T) {
 	s := &controlPlane{answer: harnessValue}
 	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, pushDoc, digest('1')), Secrets: s.fetch})
@@ -61,10 +58,9 @@ func TestAPushCredentialIsThePushProxysAlone(t *testing.T) {
 		t.Errorf("the run's placeholders %v, want work-1's", got)
 	}
 	uses := r.PushUses()
-	if len(uses) != 2 || uses[0].Name != "push-1" || uses[1].Name != "push-1" || !slices.Equal(uses[0].Hosts, []string{"git.example"}) ||
-		uses[0].PushRef != "refs/heads/qory/wi_01" || !slices.Equal(uses[1].Paths, []string{"/repos/example-org/app/pulls", "/repos/example-org/app/pulls/{}"}) ||
-		uses[1].PushRef != "" || !uses[0].Stored {
-		t.Fatalf("the push proxy's credentials %+v; want push-1 on its two items", uses)
+	if len(uses) != 1 || uses[0].Name != "push-1" || !slices.Equal(uses[0].Hosts, []string{"git.example"}) ||
+		!slices.Equal(uses[0].Paths, []string{"/example-org/app.git/*"}) || uses[0].PushRef != "refs/heads/qory/wi_01" || !uses[0].Stored {
+		t.Fatalf("the push proxy's credentials %+v; want push-1 on its item", uses)
 	}
 	if pushValueOf(r, "push-1") != "value-of-push-1" || !r.HasPush() || !r.NeedsCA() || len(r.StackUses()) != 0 {
 		t.Errorf("the push proxy sets %s, HasPush %v, NeedsCA %v, stack %v", pushValueOf(r, "push-1"), r.HasPush(), r.NeedsCA(), r.StackUses())
@@ -166,7 +162,7 @@ func TestAPushCredentialThePushProxyCannotSetIsRefused(t *testing.T) {
 // force stays.
 func TestAReloadMustAllowThePushHosts(t *testing.T) {
 	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, pushDoc, digest('1')), Secrets: (&controlPlane{answer: harnessValue}).fetch})
-	narrowed := strings.Replace(pushDoc, `"allow":["git.example","api.git.example"]`, `"allow":["git.example"]`, 1)
+	narrowed := strings.Replace(pushDoc, `"allow":["git.example"]`, `"allow":["other.example"]`, 1)
 	d, err := reload(t, r, computed(t, narrowed, digest('2')))
 	if err == nil {
 		d.Discard()
@@ -175,7 +171,7 @@ func TestAReloadMustAllowThePushHosts(t *testing.T) {
 	if !strings.Contains(err.Error(), "Add each push credential's host to the run's egress allow list.") {
 		t.Errorf("the reload's error %v", err)
 	}
-	if got := r.Policy().Policy.Egress.Allow; !slices.Equal(got, []string{"git.example", "api.git.example"}) {
+	if got := r.Policy().Policy.Egress.Allow; !slices.Equal(got, []string{"git.example"}) {
 		t.Errorf("the policy in force allows %v", got)
 	}
 }
@@ -190,7 +186,7 @@ func TestAPushValueIsRenewed(t *testing.T) {
 	c := &fakeClock{now: start}
 	s := &controlPlane{answer: expiring}
 	r := renewRun(t, pushDoc, s, c, &reports{}, nil)
-	if uses := r.PushUses(); len(uses) != 2 || uses[0].Rejected == nil {
+	if uses := r.PushUses(); len(uses) != 1 || uses[0].Rejected == nil {
 		t.Fatalf("the push proxy's credentials %+v; want push-1 with a renewal on a 401", uses)
 	}
 	if pushValueOf(r, "push-1") != "push-1-0" || value(r, "work-1") != "work-1-0" {
@@ -226,7 +222,7 @@ func TestThePushPlaceholdersFixtureIsRefused(t *testing.T) {
 // policy in force stays.
 func TestAReloadMustNotDenyThePushHosts(t *testing.T) {
 	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, pushDoc, digest('1')), Secrets: (&controlPlane{answer: harnessValue}).fetch})
-	denying := strings.Replace(pushDoc, `"allow":["git.example","api.git.example"]`, `"allow":["git.example","api.git.example"],"deny":["api.git.example"]`, 1)
+	denying := strings.Replace(pushDoc, `"allow":["git.example"]`, `"allow":["git.example"],"deny":["git.example"]`, 1)
 	d, err := reload(t, r, computed(t, denying, digest('2')))
 	if err == nil {
 		d.Discard()

@@ -328,10 +328,11 @@ release may change what an existing document does, and says so under Upgrading.
   `control_plane_unavailable` when no valid answer came. No container reaches either
   call: they go over the link alone, and the run API's route returns `404` for both
   paths (§The gateway's link, The host calls).
-- A host credential may have `purpose: push`, for qory's push and the pull request
-  calls of its submit step through the run's push proxy (§Credentials, Push
-  credentials). The run answer has `push_proxy_secret` on the local link for such a
-  run, `QORY-PUSH` and the run key open the push proxy on a separate gateway's one
+- A host credential may have `purpose: push`, for qory's push of the work item's
+  branch through the run's push proxy (§Credentials, Push credentials). Its items list
+  git's push paths of the repository alone: the forge's adapter opens the pull
+  request. The run answer has `push_proxy_secret` on the local link for such a run,
+  `QORY-PUSH` and the run key open the push proxy on a separate gateway's one
   address, `dev.qory.run.egress` has `channel: push`, and
   `dev.qory.run.policy_applied` lists each push credential's items with `purpose:
   push`. A push credential with `placeholders`, on a host the policy in force does not
@@ -2388,8 +2389,8 @@ release may change what an existing document does, and says so under Upgrading.
   it, or else before the last argument, with a wall and without one. A launch with no
   argument after `after` starts without a resume, with one line that starts with the
   fix. Codex resumes as `codex exec --json resume <session id> "<prompt>"`.
-- `(*session.Run).PushProxy` starts a forwarder on loopback for qory's push and the
-  pull request calls of its submit step, which reaches the run's push proxy: on one
+- `(*session.Run).PushProxy` starts a forwarder on loopback for qory's push of the
+  work item's branch, which reaches the run's push proxy: on one
   machine with the run answer's `push_proxy_secret`, behind a separate gateway with
   `QORY-PUSH` and the run key (`server.Link.DialPush`). It has the host proxy's rules,
   returns an error while the setup container is up or `ContainerKept` is true, and ends

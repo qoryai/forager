@@ -12,7 +12,7 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// openPush makes the run's push proxy, for qory's push and the calls of its submit step,
+// openPush makes the run's push proxy, for qory's push of the work item's branch,
 // when the run configuration has a push credential ([run.Run.HasPush]); a run without
 // one has none, and its run answer no push_proxy_secret. The push proxy is in enforce
 // mode and allows the hosts of the push credentials' items alone, with no policy of the

@@ -291,12 +291,20 @@ close takes only before a join. The gateway accepts a starter's code in the clos
 `failed`, before or after the gateway numbered a join of the run. When qory knows the
 cause, it closes a failed run with one of its end codes, listed in `$defs/end_codes` of
 integrations' `contracts/run/v1/outcome.schema.json`, whether or not a session joined
-it. The close writes `timeout`, `cancelled`, `interrupted`, `cancelled`, a run stopped
-from where it was started (a Ctrl-C), and `no_session`, `failed`, a run closed with no
-session and no reason after its host work failed, such as a fetch, and
-`model_key_limit`, `paused`, a run whose last session ended `paused` with
-`model_key_limit`, which a control plane
-reads as a pause of the run, and posts them. The close writes and posts `image_missing`,
+it. The close writes each of these reasons with its state, and posts them:
+
+- `timeout`, `cancelled`, with exit code `124`;
+- `interrupted`, `cancelled`, a run stopped from where it was started (a Ctrl-C);
+- `no_session`, `failed`, a run closed with no session and no reason after its host work
+  failed, such as a fetch;
+- `model_key_limit`, `paused`, a run whose last session ended `paused` with
+  `model_key_limit`, which a control plane reads as a pause of the run;
+- `model_key_switch`, `paused`, a run whose last session ended `paused` with
+  `model_key_switch`;
+- `model_key_unauthorized`, `failed`, a run whose last session ended `failed` with
+  `model_key_unauthorized`.
+
+The close writes and posts `image_missing`,
 `failed` with exit code `-1`, when its caller gives it for a run with no session after
 the fetch of the run's image found that its registry, or the registry's mirror, does not
 have it, and the same for `image_user_root`, after the fetch found that the image's user
