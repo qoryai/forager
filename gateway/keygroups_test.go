@@ -43,6 +43,9 @@ type mixedRun struct {
 	// machineURL is the endpoint of the machine's key.
 	machineURL string
 	agent      *http.Client
+	// hosts are the run answer's credential_hosts, from which a session computes its
+	// key's placeholder (link.GroupPlaceholder).
+	hosts []server.LinkCredentialHosts
 
 	mu           sync.Mutex
 	limited      map[string]bool
@@ -147,7 +150,7 @@ func startKeyGroupsRun(t *testing.T, machine bool, startKey string) *mixedRun {
 		m.h.secrets = append(m.h.secrets, v)
 	}
 	a := m.h.open(server.LinkRunRequest{Wall: true})
-	m.runID = a.RunID
+	m.runID, m.hosts = a.RunID, a.CredentialHosts
 	if a.ModelCredential != startKey {
 		t.Fatalf("the run's start key %q; want %s", a.ModelCredential, startKey)
 	}
@@ -182,8 +185,33 @@ func (m *mixedRun) sendTo(t *testing.T, name, path string) (int, string) {
 	if name == "machine" {
 		url = m.machineURL
 	}
-	req, _ := http.NewRequest(http.MethodPost, url+path, strings.NewReader(`{"model":"m"}`))
-	req.Header.Set("X-Api-Key", link.KeyPlaceholder(name))
+	return m.request(t, url+path, link.KeyPlaceholder(name))
+}
+
+// placeholder is the placeholder a session that joined with the model key name sets,
+// as the session computes it from the run answer's credential_hosts.
+func (m *mixedRun) placeholder(name string) string {
+	var keys []link.GroupKey
+	for _, c := range m.hosts {
+		if c.Format != "" {
+			keys = append(keys, link.GroupKey{Name: c.Name, Group: c.Group})
+		}
+	}
+	return link.GroupPlaceholder(keys, name)
+}
+
+// sendWith sends a model request with the placeholder value to the server's endpoint,
+// as send does.
+func (m *mixedRun) sendWith(t *testing.T, value string) (int, string) {
+	t.Helper()
+	return m.request(t, m.url+"/messages", value)
+}
+
+// request posts a model request to url with value in x-api-key, as send does.
+func (m *mixedRun) request(t *testing.T, url, value string) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(`{"model":"m"}`))
+	req.Header.Set("X-Api-Key", value)
 	resp, err := m.agent.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -452,5 +480,70 @@ func TestALateRefusalLeavesASessionOnTheMachinesKeyAlone(t *testing.T) {
 	}
 	if status, calls := m.send(t, "machine"); status != http.StatusOK || calls != "machine" {
 		t.Errorf("session 2, machine's placeholder: %d %q; want machine", status, calls)
+	}
+}
+
+// TestTheNextSessionGetsTheGroupsPlaceholder pins the placeholder of a key group across
+// the sessions of one run of the group a, with a-1 and then a-2, for each start key.
+// Session 1 joins with no key in its request and gets the start key. The placeholder
+// computed from the run answer's credential_hosts is a-1's, the group's first key's, and
+// a request with it reaches the provider with the start key, gets a limit refusal, and
+// goes again with the other key. Session 2 joins with no key in its request and gets
+// the other key, the group's active key: its placeholder is a-1's too, and a request
+// with it reaches the provider with the active key alone.
+func TestTheNextSessionGetsTheGroupsPlaceholder(t *testing.T) {
+	for _, c := range []struct{ start, next string }{{"a-1", "a-2"}, {"a-2", "a-1"}} {
+		t.Run("start key "+c.start, func(t *testing.T) {
+			m := startKeyGroupsRun(t, false, c.start)
+			want := link.KeyPlaceholder("a-1")
+			key := m.join(t, "")
+			if p := m.placeholder(key); key != c.start || p != want {
+				t.Fatalf("join 1: %q with the placeholder %q; want %s with %q", key, p, c.start, want)
+			}
+			m.h.post(sessionStarted(m.runID, 1))
+			m.limit(c.start)
+			if status, calls := m.sendWith(t, m.placeholder(key)); status != http.StatusOK || calls != c.start+","+c.next {
+				t.Errorf("session 1: %d %q; want %s refused, then %s", status, calls, c.start, c.next)
+			}
+			m.h.post(sessionExited(m.runID, 1))
+
+			key = m.join(t, "")
+			if p := m.placeholder(key); key != c.next || p != want {
+				t.Fatalf("join 2: %q with the placeholder %q; want %s, the group's active key, with %q", key, p, c.next, want)
+			}
+			m.h.post(sessionStarted(m.runID, 2))
+			if status, calls := m.sendWith(t, m.placeholder(key)); status != http.StatusOK || calls != c.next {
+				t.Errorf("session 2: %d %q; want %s", status, calls, c.next)
+			}
+		})
+	}
+}
+
+// TestASessionOnAnotherGroupGetsThatGroupsPlaceholder pins two key groups whose keys
+// alternate in the run configuration: a with the start key a-1 and a-2, and b with b-1
+// and b-2. Session 1 joins with no key in its request and gets a-1, whose placeholder,
+// computed from the run answer's credential_hosts, is a-1's; a request with it reaches
+// the provider with a-1. Session 2 joins with b-2, of group b, which no session used:
+// its placeholder is b-1's, the placeholder of group b's first key, and a request with
+// it reaches the provider with b-2.
+func TestASessionOnAnotherGroupGetsThatGroupsPlaceholder(t *testing.T) {
+	m := startKeyGroupsRun(t, false, "a-1")
+	key := m.join(t, "")
+	if p := m.placeholder(key); key != "a-1" || p != link.KeyPlaceholder("a-1") {
+		t.Fatalf("join 1: %q with the placeholder %q; want a-1 with a-1's", key, p)
+	}
+	m.h.post(sessionStarted(m.runID, 1))
+	if status, calls := m.sendWith(t, m.placeholder(key)); status != http.StatusOK || calls != "a-1" {
+		t.Errorf("session 1: %d %q; want a-1", status, calls)
+	}
+	m.h.post(sessionExited(m.runID, 1))
+
+	key = m.join(t, "b-2")
+	if p := m.placeholder(key); key != "b-2" || p != link.KeyPlaceholder("b-1") {
+		t.Fatalf("join 2 naming b-2: %q with the placeholder %q; want b-2 with b-1's, group b's", key, p)
+	}
+	m.h.post(sessionStarted(m.runID, 2))
+	if status, calls := m.sendWith(t, m.placeholder(key)); status != http.StatusOK || calls != "b-2" {
+		t.Errorf("session 2: %d %q; want b-2", status, calls)
 	}
 }
