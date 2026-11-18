@@ -606,10 +606,15 @@ var keyStops = map[string]string{
 // model_key_limit, the pause after a limit refusal, and model_key_switch, the pause
 // after a 401 with another key usable, each paused, and model_key_unauthorized, the end
 // once a 401 took the last key out, failed ([keyStops]), each only for a run with a join
-// whose last dev.qory.session.exited has that reason. The gateway writes the event of
-// every other end itself. joined is true when the gateway numbered a join of the run,
-// and last is the reason of the last dev.qory.session.exited the run's stream numbered,
-// empty for none.
+// whose last dev.qory.session.exited has that reason. It accepts a starter's reason, a
+// code of the reason's pattern that is none of Forager's reserved codes and none of the
+// eleven codes from image_missing to write_needs_wall, only failed, before or after the
+// gateway numbered a join of the run. When qory knows the cause, it closes a failed run
+// with one of its end codes, listed in $defs/end_codes of integrations'
+// contracts/run/v1/outcome.schema.json, whether or not a session joined it. The gateway
+// writes the event of every other end itself. joined is true when the gateway numbered
+// a join of the run, and last is the reason of the last dev.qory.session.exited the
+// run's stream numbered, empty for none.
 func closeRule(data map[string]any, joined bool, last string) string {
 	given, hasReason := data["reason"]
 	why, _ := given.(string)
@@ -638,6 +643,10 @@ func closeRule(data map[string]any, joined bool, last string) string {
 			return "a run.exited " + why + " of a run with a join"
 		case data["state"] != event.StateFailed || code != -1:
 			return "a run.exited " + why + " that is not failed with exit_code -1"
+		}
+	case event.StarterReason(why):
+		if data["state"] != event.StateFailed {
+			return "a run.exited " + why + " that is not failed"
 		}
 	default:
 		return "a run.exited with a reason the gateway decides"

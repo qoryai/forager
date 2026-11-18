@@ -584,6 +584,57 @@ func TestTheEndMember(t *testing.T) {
 	}
 }
 
+// endCodes are the end codes qory sets in a failed run's outcome, $defs/end_codes of
+// integrations' contracts/run/v1/outcome.schema.json, and push_window_closed, a code of
+// the pattern outside that list.
+var endCodes = []string{"push_credential_missing", "push_refused", "prebuilt_image_too_large", "push_not_recorded", "environment_image_missing", "push_head_changed", "push_window_closed"}
+
+// TestPostOutcomeSendsQorysEndCodesUnchanged pins qory's end codes on their way to the
+// server and back: PostOutcome sends each, with the state failed, as the body's reason,
+// byte for byte; and a delivery whose signed 202 contains the end member failed with the
+// code reads it unchanged. It pins each code unchanged at the control plane, and does
+// not reach the gateway's closeRule.
+func TestPostOutcomeSendsQorysEndCodesUnchanged(t *testing.T) {
+	a := newApiary(t)
+	c := a.client()
+	ctx := context.Background()
+	for _, code := range endCodes {
+		a.answer = func(*http.Request, []byte) (int, http.Header, string) { return 200, nil, `{"version":1}` }
+		if err := c.PostOutcome(ctx, a.runURL(), gatewayRunID, server.Outcome{State: "failed", Reason: code, Time: "2026-10-11T12:30:00Z"}); err != nil {
+			t.Fatalf("%s: %v", code, err)
+		}
+		if want := `{"version":1,"state":"failed","reason":"` + code + `","time":"2026-10-11T12:30:00Z"}`; string(a.body) != want {
+			t.Errorf("%s: sent %s; want %s", code, a.body, want)
+		}
+		a.answer = func(*http.Request, []byte) (int, http.Header, string) {
+			return 202, nil, `{"end":{"state":"failed","reason":"` + code + `"}}`
+		}
+		d, err := c.Deliver(ctx, a.srv.URL+"/v1/events", "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9e", []byte(`[]`), "")
+		if err != nil || d.ServerEnd == nil || *d.ServerEnd != (server.ServerEnd{State: "failed", Reason: code}) {
+			t.Errorf("%s: the end member read as %+v, %v", code, d.ServerEnd, err)
+		}
+	}
+}
+
+// TestTheControlPlaneAppliesTheEndCodesStateRule pins that Forager does not apply the
+// rule of integrations' contracts/run/v1/outcome.schema.json that an end code goes only
+// with the state failed: the control plane applies it. PostOutcome sends push_refused
+// with the state succeeded unchanged, and ReadEnd reads that end unchanged. It pins the
+// code unchanged at the control plane, and does not reach the gateway's closeRule.
+func TestTheControlPlaneAppliesTheEndCodesStateRule(t *testing.T) {
+	a := newApiary(t)
+	a.answer = func(*http.Request, []byte) (int, http.Header, string) { return 200, nil, `{"version":1}` }
+	if err := a.client().PostOutcome(context.Background(), a.runURL(), gatewayRunID, server.Outcome{State: "succeeded", Reason: "push_refused", Time: "2026-10-11T12:30:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"version":1,"state":"succeeded","reason":"push_refused","time":"2026-10-11T12:30:00Z"}`; string(a.body) != want {
+		t.Errorf("sent %s; want %s", a.body, want)
+	}
+	if got := server.ReadEnd([]byte(`{"end":{"state":"succeeded","reason":"push_refused"}}`)); got == nil || *got != (server.ServerEnd{State: "succeeded", Reason: "push_refused"}) {
+		t.Errorf("ReadEnd = %+v; want succeeded with push_refused", got)
+	}
+}
+
 // relay is a TLS server that stands for a gateway relaying to the server: it answers
 // as the server would, signed, a registration with through-gateway.json's run key, and
 // records the host and the target of each request.

@@ -584,8 +584,7 @@ a credential.
 ### The push proxy
 
 `(*session.Run).PushProxy` starts a forwarder of the same kind for qory's push of the
-work item's branch and the pull request calls of its submit step, in a run whose run
-configuration has a push credential
+work item's branch, in a run whose run configuration has a push credential
 ([credentials](credentials.md#push-credentials)). Call it after a `Join` returns, or
 before the first one, with no container of the run that can write its binds running. It returns a `session.HostProxy`:
 
@@ -602,7 +601,7 @@ before the first one, with no container of the run that can write its binds runn
   `403` with this body:
 
   ```
-  qory: send only the push and its pull request calls through the push proxy.
+  qory: send only git's push through the push proxy.
   qory: egress to other.example.net:443 denied by the gateway: no push credential of the run is for this host
   ```
 
@@ -610,7 +609,7 @@ before the first one, with no container of the run that can write its binds runn
   body:
 
   ```
-  qory: send only the push and its pull request calls through the push proxy.
+  qory: send only git's push through the push proxy.
   qory: PUT api.git.example/repos/example-org/app/pulls/12/merge denied by the gateway: no push credential of the run covers this path
   ```
 - Behind a wall or a separate gateway the push proxy is guarded as the run's proxy is.
@@ -1897,8 +1896,16 @@ way, `paused`, and one whose last session ended with `model_key_unauthorized` wi
 another state than `paused`, for `model_key_unauthorized` with another state than
 `failed`, for `paused` with no reason or another reason, for any of the three in a run
 with no join, and after a last session that ended otherwise.
-`Close` refuses an outcome the contract refuses, and a close while a `Join` runs.
-`session.Closed` is what the run came to:
+Close a failed run with `failed` and a code of yours, before or after the gateway
+numbered a join of the run. The code is a lower-case letter, then lower-case letters,
+digits and `_`, up to 64 characters, none of Forager's reserved codes and none of the
+eleven codes from `image_missing` to `write_needs_wall`, which close a run only before
+the gateway numbered a join of it. When qory knows the cause, it closes a failed run
+with one of its end codes, listed in `$defs/end_codes` of integrations'
+`contracts/run/v1/outcome.schema.json`, whether or not a session joined it. The gateway
+accepts such a code only `failed`; otherwise it ends the run `failed` with
+`batch_refused`. `Close` refuses an outcome the contract refuses, and a close while a
+`Join` runs. `session.Closed` is what the run came to:
 
 - `RunID` and `Dir`, the run directory with the record.
 - `State`, `Reason` and `ExitCode`, those of the run's `dev.qory.run.exited`.

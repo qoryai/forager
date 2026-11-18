@@ -292,8 +292,8 @@ release may change what an existing document does, and says so under Upgrading.
   host work included. A link batch's `dev.qory.run.exited` with `timeout` and an exit
   code other than `124` is `400` `invalid_request`.
 - Show the reason `no_session` of a `dev.qory.run.exited`, `failed` with `exit_code`
-  `-1`: a run closed with no session after its host work failed. A starter's reason
-  `no_session` is dropped, as any reserved code is.
+  `-1`: a run closed with no session and no reason after its host work failed. A
+  starter's reason `no_session` is dropped, as any reserved code is.
 - Expect several `dev.qory.run.policy_applied` per run: one at the open with an empty
   `variables`, one per session with that session's `variables`,
   `credential_variables` and `harness_hosts`, and one per reload.
@@ -797,7 +797,7 @@ release may change what an existing document does, and says so under Upgrading.
   batch on the link contains only `timeout`, `interrupted` and the codes of
   `refusal.Decides`.
 - The reason `no_session` of `dev.qory.run.exited`, reserved: the run was closed with no
-  join, `failed` with `exit_code` `-1`.
+  join and no reason, `failed` with `exit_code` `-1`.
 - The join request on the gateway's link, `POST <run.url>/<run_id>/sessions` on both
   transports, `link-join-request.schema.json`, with `version`, `passes`, `model_key`
   and an optional `model_credential`, and its answer, `link-join-answer.schema.json`, with `version`,
@@ -1407,7 +1407,7 @@ release may change what an existing document does, and says so under Upgrading.
 - A run whose run configuration has a push credential gets a push proxy, which sets
   the push credentials alone, on their items' hosts and paths, with each item's branch
   guard, and returns a `403` for every other host and path, with the first line "qory:
-  send only the push and its pull request calls through the push proxy." It stays open
+  send only git's push through the push proxy." It stays open
   until the run closes, a reopened run on a separate gateway opens it again, and its
   decisions are `dev.qory.run.egress` with `channel: push`. The run's proxy never sets a
   push credential.
@@ -1619,6 +1619,20 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- The gateway accepts a session's `dev.qory.run.exited` with a starter's reason when
+  it is `failed`, before or after the gateway numbered a join of the run. A starter's
+  reason is a code of the reason's pattern that is none of Forager's reserved codes
+  and none of the eleven image, workflow, `read_needs_*` and `write_needs_wall` codes,
+  which the gateway accepts only before a join. When qory knows the cause, it closes a
+  failed run with one of its end codes, such as `push_refused`, listed in
+  `$defs/end_codes` of integrations' `contracts/run/v1/outcome.schema.json`, whether
+  or not a session joined it. The code reaches the server unchanged, as it does from
+  the starter's outcome, where none of qory's end codes is a reserved code. Before,
+  the gateway returned `400` `invalid_request` to every starter's reason in the close
+  and ended the run `failed` with `batch_refused`. It still does so for a starter's
+  reason with another state. The fixture
+  `link-batch-beyond-schema-exited-starter-reason.json` has the state `succeeded`, so
+  the gateway refuses it, before and after a join.
 - The gateway renews each model key in a secrets request that names it alone, with or
   without a `401`; the other credentials still go together. The server returns `409` to a
   whole request when it cannot seal one of its names, so a model key it could not seal
