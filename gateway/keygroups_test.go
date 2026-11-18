@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,7 +34,8 @@ var mixedValues = map[string]string{"machine": "fake-machine-value-0001", "a-1":
 // key reaches the provider at 127.0.0.1 and the server's keys at localhost: a
 // credential from the server replaces a machine's credential of its host. The provider
 // returns a limit refusal for each key in limited, and a 401 for each key in
-// unauthorized.
+// unauthorized. A request with the key held waits at the provider until release is
+// closed, then gets the answer of that moment.
 type mixedRun struct {
 	h     *harness
 	runID string
@@ -47,16 +49,18 @@ type mixedRun struct {
 	unauthorized map[string]bool
 	calls        []string
 	reports      []string
+	held         string
+	release      chan struct{}
 }
 
 func startMixedRun(t *testing.T) *mixedRun {
 	t.Helper()
-	return startKeyGroupsRun(t, true)
+	return startKeyGroupsRun(t, true, "machine")
 }
 
-// startKeyGroupsRun opens the run of mixedRun; with machine false, the run has no key
-// of the machine's, and its start key is a-1.
-func startKeyGroupsRun(t *testing.T, machine bool) *mixedRun {
+// startKeyGroupsRun opens the run of mixedRun with the start key startKey; with machine
+// false, the run has no key of the machine's.
+func startKeyGroupsRun(t *testing.T, machine bool, startKey string) *mixedRun {
 	t.Helper()
 	m := &mixedRun{limited: map[string]bool{}, unauthorized: map[string]bool{}}
 	t.Setenv("GATEWAY_TEST_MACHINE_KEY", mixedValues["machine"])
@@ -75,6 +79,12 @@ func startKeyGroupsRun(t *testing.T, machine bool) *mixedRun {
 		}
 		m.mu.Lock()
 		m.calls = append(m.calls, key)
+		held, release := key != "" && key == m.held, m.release
+		m.mu.Unlock()
+		if held {
+			<-release
+		}
+		m.mu.Lock()
 		limited, rejected := m.limited[key], m.unauthorized[key]
 		m.mu.Unlock()
 		if rejected {
@@ -102,9 +112,9 @@ func startKeyGroupsRun(t *testing.T, machine bool) *mixedRun {
 		return `{"name":"` + name + `","group":"` + group + `","format":"anthropic-messages","endpoint":"` + m.url + `","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
 	}
 	c := newControl(t)
-	policy, startKey := `{"version":1,"egress":{"mode":"enforce","allow":["localhost","127.0.0.1"]},"credentials":[{"name":"machine"}]}`, "machine"
+	policy := `{"version":1,"egress":{"mode":"enforce","allow":["localhost","127.0.0.1"]},"credentials":[{"name":"machine"}]}`
 	if !machine {
-		policy, startKey = `{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}}`, "a-1"
+		policy = `{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}}`
 	}
 	c.serveDocument(`{"version":1,"security_policy":`+policy+`,"model_credential":"`+startKey+`","credentials":[`+
 		entry("a-1", "a")+`,`+entry("b-1", "b")+`,`+entry("a-2", "a")+`,`+entry("b-2", "b")+`]}`, 'a')
@@ -298,7 +308,7 @@ func TestAMachineKeyIsInNoKeyGroup(t *testing.T) {
 // batch's answer has stop, model_key_limit; group a takes no part. Session 3 joins with
 // no key in its request and gets a-2, group a's active key, with no stop in its batches.
 func TestALaterSessionGetsItsGroupsKey(t *testing.T) {
-	m := startKeyGroupsRun(t, false)
+	m := startKeyGroupsRun(t, false, "a-1")
 	if key := m.join(t, ""); key != "a-1" {
 		t.Fatalf("join 1: %q; want a-1", key)
 	}
@@ -353,7 +363,7 @@ func TestALaterSessionGetsItsGroupsKey(t *testing.T) {
 // to the next batch has stop, model_key_unauthorized. Session 2 then joins with no key in
 // its request and gets a-1, of group a, with no stop in its batches.
 func TestAGroupWithEveryKeyOutStopsItsSessionAlone(t *testing.T) {
-	m := startKeyGroupsRun(t, false)
+	m := startKeyGroupsRun(t, false, "a-1")
 	m.mu.Lock()
 	m.unauthorized["b-1"], m.unauthorized["b-2"] = true, true
 	m.mu.Unlock()
@@ -378,5 +388,69 @@ func TestAGroupWithEveryKeyOutStopsItsSessionAlone(t *testing.T) {
 	}
 	if status, body := m.batch(t); status != http.StatusAccepted || body != "" {
 		t.Errorf("a batch of session 2: %d %q; want 202 with no stop", status, body)
+	}
+}
+
+// TestALateRefusalLeavesASessionOnTheMachinesKeyAlone pins a limit refusal of group a
+// that reaches the proxy after a session on the machine's model key joined. The run's
+// start key is a-1, of group a, beside the machine's key. Session 1 joins with no key
+// in its request and gets a-1, and its request waits at the provider. Session 1 ends,
+// and session 2 joins with the machine's key. Only then does the provider refuse a-1
+// and a-2 at their limit, so the proxy passes the refusal for group a. Session 2's
+// batches have no stop: its key is in no group.
+func TestALateRefusalLeavesASessionOnTheMachinesKeyAlone(t *testing.T) {
+	m := startKeyGroupsRun(t, true, "a-1")
+	release := make(chan struct{})
+	var once sync.Once
+	free := func() { once.Do(func() { close(release) }) }
+	// The provider's server closes only once the request it holds ends.
+	t.Cleanup(free)
+	m.mu.Lock()
+	m.held, m.release = "a-1", release
+	m.mu.Unlock()
+	if key := m.join(t, ""); key != "a-1" {
+		t.Fatalf("join 1: %q; want a-1", key)
+	}
+	m.h.post(sessionStarted(m.runID, 1))
+	req, _ := http.NewRequest(http.MethodPost, m.url+"/messages", strings.NewReader(`{"model":"m"}`))
+	req.Header.Set("X-Api-Key", link.KeyPlaceholder("a-1"))
+	answered := make(chan int, 1)
+	go func() {
+		resp, err := m.agent.Do(req)
+		if err != nil {
+			answered <- 0
+			return
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		answered <- resp.StatusCode
+	}()
+	eventually(t, "session 1's request at the provider", func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return slices.Contains(m.calls, "a-1")
+	})
+	m.h.post(sessionExited(m.runID, 1))
+	if key := m.join(t, "machine"); key != "machine" {
+		t.Fatalf("join 2 naming machine: %q; want machine", key)
+	}
+	m.h.post(sessionStarted(m.runID, 2))
+	m.limit("a-1", "a-2")
+	free()
+	if status := <-answered; status != http.StatusTooManyRequests {
+		t.Fatalf("session 1's request: %d; want the provider's 429", status)
+	}
+	m.mu.Lock()
+	calls := strings.Join(m.calls, ",")
+	m.calls = nil
+	m.mu.Unlock()
+	if calls != "a-1,a-2" {
+		t.Errorf("the provider got %q; want a-1, then a-2", calls)
+	}
+	if status, body := m.batch(t); status != http.StatusAccepted || body != "" {
+		t.Errorf("a batch of session 2: %d %q; want 202 with no stop", status, body)
+	}
+	if status, calls := m.send(t, "machine"); status != http.StatusOK || calls != "machine" {
+		t.Errorf("session 2, machine's placeholder: %d %q; want machine", status, calls)
 	}
 }

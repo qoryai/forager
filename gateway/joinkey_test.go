@@ -546,31 +546,7 @@ func TestARestartGivesAStaleGroupsStopToThatGroup(t *testing.T) {
 		t.Fatalf("join 1 naming other: %d %s; want 200 with other", status, key)
 	}
 	o.posted(t, sessionStarted(o.runID(), 1))
-	agent := o.r.relay(t, o.key)
-	agent.Transport.(*http.Transport).TLSClientConfig = &tls.Config{RootCAs: o.ca}
-	req, _ := http.NewRequest(http.MethodPost, o.url+"/responses", strings.NewReader(`{"model":"m","stream":true}`))
-	req.Header.Set("Authorization", "Bearer "+link.KeyPlaceholder("other"))
-	type answer struct {
-		status int
-		body   string
-		err    error
-	}
-	streamed := make(chan answer, 1)
-	go func() {
-		resp, err := agent.Do(req)
-		if err != nil {
-			streamed <- answer{err: err}
-			return
-		}
-		b, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		streamed <- answer{status: resp.StatusCode, body: string(b), err: err}
-	}()
-	eventually(t, "the provider's start of the stream", func() bool {
-		o.mu.Lock()
-		defer o.mu.Unlock()
-		return slices.Contains(o.calls, "other")
-	})
+	streamed := o.stream(t, "other")
 	o.posted(t, sessionExited(o.runID(), 1))
 	if status, key := o.join(t); status != http.StatusOK || key != "model" {
 		t.Fatalf("join 2: %d %s; want 200 with model", status, key)
@@ -584,6 +560,85 @@ func TestARestartGivesAStaleGroupsStopToThatGroup(t *testing.T) {
 	eventually(t, "the mark of the group other", func() bool {
 		b, err := os.ReadFile(mark)
 		return err == nil && string(b) == `{"version":1,"groups":[{"group":"other"}]}`+"\n"
+	})
+	if got := o.e.post(t, heartbeat(o.runID())); got.status != http.StatusAccepted || len(got.body) != 0 {
+		t.Errorf("a batch of session 2: %d %q; want no stop", got.status, got.body)
+	}
+	o.r = o.r.restart(t, o.cfg)
+	o.e.r = o.r
+	if got := o.e.post(t, heartbeat(o.runID())); got.status != http.StatusAccepted || len(got.body) != 0 {
+		t.Errorf("a batch of session 2 after the restart: %d %q; want no stop", got.status, got.body)
+	}
+}
+
+// streamAnswer is the answer to a Responses stream of [openaiRemote.stream].
+type streamAnswer struct {
+	status int
+	body   string
+	err    error
+}
+
+// stream sends a Responses stream request with the placeholder of the model key name,
+// waits until the provider has it, and returns the channel of its answer.
+func (o *openaiRemote) stream(t *testing.T, name string) <-chan streamAnswer {
+	t.Helper()
+	agent := o.r.relay(t, o.key)
+	agent.Transport.(*http.Transport).TLSClientConfig = &tls.Config{RootCAs: o.ca}
+	req, _ := http.NewRequest(http.MethodPost, o.url+"/responses", strings.NewReader(`{"model":"m","stream":true}`))
+	req.Header.Set("Authorization", "Bearer "+link.KeyPlaceholder(name))
+	streamed := make(chan streamAnswer, 1)
+	go func() {
+		resp, err := agent.Do(req)
+		if err != nil {
+			streamed <- streamAnswer{err: err}
+			return
+		}
+		b, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		streamed <- streamAnswer{status: resp.StatusCode, body: string(b), err: err}
+	}()
+	eventually(t, "the provider's start of the stream", func() bool {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		return slices.Contains(o.calls, name)
+	})
+	return streamed
+}
+
+// TestALateRefusalLeavesASessionWithNoKeyAlone pins a limit refusal of the group openai
+// that reaches the proxy after a session with no model key joined. Session 1 joins with
+// model, the start key, and its Responses stream starts; session 1 ends and session 2
+// joins with no model key. Only then does the stream end with a limit, so the proxy
+// passes it for the group openai. The record's mark has the group openai, and session
+// 2's batches have no stop, before and after a restart: its key is in no group.
+func TestALateRefusalLeavesASessionWithNoKeyAlone(t *testing.T) {
+	o := startOpenAIRemote(t)
+	release := make(chan struct{})
+	var once sync.Once
+	free := func() { once.Do(func() { close(release) }) }
+	// The provider's server closes only once the stream it holds ends.
+	t.Cleanup(free)
+	o.mu.Lock()
+	o.held, o.release = "model", release
+	o.mu.Unlock()
+	if status, key := o.join(t); status != http.StatusOK || key != "model" {
+		t.Fatalf("join 1: %d %s; want 200 with model", status, key)
+	}
+	o.posted(t, sessionStarted(o.runID(), 1))
+	streamed := o.stream(t, "model")
+	o.posted(t, sessionExited(o.runID(), 1))
+	if a := o.r.do(t, o.key, http.MethodPost, "/qory-link/run-configuration/"+o.runID()+"/sessions", []byte(`{"version":1,"passes":[],"model_key":false}`)); a.status != http.StatusOK {
+		t.Fatalf("join 2 with no model key: %d %s; want 200", a.status, a.body)
+	}
+	o.posted(t, sessionStarted(o.runID(), 2))
+	free()
+	if a := <-streamed; a.err != nil || a.status != http.StatusOK || !strings.Contains(a.body, "rate_limit_exceeded") {
+		t.Fatalf("the stream of session 1: %d %q, %v; want the 200 with the limit", a.status, a.body, a.err)
+	}
+	mark := filepath.Join(o.cfg.Dir, "runs", o.runID(), "model-key-limit")
+	eventually(t, "the mark of the group openai", func() bool {
+		b, err := os.ReadFile(mark)
+		return err == nil && string(b) == `{"version":1,"groups":[{"group":"openai"}]}`+"\n"
 	})
 	if got := o.e.post(t, heartbeat(o.runID())); got.status != http.StatusAccepted || len(got.body) != 0 {
 		t.Errorf("a batch of session 2: %d %q; want no stop", got.status, got.body)

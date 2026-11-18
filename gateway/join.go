@@ -273,11 +273,9 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 		lr.px.SetModelKey(model)
 	}
 	// A new join starts with no stop, in every group: the proxy sets the active key
-	// again. Resume clears every group, as no single group is known here. Only the
-	// group of the session before can pass from its requests, since the proxy sets
-	// the keys of the session's group alone; but sessionKeys returns the start key's
-	// group when no session is open, and a session on the machine's model key has no
-	// group.
+	// again. Resume clears every group: a stream of any earlier session can pass its
+	// group after that session ends, and sessionKeys returns the start key's group
+	// when no session is open.
 	lr.keys.Resume()
 	if reporter != nil {
 		reporter.opened(j.session)
@@ -293,15 +291,13 @@ func (lr *linkRun) usedKeys(g *modelkey.Group) bool {
 }
 
 // sessionKeys is the key group of the open session, the group of the key it joined
-// with; the start key's group when no session is open, or the open session has no key
-// of a group. Nil when the run has no key group.
+// with: nil when that key is in no group, the machine's key or no key, and the start
+// key's group when no session is open. Nil when the run has no key group.
 func (lr *linkRun) sessionKeys() *modelkey.Group {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
 	if j := lr.openJoin(); j != nil {
-		if g := lr.keyGroupOf(j.model); g != nil {
-			return g
-		}
+		return lr.keyGroupOf(j.model)
 	}
 	return lr.startKeys
 }
