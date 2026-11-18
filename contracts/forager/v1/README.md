@@ -2931,8 +2931,8 @@ A restart). The local link writes none of them.
   one JSON object, `{"version": 1, "groups": [{"group": "anthropic", "reason":
   "model_key_limit"}]}`, with each key group that passed since its last join or end of
   a session, by its `group` value, and the stop's reason once an answer to a batch had
-  it. A reopen gives the stop to each group listed. A mark without `groups`, as a
-  gateway before key groups wrote it, is the open session's group's.
+  it. A reopen gives the stop to each group listed. A reopen reads any other content
+  as no stop, removes the file and writes one `dev.qory.run.log` line.
 - `held.jsonl`: the gateway's `dev.qory.run.egress` and `dev.qory.run.target_write`
   events that waited for
   `dev.qory.run.started` when the gateway stopped, one per line. The reopen reads it

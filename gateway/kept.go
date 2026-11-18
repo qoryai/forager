@@ -40,6 +40,9 @@ const (
 	joinsFile        = "joins.jsonl"
 	limitMark        = "model-key-limit"
 	unauthorizedFile = "model-keys-unauthorized.json"
+	// limitMarkTemp is where [markKeys] writes the mark before it renames it, so a
+	// crash leaves the mark before the write or the mark after it, whole.
+	limitMarkTemp = limitMark + ".tmp"
 	// unauthorizedTemp is where [writeUnauthorized] writes the file before it renames
 	// it, so a crash leaves the file before the write or the file after it, whole.
 	unauthorizedTemp = unauthorizedFile + ".tmp"
@@ -185,9 +188,9 @@ func readGiven(dir string) (given []map[string]any, torn int, err error) {
 	return given, torn, err
 }
 
-// keptMark is the [limitMark] a gateway writes: each key group whose proxy passed a
-// limit refusal or a 401 to the session since the group's last Resume, in the order
-// of the groups.
+// keptMark is the [limitMark] a gateway writes: each key group for which the run's
+// proxy passed a limit refusal or a 401 to the session since the group's last Resume,
+// in the order of the groups.
 type keptMark struct {
 	Version int           `json:"version"`
 	Groups  []markedGroup `json:"groups"`
@@ -206,53 +209,46 @@ type markedGroup struct {
 // 110 bytes.
 const maxMark = 1 << 10
 
-// limitMarked reports whether dir has the mark of a model key past its limit or out of
-// use after a 401: the proxy passed a limit refusal or a 401 to the session, and no
-// join or end of a session cleared it since. groups are the key groups of the mark
-// ([markKeys]), each with its stop's reason, empty when it has none. A mark that is no
-// [keptMark], one that a gateway before key groups wrote, an empty file or a reason and
-// a newline, or one whose write did not end, has no groups: reason is the reason it
-// contains, empty when it has none, and the mark is the open session's key group's.
-func limitMarked(dir string) (reason string, groups []markedGroup, marked bool, err error) {
+// limitMarked reads dir's [limitMark]: the key groups for which the run's proxy passed
+// a limit refusal or a 401 to the session, and no join or end of a session cleared it
+// since ([markKeys]), each with its stop's reason, empty when it has none. No file has
+// no group. A file longer than [maxMark], or one that is no version 1 [keptMark] with
+// a group, has no group either, and torn is true.
+func limitMarked(dir string) (groups []markedGroup, torn bool, err error) {
 	path := filepath.Join(dir, limitMark)
 	_, err = os.Lstat(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return "", nil, false, nil
+		return nil, false, nil
 	case err != nil:
-		return "", nil, false, accesskey.ShownError(err)
+		return nil, false, accesskey.ShownError(err)
 	}
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
-		return "", nil, false, accesskey.ShownError(err)
+		return nil, false, accesskey.ShownError(err)
 	}
 	defer f.Close()
 	b, err := io.ReadAll(io.LimitReader(f, maxMark+1))
 	if err != nil {
-		return "", nil, false, accesskey.ShownError(err)
+		return nil, false, accesskey.ShownError(err)
 	}
+	// markKeys writes the mark whole, so a file that does not read as one is no mark
+	// of this gateway's: it has no group.
 	var k keptMark
-	if bytes.HasPrefix(b, []byte("{")) {
-		// A longer file, or one that is no keptMark, is a mark the gateway did not
-		// finish writing.
-		if len(b) <= maxMark && json.Unmarshal(b, &k) == nil && k.Version == 1 && len(k.Groups) > 0 {
-			for i, g := range k.Groups {
-				if !modelkey.StopReason(g.Reason) {
-					k.Groups[i].Reason = ""
-				}
-			}
-			return "", k.Groups, true, nil
+	if len(b) > maxMark || json.Unmarshal(b, &k) != nil || k.Version != 1 || len(k.Groups) == 0 {
+		return nil, true, nil
+	}
+	for i, g := range k.Groups {
+		if !modelkey.StopReason(g.Reason) {
+			k.Groups[i].Reason = ""
 		}
-		return "", nil, true, nil
 	}
-	if r := string(bytes.TrimSuffix(b, []byte("\n"))); modelkey.StopReason(r) {
-		reason = r
-	}
-	return reason, nil, true, nil
+	return k.Groups, false, nil
 }
 
-// markKeys writes groups to dir's [limitMark] whole, mode 0600 ([writeKept]), or
-// removes the mark when groups is empty: no group has a pass since its last Resume.
+// markKeys puts groups in dir's [limitMark] whole, mode 0600, through [limitMarkTemp]
+// ([replaceKept]), or removes the mark when groups is empty: no group has a pass since
+// its last Resume.
 func markKeys(dir string, groups []markedGroup) error {
 	if len(groups) == 0 {
 		err := os.Remove(filepath.Join(dir, limitMark))
@@ -268,7 +264,7 @@ func markKeys(dir string, groups []markedGroup) error {
 	if err != nil {
 		return err
 	}
-	return writeKept(dir, limitMark, append(b, '\n'))
+	return replaceKept(dir, limitMark, limitMarkTemp, append(b, '\n'))
 }
 
 // keptUnauthorized is model-keys-unauthorized.json: the keys of every key group of the

@@ -54,10 +54,10 @@ type linkRun struct {
 	// marking takes one write of the record's model key marks at a time, so the last
 	// write has the state of every group ([linkRun.watchKeys]).
 	marking sync.Mutex
-	// marked are the key groups of keys whose proxy passed a limit refusal or a 401 to
-	// the session since the group's last Resume, by group value, each with the stop's
-	// reason, empty until an answer had it; nil when no record keeps them. Under
-	// marking.
+	// marked are the key groups of keys for which the run's proxy passed a limit
+	// refusal or a 401 to the session since the group's last Resume, by group value,
+	// each with the stop's reason, empty until an answer had it; nil when no record
+	// keeps them. Under marking.
 	marked map[string]string
 	// reporter sends the key groups' reports, nil when the run has no key group or no
 	// control plane. Set under mu.
@@ -785,13 +785,14 @@ func (lr *linkRun) setKeyGroups(ctx context.Context, groups []run.KeyGroup) {
 }
 
 // watchKeys writes the marks of the run's key groups to its record, for a gateway that
-// starts again: each group whose proxy passed a limit refusal or a 401 to the session,
-// by its group value, with the stop's reason once an answer has it ([markKeys]), and
-// the keys of every group out of use after a 401. A group may pass while a session of
-// another group is open: a stream of a session before can end in a limit after the
-// next join. The reopen gives the mark to each group it lists, so the open session's
-// group gets a stop only when that group passed ([Gateway.reopen]). Each hook writes
-// the state of every group under lr.marking, so the last write has the newest state.
+// starts again: each key group for which the run's proxy passed a limit refusal or a
+// 401 to the session, by its group value, with the stop's reason once an answer has
+// it ([markKeys]), and the keys of every group out of use after a 401. A group may
+// pass while a session of another group is open: a stream of a session before can end
+// in a limit after the next join. The reopen gives the mark to each group it lists, so
+// the open session's group gets a stop only when that group passed ([Gateway.reopen]).
+// Each hook writes the state of every group under lr.marking, so the last write has
+// the newest state.
 // The hooks are called on the proxy's request path, the batch's and the renewal's: a
 // write that fails is reported, and the request goes on.
 func (lr *linkRun) watchKeys() {
@@ -806,7 +807,7 @@ func (lr *linkRun) watchKeys() {
 			}
 		}
 		if err := markKeys(dir, groups); err != nil {
-			g.report(fmt.Sprintf("run %s: writing its model key mark: %v", runID, err))
+			g.report(fmt.Sprintf("run %s: check the run's record directory: writing the model key mark failed: %v", runID, err))
 		}
 	}
 	for _, group := range lr.keys.Groups() {
@@ -837,20 +838,37 @@ func (lr *linkRun) watchKeys() {
 	}
 }
 
-// passMarked gives group the mark of a record a gateway reopens the run with: a pass,
-// with the stop's reason fixed at reason when it has one ([modelkey.Group.PassWith]).
-// The reason goes into the record's mark again.
-func (lr *linkRun) passMarked(group *modelkey.Group, reason string) {
-	if reason == "" {
-		group.Pass()
-		return
+// passMarks gives each key group of groups, the mark of a record a gateway reopens the
+// run with, a pass, with the stop's reason fixed at the group's reason when it has one
+// ([modelkey.Group.PassWith]). A group the run configuration no longer has gets
+// nothing. Every group that gets a pass goes into lr.marked with its reason before the
+// first pass, so the first write of the record's mark has each of them.
+func (lr *linkRun) passMarks(groups []markedGroup) {
+	type pass struct {
+		group  *modelkey.Group
+		reason string
 	}
+	var passes []pass
 	lr.marking.Lock()
-	if lr.marked != nil {
-		lr.marked[lr.groupNames[group]] = reason
+	for _, m := range groups {
+		group := lr.keyGroupNamed(m.Group)
+		if group == nil {
+			continue
+		}
+		if lr.marked != nil {
+			lr.marked[m.Group] = m.Reason
+		}
+		passes = append(passes, pass{group: group, reason: m.Reason})
 	}
 	lr.marking.Unlock()
-	group.PassWith(reason)
+	// After the unlock: the hooks of a pass take lr.marking.
+	for _, p := range passes {
+		if p.reason == "" {
+			p.group.Pass()
+		} else {
+			p.group.PassWith(p.reason)
+		}
+	}
 }
 
 // keyGroupNamed is the key group whose group value is name, nil for none.

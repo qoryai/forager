@@ -281,9 +281,20 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 		var mayPass holdError
 		return fail(!errors.As(err, &mayPass), err)
 	}
-	reason, groups, marked, err := limitMarked(dir)
+	groups, torn, err := limitMarked(dir)
 	if err != nil {
 		return fail(true, err)
+	}
+	if torn {
+		// No gateway writes such a file: the reopen passes no group for it and removes
+		// it.
+		lr.logLine(tornMark)
+		lr.marking.Lock()
+		err := markKeys(dir, nil)
+		lr.marking.Unlock()
+		if err != nil {
+			g.report(fmt.Sprintf("run %s: check the run's record directory: removing the model key mark failed: %v", runID, err))
+		}
 	}
 	if lr.keys != nil {
 		// A key whose renewal was pending has no value, as the secrets request left it
@@ -295,27 +306,11 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 				lr.keys.Revoked(k.Credential)
 			}
 		}
-	}
-	switch marks := lr.sessionKeys(); {
-	case !marked || lr.keys == nil:
-		// A run configuration with no key group now has no key to stop.
-	case groups != nil:
-		// The mark lists each group whose proxy passed a limit refusal or a 401 to
-		// the session, with the stop's reason when an answer had it: the first
-		// batch's answer of a session of such a group has the stop, with the same
-		// reason or with its reason as of then. A group the run configuration no
-		// longer has gets nothing.
-		for _, m := range groups {
-			if group := lr.keyGroupNamed(m.Group); group != nil {
-				lr.passMarked(group, m.Reason)
-			}
-		}
-	case marks != nil:
-		// A mark a gateway before key groups wrote, or one whose write did not end,
-		// lists no group: it is of the open session's key group, or of the start
-		// key's group when no session is open, as sessions are serial and the proxy
-		// sets the keys of the session's group alone.
-		lr.passMarked(marks, reason)
+		// The mark lists each key group for which the run's proxy passed a limit refusal
+		// or a 401 to the session, with the stop's reason when an answer had it: the
+		// first batch's answer of a session of such a group has the stop, with the same
+		// reason or with its reason as of then.
+		lr.passMarks(groups)
 	}
 	lr.mu.Lock()
 	open := lr.openJoin()
@@ -405,6 +400,11 @@ func hasHarness(a map[string]any) bool {
 		return m["purpose"] == server.PurposeHarness
 	})
 }
+
+// tornMark is the dev.qory.run.log line of a reopen whose record has a model-key-limit
+// that is no version 1 mark of key groups: the reopen removes it and gives no session a
+// stop.
+const tornMark = "No action needed: the reopen removed model-key-limit, not a version 1 mark, and stops no session."
 
 // codeWorkspaceNotServed is Qory Apiary's refusal of an attach of a run whose workspace
 // the gateway does not serve.

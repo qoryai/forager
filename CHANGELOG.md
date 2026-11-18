@@ -25,8 +25,7 @@ release may change what an existing document does, and says so under Upgrading.
   credentials, across every group, and `server.CheckCredentials` refuses a seventh in
   a document built in Go too: `Remove API credentials until the run has 6 at most.`
   A separate gateway's `model-key-limit` lists each key group that passed, by its
-  `group` value, with the stop's reason, as JSON; a gateway reads a mark written before
-  this change as the open session's group's.
+  `group` value, with the stop's reason, as JSON.
 - Read `model.endpoint` of a runtime in `runtimes.json` as one of `variable` and
   `setting`: a descriptor's endpoint may be a setting, such as
   `model_providers.qory.base_url`, and then has no `variable`. Read `resume` of a

@@ -3,6 +3,7 @@ package gateway_test
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log"
@@ -336,6 +337,10 @@ func TestAReopenKeepsTheStopsReasonAndTheKeysOut(t *testing.T) {
 	if got := o.e.post(t, heartbeat(o.runID())); got.status != http.StatusAccepted || string(got.body) != stop {
 		t.Errorf("the reopened run's first batch: %d %q", got.status, got.body)
 	}
+	// The reopen writes the mark again with the stop's reason.
+	if b, err := os.ReadFile(filepath.Join(dir, "model-key-limit")); err != nil || string(b) != `{"version":1,"groups":[{"group":"openai","reason":"model_key_switch"}]}`+"\n" {
+		t.Errorf("the mark after the reopen: %q, %v", b, err)
+	}
 	// The reopen's secrets request leaves model, out for the run, out.
 	if reqs := o.c.requests(t); len(reqs) == 0 || !slices.Equal(reqs[len(reqs)-1].Credentials, []string{"model-2"}) {
 		t.Errorf("the secrets requests %+v; want the reopen's with model-2 alone", reqs)
@@ -650,24 +655,40 @@ func TestALateRefusalLeavesASessionWithNoKeyAlone(t *testing.T) {
 	}
 }
 
-// TestARestartGivesAnOldMarkToTheSessionsGroup pins a mark that a gateway before key
-// groups wrote, a reason and a newline: the reopen gives it to the open session's
-// group, so the answer to the session's next batch has the stop with that reason.
-func TestARestartGivesAnOldMarkToTheSessionsGroup(t *testing.T) {
+// TestARestartReadsAnOldMarkAsNoStop pins a mark that is no version 1 mark of key
+// groups, a reason and a newline: the reopen gives no session a stop, removes the mark
+// and writes one dev.qory.run.log line, so the answer to the session's next batch has no
+// stop and its request reaches the provider.
+func TestARestartReadsAnOldMarkAsNoStop(t *testing.T) {
 	o := startOpenAIRemoteOf(t, true)
 	if status, key := o.joinNaming(t, "other"); status != http.StatusOK || key != "other" {
 		t.Fatalf("join 1 naming other: %d %s; want 200 with other", status, key)
 	}
 	o.posted(t, sessionStarted(o.runID(), 1))
-	if err := os.WriteFile(filepath.Join(o.cfg.Dir, "runs", o.runID(), "model-key-limit"), []byte("model_key_switch\n"), 0o600); err != nil {
+	dir := filepath.Join(o.cfg.Dir, "runs", o.runID())
+	if err := os.WriteFile(filepath.Join(dir, "model-key-limit"), []byte("model_key_switch\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	o.r = o.r.restart(t, o.cfg)
 	o.e.r = o.r
-	if got := o.e.post(t, heartbeat(o.runID())); got.status != http.StatusAccepted || string(got.body) != `{"stop":{"reason":"model_key_switch"}}` {
-		t.Errorf("the reopened run's first batch: %d %q; want stop, model_key_switch", got.status, got.body)
+	if got := o.e.post(t, heartbeat(o.runID())); got.status != http.StatusAccepted || len(got.body) != 0 {
+		t.Errorf("the reopened run's first batch: %d %q; want no stop", got.status, got.body)
 	}
-	if status, calls := o.sendAs(t, "other"); status != http.StatusTooManyRequests || len(calls) != 0 {
-		t.Errorf("a request of session 1 after the restart: %d %v; want the gateway's 429 and no call", status, calls)
+	if status, calls := o.sendAs(t, "other"); status != http.StatusOK || strings.Join(calls, ",") != "other" {
+		t.Errorf("a request of session 1 after the restart: %d %v; want 200 from other", status, calls)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "model-key-limit")); !os.IsNotExist(err) {
+		t.Errorf("the old mark after the reopen: %v; want it removed", err)
+	}
+	want, n := "No action needed: the reopen removed model-key-limit, not a version 1 mark, and stops no session.\n", 0
+	for _, r := range readLines(t, filepath.Join(dir, "events.jsonl")) {
+		if r.Type == event.RunLog {
+			if b, _ := base64.StdEncoding.DecodeString(r.Data["bytes"].(string)); string(b) == want {
+				n++
+			}
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d run.log lines %q; want 1", n, want)
 	}
 }
