@@ -1150,10 +1150,11 @@ group's placeholder, and sets no key of another group. The session gives the run
 group's placeholder in the variable of the session's key, with the key's endpoint (The
 variable of a model key, below). A join request whose `model_credential` is a key of a
 group gets the group's active key; when no session used the group yet, and it is not the
-start key's group, the join gets that key, or, when that key is in cooldown, the group's
-next key as in step 2 below. A join request with no `model_credential` gets the start
-key, or the active key of the start key's group (§The gateway's link, Joining a session). Keys outside every
-group keep the rules of The start key, above.
+start key's group, the join gets that key, or, when that key is in cooldown or out, the
+key step 2 below makes active; with no key of the group usable, the join gets that key.
+A join request with no `model_credential` gets the start key, or the active key of the
+start key's group (§The gateway's link, Joining a session). Keys outside every group keep
+the rules of The start key, above.
 
 A limit refusal is a `429` from the model provider, the endpoint's host. The gateway's
 `429` of its run limits (§The policy, Run limits), a `5xx` and an `overloaded` error are
@@ -3954,7 +3955,8 @@ brought back, `credential`, its name, and `at`, the gateway's clock when the `40
 arrived, an RFC 3339 time as `observed_at`. Each report has every such key when the
 gateway made it, so a key a renewal brought back is absent from the next report the
 gateway makes; a report made at a session's start or end keeps the keys it was made with
-across its tries. Absent when the group has none (§Credentials, Keys out after a 401).
+across its tries. Absent when no key of any key group of the run is out after a `401`
+(§Credentials, Keys out after a 401).
 The server ignores an entry whose `credential` is not one of the run's credentials, and
 treats the report as if that entry were absent. More than 6 entries, a credential twice
 or an entry of the wrong type is a signed `400` `invalid_request`:
@@ -5009,8 +5011,9 @@ document:
   model keys the gateway holds for the run, from the server or the machine. Absent, it
   means the start key, or, when the start key is in a key group, that group's active
   key. The name of a key of a key group means that group's active key: the key the proxy
-  switched to after a limit refusal, or, for a group no session used yet, the named key
-  (§Credentials, Several model keys). The name of a model key of the machine's means that
+  switched to after a limit refusal, or, for a group no session used yet, the named key,
+  or, when it is in cooldown or out, the key a limit refusal switches to (§Credentials,
+  Several model keys). The name of a model key of the machine's means that
   key alone. A request with `model_key` `false` may not contain it.
 
 The answer is a `200`, `application/json`, whose body is a

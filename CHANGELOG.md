@@ -1278,8 +1278,12 @@ release may change what an existing document does, and says so under Upgrading.
 - Expect one key group per `group` value of a run's API credentials, each with its
   rotation, cooldowns and stop apart from the others' (contract README §Credentials,
   Several model keys). A join request with a key of a group in `model_credential` gets
-  that group's active key, or, for a group no session used yet, that key; a join request
-  with no `model_credential` gets the start key's group. The proxy sets the active key of the session's group alone, on a
+  that group's active key. For a group other than the start key's that no session used
+  yet, it gets that key, or, when that key is in cooldown or out, the key a limit
+  refusal switches to: the key with `chosen`, then a key with no known reset by the
+  order, then the key whose reset is closest. With no key of the group usable, it gets
+  that key, and its first request gets the gateway's `429`, which stops the session. A
+  join request with no `model_credential` gets the start key's group. The proxy sets the active key of the session's group alone, on a
   request with that group's placeholder. With every key of the session's group in
   cooldown or used up, the session stops, and the run pauses at that session; with every
   key of the session's group out after a `401`, the session ends

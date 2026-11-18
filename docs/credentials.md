@@ -245,7 +245,9 @@ is never in a key group: a session on it gets that key alone.
 
 A session starts on the key in its join request's `model_credential`, or on the start
 key when the request has none. For a key of a group, the session gets the group's active
-key; a group no session used yet starts at the key in the request.
+key. A group other than the start key's that no session used yet starts at the key in
+the request, or, when that key is in cooldown or out, at the key a `429` switches to, as
+below.
 
 1. Optionally set `pause_for_s` on a key of the group: the cooldown in seconds after a
    refusal with no reset, 1 to 604800. A key without it has a cooldown of 60 seconds
