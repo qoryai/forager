@@ -724,19 +724,26 @@ func (lr *linkRun) decide(ctx, steps context.Context, d decision, authority func
 // key, every other group on its first key. The reporter runs under ctx, the run's.
 func (lr *linkRun) setKeyGroups(ctx context.Context, groups []run.KeyGroup) {
 	g, r, runID := lr.g, lr.r, lr.id
-	start := r.Held().Start
+	held := r.Held()
 	var made []*modelkey.Group
-	var order []string
 	px := make([]proxy.KeyGroup, 0, len(groups))
 	for _, kg := range groups {
-		group := modelkey.New(kg.Keys, start, nil)
+		group := modelkey.New(kg.Keys, held.Start, nil)
 		group.SetFormat(kg.Format)
-		if group.Has(start) {
+		if group.Has(held.Start) {
 			lr.startKeys = group
 		}
 		made = append(made, group)
 		px = append(px, proxy.KeyGroup{Group: group, Format: kg.Format, Stream: kg.Stream})
-		order = append(order, group.Names()...)
+	}
+	// The keys in the order of the run configuration's credentials, which the reports
+	// and the record of the keys out after a 401 follow, whatever the order of the
+	// groups.
+	var order []string
+	for _, c := range held.Credentials() {
+		if slices.ContainsFunc(made, func(group *modelkey.Group) bool { return group.Has(c.Name) }) {
+			order = append(order, c.Name)
+		}
 	}
 	lr.keys = modelkey.NewSet(made, order)
 	for _, name := range r.KeysOut() {

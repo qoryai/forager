@@ -106,6 +106,25 @@ func TestASetReportsTheWindowsOfEveryGroup(t *testing.T) {
 	}
 }
 
+// TestASetSnapshotFollowsTheCredentialsOrder pins the order of a snapshot's windows when
+// the order of the groups and that of the run configuration's credentials differ: codex,
+// of the second group, is before claude-2, of the first, among the credentials, and its
+// window comes first.
+func TestASetSnapshotFollowsTheCredentialsOrder(t *testing.T) {
+	at := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	s, claude, codex := twoGroups(func() time.Time { return at })
+	claude.Refused("claude-2", http.Header{}, "")
+	codex.Refused("codex", http.Header{}, "")
+	ws, _ := s.Snapshot()
+	var got []string
+	for _, w := range ws {
+		got = append(got, w.Credential)
+	}
+	if !slices.Equal(got, []string{"codex", "claude-2"}) {
+		t.Errorf("windows %v; want codex then claude-2, the order of the credentials", got)
+	}
+}
+
 // TestANilSetHasNoGroup pins the set of a run with no key group.
 func TestANilSetHasNoGroup(t *testing.T) {
 	var s *modelkey.Set
