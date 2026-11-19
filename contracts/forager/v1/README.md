@@ -2102,9 +2102,9 @@ outside gets none.
 
 | The launch | `outcome` | `is_error` |
 |---|---|---|
-| exited 0 | `success` | false |
+| ended `succeeded` | `success` | false |
 | paused, with `model_key_limit` or `model_key_switch` | `error_during_execution` | false |
-| any other end: an exit other than 0, a timeout, an interrupt | `error_during_execution` | true |
+| any other end: `failed`, or `cancelled` by a timeout or an interrupt | `error_during_execution` | true |
 
 The session reads `usage` from the rollouts below `resume.prefix`, which Codex writes
 one per thread, `rollout-<time>-<thread id>.jsonl`, once Codex exited. Each

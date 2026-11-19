@@ -196,8 +196,8 @@ it. See the contract's §The events, A session's transcript.
 
 Codex prints no result line, so the session writes the `dev.qory.runtime.result` of
 each launch of Codex itself, right before the session's `dev.qory.session.exited`, for
-a launch that wrote `dev.qory.runtime.started`. `outcome` is `success` for a launch that
-exited 0 and `error_during_execution` otherwise; `is_error` is false for `success` and
+a launch that wrote `dev.qory.runtime.started`. `outcome` is `success` for a launch whose
+session ended `succeeded`, and `error_during_execution` otherwise; `is_error` is false for `success` and
 for a launch paused with `model_key_limit` or `model_key_switch`, and true otherwise.
 `usage` is the launch's tokens, read from the rollouts below `resume.prefix` once Codex
 exited: the total of the launch's thread less what the restored rollout already had,

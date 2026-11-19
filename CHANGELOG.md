@@ -390,12 +390,12 @@ release may change what an existing document does, and says so under Upgrading.
   a subagent in the background.
 - A launch of Codex has a `dev.qory.runtime.result`, which the session writes right
   before `dev.qory.session.exited`, since Codex 0.167.2 prints no result line:
-  `success` with `is_error` false for an exit of 0, `error_during_execution` with
-  `is_error` false for a pause with `model_key_limit` or `model_key_switch`, and
-  `error_during_execution` with `is_error` true for any other end. Its `usage` is the
-  launch's tokens from Codex's rollouts, its child agents included, with `input` less
-  the cached and cache-write tokens; it has no `line`, `turns`, `duration_ms`,
-  `cost_usd` or `result`. A launch with no `dev.qory.runtime.started` has none. See the
+  `success` with `is_error` false for a session that ended `succeeded`,
+  `error_during_execution` with `is_error` false for a pause with `model_key_limit` or
+  `model_key_switch`, and `error_during_execution` with `is_error` true for any other
+  end. Its `usage` is the launch's tokens from Codex's rollouts, its child agents
+  included, with `input` less the cached and cache-write tokens; it has no `line`,
+  `turns`, `duration_ms`, `cost_usd` or `result`. A launch with no `dev.qory.runtime.started` has none. See the
   contract's README, §The events, Codex's result.
 - A descriptor rule can have `sum`: more fields of the event's data, each the sum of a
   named number over the members of one object of the record, `over`. A field of `data`
