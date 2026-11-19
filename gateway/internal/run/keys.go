@@ -66,9 +66,8 @@ func keyEntry(c server.RunCredential) credential.KeyEntry {
 // and use_up_to_windows without the other, which each fail the schema too; and a start
 // key in cooldown at now, since the server picks the start key among the keys out of
 // cooldown. A key with no pause_for_s has [modelkey.DefaultPauseFor]. A key whose
-// format, endpoint or auth differ from those of its group's first key, and a second key
-// with chosen in one group, are refused before, by [server.CheckCredentials] in
-// [Run.Read].
+// format, endpoint or auth differ from those of its group's first key is refused
+// before, by [server.CheckCredentials] in [Run.Read].
 func (r *Run) checkKeyGroup(now time.Time) error {
 	start := startName(startGroup(r.stored, r.storedModel), r.storedModel)
 	for _, group := range storedGroups(r.stored) {
@@ -151,7 +150,7 @@ type KeyGroup struct {
 
 // KeyGroups are the run's key groups, [credential.Held.Groups], in their order, each
 // key with its resets_at, schedule_resets_at, pause_for_s or without it
-// [modelkey.DefaultPauseFor] of its auth, cooldown_until, chosen, use_up_to_percent and
+// [modelkey.DefaultPauseFor] of its auth, cooldown_until, use_up_to_percent and
 // use_up_to_windows; none when the run has no API credential. The keys of a group share
 // their format and endpoint, so the group's format and stream path are its first
 // key's. Call it after [Run.Hold].
@@ -172,7 +171,7 @@ func (r *Run) KeyGroups() []KeyGroup {
 			if len(group.Keys) == 0 {
 				group.Format, group.Stream = c.Format, modelkey.StreamPath(c.Format, c.Endpoint)
 			}
-			k := modelkey.Key{Name: name, PauseFor: modelkey.DefaultPauseFor(c.Auth.OAuth), Chosen: c.Chosen}
+			k := modelkey.Key{Name: name, PauseFor: modelkey.DefaultPauseFor(c.Auth.OAuth)}
 			if c.PauseForS != nil {
 				k.PauseFor = time.Duration(*c.PauseForS) * time.Second
 			}

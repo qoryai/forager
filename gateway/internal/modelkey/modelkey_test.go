@@ -448,14 +448,14 @@ func TestErrorOfReadsTypeAndCode(t *testing.T) {
 	}
 }
 
-// TestASwitchTakesTheChosenKeyThenNoResetThenTheClosestReset pins the order of a switch
-// among the keys out of cooldown: the chosen key first; then the keys with no known
-// reset, or one that has passed, by the order; then the closest reset, from the
-// answers' windows over the run configuration's resets_at.
-func TestASwitchTakesTheChosenKeyThenNoResetThenTheClosestReset(t *testing.T) {
+// TestASwitchTakesNoResetThenTheClosestReset pins the order of a switch among the keys
+// out of cooldown: the keys with no known reset, or one that has passed, by the order;
+// then the closest reset, from the answers' windows over the run configuration's
+// resets_at.
+func TestASwitchTakesNoResetThenTheClosestReset(t *testing.T) {
 	c := &clock{now: start}
 	keys := []modelkey.Key{
-		{Name: "model", PauseFor: time.Hour, Chosen: true},
+		{Name: "model", PauseFor: time.Hour},
 		{Name: "model-2", PauseFor: time.Hour, ResetsAt: start.Add(3 * time.Hour)},
 		{Name: "model-3", PauseFor: time.Hour, ResetsAt: start.Add(-time.Hour)},
 		{Name: "model-4", PauseFor: time.Hour, ResetsAt: start.Add(time.Hour)},
@@ -484,7 +484,37 @@ func TestASwitchTakesTheChosenKeyThenNoResetThenTheClosestReset(t *testing.T) {
 	}
 	c.now = start.Add(11 * time.Minute)
 	if got := refuse("model-2"); got != "model" {
-		t.Errorf("after model-2, once model's cooldown ended: %s; want model, the chosen key", got)
+		t.Errorf("after model-2, once model's cooldown ended: %s; want model, first by the order with no known reset", got)
+	}
+}
+
+// TestASwitchWithNoResetsGoesByTheOrder pins a group whose keys have no known reset: a
+// refusal of the first key makes the second key active, not a later one.
+func TestASwitchWithNoResetsGoesByTheOrder(t *testing.T) {
+	c := &clock{now: start}
+	g := modelkey.New([]modelkey.Key{
+		{Name: "model", PauseFor: time.Hour},
+		{Name: "model-2", PauseFor: time.Hour},
+		{Name: "model-3", PauseFor: time.Hour},
+	}, "model", c.Now)
+	if next, ok := g.Refused("model", headers("retry-after", "600"), ""); next != "model-2" || !ok {
+		t.Errorf("Refused model: %s, %v; want model-2, first by the order", next, ok)
+	}
+}
+
+// TestASwitchTakesAKeyWithNoResetBeforeAnEarlierKeyWithOne pins the first step of the
+// order over the order of the keys: a key with no known reset goes before an earlier
+// key whose answer has a reset in 4 hours.
+func TestASwitchTakesAKeyWithNoResetBeforeAnEarlierKeyWithOne(t *testing.T) {
+	c := &clock{now: start}
+	g := modelkey.New([]modelkey.Key{
+		{Name: "model", PauseFor: time.Hour},
+		{Name: "model-2", PauseFor: time.Hour},
+		{Name: "model-3", PauseFor: time.Hour},
+	}, "model-2", c.Now)
+	g.Answered("model", http.StatusOK, headers("anthropic-ratelimit-unified-5h-status", "allowed", "anthropic-ratelimit-unified-5h-reset", epoch(start.Add(4*time.Hour))))
+	if next, ok := g.Refused("model-2", headers("retry-after", "600"), ""); next != "model-3" || !ok {
+		t.Errorf("Refused model-2: %s, %v; want model-3, the key with no known reset", next, ok)
 	}
 }
 
@@ -503,14 +533,14 @@ func TestResetsInOneMinuteGoByTheOrder(t *testing.T) {
 }
 
 // TestAKeyInCooldownAtTheClaimWaitsForItsEnd pins cooldown_until of the run
-// configuration: the key is skipped until then, and a chosen key in cooldown comes first
-// once its cooldown ends. The group pauses only when every key cools at once.
+// configuration: the key is skipped until then, and becomes active once its cooldown
+// ends. The group pauses only when every key cools at once.
 func TestAKeyInCooldownAtTheClaimWaitsForItsEnd(t *testing.T) {
 	c := &clock{now: start}
 	g := modelkey.New([]modelkey.Key{
 		{Name: "model", PauseFor: time.Hour},
 		{Name: "model-2", PauseFor: time.Hour},
-		{Name: "model-3", PauseFor: time.Hour, Chosen: true, CooldownUntil: start.Add(30 * time.Minute)},
+		{Name: "model-3", PauseFor: time.Hour, CooldownUntil: start.Add(30 * time.Minute)},
 	}, "model", c.Now)
 	if next, ok := g.Refused("model", headers("retry-after", "3600"), ""); next != "model-2" || !ok {
 		t.Errorf("Refused model: %s, %v; want model-2, model-3 in cooldown", next, ok)

@@ -185,7 +185,7 @@ func CheckCredentials(creds []RunCredential, model string) error {
 // [refusal.RunConfigurationInvalid] with the credential's name: an API credential with
 // no group and a host credential with one, as the schema does for a document read from
 // bytes; a key whose format, endpoint or auth differ from those of the first key of its
-// group ([KeyGroupDiffers]); and a second key with chosen in one group.
+// group ([KeyGroupDiffers]).
 func checkKeyGroups(creds []RunCredential) error {
 	for i, c := range creds {
 		name := accesskey.ShownName(c.Name, true)
@@ -208,13 +208,6 @@ func checkKeyGroups(creds []RunCredential) error {
 		if member := KeyGroupDiffers(creds[first], c); member != "" {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
 				"Give the keys of group %s one format, endpoint and auth.\nThe credentials %s and %s differ in %s", group, accesskey.ShownName(creds[first].Name, true), name, member)
-		}
-		if !c.Chosen {
-			continue
-		}
-		if j := slices.IndexFunc(creds[:i], func(o RunCredential) bool { return same(o) && o.Chosen }); j >= 0 {
-			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"Set chosen on one key of group %s.\nThe credentials %s and %s both have it", group, accesskey.ShownName(creds[j].Name, true), name)
 		}
 	}
 	return nil

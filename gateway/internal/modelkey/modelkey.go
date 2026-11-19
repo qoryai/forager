@@ -49,16 +49,14 @@ func DefaultPauseFor(oauth bool) time.Duration {
 // Key is one key of the group, from the run configuration's credentials: its name, its
 // earliest reset as the server had it, zero for none, the next reset of its weekly
 // schedule, zero for none, its pause_for_s, or [DefaultPauseFor] without one, the end of
-// its cooldown at the claim, zero for none, chosen, true for the key of the model
-// choice, and its use_up_to_percent, 0 for none, with the use_up_to_windows it applies
-// to.
+// its cooldown at the claim, zero for none, and its use_up_to_percent, 0 for none, with
+// the use_up_to_windows it applies to.
 type Key struct {
 	Name             string
 	ResetsAt         time.Time
 	ScheduleResetsAt time.Time
 	PauseFor         time.Duration
 	CooldownUntil    time.Time
-	Chosen           bool
 	UseUpToPercent   int
 	UseUpToWindows   []string
 }
@@ -289,18 +287,14 @@ func (g *Group) pick(move bool) (string, bool) {
 }
 
 // next is the key a switch makes active, among the keys usable at now
-// ([Group.usable]): the chosen key first; then the keys with no known reset, or one
-// that has passed, by the order; then the key with the closest reset, keys whose
-// resets fall in the same minute by the order. It reports false when every key is out
-// or in cooldown. Called with g.mu held.
+// ([Group.usable]): the keys with no known reset, or one that has passed, by the order;
+// then the key with the closest reset, keys whose resets fall in the same minute by the
+// order. It reports false when every key is out or in cooldown. Called with g.mu held.
 func (g *Group) next(now time.Time) (int, bool) {
 	best, bestReset := -1, time.Time{}
-	for i, k := range g.keys {
+	for i := range g.keys {
 		if !g.usable(i, now) {
 			continue
-		}
-		if k.Chosen {
-			return i, true
 		}
 		reset := g.knownReset(i, now).Truncate(time.Minute)
 		switch {

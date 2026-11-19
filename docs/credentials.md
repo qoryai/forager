@@ -268,9 +268,8 @@ The keys of a group share one placeholder, that of the group's first key, and wh
 session runs on the group, the proxy sets one of them, the group's active key, and no key
 of another group. When the provider returns `429` for the active key, the proxy puts the key in
 cooldown until the reset in the answer's headers, makes another key out of cooldown the
-active key, and sends the request again with it. The proxy takes the key with `chosen`
-first, then a key with no known reset, by the order, then the key whose limit resets
-soonest. A key with `cooldown_until` stays in cooldown until that time, until the
+active key, and sends the request again with it. The proxy takes a key with no known
+reset first, by the order, then the key whose limit resets soonest. A key with `cooldown_until` stays in cooldown until that time, until the
 provider returns a `2xx` for it, or until the answer to a later model keys report has
 an entry of the key that is not `rejected`. The session gets only the answer to that
 second request. The proxy keeps a copy of each request
