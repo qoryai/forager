@@ -171,9 +171,9 @@ func startRefusal(err error) (code string, names []string, text string) {
 	return r.Code, r.Names, err.Error()
 }
 
-// TestTheDefaultCredentialIsTheNamedModelKey pins Held.Start: the model key that
-// start names, the run's one model key when start is empty, and none when the run has
-// no model key and start is empty. It pins each refusal, run_configuration_invalid
+// TestTheDefaultCredentialIsTheNamedModelKey pins Held.DefaultCredential: the model key
+// that start names, the run's one model key when start is empty, and none when the run
+// has no model key and start is empty. It pins each refusal, run_configuration_invalid
 // with its text word for word: an empty start beside two model keys, with no name; a
 // start beside no model key; and a start that names no model key of the run, a host
 // credential included, each with the start as its name. A model key from the server
