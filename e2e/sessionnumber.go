@@ -30,7 +30,7 @@ func sessionNumber() int {
 
 // sessionNumbers checks QORY_SESSION in three sessions of one walled run: the first
 // session runs the runtime, two sessions with no runtime join after it, and each reads
-// the number the gateway gave its join, 1, 2 and 3.
+// the number the gateway assigned to its join, 1, 2 and 3.
 func sessionNumbers(t *testing.T, o Options, h hosts, outside string) {
 	t.Run("each session of a run reads its number in QORY_SESSION", func(t *testing.T) {
 		var later []string

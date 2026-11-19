@@ -337,8 +337,8 @@ func TestTheHarnessHome(t *testing.T) {
 	}
 }
 
-// TestTheSessionNumber pins QORY_SESSION: each session of a run gets the number the
-// gateway's join answer gives it, 1 for the run's first, with or without a wall.
+// TestTheSessionNumber pins QORY_SESSION: each session of a run gets the number in
+// the gateway's join answer, 1 for the run's first, with or without a wall.
 // Without a wall Forager's value wins over one the run inherits, a value of the run's
 // is denied as any QORY_ name, and the record lists the name, fixed, as it lists
 // QORY_RUN_ID. Behind a wall a value the run passes, inherits or gets from the machine
