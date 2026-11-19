@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -696,6 +697,12 @@ var errTooManyEntries = fmt.Errorf("the search listed more than %d entries", max
 // exist matches nothing. With limit above 0, more than limit entries listed is
 // [errTooManyEntries]; with 0, the search lists every entry.
 func findMatches(base, start string, p *pathPattern, limit int, follow bool) ([]string, error) {
+	return findUpTo(base, start, p, limit, follow, 0)
+}
+
+// findUpTo is [findMatches] that ends the search once it found stop paths, 2 when
+// stop is 0.
+func findUpTo(base, start string, p *pathPattern, limit int, follow bool, stop int) ([]string, error) {
 	var fd int
 	var err error
 	if follow {
@@ -709,7 +716,7 @@ func findMatches(base, start string, p *pathPattern, limit int, follow bool) ([]
 	case err != nil:
 		return nil, err
 	}
-	s := &search{pattern: p, limit: limit}
+	s := &search{pattern: p, limit: limit, stop: stop}
 	err = s.below(fd, "", 0)
 	return s.found, err
 }
@@ -776,6 +783,8 @@ type search struct {
 	found   []string
 	listed  int
 	limit   int
+	// stop is how many paths end the search, 2 when it is 0.
+	stop int
 	// beforeOpen, when not nil, gets the name of each directory below just before its
 	// open; a test changes the entry there. Nil outside tests.
 	beforeOpen func(dirFD int, name string)
@@ -783,11 +792,12 @@ type search struct {
 
 // below adds to found the paths below the directory fd, which it closes, relative to
 // the start of the search with rel the path of the directory, whose names from the
-// i-th on match the pattern, until found has two.
+// i-th on match the pattern, until found has s.stop paths, two when s.stop is 0.
 func (s *search) below(fd int, rel string, i int) error {
 	f := os.NewFile(uintptr(fd), "")
 	defer f.Close()
 	last := i == len(s.pattern.names)-1
+	stop := cmp.Or(s.stop, 2)
 	for {
 		entries, err := f.ReadDir(findBatch)
 		for _, e := range entries {
@@ -815,7 +825,7 @@ func (s *search) below(fd int, rel string, i int) error {
 					return err
 				}
 			}
-			if len(s.found) > 1 {
+			if len(s.found) >= stop {
 				return nil
 			}
 		}

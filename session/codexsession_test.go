@@ -41,6 +41,13 @@ echo '{"line":2}' >> "$f"
 // ok.
 func codexSpec(t *testing.T, installed bool, home, paused string) runSpec {
 	t.Helper()
+	sp, _ := codexSpecGateway(t, installed, home, paused)
+	return sp
+}
+
+// codexSpecGateway is [codexSpec] and the fake gateway it speaks to.
+func codexSpecGateway(t *testing.T, installed bool, home, paused string) (runSpec, *linktest.Fake) {
+	t.Helper()
 	sp, g := specGateway(t)
 	rt, err := codex.New()
 	if err != nil {
@@ -72,7 +79,7 @@ func codexSpec(t *testing.T, installed bool, home, paused string) runSpec {
 		})
 		g.OnTranscript(func(string) linktest.Reply { return linktest.Reply{Status: 200, Body: []byte("ok\n")} })
 	}
-	return sp
+	return sp, g
 }
 
 // TestACodexSessionStartsAndResumes pins the contract's Codex runtime in a session

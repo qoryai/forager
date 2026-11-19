@@ -194,6 +194,19 @@ shows the cause, a `404` from the gateway among the causes. Behind a wall the sa
 happens when the wall cannot bind the transcript directory where the agent's user writes
 it. See the contract's §The events, A session's transcript.
 
+Codex prints no result line, so the session writes the `dev.qory.runtime.result` of
+each launch of Codex itself, right before the session's `dev.qory.session.exited`, for
+a launch that wrote `dev.qory.runtime.started`. `outcome` is `success` for a launch that
+exited 0 and `error_during_execution` otherwise; `is_error` is false for `success` and
+for a launch paused with `model_key_limit` or `model_key_switch`, and true otherwise.
+`usage` is the launch's tokens, read from the rollouts below `resume.prefix` once Codex
+exited: the total of the launch's thread less what the restored rollout already had,
+plus the total of each child agent's rollout, the children of children included.
+`input` is Codex's `input_tokens` less its cached and cache-write tokens. The rollouts
+are read with the same checks as the transcript, and at most 256 files and 256 MiB
+together; past them the result has no `usage`, and the session writes one line on
+`stderr` that starts with the fix. See the contract's §The events, Codex's result.
+
 Behind a wall, the `dev.qory.session.exited` of a runtime that exited also has the
 enclosure's peak memory and CPU time, as measured inside the enclosure, to size machine
 types; they are not for limits or billing:
@@ -372,7 +385,7 @@ records come from outside. A **descriptor** maps those reports to events:
 | `dev.qory.runtime.text`              | The runtime printed a text block      |
 | `dev.qory.runtime.notification`      | The runtime notified its user         |
 | `dev.qory.runtime.ended`             | The runtime closed its session        |
-| `dev.qory.runtime.result`            | A headless session printed its result |
+| `dev.qory.runtime.result`            | A headless session printed its result, or a launch of Codex ended |
 
 Forager ships the descriptor for Claude Code. A runtime that nothing describes still
 runs: its run, its log and its egress are recorded, with no runtime events. See
