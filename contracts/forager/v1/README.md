@@ -1002,14 +1002,14 @@ credential "forge" merges two apply items of its entry`. No message contains a v
 server replaces each credential of the machine's whose hosts claim one of its hosts, or
 a host above or below one; the host of a model key, from the server or a local model
 provider credential, is its endpoint's. A key from `env` or `file`, such as a local
-model provider credential for that host, is then not read; an adapter still runs, and its answer is dropped. The run
-answer, the record and `placeholders` list the server's credential instead. The
-replaced credential may have the same name: the local model provider credential `model`
-on `api.anthropic.com` and a run configuration's `model` on `api.anthropic.com` give the
-run the server's `model`. A credential of the machine's that stays, because its hosts
-claim none of the server's credential's hosts, and that has the same name is no run, so
-the record lists each name once. Without `credentials` the run gets the machine's
-credentials as before.
+model provider credential for that host, is then not read; an adapter still runs, and
+its answer is dropped. The run answer, the record and `placeholders` list the server's
+credential instead. The replaced credential may have the same name: the local model
+provider credential `model` on `api.anthropic.com` and a run configuration's `model` on
+`api.anthropic.com` give the run the server's `model`. A credential of the machine's
+that stays, because its hosts claim none of the server's credential's hosts, and that
+has the same name is no run, so the record lists each name once. Without `credentials`
+the run gets the machine's credentials as before.
 
 **Renewal.** A value of the answer may have `expires_at`, when it stops working, and
 `apply`, where it is set (`sealed-plaintext.schema.json`). Each `apply` item is within
@@ -1130,12 +1130,14 @@ twice`, and `set each window in use_up_to_windows of the model key "model-2" to 
 of a-z, 0-9 and underscore, starting with a letter, such as five_hour: window 1 is
 "Five_Hour"`.
 
-The server sends each group's keys in the order that breaks ties: by when they were added, then the keys in cooldown at the claim, each with `cooldown_until`. When the active key goes into cooldown, the gateway
-makes active a key out of cooldown: a key with no known reset first, in the order the run configuration lists them; then the key with
-the closest reset; among equals, the first by the order (step 2 below). When the run's
-API credentials, across every group, would pass 6, the keys out of cooldown come first,
-then the keys in cooldown by the earliest `cooldown_until`. The gateway starts a key
-with `cooldown_until` in cooldown until that time, or until a later state of the key
+The server sends each group's keys in the order that breaks ties: by when they were
+added, then the keys in cooldown at the claim, each with `cooldown_until`. When the
+active key goes into cooldown, the gateway makes active a key out of cooldown: a key
+with no known reset first, in the order the run configuration lists them; then the key
+with the closest reset; among equals, the first by the order (step 2 below). When the
+run's API credentials, across every group, would pass 6, the keys out of cooldown come
+first, then the keys in cooldown by the earliest `cooldown_until`. The gateway starts a
+key with `cooldown_until` in cooldown until that time, or until a later state of the key
 allows it: a `2xx` response of the provider to the key, or an entry of the key in a
 model keys report's answer that is not `rejected` and whose `observed_at` is after the
 run's start. The default model provider credential is never in cooldown: a default model
@@ -1181,11 +1183,12 @@ nothing of the refusal to the session, and:
    subscription. The gateway takes a reset, or a `retry-after`, of at most 31 days
    after the answer arrived: a later one counts as 31 days after the answer.
 2. Makes another key of the group that is not in cooldown the active key: the first
-   key, by the order, with no known reset or a reset that has passed; else the key with the closest reset, keys whose resets fall in the same
-   minute by the order. A key's known reset is the earliest time after the gateway's
-   clock among: the `resets_at` of its windows (§The server, The model keys); while no
-   window has one, the key's `resets_at` in the run configuration; and the key's
-   `schedule_resets_at`, or that time plus 7 days once it has passed.
+   key, by the order, with no known reset or a reset that has passed; else the key with
+   the closest reset, keys whose resets fall in the same minute by the order. A key's
+   known reset is the earliest time after the gateway's clock among: the `resets_at` of
+   its windows (§The server, The model keys); while no window has one, the key's
+   `resets_at` in the run configuration; and the key's `schedule_resets_at`, or that
+   time plus 7 days once it has passed.
 3. Sends the request again with that key, from the copy, and passes the new answer to the
    session in place of the refusal. When that answer is a limit refusal too, the proxy
    starts again at step 1.
@@ -3972,8 +3975,8 @@ empty is the clock's now; a refusal reads `outcome <run.url>/<run_id>: <code> (s
 Several model keys) with a signed `POST <run.url>/<run_id>/model-keys`, `Content-Type:
 application/json`, signed by its access key under `qory-request-ed25519-v1`. A run whose
 run configuration has an API credential sends reports, also when its default model
-provider credential is a local model provider credential, which no report lists. Only the
-gateway that holds the run sends a report: the instance of the gateway node that
+provider credential is a local model provider credential, which no report lists. Only
+the gateway that holds the run sends a report: the instance of the gateway node that
 attached the run (After the attach, above). The server accepts it from that instance's
 active keys alone, and answers `404` to a report from any other sender, the node or node
 pool of a direct run among them. Its body is a `model-keys-report.schema.json` document
@@ -4940,12 +4943,12 @@ document:
   `placeholders` on the first entry alone, empty on the others. A harness credential
   (§Credentials, Harness credentials) and a push credential (§Credentials, Push
   credentials) have no entry. A model key, from the server or a local model provider
-  credential, also has `format` and `endpoint`; its `hosts` are the endpoint's host alone, and its
-  `placeholders` are empty. An entry with `format` has `auth` and `endpoint`, and one
-  with `endpoint` has `format`. The session adds the variable it gives the default model
-  provider credential (§Credentials, The variable of a model key) to the default model
-  provider credential's `placeholders`. Names and hosts alone, never a secret. Absent
-  means none.
+  credential, also has `format` and `endpoint`; its `hosts` are the endpoint's host
+  alone, and its `placeholders` are empty. An entry with `format` has `auth` and
+  `endpoint`, and one with `endpoint` has `format`. The session adds the variable it
+  gives the default model provider credential (§Credentials, The variable of a model
+  key) to the default model provider credential's `placeholders`. Names and hosts alone,
+  never a secret. Absent means none.
 - `default_model_provider_credential_name`: the name of the default model provider
   credential, the model key a session starts with when its join request contains none,
   an entry of `credential_hosts` with `format`: the run configuration's
@@ -6492,9 +6495,9 @@ result and each denied tool call (§The events). Its `tools.summary` lists
 and both `Agent: description` and `Task: description`, because the 2.1.316 binary has
 both names for the tool that starts a subagent and the init line of a recorded 2.1.316
 run lists `Task`. Its `secrets` declare no secret, reserve no variable and have no `one_of` group: the run's model key is a model
-key from the server or a local model provider credential (§Credentials). Its `model` lists
-`anthropic-messages`; it places the model id as `--model`, the run's effort value as
-`--effort` and an agent's effort value in the `effort` frontmatter, each of the two
+key from the server or a local model provider credential (§Credentials). Its `model`
+lists `anthropic-messages`; it places the model id as `--model`, the run's effort value
+as `--effort` and an agent's effort value in the `effort` frontmatter, each of the two
 taking `low`, `medium`, `high`, `xhigh` and `max`; it places the endpoint in
 `ANTHROPIC_BASE_URL`; its `keys` are `ANTHROPIC_API_KEY`, an API key sent as the
 header `x-api-key`, `ANTHROPIC_AUTH_TOKEN`, an API key sent as a bearer, and

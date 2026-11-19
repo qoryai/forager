@@ -273,11 +273,11 @@ session runs on the group, the proxy sets one of them, the group's active key, a
 of another group. When the provider returns `429` for the active key, the proxy puts the key in
 cooldown until the reset in the answer's headers, makes another key out of cooldown the
 active key, and sends the request again with it. The proxy takes a key with no known
-reset first, by the order, then the key whose limit resets soonest. A key with `cooldown_until` stays in cooldown until that time, until the
-provider returns a `2xx` for it, or until the answer to a later model keys report has
-an entry of the key that is not `rejected`. The session gets only the answer to that
-second request. The proxy keeps a copy of each request
-body up to 8 MiB for this; a larger body goes once.
+reset first, by the order, then the key whose limit resets soonest. A key with
+`cooldown_until` stays in cooldown until that time, until the provider returns a `2xx`
+for it, or until the answer to a later model keys report has an entry of the key that is
+not `rejected`. The session gets only the answer to that second request. The proxy keeps
+a copy of each request body up to 8 MiB for this; a larger body goes once.
 
 Keys of the format `openai-responses` keep one key for each session, because Codex
 sends its reasoning encrypted for one account. The proxy sends no such request again:
