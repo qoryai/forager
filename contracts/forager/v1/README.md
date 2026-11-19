@@ -1131,23 +1131,24 @@ twice`, and `set each window in use_up_to_windows of the model key "model-2" to 
 of a-z, 0-9 and underscore, starting with a letter, such as five_hour: window 1 is
 "Five_Hour"`.
 
-The server sends each group's keys in the order that breaks ties: the provider's default
-key in Qory Apiary first, then the other keys by when they were added, then the keys in
-cooldown at the claim, each with `cooldown_until`. The run starts on the key in
-`default_model_provider_credential_name`, which can be another key than the provider's
-default key in Qory Apiary. When the active key goes into cooldown, the gateway makes
-active a key out of cooldown: a key with no known reset first, ties broken by the order
-the server sent; then the key with the closest reset; among equals, the first by that
-order (step 2 below). When the run's API credentials, across every group, would pass 6,
-the keys out of cooldown come first, then the keys in cooldown by the earliest
-`cooldown_until`. The gateway starts a key with `cooldown_until` in cooldown until that
-time, or until a later state of the key allows it: a `2xx` response of the provider to
-the key, or an entry of the key in a model keys report's answer that is not `rejected`
-and whose `observed_at` is after the run's start. The default model provider credential
-is never in cooldown: a default model provider credential whose `cooldown_until` is
-after the gateway's clock is `run_configuration_invalid`, `Set
-default_model_provider_credential_name to a model key out of cooldown.` with `The
-default model provider credential "model" is in cooldown until <time>` on a second line.
+The server sends each group's keys in the order that breaks ties: the keys out of
+cooldown at the claim, then the keys in cooldown, each with `cooldown_until`; in each
+part the provider's default key in the control plane first, then the others by when they
+were added. The run starts on the key in `default_model_provider_credential_name`, which
+can be another key than the provider's default key in the control plane. When the active
+key goes into cooldown, the gateway makes active a key out of cooldown: a key with no
+known reset first, ties broken by the order the server sent; then the key with the
+closest reset; among equals, the first by that order (step 2 below). When the run's API
+credentials, across every group, would pass 6, the keys out of cooldown come first, then
+the keys in cooldown by the earliest `cooldown_until`. The gateway starts a key with
+`cooldown_until` in cooldown until that time, or until a later state of the key allows
+it: a `2xx` response of the provider to the key, or an entry of the key in a model keys
+report's answer that is not `rejected` and whose `observed_at` is after the run's start.
+The default model provider credential is never in cooldown: a default model provider
+credential whose `cooldown_until` is after the gateway's clock is
+`run_configuration_invalid`, `Set default_model_provider_credential_name to a model key
+out of cooldown.` with `The default model provider credential "model" is in cooldown
+until <time>` on a second line.
 
 The keys of a group share one placeholder, the placeholder of the group's first key in
 `credentials`, such as `qory-model-sets-the-credential-outside-the-enclosure` for a

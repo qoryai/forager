@@ -484,8 +484,8 @@ func keyGroups(stored []Stored) []KeyGroup {
 // check refuses two uses that claim a host together, unless both are model keys, which
 // the proxy tells apart by their placeholders, or both have paths and no path of one
 // overlaps a path of the other, so the proxy sets the use whose paths match a request:
-// a model key from the server with paths, such as /backend-api/codex/*, beside a host
-// credential with other paths of its host.
+// a model key stored in the control plane with paths, such as /backend-api/codex/*,
+// beside a host credential with other paths of its host.
 // Under enforce it refuses a host the run's allow list does not cover, a model key's
 // host being its endpoint's: a credential for a host the run never reaches is a
 // mistake to hear of before the run, not during it.
