@@ -312,10 +312,10 @@ type RunConfiguration struct {
 	// the document's order, each name once; nil when the document has none. The
 	// gateway fetches their values with the secrets request.
 	Credentials []RunCredential `json:"credentials,omitzero"`
-	// ModelCredential is the name of the model key the runtime starts with, an API
-	// credential of Credentials or a model key of the machine's; empty when the document
-	// names none, which a run with one model key may.
-	ModelCredential string `json:"model_credential,omitzero"`
+	// DefaultModelProviderCredentialName is the name of the model key the runtime
+	// starts with, an API credential of Credentials or a local model provider credential;
+	// empty when the document names none, which a run with one model key may.
+	DefaultModelProviderCredentialName string `json:"default_model_provider_credential_name,omitzero"`
 	// StackHosts are the hosts the run's stack proxy allows beside the gateway's
 	// gateway.stack_hosts, each a lower-case host name, an IPv4 address or a *. suffix,
 	// in the document's order; nil when the document has none.
@@ -364,9 +364,8 @@ type RunCredential struct {
 	ScheduleResetsAt string `json:"schedule_resets_at,omitzero"`
 	PauseForS        *int   `json:"pause_for_s,omitzero"`
 	// CooldownUntil is the end of an API credential's cooldown at the claim, RFC 3339,
-	// empty for a key out of cooldown; Chosen is true for the key of the model choice.
+	// empty for a key out of cooldown.
 	CooldownUntil string `json:"cooldown_until,omitzero"`
-	Chosen        bool   `json:"chosen,omitzero"`
 	// UseUpToPercent is an API credential's Use up to percentage, 1 to 99, nil when the
 	// document has none; UseUpToWindows are the limit windows it applies to, such as
 	// five_hour and seven_day, nil when the document has none.

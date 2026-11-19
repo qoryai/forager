@@ -136,12 +136,12 @@ At each `Join` the session:
 
 1. starts the join step, `join session <n>`, and sends the join request: the names,
    never the values, of the variables it passes a value for, and the session's model
-   credential when `ModelCredential` is set; the answer has the session's number, 1 for
-   the run's first join. Behind a separate gateway, after a try that gets no answer,
-   or a `503` with no code, the session flushes the run's events and sends the same
-   join request again, for up to 120 seconds: the gateway may be restarting. When the
-   previous join's events were not accepted by its end, the session sends the request
-   only once they are, within the same 120 seconds;
+   credential when `ModelProviderCredentialName` is set; the answer has the session's
+   number, 1 for the run's first join. Behind a separate gateway, after a try that gets
+   no answer, or a `503` with no code, the session flushes the run's events and sends
+   the same join request again, for up to 120 seconds: the gateway may be restarting.
+   When the previous join's events were not accepted by its end, the session sends the
+   request only once they are, within the same 120 seconds;
 2. checks the session's places, prepares the runtime and resolves the variables, then
    ends the join step `succeeded` with `-1`;
 3. records `dev.qory.session.started`, with the runtime, the command, `terminal`, the
@@ -1363,11 +1363,11 @@ Codex from either place, the contract's descriptor or a machine's `codex.yaml`, 
 with the check of Codex's flags below.
 
 A session whose `SessionSpec.Runtime` is nil runs a bare runtime named after its
-command, and has no start key: its program gets no model key's variable, placeholder or
-endpoint, whatever model keys the run has. Its `dev.qory.session.started` contains
-`bare`, `true`; a session whose runtime the caller sets has no `bare`, even a bare
-runtime. A runtime set in the spec without a `model` section, even a bare one, fails in
-a run with a model key.
+command, and has no default model provider credential: its program gets no model key's
+variable, placeholder or endpoint, whatever model keys the run has. Its
+`dev.qory.session.started` contains `bare`, `true`; a session whose runtime the caller
+sets has no `bare`, even a bare runtime. A runtime set in the spec without a `model`
+section, even a bare one, fails in a run with a model key.
 
 A program that needs custom code implements the interface.
 `session/runtimes/runtimetest` runs the same checks on it.
@@ -1534,8 +1534,8 @@ matching.
 the mounts, the setup commands and the rest below. `Harness` lists the harness's
 sources, each a `source` and a full `commit`; `dev.qory.session.started` records them, a
 source that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or
-`qecd_` as the value's phrase in its place. `ModelCredential` is the credential the join
-request asks the gateway for, for this session.
+`qecd_` as the value's phrase in its place. `ModelProviderCredentialName` is the
+credential the join request asks the gateway for, for this session.
 
 - `RuntimeInstall` is where you installed the runtime's program on this machine: `Dir`,
   the folder, an absolute path such as `/opt/runtimes/claude/2.1.320`, and `Version`,

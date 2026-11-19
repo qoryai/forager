@@ -189,13 +189,14 @@ Claude Code:
 The session also sets `ANTHROPIC_BASE_URL` to the endpoint. Every other value of
 `ANTHROPIC_BASE_URL`, from the server, `--env`, `wall.env`, the harness or the shell, is
 left out. Claude Code's other key variables get no value in its process environment
-either: with the start key in `ANTHROPIC_API_KEY`, a value of `ANTHROPIC_AUTH_TOKEN` or
-`CLAUDE_CODE_OAUTH_TOKEN` from any of these sources or the runtime's preparation is left
-out, and behind a wall the image's value is unset. One exception applies: when the run
-has an authority, a variable that points at the CA bundle is set to the bundle's path,
-even one of these. Without a wall these are the names the caller gives in
-`OpenSpec.CAEnv`; `qory` is to set it from `wall.ca_env`. Behind a wall they are the names
-in `CAEnv` of `wall.Docker`. A nil list means `wall.DefaultCAEnv`.
+either: with the default model provider credential in `ANTHROPIC_API_KEY`, a value of
+`ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN` from any of these sources or the
+runtime's preparation is left out, and behind a wall the image's value is unset. One
+exception applies: when the run has an authority, a variable that points at the CA
+bundle is set to the bundle's path, even one of these. Without a wall these are the
+names the caller gives in `OpenSpec.CAEnv`; `qory` is to set it from `wall.ca_env`.
+Behind a wall they are the names in `CAEnv` of `wall.Docker`. A nil list means
+`wall.DefaultCAEnv`.
 
 Claude Code also applies the `env` object of a settings file. The session copies the
 `env` of the `--settings` file into the run's `settings.json` without
@@ -216,16 +217,18 @@ If the runtime reads no key for the format or the `auth`, the run stops with
 `run_configuration_invalid`.
 
 A run may have several model keys, from `forager.yaml` and from the control plane. The
-gateway holds every one and sets only the start key, the one the runtime starts with.
-The proxy sets the start key only on a request to its endpoint's host that carries its
-placeholder. Under `enforce`, a request to a host that only model keys other than the running
-session's cover passes with no key set and needs no path rule, since a model provider
-is an integration that a policy cannot deny. The proxy sets no value of such a key, and
-replaces each model key's value in the answers from the key's host. With two or more model keys, the run configuration's `model_credential`
-names the start key; without it, the run stops with `run_configuration_invalid`. With
-one, that one is the start key. A session joined with no runtime,
-`session.SessionSpec.Runtime` nil, has no start key: its program gets no model key's
-variable, placeholder or endpoint.
+gateway holds every one and sets only the default model provider credential, the one the
+runtime starts with. The proxy sets the default model provider credential only on a
+request to its endpoint's host that carries its placeholder. Under `enforce`, a request
+to a host that only model keys other than the running session's cover passes with no key
+set and needs no path rule, since a model provider is an integration that a policy
+cannot deny. The proxy sets no value of such a key, and replaces each model key's value
+in the answers from the key's host. With two or more model keys, the run configuration's
+`default_model_provider_credential_name` names the default model provider credential;
+without it, the run stops with `run_configuration_invalid`. With one, that one is the
+default model provider credential. A session joined with no runtime,
+`session.SessionSpec.Runtime` nil, has no default model provider credential: its program
+gets no model key's variable, placeholder or endpoint.
 
 A credential without `format` whose `placeholders` list a model key's variable, such as
 `ANTHROPIC_API_KEY`, stops the run with `run_configuration_invalid`. Rewrite it as a
@@ -243,13 +246,14 @@ stop the run with `run_configuration_invalid`, such as `Give the keys of group
 "anthropic" one format, endpoint and auth.` A key of `forager.yaml` has no `group` and
 is never in a key group: a session on it gets that key alone.
 
-A session starts on the key in its join request's `model_credential`, or on the start
-key when the request has none. For a key of a group, the session gets the group's active
-key. A group other than the start key's that no session used yet starts at the key in
-the request, or, when that key is in cooldown or out, at the key a `429` switches to, as
-below. When no key of that group is usable, the session starts at the key in the
-request: its first model request gets the gateway's `429` with no `Retry-After`, and the
-session stops at its next batch, as below.
+A session starts on the key in its join request's `model_provider_credential_name`, or
+on the default model provider credential when the request has none. For a key of a
+group, the session gets the group's active key. A group other than the default model
+provider credential's that no session used yet starts at the key in the request, or,
+when that key is in cooldown or out, at the key a `429` switches to, as below. When no
+key of that group is usable, the session starts at the key in the request: its first
+model request gets the gateway's `429` with no `Retry-After`, and the session stops at
+its next batch, as below.
 
 1. Optionally set `pause_for_s` on a key of the group: the cooldown in seconds after a
    refusal with no reset, 1 to 604800. A key without it has a cooldown of 60 seconds
@@ -268,13 +272,12 @@ The keys of a group share one placeholder, that of the group's first key, and wh
 session runs on the group, the proxy sets one of them, the group's active key, and no key
 of another group. When the provider returns `429` for the active key, the proxy puts the key in
 cooldown until the reset in the answer's headers, makes another key out of cooldown the
-active key, and sends the request again with it. The proxy takes the key with `chosen`
-first, then a key with no known reset, by the order, then the key whose limit resets
-soonest. A key with `cooldown_until` stays in cooldown until that time, until the
-provider returns a `2xx` for it, or until the answer to a later model keys report has
-an entry of the key that is not `rejected`. The session gets only the answer to that
-second request. The proxy keeps a copy of each request
-body up to 8 MiB for this; a larger body goes once.
+active key, and sends the request again with it. The proxy takes a key with no known
+reset first, by the order, then the key whose limit resets soonest. A key with
+`cooldown_until` stays in cooldown until that time, until the provider returns a `2xx`
+for it, or until the answer to a later model keys report has an entry of the key that is
+not `rejected`. The session gets only the answer to that second request. The proxy keeps
+a copy of each request body up to 8 MiB for this; a larger body goes once.
 
 Keys of the format `openai-responses` keep one key for each session, because Codex
 sends its reasoning encrypted for one account. The proxy sends no such request again:
@@ -326,7 +329,7 @@ values. An entry is one of two kinds:
 
 ```json
 {"version": 1,
- "model_credential": "model",
+ "default_model_provider_credential_name": "model",
  "credentials": [
    {"name": "model", "group": "anthropic", "format": "anthropic-messages",
     "endpoint": "https://api.model.example/anthropic",
@@ -388,18 +391,21 @@ values. An entry is one of two kinds:
   credential "forge" expired at 2026-10-24T13:00:00Z`, and the proxy sets the value no
   more.
 - On a host that one of these credentials is for, its value replaces the machine's
-  credential, such as the model key in `forager.yaml` for the same endpoint host,
+  credential, such as a local model provider credential for the same endpoint host,
   whatever its name.
-- `model_credential` names the start key: an API credential of the run configuration,
-  or a model key of `forager.yaml`.
+- `default_model_provider_credential_name` names the default model provider credential:
+  an API credential of the run configuration, or a local model provider credential, a
+  model key of `forager.yaml`.
 - A placeholder goes only into a variable for a credential. A host credential whose
   `placeholders` list a variable the runtime denies, a model override, the model
   endpoint's variable or a model key's variable stops the run
   (`run_configuration_invalid`). The same holds for the run's placeholders from this
   machine's credentials and tools. A tool's variable, such as `GITHUB_TOKEN`, is fine.
-- The credentials and `model_credential` are fixed for the run: a renewal changes only
-  a value. A reload that changes them fails, and the run keeps its policy. So does a reload that selects another
-  model key of this machine's as the start key, with or without `model_credential`.
+- The credentials and `default_model_provider_credential_name` are fixed for the run: a
+  renewal changes only a value. A reload that changes them fails, and the run keeps its
+  policy. So does a reload that selects another local model provider credential as the
+  default model provider credential, with or without
+  `default_model_provider_credential_name`.
 - Without `credentials`, the run gets the machine's credentials as before.
 
 A run configuration may also list `stack_hosts`, the hosts qory may fetch the run's
@@ -452,10 +458,11 @@ subscription login is such a key:
 - The proxy checks no signature, and decodes at most 8 KiB of payload.
 - The header the session sends under that name, in any letter case and with `_` for
   `-`, never reaches the provider.
-- A key whose value has no such string when the run opens leaves its key group, and
-  the run's record gets one line that starts with the fix and contains neither the
-  value nor the claim. With no key left in a key group of the run, the start key's
-  group or another, the run stops with `run_configuration_invalid` at its start.
+- A key whose value has no such string when the run opens leaves its key group, and the
+  run's record gets one line that starts with the fix and contains neither the value nor
+  the claim. With no key left in a key group of the run, the default model provider
+  credential's group or another, the run stops with `run_configuration_invalid` at its
+  start.
 - An `account_header` that frames the request, is hop-by-hop, is one the proxy sets,
   or is `Authorization` stops the run with `run_configuration_invalid`.
 

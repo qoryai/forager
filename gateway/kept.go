@@ -129,18 +129,18 @@ func readRequest(dir string) (keptRequest, error) {
 }
 
 // keptJoin is one line of joins.jsonl: one join decision, written before the gateway
-// writes its answer, with names alone. Session is the join's number; Accepted is true for a
-// 200, false for a 403; Passes are the request's passes; Model is the model key the
-// answer starts the session with, empty for none; NoKey is the request's model_key
-// false; and ModelCredential is the request's model_credential, empty for none, which
-// the replay of a join compares.
+// writes its answer, with names alone. Session is the join's number; Accepted is true
+// for a 200, false for a 403; Passes are the request's passes; Model is the model key
+// the answer starts the session with, empty for none; NoKey is the request's model_key
+// false; and ModelProviderCredentialName is the request's
+// model_provider_credential_name, empty for none, which the replay of a join compares.
 type keptJoin struct {
-	Session         int      `json:"session"`
-	Accepted        bool     `json:"accepted"`
-	Passes          []string `json:"passes"`
-	Model           string   `json:"model"`
-	NoKey           bool     `json:"no_key"`
-	ModelCredential string   `json:"model_credential,omitempty"`
+	Session                     int      `json:"session"`
+	Accepted                    bool     `json:"accepted"`
+	Passes                      []string `json:"passes"`
+	Model                       string   `json:"model"`
+	NoKey                       bool     `json:"no_key"`
+	ModelProviderCredentialName string   `json:"model_provider_credential_name,omitempty"`
 }
 
 // kept is the join's line of joins.jsonl.
@@ -149,13 +149,13 @@ func (j *join) kept() keptJoin {
 	if passes == nil {
 		passes = []string{}
 	}
-	return keptJoin{Session: j.session, Accepted: j.accepted, Passes: passes, Model: j.model, NoKey: j.noKey, ModelCredential: j.credential}
+	return keptJoin{Session: j.session, Accepted: j.accepted, Passes: passes, Model: j.model, NoKey: j.noKey, ModelProviderCredentialName: j.credential}
 }
 
 // join is the join of the line, with neither its session.started nor its
 // session.exited numbered: the record's events set those.
 func (k keptJoin) join() *join {
-	return &join{session: k.Session, accepted: k.Accepted, passes: slices.Clone(k.Passes), model: k.Model, noKey: k.NoKey, credential: k.ModelCredential}
+	return &join{session: k.Session, accepted: k.Accepted, passes: slices.Clone(k.Passes), model: k.Model, noKey: k.NoKey, credential: k.ModelProviderCredentialName}
 }
 
 // readJoins reads joins.jsonl from dir, in order; no file is no join. A line that does

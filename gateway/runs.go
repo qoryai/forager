@@ -46,9 +46,10 @@ type linkRun struct {
 	// keys are the run's key groups, one per group value of the run configuration's API
 	// credentials; nil when the run has none.
 	keys *modelkey.Set
-	// startKeys is the key group of the run's start key, nil when the run has none or
-	// its start key is the machine's.
-	startKeys *modelkey.Group
+	// defaultKeys is the key group of the run's default model provider credential, nil
+	// when the run has none or its default model provider credential is a local model
+	// provider credential.
+	defaultKeys *modelkey.Group
 	// groupNames is the group value of each key group of keys, [run.KeyGroup.Name].
 	groupNames map[*modelkey.Group]string
 	// marking takes one write of the record's model key marks at a time, so the last
@@ -624,15 +625,15 @@ type holdError struct{ error }
 func (e holdError) Unwrap() error { return e.error }
 
 // decide decides the run by d and starts what the gateway holds of it, for an open and
-// for a reopen alike: the run's values ([run.Run.Hold], whose failure that may pass is a
-// [holdError]), its tools, its proxy, guarded on a wall or the one address, with the
+// for a reopen alike: the run's values ([run.Run.Hold], whose failure that may pass is
+// a [holdError]), its tools, its proxy, guarded on a wall or the one address, with the
 // run API, its limits and the node's path rules; the run's authority from authority,
-// called when the run's policy needs one, which the proxy ends TLS with; the start key;
-// and the key groups, which on the one address keep the mark of a passed limit refusal
-// in the run's record ([markKeys]). It returns the authority, nil for none. ctx is the
-// run's, which the key reporter runs under; steps is that of the fetch of the run's
-// values and of the wait for its tools to listen, which the caller ends as Close starts,
-// so Close does not wait for them.
+// called when the run's policy needs one, which the proxy ends TLS with; the default
+// model provider credential; and the key groups, which on the one address keep the mark
+// of a passed limit refusal in the run's record ([markKeys]). It returns the authority,
+// nil for none. ctx is the run's, which the key reporter runs under; steps is that of
+// the fetch of the run's values and of the wait for its tools to listen, which the
+// caller ends as Close starts, so Close does not wait for them.
 func (lr *linkRun) decide(ctx, steps context.Context, d decision, authority func(*run.Run) (*proxy.CA, error)) (*proxy.CA, error) {
 	g := lr.g
 	var selects []run.Selection
@@ -713,10 +714,10 @@ func (lr *linkRun) decide(ctx, steps context.Context, d decision, authority func
 		}
 		lr.px.Terminate(ca, r.Uses(), pol.Policy.Egress.Paths, run.ProxyTools(lr.tools))
 	}
-	if held := r.Held(); held != nil && held.Start != "" {
-		// Before any session joins, and between sessions, the proxy sets the start key;
-		// of a key group, the group's active key.
-		lr.px.SetModelKey(held.Start)
+	if held := r.Held(); held != nil && held.DefaultCredential != "" {
+		// Before any session joins, and between sessions, the proxy sets the default
+		// model provider credential; of a key group, the group's active key.
+		lr.px.SetModelKey(held.DefaultCredential)
 	}
 	if groups := r.KeyGroups(); len(groups) > 0 {
 		lr.setKeyGroups(ctx, groups)
@@ -727,8 +728,9 @@ func (lr *linkRun) decide(ctx, steps context.Context, d decision, authority func
 // setKeyGroups makes the run's key groups of groups: each group's proxy sets its active
 // key, sends a refused request again with its next key, for a format other than
 // openai-responses, whose active key changes only at a join, and the reporter shares
-// each key's state with the control plane. The start key's group starts on the start
-// key, every other group on its first key. The reporter runs under ctx, the run's.
+// each key's state with the control plane. The default model provider credential's
+// group starts on the default model provider credential, every other group on its first
+// key. The reporter runs under ctx, the run's.
 func (lr *linkRun) setKeyGroups(ctx context.Context, groups []run.KeyGroup) {
 	g, r, runID := lr.g, lr.r, lr.id
 	held := r.Held()
@@ -736,10 +738,10 @@ func (lr *linkRun) setKeyGroups(ctx context.Context, groups []run.KeyGroup) {
 	lr.groupNames = make(map[*modelkey.Group]string, len(groups))
 	px := make([]proxy.KeyGroup, 0, len(groups))
 	for _, kg := range groups {
-		group := modelkey.New(kg.Keys, held.Start, nil)
+		group := modelkey.New(kg.Keys, held.DefaultCredential, nil)
 		group.SetFormat(kg.Format)
-		if group.Has(held.Start) {
-			lr.startKeys = group
+		if group.Has(held.DefaultCredential) {
+			lr.defaultKeys = group
 		}
 		made = append(made, group)
 		lr.groupNames[group] = kg.Name
@@ -1356,25 +1358,25 @@ func ended(e ending, session int, from time.Time) map[string]any {
 // contracts/forager/v1/link-run-answer.schema.json: on the one address without the
 // labels, the proxy secret, the stack proxy secret and the push proxy secret.
 type runAnswerDoc struct {
-	Version              int                          `json:"version"`
-	RunID                string                       `json:"run_id"`
-	Labels               map[string]string            `json:"labels,omitzero"`
-	Policy               json.RawMessage              `json:"policy,omitempty"`
-	Digest               string                       `json:"digest,omitempty"`
-	Variables            map[string]server.Variable   `json:"variables,omitempty"`
-	ProxySecret          string                       `json:"proxy_secret,omitempty"`
-	StackProxySecret     string                       `json:"stack_proxy_secret,omitempty"`
-	PushProxySecret      string                       `json:"push_proxy_secret,omitempty"`
-	CertificateAuthority string                       `json:"certificate_authority,omitempty"`
-	Placeholders         []string                     `json:"placeholders,omitempty"`
-	Reserved             []string                     `json:"reserved,omitempty"`
-	CredentialHosts      []server.LinkCredentialHosts `json:"credential_hosts,omitempty"`
-	ModelCredential      string                       `json:"model_credential,omitempty"`
-	Image                *server.LinkImage            `json:"image,omitempty"`
-	RelayImage           string                       `json:"relay_image,omitempty"`
-	RunAPI               string                       `json:"run_api,omitempty"`
-	Resume               *server.LinkResume           `json:"resume,omitempty"`
-	Applied              map[string]any               `json:"applied"`
+	Version                            int                          `json:"version"`
+	RunID                              string                       `json:"run_id"`
+	Labels                             map[string]string            `json:"labels,omitzero"`
+	Policy                             json.RawMessage              `json:"policy,omitempty"`
+	Digest                             string                       `json:"digest,omitempty"`
+	Variables                          map[string]server.Variable   `json:"variables,omitempty"`
+	ProxySecret                        string                       `json:"proxy_secret,omitempty"`
+	StackProxySecret                   string                       `json:"stack_proxy_secret,omitempty"`
+	PushProxySecret                    string                       `json:"push_proxy_secret,omitempty"`
+	CertificateAuthority               string                       `json:"certificate_authority,omitempty"`
+	Placeholders                       []string                     `json:"placeholders,omitempty"`
+	Reserved                           []string                     `json:"reserved,omitempty"`
+	CredentialHosts                    []server.LinkCredentialHosts `json:"credential_hosts,omitempty"`
+	DefaultModelProviderCredentialName string                       `json:"default_model_provider_credential_name,omitempty"`
+	Image                              *server.LinkImage            `json:"image,omitempty"`
+	RelayImage                         string                       `json:"relay_image,omitempty"`
+	RunAPI                             string                       `json:"run_api,omitempty"`
+	Resume                             *server.LinkResume           `json:"resume,omitempty"`
+	Applied                            map[string]any               `json:"applied"`
 }
 
 // reloadAnswerDoc is the reload answer as the gateway writes it,
@@ -1493,7 +1495,7 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 		CredentialHosts: credentialHosts(lr.r.Held()), Image: lr.image(), Applied: lr.given[len(lr.given)-1],
 	}
 	if held := lr.r.Held(); held != nil {
-		a.ModelCredential = held.Start
+		a.DefaultModelProviderCredentialName = held.DefaultCredential
 	}
 	if lr.wall {
 		a.RelayImage = lr.r.RelayImage()

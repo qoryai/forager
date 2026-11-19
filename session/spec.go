@@ -300,9 +300,9 @@ type SessionSpec struct {
 	// Runtime is the program that is run: what is prepared before it starts, what its
 	// records mean and how it is asked to leave. The catalog package resolves a name to
 	// one. Nil means a bare runtime named after the Command: the session is recorded,
-	// the runtime's session inside it is not. A session with no runtime has no start
-	// key: the program gets no model key's variable, placeholder or endpoint. Only a nil
-	// Runtime sets bare in dev.qory.session.started.
+	// the runtime's session inside it is not. A session with no runtime has no default
+	// model provider credential: the program gets no model key's variable, placeholder
+	// or endpoint. Only a nil Runtime sets bare in dev.qory.session.started.
 	Runtime runtimes.Runtime
 	// RuntimeInstall is the folder the caller installed the runtime's program in, and
 	// the version it installed. A session of a Runtime that is
@@ -363,11 +363,12 @@ type SessionSpec struct {
 	// Harness are the harness sources the session's compose used, each with the commit
 	// compose used, reported in dev.qory.session.started as harness; nil reports none.
 	Harness []HarnessSource
-	// ModelCredential is the name of the model key the session starts with, one of the
-	// model keys the gateway holds for the run; empty means the run's start key. The join
-	// request contains it. A session with no Runtime starts with no model key: Join and
-	// AgentEnv refuse ModelCredential beside a nil Runtime before any request.
-	ModelCredential string
+	// ModelProviderCredentialName is the name of the model key the session starts with,
+	// one of the model keys the gateway holds for the run; empty means the run's
+	// default model provider credential. The join request contains it. A session with
+	// no Runtime starts with no model key: Join and AgentEnv refuse
+	// ModelProviderCredentialName beside a nil Runtime before any request.
+	ModelProviderCredentialName string
 	// OnVariables, when not nil, is called once the session's variables are resolved,
 	// before the wall and the agent start, with each name, its source and the values
 	// that lost, as dev.qory.run.policy_applied records them: qory prints a line for an

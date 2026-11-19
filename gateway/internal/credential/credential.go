@@ -102,11 +102,11 @@ type Use struct {
 	// Renewed is true when the server's value is fetched again before it expires and
 	// after a host refuses it: a value the run renews, whose rejected requests it again.
 	Renewed bool
-	// Format, Endpoint and OAuth are a model key's, from the server or the machine;
-	// empty for every other credential. AccountHeader and AccountClaim, of a model key
-	// from the server alone, are the header the proxy sets beside the value and the
-	// JSON pointer of its value in the value's JWT payload ([AccountClaim]); empty for
-	// none.
+	// Format, Endpoint and OAuth are a model key's, whether stored in the control plane or
+	// a local model provider credential; empty for every other credential. AccountHeader
+	// and AccountClaim, of a model key stored in the control plane alone, are the header
+	// the proxy sets beside the value and the JSON pointer of its value in the value's JWT
+	// payload ([AccountClaim]); empty for none.
 	Format, Endpoint            string
 	OAuth                       bool
 	AccountHeader, AccountClaim string
@@ -186,16 +186,16 @@ const (
 	RetryWait = 30 * time.Second
 )
 
-// Held are a run's credentials, resolved. Start is the name of the model key the
-// runtime starts with, which the proxy sets before the first session and between
-// sessions; empty when the run has none.
+// Held are a run's credentials, resolved. DefaultCredential is the name of the model
+// key the runtime starts with, which the proxy sets before the first session and
+// between sessions; empty when the run has none.
 type Held struct {
-	Uses         []*Use
-	Placeholders []string
-	Start        string
+	Uses              []*Use
+	Placeholders      []string
+	DefaultCredential string
 	// Groups are the key groups of the run configuration's API credentials, one per
 	// group value, in the order of each group's first key, [KeyGroups]. Empty when the
-	// run has no API credential from the server. A model key of the machine's is in
+	// run has no API credential from the server. A local model provider credential is in
 	// none.
 	Groups []KeyGroup
 	all    []*held
@@ -218,13 +218,13 @@ func (h *Held) reportPanic(line string) {
 }
 
 // Credential is one credential a run holds: its name, the hosts of its uses in their
-// order, as the proxy matches them, and the variables the enclosure gets a placeholder in
-// for it, each once. Of a credential from the server, Stored is true. Of a model key,
-// from the server or the machine, Format, Endpoint and OAuth are set; of a model key
-// from the server, Group, its key group. Of both, Scheme,
-// Username and Header are how its value is set on its first use's hosts. Items, of a
-// credential from the server, are its uses in order: each one's hosts with how the value
-// is set there.
+// order, as the proxy matches them, and the variables the enclosure gets a placeholder
+// in for it, each once. Of a credential from the server, Stored is true. Of a model
+// key, whether stored in the control plane or a local model provider credential,
+// Format, Endpoint and OAuth are set; of a model key stored in the control plane,
+// Group, its key group. Of both, Scheme, Username and Header are how its value is set
+// on its first use's hosts. Items, of a credential from the server, are its uses in
+// order: each one's hosts with how the value is set there.
 type Credential struct {
 	Name                     string
 	Hosts                    []string
@@ -293,11 +293,11 @@ func Resolve(ctx context.Context, defs []Definition, selected []policy.Selected,
 // whose env or file use claims one is not read, and an adapter's answer that claims one
 // is dropped, with no renewal; the adapter has run all the same. A credential of the
 // machine's that it replaces may have its name. A credential from the server with the
-// name of a credential of the machine's that stays is refused, so the record lists
-// each once. The checks of Resolve then cover all of them. start is the run
-// configuration's model_credential, the name of the model key the runtime starts with,
-// empty when it names none ([Held.startKey]).
-func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selected, stored []Stored, start string, mode policy.Mode, allow []string, report func(string)) (*Held, error) {
+// name of a credential of the machine's that stays is refused, so the record lists each
+// once. The checks of Resolve then cover all of them. defaultName is the run
+// configuration's default_model_provider_credential_name, the name of the model key the
+// runtime starts with, empty when it names none ([Held.setDefaultCredential]).
+func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selected, stored []Stored, defaultName string, mode policy.Mode, allow []string, report func(string)) (*Held, error) {
 	out := &Held{}
 	replaced := func(hosts []string) bool {
 		for _, s := range stored {
@@ -390,7 +390,7 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 		out.Close()
 		return nil, err
 	}
-	if err := out.startKey(start); err != nil {
+	if err := out.setDefaultCredential(defaultName); err != nil {
 		out.Close()
 		return nil, err
 	}
@@ -402,10 +402,11 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 	return out, nil
 }
 
-// startKey sets Start: start when it names a model key of the run, or the run's one
-// model key when start is empty. It refuses a start that names no model key of the
-// run, and an empty one beside two or more model keys, each run_configuration_invalid.
-func (h *Held) startKey(start string) error {
+// setDefaultCredential sets DefaultCredential: defaultName when it names a model key of
+// the run, or the run's one model key when defaultName is empty. It refuses a
+// defaultName that names no model key of the run, and an empty one beside two or more
+// model keys, each run_configuration_invalid.
+func (h *Held) setDefaultCredential(defaultName string) error {
 	var keys []string
 	for _, c := range h.Credentials() {
 		if c.Format != "" {
@@ -417,20 +418,20 @@ func (h *Held) startKey(start string) error {
 		shown[i] = accesskey.ShownName(k, false)
 	}
 	switch {
-	case start == "" && len(keys) == 0:
-	case start == "" && len(keys) == 1:
-		h.Start = keys[0]
-	case start == "" && len(keys) > 1:
+	case defaultName == "" && len(keys) == 0:
+	case defaultName == "" && len(keys) == 1:
+		h.DefaultCredential = keys[0]
+	case defaultName == "" && len(keys) > 1:
 		return refusal.New(refusal.RunConfigurationInvalid, nil,
-			"set model_credential in the run configuration, or give the run one model key: the run has the model keys %s", strings.Join(shown, ", "))
-	case slices.Contains(keys, start):
-		h.Start = start
+			"Set default_model_provider_credential_name, or give the run one model key.\nThe run has the model keys %s", strings.Join(shown, ", "))
+	case slices.Contains(keys, defaultName):
+		h.DefaultCredential = defaultName
 	case len(keys) == 0:
-		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(start),
-			"remove model_credential from the run configuration, or give the run a model key %s: the run has no model key", accesskey.ShownName(start, true))
+		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(defaultName),
+			"Remove default_model_provider_credential_name, or give the run a model key %s.\nThe run has no model key", accesskey.ShownName(defaultName, true))
 	default:
-		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(start),
-			"set model_credential in the run configuration to one of the run's model keys, %s: the run has no model key %s", strings.Join(shown, ", "), accesskey.ShownName(start, true))
+		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(defaultName),
+			"Set default_model_provider_credential_name to one of the run's model keys.\nThe run has the model keys %s, and no model key %s", strings.Join(shown, ", "), accesskey.ShownName(defaultName, true))
 	}
 	return nil
 }
@@ -483,8 +484,8 @@ func keyGroups(stored []Stored) []KeyGroup {
 // check refuses two uses that claim a host together, unless both are model keys, which
 // the proxy tells apart by their placeholders, or both have paths and no path of one
 // overlaps a path of the other, so the proxy sets the use whose paths match a request:
-// a model key from the server with paths, such as /backend-api/codex/*, beside a host
-// credential with other paths of its host.
+// a model key stored in the control plane with paths, such as /backend-api/codex/*,
+// beside a host credential with other paths of its host.
 // Under enforce it refuses a host the run's allow list does not cover, a model key's
 // host being its endpoint's: a credential for a host the run never reaches is a
 // mistake to hear of before the run, not during it.

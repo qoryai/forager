@@ -316,7 +316,7 @@ func (g *Gateway) reopenSteps(runID string, p presented) (lr *linkRun, final boo
 	open := lr.openJoin()
 	lr.mu.Unlock()
 	switch held := lr.r.Held(); {
-	case open != nil && open.noKey && held != nil && held.Start != "":
+	case open != nil && open.noKey && held != nil && held.DefaultCredential != "":
 		lr.px.SetNoModelKey()
 	case open != nil && open.model != "":
 		lr.px.SetModelKey(open.model)

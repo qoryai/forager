@@ -736,28 +736,30 @@ ends in `.local`, `.internal` or `.home.arpa`. A credential whose `hosts` are
 credential's key is sent only over TLS whose certificate the gateway machine's system
 trust store verifies.
 
-Before the run starts every selected credential is resolved, and any of these is
-no run: a name the machine does not define, an argument it does not provide for, a host
-two credentials claim, unless both are model keys or both have `paths` and no path of
-one overlaps a path of the other, a claim above the definition's, and
-under `enforce` a credential's host that no entry of the run's allow list covers: `add
-api.model.example to the run's egress allow list, or remove the credential model: the
-credential model is for api.model.example, which no allow entry covers`. A model key's
-host, from the server or the machine, is its endpoint's host. The gateway runs an adapter again five minutes before
-`expires_at`, and when a host returns 401 to a request it set the secret on, at most
-once every thirty seconds. The new answer changes the secret and nothing else: one
-that lists other hosts, schemes or paths is refused and reported, and the old secret
-stays, because what a run reaches is fixed when it starts.
+Before the run starts every selected credential is resolved, and any of these is no run:
+a name the machine does not define, an argument it does not provide for, a host two
+credentials claim, unless both are model keys or both have `paths` and no path of one
+overlaps a path of the other, a claim above the definition's, and under `enforce` a
+credential's host that no entry of the run's allow list covers: `add api.model.example
+to the run's egress allow list, or remove the credential model: the credential model is
+for api.model.example, which no allow entry covers`. The host of a model key, whether
+stored in the control plane or a local model provider credential, is its endpoint's
+host. The gateway runs an adapter again five minutes before `expires_at`, and when a
+host returns 401 to a request it set the secret on, at most once every thirty seconds.
+The new answer changes the secret and nothing else: one that lists other hosts, schemes
+or paths is refused and reported, and the old secret stays, because what a run reaches
+is fixed when it starts.
 
-**Placeholders.** A program often needs a credential set to start. A
-definition, or an adapter's answer, lists variables the agent's environment gets with the value
+**Placeholders.** A program often needs a credential set to start. A definition, or an
+adapter's answer, lists variables the agent's environment gets with the value
 `qory-sets-the-credential-outside-the-enclosure`, which is no credential anywhere; the
 proxy replaces what the program sends. A model key has no `placeholders`: the session
-sets the variable of the start key, the model key the runtime starts with, to the
-value `qory-`, the key's name and `-sets-the-credential-outside-the-enclosure`, such
-as `qory-model-sets-the-credential-outside-the-enclosure` (From the server, The start
-key, below). A session that passes a value for such a variable does not start: its join
-fails, `placeholder_conflict`, and the run stays open.
+sets the variable of the default model provider credential, the model key the runtime
+starts with, to the value `qory-`, the key's name and
+`-sets-the-credential-outside-the-enclosure`, such as
+`qory-model-sets-the-credential-outside-the-enclosure` (From the server, The default
+model provider credential, below). A session that passes a value for such a variable
+does not start: its join fails, `placeholder_conflict`, and the run stays open.
 
 **Several credentials on one host.** Two credentials may claim one host when each has
 `paths` and no path of one overlaps a path of the other: two paths overlap when one
@@ -870,11 +872,11 @@ event per request, `method: HTTPS` with `request_method`, `path` without its que
 and no error contains a secret.
 
 **From the server.** A run configuration may have `credentials`, the credentials whose
-values the server stores for the run, at most 16, and `model_credential`
-(`run-configuration.schema.json`):
+values the server stores for the run, at most 16, and
+`default_model_provider_credential_name` (`run-configuration.schema.json`):
 
 ```json
-"model_credential": "model",
+"default_model_provider_credential_name": "model",
 "credentials": [
   {"name": "model", "group": "anthropic", "format": "anthropic-messages",
    "endpoint": "https://api.model.example/anthropic",
@@ -959,17 +961,18 @@ is `run_configuration_invalid`, and a name that contains an access key secret, a
 key, a run code or an enrolment code is shown as a phrase, in the text and in the
 refusal's `names`.
 
-`model_credential` is the name of the start key, the model key the runtime starts
-with: an API credential of `credentials`, or a model key that the machine defines and
-the run's policy selects. A run with two or more model keys, the server's and the
-machine's together, needs it; in a run with one, that one is the start key, and
-`model_credential` may name it. Each of these is `run_configuration_invalid`: a
-`model_credential` that names a host credential of the document; none beside two or
-more API credentials, whose message is `Set model_credential to the model key the
-runtime starts with.` with `The document lists the model keys model, backup` on a
-second line; and, when the gateway resolves the run's credentials, a name of no model
-key of the run, and none beside two or more model keys of the server's and the
-machine's together.
+`default_model_provider_credential_name` is the name of the default model provider
+credential, the model key the runtime starts with: an API credential of `credentials`,
+or a local model provider credential that the run's policy selects. A run with two or
+more model keys, the server's and the local ones together, needs it; in a run with one,
+that one is the default model provider credential, and
+`default_model_provider_credential_name` may name it. Each of these is
+`run_configuration_invalid`: a `default_model_provider_credential_name` that names a
+host credential of the document; none beside two or more API credentials, whose message
+is `Set default_model_provider_credential_name to the model provider credential the
+first session uses: the document lists model, backup.`; and, when the gateway resolves
+the run's credentials, a name of no model key of the run, and none beside two or more
+model keys, the server's and the local model provider credentials together.
 
 The gateway sets these credentials for every run, with or without a wall. A run
 configuration with `credentials` from a server whose discovery lists no `secrets` is
@@ -998,16 +1001,16 @@ item with the host has, such as `Tell whoever runs the control plane: credential
 else, for hosts of two entry items in one item, `Tell whoever runs the control plane:
 credential "forge" merges two apply items of its entry`. No message contains a value. A credential from the
 server replaces each credential of the machine's whose hosts claim one of its hosts, or
-a host above or below one; the host of a model key, from the server or the machine, is
-its endpoint's. A key from `env` or `file`, such as forager.yaml's model key for that
-host, is then not read; an adapter still runs, and its answer is dropped. The run
-answer, the record and `placeholders` list the server's credential instead. The
-replaced credential may have the same name: forager.yaml's `model` on
-`api.anthropic.com` and a run configuration's `model` on `api.anthropic.com` give the
-run the server's `model`. A credential of the machine's that stays, because its hosts
-claim none of the server's credential's hosts, and that has the same name is no run, so
-the record lists each name once. Without `credentials` the run gets the machine's
-credentials as before.
+a host above or below one; the host of a model key, from the server or a local model
+provider credential, is its endpoint's. A key from `env` or `file`, such as a local
+model provider credential for that host, is then not read; an adapter still runs, and
+its answer is dropped. The run answer, the record and `placeholders` list the server's
+credential instead. The replaced credential may have the same name: the local model
+provider credential `model` on `api.anthropic.com` and a run configuration's `model` on
+`api.anthropic.com` give the run the server's `model`. A credential of the machine's
+that stays, because its hosts claim none of the server's credential's hosts, and that
+has the same name is no run, so the record lists each name once. Without `credentials`
+the run gets the machine's credentials as before.
 
 **Renewal.** A value of the answer may have `expires_at`, when it stops working, and
 `apply`, where it is set (`sealed-plaintext.schema.json`). Each `apply` item is within
@@ -1042,51 +1045,54 @@ the client as the host sent it. The gateway judges `expires_at` by the machine's
 A reload resolves the credentials again and keeps the run's renewals, and the run's
 end stops them.
 
-**The start key.** The gateway holds every model key of the run, from the server and
-the machine, and its proxy sets one of them at a time: the key of the running session,
-the start key before the first session and between sessions, or, for a key of a key
-group, that group's active key (Several model keys, below). It sets the key only on a
-request to the key's host that contains the key's placeholder where the key goes: in
-the key's header, or in `Authorization` with the key's scheme. A model key's placeholder is `qory-`, the key's name and
+**The default model provider credential.** The gateway holds every model key of the run,
+from the server and the machine, and its proxy sets one of them at a time: the key of
+the running session, the default model provider credential before the first session and
+between sessions, or, for a key of a key group, that group's active key (Several model
+keys, below). It sets the key only on a request to the key's host that contains the
+key's placeholder where the key goes: in the key's header, or in `Authorization` with
+the key's scheme. A model key's placeholder is `qory-`, the key's name and
 `-sets-the-credential-outside-the-enclosure`, such as
 `qory-model-sets-the-credential-outside-the-enclosure`, so two model keys of a run have
 two placeholders, apart from the keys of one key group, which share the placeholder of
-the group's first key. A request to the host without the placeholder gets no key.
-Under `enforce`, a request to a host that only model keys other than the running
-session's cover passes with no key set and needs no path rule: a model provider is an
-integration, so a policy cannot deny its hosts. The proxy sets no value of such a key,
-and replaces each model key's value with its placeholder in every answer from the key's
-host. The run answer's `model_credential` is the start key's name (§The gateway's
-link).
+the group's first key. A request to the host without the placeholder gets no key. Under
+`enforce`, a request to a host that only model keys other than the running session's
+cover passes with no key set and needs no path rule: a model provider is an integration,
+so a policy cannot deny its hosts. The proxy sets no value of such a key, and replaces
+each model key's value with its placeholder in every answer from the key's host. The run
+answer's `default_model_provider_credential_name` is the default model provider
+credential's name (§The gateway's link).
 
 **Several model keys.** A run can have several model keys of one provider, so that the
 run goes on when the provider returns a limit refusal for one key. Each API credential
 of `credentials` has `group`, the id of its provider as the server sets it, such as
-`anthropic`. The API credentials with one `group` value are one key group, and a run
-can have several key groups, such as one of `anthropic` keys and one of `openai` keys.
-The gateway sets the keys of each group one at a time, with a rotation, cooldowns and a
-stop apart from every other group's. The keys of one group have one `format`,
-`endpoint` and `auth`: a key whose `format`, `endpoint`, `auth.scheme`,
-`auth.username`, `auth.header` (letter case ignored), `auth.oauth`,
-`auth.account_header` (letter case ignored) or `auth.account_claim` differs from the
-group's first key's is `run_configuration_invalid`, with the two lines `Give the keys of
-group "anthropic" one format, endpoint and auth.` and `The credentials "model" and
-"model-2" differ in endpoint`. An API credential without `group` fails the schema, and
-so does a host credential with one. The order of a group's entries in `credentials` is
-the order in which the proxy sets them, the start key's place included. The start key's
-group starts on the start key, wherever its place in the order, and every other group
-on its first key. A run configuration has at most 6 API credentials, across every key
-group. A model key of the machine's, from `forager.yaml`, has no `group` and is never in
-a key group: a session on it gets that key alone, with no rotation, cooldown, model keys
-report entry or renewal after a `401`. Each key of a group may have `pause_for_s`, `resets_at`, `schedule_resets_at`, `cooldown_until`, `chosen`, and
-`use_up_to_percent` with `use_up_to_windows` (`run-configuration.schema.json`).
-`pause_for_s` is the key's cooldown in seconds after a limit refusal with no reset, for
-a key without `schedule_resets_at`. A key without `pause_for_s` has a cooldown of 60
-seconds for an API key, and of 3600 seconds for a subscription, a key whose `auth` has
-`oauth`. A `pause_for_s` below 1 fails the schema, and the gateway checks it on each key
-of every group too: a key of the group with one below 1 is `run_configuration_invalid`
-with the key's name, `set pause_for_s on the model key "model-2" to a value from 1 to
-604800, or remove it for the default cooldown: pause_for_s is 0`.
+`anthropic`. The API credentials with one `group` value are one key group, and a run can
+have several key groups, such as one of `anthropic` keys and one of `openai` keys. The
+gateway sets the keys of each group one at a time, with a rotation, cooldowns and a stop
+apart from every other group's. The keys of one group have one `format`, `endpoint` and
+`auth`: a key whose `format`, `endpoint`, `auth.scheme`, `auth.username`, `auth.header`
+(letter case ignored), `auth.oauth`, `auth.account_header` (letter case ignored) or
+`auth.account_claim` differs from the group's first key's is
+`run_configuration_invalid`, with the two lines `Give the keys of group "anthropic" one
+format, endpoint and auth.` and `The credentials "model" and "model-2" differ in
+endpoint`. An API credential without `group` fails the schema, and so does a host
+credential with one. The order of a group's entries in `credentials` is the order in
+which the proxy sets them, the default model provider credential's place included. The
+default model provider credential's group starts on the default model provider
+credential, wherever its place in the order, and every other group on its first key. A
+run configuration has at most 6 API credentials, across every key group. A local model
+provider credential, from `forager.yaml`, has no `group` and is never in a key group: a
+session on it gets that key alone, with no rotation, cooldown, model keys report entry
+or renewal after a `401`. Each key of a group may have `pause_for_s`, `resets_at`,
+`schedule_resets_at`, `cooldown_until`, and `use_up_to_percent` with `use_up_to_windows`
+(`run-configuration.schema.json`). `pause_for_s` is the key's cooldown in seconds after
+a limit refusal with no reset, for a key without `schedule_resets_at`. A key without
+`pause_for_s` has a cooldown of 60 seconds for an API key, and of 3600 seconds for a
+subscription, a key whose `auth` has `oauth`. A `pause_for_s` below 1 fails the schema,
+and the gateway checks it on each key of every group too: a key of the group with one
+below 1 is `run_configuration_invalid` with the key's name, `set pause_for_s on the
+model key "model-2" to a value from 1 to 604800, or remove it for the default cooldown:
+pause_for_s is 0`.
 
 `use_up_to_percent` is the key's Use up to percentage, 1 to 99, and `use_up_to_windows`
 are the limit windows it applies to: 1 to 11 names, none twice, each in the grammar of a
@@ -1125,21 +1131,24 @@ twice`, and `set each window in use_up_to_windows of the model key "model-2" to 
 of a-z, 0-9 and underscore, starting with a letter, such as five_hour: window 1 is
 "Five_Hour"`.
 
-The server sends each group's keys in the order that breaks ties: the key of the model
-choice first, with `chosen: true`, when it is out of cooldown at the claim; then the
-provider's default key; then the others by when they were added; then the keys in
-cooldown at the claim, each with `cooldown_until`. When the run's API credentials, across
-every group, would pass 6, the keys out of cooldown come first, then the keys in cooldown
-by the earliest `cooldown_until`. The gateway starts a key with `cooldown_until` in cooldown until that
-time, or until a later state of the key allows it: a `2xx` response of the provider to
-the key, or an entry of the key in a model keys report's answer that is not `rejected`
-and whose `observed_at` is after the run's start. The start key is never in cooldown: a
-start key whose `cooldown_until` is after the gateway's clock is
-`run_configuration_invalid`, `set model_credential to a model key out of cooldown: the
-start key "model" is in cooldown until <time>`. Only one key of a group has `chosen`;
-two in one group are `run_configuration_invalid`, with the two lines `Set chosen on one
-key of group "anthropic".` and `The credentials "model" and "model-2" both have it`.
-Each group may have one.
+The server sends each group's keys in the order that breaks ties: the keys out of
+cooldown at the claim, then the keys in cooldown, each with `cooldown_until`; in each
+part the provider's default key in the control plane first, then the others by when they
+were added. The run starts on the key in `default_model_provider_credential_name`, which
+can be another key than the provider's default key in the control plane. When the active
+key goes into cooldown, the gateway makes active a key out of cooldown: a key with no
+known reset first, ties broken by the order the server sent; then the key with the
+closest reset; among equals, the first by that order (step 2 below). When the run's API
+credentials, across every group, would pass 6, the keys out of cooldown come first, then
+the keys in cooldown by the earliest `cooldown_until`. The gateway starts a key with
+`cooldown_until` in cooldown until that time, or until a later state of the key allows
+it: a `2xx` response of the provider to the key, or an entry of the key in a model keys
+report's answer that is not `rejected` and whose `observed_at` is after the run's start.
+The default model provider credential is never in cooldown: a default model provider
+credential whose `cooldown_until` is after the gateway's clock is
+`run_configuration_invalid`, `Set default_model_provider_credential_name to a model key
+out of cooldown.` with `The default model provider credential "model" is in cooldown
+until <time>` on a second line.
 
 The keys of a group share one placeholder, the placeholder of the group's first key in
 `credentials`, such as `qory-model-sets-the-credential-outside-the-enclosure` for a
@@ -1148,13 +1157,15 @@ group and names are unique in a run. While a session runs on a key of a group, t
 sets that group's active key on each request to the endpoint's host that contains the
 group's placeholder, and sets no key of another group. The session gives the runtime the
 group's placeholder in the variable of the session's key, with the key's endpoint (The
-variable of a model key, below). A join request whose `model_credential` is a key of a
-group gets the group's active key; when no session used the group yet, and it is not the
-start key's group, the join gets that key, or, when that key is in cooldown or out, the
-key step 2 below makes active; with no key of the group usable, the join gets that key.
-A join request with no `model_credential` gets the start key, or the active key of the
-start key's group (§The gateway's link, Joining a session). Keys outside every group keep
-the rules of The start key, above.
+variable of a model key, below). A join request whose `model_provider_credential_name`
+is a key of a group gets the group's active key; when no session used the group yet, and
+it is not the default model provider credential's group, the join gets that key, or,
+when that key is in cooldown or out, the key step 2 below makes active; with no key of
+the group usable, the join gets that key. A join request with no
+`model_provider_credential_name` gets the default model provider credential, or the
+active key of the default model provider credential's group (§The gateway's link,
+Joining a session). Keys outside every group keep the rules of The default model
+provider credential, above.
 
 A limit refusal is a `429` from the model provider, the endpoint's host. The gateway's
 `429` of its run limits (§The policy, Run limits), a `5xx` and an `overloaded` error are
@@ -1175,13 +1186,13 @@ nothing of the refusal to the session, and:
    without `pause_for_s`, 60 seconds after it for an API key and 3600 seconds for a
    subscription. The gateway takes a reset, or a `retry-after`, of at most 31 days
    after the answer arrived: a later one counts as 31 days after the answer.
-2. Makes another key of the group that is not in cooldown the active key: the key with
-   `chosen`; else the first key, by the order, with no known reset or a reset that has
-   passed; else the key with the closest reset, keys whose resets fall in the same
-   minute by the order. A key's known reset is the earliest time after the gateway's
-   clock among: the `resets_at` of its windows (§The server, The model keys); while no
-   window has one, the key's `resets_at` in the run configuration; and the key's
-   `schedule_resets_at`, or that time plus 7 days once it has passed.
+2. Makes another key of the group that is not in cooldown the active key: the first
+   key, by the order, with no known reset or a reset that has passed; else the key with
+   the closest reset, keys whose resets fall in the same minute by the order. A key's
+   known reset is the earliest time after the gateway's clock among: the `resets_at` of
+   its windows (§The server, The model keys); while no window has one, the key's
+   `resets_at` in the run configuration; and the key's `schedule_resets_at`, or that
+   time plus 7 days once it has passed.
 3. Sends the request again with that key, from the copy, and passes the new answer to the
    session in place of the refusal. When that answer is a limit refusal too, the proxy
    starts again at step 1.
@@ -1304,10 +1315,10 @@ as:
 Store in the control plane a value of the model key "subscription" with a string at its account_claim; the run does not set the key: the value's JWT payload has no string at account_claim "/https:~1~1api.openai.com~1auth/chatgpt_account_id"
 ```
 
-When no key is left in a key group of the run, the start key's group or another, the
-run is refused at its start, `run_configuration_invalid`. A renewed value without the
-claim is a renewal refused for its form: the run keeps the value it had, and the
-gateway reports the renewal that failed.
+When no key is left in a key group of the run, the default model provider credential's
+group or another, the run is refused at its start, `run_configuration_invalid`. A
+renewed value without the claim is a renewal refused for its form: the run keeps the
+value it had, and the gateway reports the renewal that failed.
 
 **Keys out after a 401.** A model provider may return `401` for a key that a person
 revoked or whose subscription ended. The contract has three parts for such a key:
@@ -1362,42 +1373,44 @@ stop in its answers. Its first secrets request leaves those keys out, and it ren
 key whose renewal was pending in a request that names it alone. When no credential of
 the run is left to request, it sends no secrets request.
 
-**The variable of a model key.** The session gives the start key to the runtime. The
-run answer's `credential_hosts` has each model key's `format`, `endpoint` and `auth`
-(§The gateway's link). Of the runtime's descriptor's `model.keys` (§The descriptor), the
-session takes the key whose `format` is the start key's and whose `auth` has the start
-key's scheme, header name, case ignored, and `oauth`. The session then sets two
-variables:
+**The variable of a model key.** The session gives the default model provider credential
+to the runtime. The run answer's `credential_hosts` has each model key's `format`,
+`endpoint` and `auth` (§The gateway's link). Of the runtime's descriptor's `model.keys`
+(§The descriptor), the session takes the key whose `format` is the default model
+provider credential's and whose `auth` has the default model provider credential's
+scheme, header name, case ignored, and `oauth`. The session then sets two variables:
 
-- the key's variable, to the start key's placeholder, which for a key of a key group
-  is the placeholder of the group's first key in the run answer's `credential_hosts`,
-  by the entries' `group`; the variable joins the start key's `placeholders` and the
-  run's;
+- the key's variable, to the default model provider credential's placeholder, which for
+  a key of a key group is the placeholder of the group's first key in the run answer's
+  `credential_hosts`, by the entries' `group`; the variable joins the default model
+  provider credential's `placeholders` and the run's;
 - the runtime's model endpoint variable, `ANTHROPIC_BASE_URL` for Claude Code, to the
-  start key's `endpoint`. Every other value of the endpoint variable loses to it, and
-  the endpoint rule does not apply (§Variables, The model endpoint).
+  default model provider credential's `endpoint`. Every other value of the endpoint
+  variable loses to it, and the endpoint rule does not apply (§Variables, The model
+  endpoint).
 
 The runtime's other variables of `model.keys` get no value in the runtime's process
 environment: a value of each, from the server, the run, the machine, the harness's
-defaults, the harness's computed values or the environment the run inherits, is left
-out and recorded as `fixed`. A value the runtime's preparation sets is left out too, and
-is not recorded as `fixed`. Behind a wall the name is unset inside, so an image's value
-does not reach the runtime either. The runtime would send such a value to the start
-key's endpoint. For Claude Code with a start key in `ANTHROPIC_API_KEY`, no value of
-`ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN` reaches its process environment,
-with one exception (§Variables, The model endpoint): when the run has an authority, a
-variable that points at the CA bundle is set to the bundle's path, even one of
-`model.keys`. Claude Code also applies the `env` object of a settings file: the session
-drops every variable of `model.keys` and the endpoint variable from the `env` of the
-`--settings` file. It also drops the file's top-level `apiKeyHelper`, `awsAuthRefresh`,
-`awsCredentialExport`, `gcpAuthRefresh` and `modelOverrides`: Claude Code ranks
-`apiKeyHelper` above `CLAUDE_CODE_OAUTH_TOKEN`, and the others set cloud credentials or
-a provider's model ids. The session does not read Claude Code's other settings files, so
-a value set in one of them can reach Claude Code (§Variables, The model endpoint).
+defaults, the harness's computed values or the environment the run inherits, is left out
+and recorded as `fixed`. A value the runtime's preparation sets is left out too, and is
+not recorded as `fixed`. Behind a wall the name is unset inside, so an image's value
+does not reach the runtime either. The runtime would send such a value to the default
+model provider credential's endpoint. For Claude Code with a default model provider
+credential in `ANTHROPIC_API_KEY`, no value of `ANTHROPIC_AUTH_TOKEN` or
+`CLAUDE_CODE_OAUTH_TOKEN` reaches its process environment, with one exception
+(§Variables, The model endpoint): when the run has an authority, a variable that points
+at the CA bundle is set to the bundle's path, even one of `model.keys`. Claude Code also
+applies the `env` object of a settings file: the session drops every variable of
+`model.keys` and the endpoint variable from the `env` of the `--settings` file. It also
+drops the file's top-level `apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`,
+`gcpAuthRefresh` and `modelOverrides`: Claude Code ranks `apiKeyHelper` above
+`CLAUDE_CODE_OAUTH_TOKEN`, and the others set cloud credentials or a provider's model
+ids. The session does not read Claude Code's other settings files, so a value set in one
+of them can reach Claude Code (§Variables, The model endpoint).
 
 For Claude Code:
 
-| The start key's `auth` | Claude Code's variable |
+| The default model provider credential's `auth` | Claude Code's variable |
 |---|---|
 | `{"scheme": "header", "header": "x-api-key"}` | `ANTHROPIC_API_KEY` |
 | `{"scheme": "bearer"}` | `ANTHROPIC_AUTH_TOKEN` |
@@ -1405,57 +1418,75 @@ For Claude Code:
 
 So an API key that a provider takes as a bearer goes into `ANTHROPIC_AUTH_TOKEN`. The
 other model keys get no variable and no placeholder. Each of these is
-`run_configuration_invalid` with the start key's name: a runtime whose descriptor has
-no `model` section; a `format` for which the descriptor lists no key, `give the model
-key "model" a provider whose API the runtime claude reads keys for: the descriptor of
-the runtime lists keys for anthropic-messages, and the key's API is openai-chat`; and an
-`auth` that no key of that format has, `set the auth of the model key "model" to one
-the runtime claude reads: it reads anthropic-messages keys as the header x-api-key, a
-bearer or a bearer with oauth, and the key's auth is the basic scheme`. The chosen
-variable is a placeholder like any other: a value a session passes for it fails the
-session's join, `placeholder_conflict`, and Claude Code's approval of the stand-in
-covers it (§The runtime). The session takes the variable from the runtime's descriptor,
-which the gateway does not read.
+`run_configuration_invalid` with the default model provider credential's name: a runtime
+whose descriptor has no `model` section; a `format` for which the descriptor lists no
+key, `give the model key "model" a provider whose API the runtime claude reads keys for:
+the descriptor of the runtime lists keys for anthropic-messages, and the key's API is
+openai-chat`; and an `auth` that no key of that format has, `set the auth of the model
+key "model" to one the runtime claude reads: it reads anthropic-messages keys as the
+header x-api-key, a bearer or a bearer with oauth, and the key's auth is the basic
+scheme`. The chosen variable is a placeholder like any other: a value a session passes
+for it fails the session's join, `placeholder_conflict`, and Claude Code's approval of
+the stand-in covers it (§The runtime). The session takes the variable from the runtime's
+descriptor, which the gateway does not read.
 
-A session with no runtime, `session.SessionSpec.Runtime` nil, has no start key. The
-session sets no model key's variable and no endpoint variable, adds no placeholder for
-a model key, and does not check `model_credential` or the number of model keys: every
-model key stays as the run answer has it, with no placeholder. Its join request has
-`model_key` false, so the proxy sets no model key for the session's program from the
-join's `200` until the session's `dev.qory.session.exited` (§The gateway's link,
-Joining a session).
+A session with no runtime, `session.SessionSpec.Runtime` nil, has no default model
+provider credential. The session sets no model key's variable and no endpoint variable,
+adds no placeholder for a model key, and does not check
+`default_model_provider_credential_name` or the number of model keys: every model key
+stays as the run answer has it, with no placeholder. Its join request has `model_key`
+false, so the proxy sets no model key for the session's program from the join's `200`
+until the session's `dev.qory.session.exited` (§The gateway's link, Joining a session).
 
 A placeholder goes only into a variable for a credential. A placeholder of a host
 credential from the server is `run_configuration_invalid`, with the credential's name,
 when the runtime's descriptor lists it in `denies`, in its model `overrides` or in
 `reserves`, when it is the model `endpoint`'s variable, or when the runtime reads a
-model key from it, a variable of `model.keys`: only the start key sets a model key's
-variable. A host credential of the machine's with a model key's variable among its
-`placeholders` is `run_configuration_invalid` with the credential's name: `remove
-ANTHROPIC_API_KEY from the placeholders of the credential "model" in forager.yaml: the
-runtime claude reads a model key from it, and only a model key sets it; a model key has
-format, endpoint and auth`. The session checks the run answer's
-`placeholders` too, the machine's credentials and tools included: one that the
+model key from it, a variable of `model.keys`: only the default model provider
+credential sets a model key's variable. A host credential of the machine's with a model
+key's variable among its `placeholders` is `run_configuration_invalid` with the
+credential's name: `remove ANTHROPIC_API_KEY from the placeholders of the credential
+"model" in forager.yaml: the runtime claude reads a model key from it, and only a model
+key sets it; a model key has format, endpoint and auth`. The session checks the run
+answer's `placeholders` too, the machine's credentials and tools included: one that the
 descriptor denies, lists in its overrides or reads its endpoint from, one the runtime
 reads a model key from, and one the runtime declares or reserves that no credential has
 among its `placeholders`, is `run_configuration_invalid` with the placeholder's name. A
 host credential gets the variables its `placeholders` list, such as a tool's
 `GITHUB_TOKEN`.
 
-The credentials and `model_credential` are fixed when the run starts: a reload whose
-`credentials` differ, or whose `model_credential` names another key, fails, and the
-policy in force stays. So does a reload whose start key differs from the run's, without
-`model_credential`: `run configuration <url>: start a new run to change the model key it
-starts with: the run started with "first", and this run configuration selects "second";
-the policy in force stays`, with `no model key` in place of a quoted name when there is
-none. The active key changes during the run, and a reload is compared with the start
-key, never with the active key. A private host gets a value only through an exact entry,
-as a credential of the machine's does, and the proxy verifies the host's certificate
-against the gateway machine's trust store. A host on the gateway machine gets a value
-only when the node's policy names it, as for every name on the machine. On a host that
-gets a credential, from the server or the machine, a `TRACE` or `TRACK` through
-`CONNECT` is denied with the rule `wall:echo-method` (§Credentials, The answer). The
-values stay bytes until the proxy sets the header, and are overwritten when the run
+The credentials and `default_model_provider_credential_name` are fixed when the run
+starts. Each of these three reloads fails with its fix on the first line, and the policy
+in force stays; the gateway reports it with `the reload failed: ` at the start of the
+second line. A reload whose `credentials` differ fails with `Start a new run to use
+other credentials.`, and `run configuration <url>: a run's credentials from the control
+plane are fixed when it starts, and this run configuration has other credentials than
+the run started with; the policy in force stays` on a second line. A reload that sets,
+changes or removes `default_model_provider_credential_name` fails too, even when the
+value is the key the run uses: `Start a new run to change
+default_model_provider_credential_name.`, with `run configuration <url>: the run started
+with default_model_provider_credential_name unset, and this run configuration sets it to
+"first"; the policy in force stays` on a second line, or `run configuration <url>: the
+run started with default_model_provider_credential_name "first", and this run
+configuration leaves it unset; the policy in force stays` when the reload removes the
+field. So does a reload whose default model provider credential differs from the run's,
+without `default_model_provider_credential_name`: `Start a new run to change the default
+model provider credential.`, with `run configuration <url>: the run started with the
+model key "first"; this run configuration has one model key, "second", and no
+default_model_provider_credential_name; the policy in force stays` on a second line. For
+a reload with no model key the second line is `run configuration <url>: the run started
+with the model key "first"; this run configuration has no model key; the policy in force
+stays`, and for a run that started with no model key it is `run configuration <url>: the
+run started with no model key; this run configuration has one model key, "first", and no
+default_model_provider_credential_name; the policy in force stays`. The active key
+changes during the run, and a reload is compared with the default model provider
+credential, never with the active key. A private host gets a value only through an exact
+entry, as a credential of the machine's does, and the proxy verifies the host's
+certificate against the gateway machine's trust store. A host on the gateway machine
+gets a value only when the node's policy names it, as for every name on the machine. On
+a host that gets a credential, from the server or the machine, a `TRACE` or `TRACK`
+through `CONNECT` is denied with the rule `wall:echo-method` (§Credentials, The answer).
+The values stay bytes until the proxy sets the header, and are overwritten when the run
 ends.
 
 **Stack hosts from the server.** A run configuration may have `stack_hosts`, the
@@ -1692,7 +1723,7 @@ of the highest source that sets it:
 
 | Source, highest first | What it is | In the launch spec, Go |
 |---|---|---|
-| `fixed` | Forager's names, `QORY_RUN_ID`, `QORY_RUN_SOCKET`, `QORY_RUN_API`, `QORY_HOST_URL` and `QORY_HARNESS_HOME`; the proxy's (§Sequence step 5); the names the wall sets (§The wall); the runtime's preparation (§The runtime), a descriptor's `fixed` among them (§The descriptor); the placeholders (§Credentials, §Tools); the start key's endpoint in the runtime's model endpoint variable (§Credentials, The variable of a model key); and the values the harness computes itself | `SessionSpec.HarnessHome`, `SessionSpec.LaunchFixed` |
+| `fixed` | Forager's names, `QORY_RUN_ID`, `QORY_RUN_SOCKET`, `QORY_RUN_API`, `QORY_HOST_URL` and `QORY_HARNESS_HOME`; the proxy's (§Sequence step 5); the names the wall sets (§The wall); the runtime's preparation (§The runtime), a descriptor's `fixed` among them (§The descriptor); the placeholders (§Credentials, §Tools); the default model provider credential's endpoint in the runtime's model endpoint variable (§Credentials, The variable of a model key); and the values the harness computes itself | `SessionSpec.HarnessHome`, `SessionSpec.LaunchFixed` |
 | `apiary` | the server's: the run configuration's `variables` | |
 | `run` | the run's variables, `qory run --env` | `SessionSpec.Variables.Run` |
 | `machine` | the machine's variables, the `wall.env` of `forager.yaml` | `SessionSpec.Variables.Machine` |
@@ -1735,41 +1766,40 @@ with no control plane has no such variable.
 
 **Denied names.** The deny list leaves out a value of the server, the run, the machine
 or the harness's defaults whose name it matches: the built-in list
-`denied-variables.json`, the session's runtime's `denies` (§The descriptor), and the names
-the node's owner adds in the launch spec, `SessionSpec.Variables.Deny` in Go, such as `[NAME,
-PREFIX_*]`. The built-in entries apply to the harness's computed values as well, so a
-computed `DOCKER_HOST` or `NODE_EXTRA_CA_CERTS` is left out too; the runtime's `denies`
-and the node's entries leave them in, since the harness computes such values for the
-runtime. Behind a wall, the names in the runtime's model `overrides` (§The descriptor)
-are entries of the deny list too, and they leave out the harness's computed value of
-such a name as well; without a wall they leave nothing out. What the run inherits is
-matched against no entry: it is the developer's environment. A denied value is left
-out, recorded as `denied`, and the next source's
-value of the name applies. Where the endpoint rule applies, the runtime's `denies` leave
-out no value of the variable of the runtime's model `endpoint`: the endpoint rule
-applies to it, and in a run with a start key the variable is a fixed name (The model
-endpoint, below). Each built-in entry undermines the wall, the proxy or
-Forager. An entry is a name or a pattern, `^[A-Za-z0-9_*]{1,128}$` with at least one
-character other than `*`. It matches a whole name: `*` matches any run of characters,
-the empty run included, anywhere in the entry. Matching ignores case, because programs
-read `http_proxy` and `HTTP_PROXY` alike. `denied-variables.json`, `{"version": 1,
-"names": [...], "patterns": [...], "forge_tokens": [...], "model_keys": [...]}`, is the
-built-in list for every source the deny list covers, the harness's computed values
-included. `forge_tokens` and `model_keys` are names too, of the variables a code forge's
-token and a runtime's model key are read from: the deny list covers them as it covers
-`names`, a credential's `placeholders` may contain them, and `Setup` refuses one with the
-fix of moving it to the gateway's credentials. When the deny list leaves out a value of
-one, the run reports, with no value, `Define <NAME> as a credential in the run
-configuration, not as a variable: the run leaves out the value that the server passes,
-...` for the server's value, and `Move <NAME> to the gateway's credentials in
-forager.yaml: the run leaves out the value that <SOURCE> passes, since
-denied-variables.json lists it as a forge token.` (or `a model key`) for the node's
-sources; a placeholder of the run has no line. `model_keys` has every variable a runtime
-descriptor's `model.keys` lists, and `CODEX_API_KEY`, which Codex reads a key from
-beside `OPENAI_API_KEY` and which its descriptor denies. It contains every row of the
-table but the rows that depend on the node and the run: the names the wall sets for
-the run's bundle, and the runtime's `denies` and `overrides`, which `runtimes.json`
-lists.
+`denied-variables.json`, the session's runtime's `denies` (§The descriptor), and the
+names the node's owner adds in the launch spec, `SessionSpec.Variables.Deny` in Go, such
+as `[NAME, PREFIX_*]`. The built-in entries apply to the harness's computed values as
+well, so a computed `DOCKER_HOST` or `NODE_EXTRA_CA_CERTS` is left out too; the
+runtime's `denies` and the node's entries leave them in, since the harness computes such
+values for the runtime. Behind a wall, the names in the runtime's model `overrides`
+(§The descriptor) are entries of the deny list too, and they leave out the harness's
+computed value of such a name as well; without a wall they leave nothing out. What the
+run inherits is matched against no entry: it is the developer's environment. A denied
+value is left out, recorded as `denied`, and the next source's value of the name
+applies. Where the endpoint rule applies, the runtime's `denies` leave out no value of
+the variable of the runtime's model `endpoint`: the endpoint rule applies to it, and in
+a run with a default model provider credential the variable is a fixed name (The model
+endpoint, below). Each built-in entry undermines the wall, the proxy or Forager. An
+entry is a name or a pattern, `^[A-Za-z0-9_*]{1,128}$` with at least one character other
+than `*`. It matches a whole name: `*` matches any run of characters, the empty run
+included, anywhere in the entry. Matching ignores case, because programs read
+`http_proxy` and `HTTP_PROXY` alike. `denied-variables.json`, `{"version": 1, "names":
+[...], "patterns": [...], "forge_tokens": [...], "model_keys": [...]}`, is the built-in
+list for every source the deny list covers, the harness's computed values included.
+`forge_tokens` and `model_keys` are names too, of the variables a code forge's token and
+a runtime's model key are read from: the deny list covers them as it covers `names`, a
+credential's `placeholders` may contain them, and `Setup` refuses one with the fix of
+moving it to the gateway's credentials. When the deny list leaves out a value of one,
+the run reports, with no value, `Define <NAME> as a credential in the run configuration,
+not as a variable: the run leaves out the value that the server passes, ...` for the
+server's value, and `Move <NAME> to the gateway's credentials in forager.yaml: the run
+leaves out the value that <SOURCE> passes, since denied-variables.json lists it as a
+forge token.` (or `a model key`) for the node's sources; a placeholder of the run has no
+line. `model_keys` has every variable a runtime descriptor's `model.keys` lists, and
+`CODEX_API_KEY`, which Codex reads a key from beside `OPENAI_API_KEY` and which its
+descriptor denies. It contains every row of the table but the rows that depend on the
+node and the run: the names the wall sets for the run's bundle, and the runtime's
+`denies` and `overrides`, which `runtimes.json` lists.
 
 | Name | Why |
 |---|---|
@@ -1788,20 +1818,21 @@ lists.
 | the session's runtime's `denies` | they move the runtime's model credential or run its commands (§The descriptor) |
 | behind a wall, the session's runtime's model `overrides` | they would override the model id or effort value a composer writes (§The descriptor) |
 
-**The model endpoint.** In a run with a start key, the model key the runtime starts
-with (§Credentials, The start key), the session sets the variable of the runtime's model
-`endpoint` (§The descriptor), `ANTHROPIC_BASE_URL` for Claude Code, to the start key's
+**The model endpoint.** In a run with a default model provider credential, the model key
+the runtime starts with (§Credentials, The default model provider credential), the
+session sets the variable of the runtime's model `endpoint` (§The descriptor),
+`ANTHROPIC_BASE_URL` for Claude Code, to the default model provider credential's
 `endpoint`, with or without a wall. The name is then one of the run's fixed names: a
 value of the server, the run, the machine, the harness's defaults or the harness's
-computed values is left out and recorded as `fixed`, the value the run inherits loses
-to it as well, and the endpoint rule does not apply. The runtime's other variables of
+computed values is left out and recorded as `fixed`, the value the run inherits loses to
+it as well, and the endpoint rule does not apply. The runtime's other variables of
 `model.keys` (§Credentials, The variable of a model key) are left out the same way, the
 value the run inherits and the one the runtime's preparation sets included, and the
 session sets none of them in the runtime's process environment. One exception applies:
 when the run has an authority, a variable that points at the CA bundle is set to the
 bundle's path, even one of `model.keys`. Without a wall these are the names the caller
-gives in `OpenSpec.CAEnv`, or `wall.DefaultCAEnv` when it is nil; `qory` is to set it from
-`wall.ca_env`. Behind a wall they are the names in `CAEnv` of `wall.Docker`, or
+gives in `OpenSpec.CAEnv`, or `wall.DefaultCAEnv` when it is nil; `qory` is to set it
+from `wall.ca_env`. Behind a wall they are the names in `CAEnv` of `wall.Docker`, or
 `wall.DefaultCAEnv` when it is nil, each set to `/qory/ca-bundle.pem`. No check compares
 these names with `model.keys`, and a walled run does not unset them. Claude Code also
 applies the `env` object of a settings file. The session copies the `env` of the
@@ -1809,25 +1840,28 @@ applies the `env` object of a settings file. The session copies the `env` of the
 runtime's `denies`, the names of `forge_tokens` and `model_keys` of
 `denied-variables.json` and, behind a wall, the runtime's model `overrides`, matched
 regardless of case, the names of the descriptor's `fixed`, matched regardless of case
-too, and in a run with a start key the endpoint variable and the
-variables of `model.keys`, the start key's included, matched by exact name. It keeps
-every other member, and then sets the descriptor's `fixed` variables in it. For a name of `forge_tokens` or `model_keys` the copy leaves out,
-other than a placeholder of the run and a variable the start key sets or leaves out,
-the run reports `Move <NAME> to the gateway's credentials in forager.yaml: the run
-leaves out the value that the env of --settings passes, ...` (Denied names). In a run with a start key the copy also leaves out the file's top-level
-`apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh` and
-`modelOverrides`: Claude Code ranks `apiKeyHelper` above `CLAUDE_CODE_OAUTH_TOKEN`, and
-the others set cloud credentials or a provider's model ids. Without a start key the copy
-keeps them. In a run whose image is named by its reference, a path in it is written as
-the enclosure sees it. The session does not read Claude Code's other settings files,
-such as `~/.claude/settings.json`, or the workspace's `.claude/settings.json`, which
-Claude Code reads unless the launch passes `--setting-sources user`. So a value of the
-endpoint variable or of a model-key variable set in one of them can reach Claude Code.
+too, and in a run with a default model provider credential the endpoint variable and the
+variables of `model.keys`, the default model provider credential's included, matched by
+exact name. It keeps every other member, and then sets the descriptor's `fixed`
+variables in it. For a name of `forge_tokens` or `model_keys` the copy leaves out, other
+than a placeholder of the run and a variable the default model provider credential sets
+or leaves out, the run reports `Move <NAME> to the gateway's credentials in
+forager.yaml: the run leaves out the value that the env of --settings passes, ...`
+(Denied names). In a run with a default model provider credential the copy also leaves
+out the file's top-level `apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`,
+`gcpAuthRefresh` and `modelOverrides`: Claude Code ranks `apiKeyHelper` above
+`CLAUDE_CODE_OAUTH_TOKEN`, and the others set cloud credentials or a provider's model
+ids. Without a default model provider credential the copy keeps them. In a run whose
+image is named by its reference, a path in it is written as the enclosure sees it. The
+session does not read Claude Code's other settings files, such as
+`~/.claude/settings.json`, or the workspace's `.claude/settings.json`, which Claude Code
+reads unless the launch passes `--setting-sources user`. So a value of the endpoint
+variable or of a model-key variable set in one of them can reach Claude Code.
 
-In a run without a start key, the endpoint rule sets whether a value of the
-endpoint variable applies: behind a wall, and without one for a run whose answer has
-`credential_hosts`. It checks each value of the server, the run, the machine, the
-harness's defaults and the harness's computed values, after the other entries of the
+In a run without a default model provider credential, the endpoint rule sets whether a
+value of the endpoint variable applies: behind a wall, and without one for a run whose
+answer has `credential_hosts`. It checks each value of the server, the run, the machine,
+the harness's defaults and the harness's computed values, after the other entries of the
 deny list, and the other rules for the server's values (Also left out, below), that
 apply to that source; it checks no value the run inherits. A model credential is a
 credential of the run answer's `credential_hosts` whose `placeholders` include a
@@ -1835,14 +1869,14 @@ variable the runtime declares or reserves. A value applies only when
 `policy.EndpointHost` reads a host from it, which needs an `https` URL without user
 information, and that host is a host of a model credential by the rule the gateway's
 proxy picks a request's credential by, `policy.CredentialFor`. When such a value
-applies, the name's entry in the record, if the record lists the name, has `kept`
-(The record of the variables, below). Any other value is
-left out, recorded as `endpoint_unreadable` or `endpoint_uncovered`, and the next
-source's value applies. When the rule leaves out one of the harness's computed values
-of the name, it leaves out all of them; when it keeps all of them, the last one alone
-applies. Behind a wall, an answer without `credential_hosts` has no model credential,
-so every value is left out. Without a wall and without `credential_hosts` the rule does
-not apply, and the deny list treats the name as any other.
+applies, the name's entry in the record, if the record lists the name, has `kept` (The
+record of the variables, below). Any other value is left out, recorded as
+`endpoint_unreadable` or `endpoint_uncovered`, and the next source's value applies. When
+the rule leaves out one of the harness's computed values of the name, it leaves out all
+of them; when it keeps all of them, the last one alone applies. Behind a wall, an answer
+without `credential_hosts` has no model credential, so every value is left out. Without
+a wall and without `credential_hosts` the rule does not apply, and the deny list treats
+the name as any other.
 
 **A model key.** A run whose answer has `credential_hosts` needs a model key for its
 runtime when the runtime's descriptor has a `model` section with `keys` (§The
@@ -1851,8 +1885,8 @@ a model key's variable among its `placeholders`. After the variables are resolve
 session refuses the run, `model_key_missing` with the model keys' variables, unless one
 of these holds:
 
-- `credential_hosts` has a model key, an entry with `format`, from the server or the
-  machine.
+- `credential_hosts` has a model key, an entry with `format`: a credential stored in the
+  control plane, or a local model provider credential.
 - A value of a model key's variable reaches the runtime: the run's, the machine's, the
   harness's, the runtime's preparation's or one the run inherits, unless it is a
   placeholder.
@@ -1885,27 +1919,27 @@ as one of these two still masks it.
 **Also left out.** A value of any source below the fixed names for a fixed name is left
 out and recorded as `fixed`: the fixed value applies. The server's value of a variable
 the session's runtime declares, reserves or reads a model key from (its descriptor's
-`model.keys`), where the stand-in goes or which is unset, and of
-one a value of the machine's is read from, such as a credential's `env` (§Credentials),
-whose value stays outside the enclosure, is left out and recorded as `denied`. A value
-the node passes for a variable the runtime declares or reserves reaches the runtime as
-passed, unless it is a placeholder of the run (`placeholder_conflict`). A value the
-server or the node passes for a variable of `model.keys` is left out and recorded as
-`denied`, since `denied-variables.json` lists it in `model_keys` (Denied names, above);
-the session sets the start key's variable to its placeholder, that of its key group for
-a key of one. In a run with a start
-key, a value the server or the node passes for another variable of `model.keys` is left
-out and recorded as `fixed`, not `denied` (§Credentials, The variable of a model key). Behind a wall, every variable the runtime declares, reserves
-or reads a model key from that neither a
+`model.keys`), where the stand-in goes or which is unset, and of one a value of the
+machine's is read from, such as a credential's `env` (§Credentials), whose value stays
+outside the enclosure, is left out and recorded as `denied`. A value the node passes for
+a variable the runtime declares or reserves reaches the runtime as passed, unless it is
+a placeholder of the run (`placeholder_conflict`). A value the server or the node passes
+for a variable of `model.keys` is left out and recorded as `denied`, since
+`denied-variables.json` lists it in `model_keys` (Denied names, above); the session sets
+the default model provider credential's variable to its placeholder, that of its key
+group for a key of one. In a run with a default model provider credential, a value the
+server or the node passes for another variable of `model.keys` is left out and recorded
+as `fixed`, not `denied` (§Credentials, The variable of a model key). Behind a wall,
+every variable the runtime declares, reserves or reads a model key from that neither a
 placeholder, a source, the runtime's preparation, Forager nor the wall sets is unset
 inside the enclosure, so an image's `ENV` cannot set one, and the runtime never sees it
 empty, which a program may read as set. So is every name the runtime `denies` or lists
 in its model `overrides` or as its model `endpoint`, or the node's deny list removes, by
-its exact name, that nothing sets: a pattern unsets none, and a name Forager, the wall or the preparation
-sets keeps its value. One exception
-limits this: with nested Docker, `DOCKER_CONFIG` is never unset, and a non-empty value
-in the enclosure's environment, the image's included, takes the place of the wall's
-docker configuration (§The wall, Nested Docker).
+its exact name, that nothing sets: a pattern unsets none, and a name Forager, the wall
+or the preparation sets keeps its value. One exception limits this: with nested Docker,
+`DOCKER_CONFIG` is never unset, and a non-empty value in the enclosure's environment,
+the image's included, takes the place of the wall's docker configuration (§The wall,
+Nested Docker).
 
 **Unwalled runs.** The launch spec decides whether an unwalled run receives the server's
 variables, `SessionSpec.Variables.Unwalled` in Go: `ignore`, the default, or `accept`. With
@@ -1923,8 +1957,9 @@ each with its source, `from`, and the reason, `why`: `overridden`, `denied`, `fi
 model credential, or `endpoint_unreadable`, the value is not an `https` URL with a host
 Forager reads. An entry has `kept`, behind a wall, when the value that applies is one of
 the model endpoint's variable whose host is a host of the run's model credential: `why`
-`endpoint_covered` and the credential's name, `credential`. A run with a start key has
-no `kept`: the start key's endpoint is a fixed value.
+`endpoint_covered` and the credential's name, `credential`. A run with a default model
+provider credential has no `kept`: the default model provider credential's endpoint is a
+fixed value.
 
 ```json
 [{"name": "HARNESS_PROFILE", "from": "harness", "lost": []},
@@ -1954,16 +1989,17 @@ starts, so `qory` prints a line for an `--env` value that lost.
 `credential_variables` lists the variables the agent gets a placeholder in, with or
 without a wall, for a credential, never a value: one `{credential, name}` per credential
 and variable, in the order of the run answer's `credential_hosts` and of each
-credential's `placeholders`. The start key's one entry is the variable the session gives
-it (§Credentials, The variable of a model key); the other model keys have none. A
-credential's name or a variable that contains `qak_`, `qrk_`, `qecr_`, `qecn_`, `qecp_`,
-`qecg_`, `qeci_` or `qecd_` in any case is `(a name that contains an access key secret)`
-in its place, `(a name that contains a run key)` when it contains `qrk_` and no `qak_`,
-`(a name that contains a run code)` when it contains `qecr_` and neither of the others,
-or `(a name that contains an enrolment code)` when it contains `qecn_`, `qecp_`,
-`qecg_`, `qeci_` or `qecd_` and none of the others, so the record contains none of them.
-`credential_variables` is absent when there is no entry and at the open, and every
-further `dev.qory.run.policy_applied` during the session repeats it.
+credential's `placeholders`. The default model provider credential's one entry is the
+variable the session gives it (§Credentials, The variable of a model key); the other
+model keys have none. A credential's name or a variable that contains `qak_`, `qrk_`,
+`qecr_`, `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` in any case is `(a name that
+contains an access key secret)` in its place, `(a name that contains a run key)` when it
+contains `qrk_` and no `qak_`, `(a name that contains a run code)` when it contains
+`qecr_` and neither of the others, or `(a name that contains an enrolment code)` when it
+contains `qecn_`, `qecp_`, `qecg_`, `qeci_` or `qecd_` and none of the others, so the
+record contains none of them. `credential_variables` is absent when there is no entry
+and at the open, and every further `dev.qory.run.policy_applied` during the session
+repeats it.
 
 ```json
 [{"credential": "forge", "name": "GITHUB_TOKEN"},
@@ -3007,7 +3043,7 @@ A restart). The local link writes none of them.
   a credential's value.
 - `joins.jsonl`: each join the gateway numbered, one JSON object per line, written
   before the join's answer: `session`, `accepted`, `passes`, `model`, `no_key` and,
-  when the join asked for one, `model_credential`.
+  when the join asked for one, `model_provider_credential_name`.
 - `model-key-limit`: present while the run's proxy has passed a model provider's limit
   refusal or a `401` to the session (§The gateway's link, A stop in a batch's answer):
   one JSON object, `{"version": 1, "groups": [{"group": "anthropic", "reason":
@@ -3957,16 +3993,16 @@ empty is the clock's now; a refusal reads `outcome <run.url>/<run_id>: <code> (s
 <status>)`.
 
 **The model keys.** The gateway reports the state of the run's key groups (§Credentials,
-Several model keys) with a signed `POST <run.url>/<run_id>/model-keys`,
-`Content-Type: application/json`, signed by its access key under
-`qory-request-ed25519-v1`. A run whose run configuration has an API credential sends
-reports, also when its start key is a model key of the machine's, which no report lists.
-Only the gateway that holds the run sends a report: the
-instance of the gateway node that attached the run (After the attach, above). The
-server accepts it from that instance's active keys alone, and answers `404` to a report
-from any other sender, the node or node pool of a direct run among them. Its body is a `model-keys-report.schema.json` document of at most
-32 KiB, with at most 66 entries in `keys`: 6 keys times the 11 windows listed below. The
-cap rises with each window the list gains, in the report and in the answer:
+Several model keys) with a signed `POST <run.url>/<run_id>/model-keys`, `Content-Type:
+application/json`, signed by its access key under `qory-request-ed25519-v1`. A run whose
+run configuration has an API credential sends reports, also when its default model
+provider credential is a local model provider credential, which no report lists. Only
+the gateway that holds the run sends a report: the instance of the gateway node that
+attached the run (After the attach, above). The server accepts it from that instance's
+active keys alone, and answers `404` to a report from any other sender, the node or node
+pool of a direct run among them. Its body is a `model-keys-report.schema.json` document
+of at most 32 KiB, with at most 66 entries in `keys`: 6 keys times the 11 windows listed
+below. The cap rises with each window the list gains, in the report and in the answer:
 
 ```json
 {"version": 1, "run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9e", "time": "2026-11-10T12:00:05Z",
@@ -4915,29 +4951,32 @@ document:
   walled run that passes one is refused with `variable_reserved`, and an unwalled run has
   its value left out, as today. Absent means none.
 - `credential_hosts`: the hosts and placeholders of each credential the gateway holds
-  for the run, from which the session reads which hosts the run's credentials cover.
-  One entry per credential, in the order the policy selects them, each closed: `name`,
-  the credential's name; `hosts`, 1 or more, the credential's hosts as the proxy
-  matches them, which are the hosts `applied.credentials` lists for it, in its order;
-  and `placeholders`, the variables the session sets to a placeholder for this
-  credential, each also in `placeholders` and each once, empty when it sets none. A
-  credential from the server also has `auth`, and so does a model key of the
-  machine's, its definition's. A host credential from the server has one entry per
-  `apply` item, the answer's items when its value has `apply`, in their order: each
-  with the item's hosts and its `scheme`, `username` and `header` as `auth`, and the
-  credential's `placeholders` on the first entry alone, empty on the others. A harness
-  credential (§Credentials, Harness credentials) and a push credential (§Credentials,
-  Push credentials) have no entry. A model key, from the server or
-  the machine, also has `format` and `endpoint`; its `hosts` are the endpoint's host
+  for the run, from which the session reads which hosts the run's credentials cover. One
+  entry per credential, in the order the policy selects them, each closed: `name`, the
+  credential's name; `hosts`, 1 or more, the credential's hosts as the proxy matches
+  them, which are the hosts `applied.credentials` lists for it, in its order; and
+  `placeholders`, the variables the session sets to a placeholder for this credential,
+  each also in `placeholders` and each once, empty when it sets none. A credential from
+  the server also has `auth`, and so does a local model provider credential, its
+  definition's. A host credential from the server has one entry per `apply` item, the
+  answer's items when its value has `apply`, in their order: each with the item's hosts
+  and its `scheme`, `username` and `header` as `auth`, and the credential's
+  `placeholders` on the first entry alone, empty on the others. A harness credential
+  (§Credentials, Harness credentials) and a push credential (§Credentials, Push
+  credentials) have no entry. A model key, from the server or a local model provider
+  credential, also has `format` and `endpoint`; its `hosts` are the endpoint's host
   alone, and its `placeholders` are empty. An entry with `format` has `auth` and
   `endpoint`, and one with `endpoint` has `format`. The session adds the variable it
-  gives the start key (§Credentials, The variable of a model key) to the start key's
-  `placeholders`. Names and hosts alone, never a secret. Absent means none.
-- `model_credential`: the name of the start key, the model key a session starts with
-  when its join request contains none, an entry of `credential_hosts` with `format`: the
-  run configuration's `model_credential`, or the run's one model key (§Credentials, The
-  start key). The join answer's `model_credential` is the key each session starts with
-  (Joining a session, below). Absent when the gateway holds no model key for the run.
+  gives the default model provider credential (§Credentials, The variable of a model
+  key) to the default model provider credential's `placeholders`. Names and hosts alone,
+  never a secret. Absent means none.
+- `default_model_provider_credential_name`: the name of the default model provider
+  credential, the model key a session starts with when its join request contains none,
+  an entry of `credential_hosts` with `format`: the run configuration's
+  `default_model_provider_credential_name`, or the run's one model key (§Credentials,
+  The default model provider credential). The join answer's
+  `model_provider_credential_name` is the key each session starts with (Joining a
+  session, below). Absent when the gateway holds no model key for the run.
 - `image`: the image the run gets, as a definition of `images` has it, `ref` required:
   the one the policy in force selects, or the machine's default, `name` absent when the
   default is a reference. For a reference the policy names, `ref` is that reference,
@@ -5070,7 +5109,7 @@ document:
 {"version": 1,
  "passes": ["HOME", "NODE_ENV", "PATH"],
  "model_key": true,
- "model_credential": "backup"}
+ "model_provider_credential_name": "backup"}
 ```
 
 - `passes`, required: the names of the variables the session passes a value for, in
@@ -5086,25 +5125,27 @@ document:
   every other. When it is `false`, the gateway's proxy sets no model key, the active key
   neither, from the join's `200` until the gateway receives the session's
   `dev.qory.session.exited`, and then sets the active key again; the answer has no
-  `model_credential`.
-- `model_credential`: the name of the model key the session starts with, one of the
-  model keys the gateway holds for the run, from the server or the machine. Absent, it
-  means the start key, or, when the start key is in a key group, that group's active
-  key. The name of a key of a key group means that group's active key: the key the proxy
-  switched to after a limit refusal. The name of a key of the start key's group that is
-  not active means the active key too. For a group other than the start key's that no
-  session used yet, it means the named key, or, when it is in cooldown or out, the key a
-  limit refusal switches to. When no key of that group is usable, it means the named
-  key: the session's first request with the group's placeholder gets the gateway's `429`
-  with no `Retry-After`, and the answer to its next batch has `stop` (§Credentials,
-  Several model keys). The name of a model key of the machine's means that
-  key alone. A request with `model_key` `false` may not contain it.
+  `model_provider_credential_name`.
+- `model_provider_credential_name`: the name of the model key the session starts with,
+  one of the model keys the gateway holds for the run: a credential stored in the
+  control plane, or a local model provider credential. Absent, it means the default
+  model provider credential, or, when the default model provider credential is in a key
+  group, that group's active key. The name of a key of a key group means that group's
+  active key: the key the proxy switched to after a limit refusal. The name of a key of
+  the default model provider credential's group that is not active means the active key
+  too. For a group other than the default model provider credential's that no session
+  used yet, it means the named key, or, when it is in cooldown or out, the key a limit
+  refusal switches to. When no key of that group is usable, it means the named key: the
+  session's first request with the group's placeholder gets the gateway's `429` with no
+  `Retry-After`, and the answer to its next batch has `stop` (§Credentials, Several
+  model keys). The name of a local model provider credential means that key alone. A
+  request with `model_key` `false` may not contain it.
 
 The answer is a `200`, `application/json`, whose body is a
 `link-join-answer.schema.json` document:
 
 ```json
-{"version": 1, "session": 1, "model_credential": "backup"}
+{"version": 1, "session": 1, "model_provider_credential_name": "backup"}
 ```
 
 - `session`, required: the session's number in the run, from 1. The gateway numbers the
@@ -5113,12 +5154,12 @@ The answer is a `200`, `application/json`, whose body is a
   refused join's number is one more than the number of the run's join before it. The
   session's `dev.qory.session.started` and
   `dev.qory.session.exited` contain it.
-- `model_credential`: the name of the model key the session starts with, an entry of
-  the run answer's `credential_hosts` with `format`: the request's `model_credential`,
-  or the run's active key. The session gives the runtime the variable and the endpoint of
-  this one alone (§Credentials, The variable of a model key); a session with no
-  runtime gets neither. Absent when the gateway holds no model key for the run, or
-  when the join request's `model_key` is `false`.
+- `model_provider_credential_name`: the name of the model key the session starts with,
+  an entry of the run answer's `credential_hosts` with `format`: the request's
+  `model_provider_credential_name`, or the run's active key. The session gives the
+  runtime the variable and the endpoint of this one alone (§Credentials, The variable of
+  a model key); a session with no runtime gets neither. Absent when the gateway holds no
+  model key for the run, or when the join request's `model_key` is `false`.
 
 A join is open from the gateway's `200` to it until the gateway receives the session's
 `dev.qory.session.exited`. The gateway refuses a join while another join of the run is
@@ -5128,7 +5169,7 @@ The gateway answers a join it does not accept with a code that already exists:
 
 | Status | Code | When |
 |---|---|---|
-| `400` | `invalid_request` | a body the schema refuses, a member it does not define among them, and a `model_credential` beside a `model_key` of `false`; a `model_credential` that names no model key of the run; a join while another join of the run is open; and on the local link a `run_id` of no run of this gateway's |
+| `400` | `invalid_request` | a body the schema refuses, a member it does not define among them, and a `model_provider_credential_name` beside a `model_key` of `false`; a `model_provider_credential_name` that names no model key of the run; a join while another join of the run is open; and on the local link a `run_id` of no run of this gateway's |
 | `400` | `run_key_invalid` | behind a separate gateway, a `run_id` that is not the run key's |
 | `403` | `placeholder_conflict` | a placeholder of a credential or a tool the gateway holds for the run among `passes`; the run stays open |
 | `410` | the code of the run's end | a run that has ended, with the code and the `from` of its end at the gateway, as for a reload (The end of a run at the gateway, below) |
@@ -5158,13 +5199,13 @@ join. On the local link the session sends a join request once.
 Behind a separate gateway, a join request that repeats the last join the gateway
 numbered gets that join's answer again, and nothing is numbered anew: for a join
 answered `200`, the same `200`, with the same session number and model key; for a join
-answered `403` `placeholder_conflict`, the same `403`, as long as the request's
-`passes` still contain a placeholder of a credential or a tool the gateway holds for
-the run. A join request repeats the last join when that join's session has neither
-started nor exited and the request has the same `passes`, `model_key` and
-`model_credential`. The gateway writes each join it numbers to `joins.jsonl` before it
-sends the join's answer (The record files), so a repeated join request gets the same
-answer from the gateway that starts again.
+answered `403` `placeholder_conflict`, the same `403`, as long as the request's `passes`
+still contain a placeholder of a credential or a tool the gateway holds for the run. A
+join request repeats the last join when that join's session has neither started nor
+exited and the request has the same `passes`, `model_key` and
+`model_provider_credential_name`. The gateway writes each join it numbers to
+`joins.jsonl` before it sends the join's answer (The record files), so a repeated join
+request gets the same answer from the gateway that starts again.
 
 **Events.** The session posts its events to `events.url`, in batches cut as toward the
 server (§The server, Delivery), with `Content-Type: application/cloudevents-batch+json`.
@@ -6028,9 +6069,10 @@ There are three ways to a runtime, and a name resolves to the first that applies
 2. **A bare runtime**, for a name nothing describes. Nothing is prepared and no record
    is read: the run's events, its log and its egress record are all there, the session's
    are not. Any program runs behind a wall this way, with no descriptor. A session with
-   no runtime at all, `session.SessionSpec.Runtime` nil, runs a bare runtime too, has
-   no start key (§Credentials, The variable of a model key), and has `bare` in its
-   `dev.qory.session.started` (§The events, A session with no runtime).
+   no runtime at all, `session.SessionSpec.Runtime` nil, runs a bare runtime too, has no
+   default model provider credential (§Credentials, The variable of a model key), and
+   has `bare` in its `dev.qory.session.started` (§The events, A session with no
+   runtime).
 3. **An implementation in Go**, for a caller that embeds Forager and whose program
    needs what a descriptor cannot express. It is set in `session.SessionSpec.Runtime` like any
    other.
@@ -6226,40 +6268,41 @@ that ids are distinct, that every id of a group is declared and in one group at 
 
 **Model**, optional: the model API formats the runtime sends its requests in, and where
 a composer, such as qory, writes a run's model id, effort value and model endpoint, and
-an agent's model id and effort value.
-`formats` lists one or more formats of `api-format.schema.json`. `model` is the place
-of the model id. A place is exactly one of `flag`, an argument the runtime is started
-with, which takes the value; `setting`, a dotted key in the JSON settings file the
-launch passes, or with `config` a `key=value` pair of `config.flag` (Config, below); or
-`variable`, an environment variable. An agent place is where a value goes in an
-agent's file, exactly one of `frontmatter`, a key of the file's frontmatter, for an
-agent file of Markdown such as Claude Code's, and `toml`, a key at the top of the file,
-for an agent file of TOML such as Codex's; each key is a letter, then up to 63 letters,
-digits, underscores and dashes. `agent`, optional, is the agent place of an agent's
-model id: `{frontmatter: …}` or `{toml: …}`, such as Codex's `{toml: model}`. `effort`, optional, has `run`,
-the place of the run's effort value with `values`, the 1 to 16 values the runtime
-accepts there, and optionally `agent`, the agent place of an agent's effort value with
-`values`, the values the runtime accepts there, such as
-`{frontmatter: effort, values: [low, high]}`. A value is a lower-case letter, then up
-to 31 lower-case letters, digits and dashes. Codex's descriptor places an agent's model
-id in `{toml: model}` and an agent's effort value in `{toml: model_reasoning_effort}`,
-with the run's values, `none`, `low`, `medium`, `high`, `xhigh`, `max` and `ultra`: a
-Codex 0.167.2 agent file is a TOML file below `agents/` of a config folder, such as
-`$CODEX_HOME/agents/reviewer.toml`, that takes the keys of `config.toml` at its top. `endpoint` is where the base URL of the run's model API goes, exactly one
-of `{variable}`, the variable the runtime reads it from, `{variable: ANTHROPIC_BASE_URL}`,
-and `{setting}`, a dotted key of the runtime's settings, written as a place's setting,
-`{setting: model_providers.qory.base_url}`; with `config`, the session passes the URL
-as a TOML string. A flag is no place of the endpoint. The session sets the start key's endpoint in an endpoint
-variable; for an endpoint in a setting it sets no variable, and with `config` passes the
-endpoint as that setting's pair (Config, below). `keys` lists 1 to 32 variables the
-runtime reads a model key from, each `{format, auth, variable}`: the API format the key
-is for, how the runtime sends it, `auth.schema.json` with `oauth` for an OAuth token,
-and the variable. The session gives the start key's placeholder, that of its key group
-for a key of one, to the variable of the
-key whose format is the start key's and whose `auth` has its scheme, its header's name,
-case ignored, and its `oauth` (§Credentials, The variable of a model key). Optional in
-the schema, `keys` is what makes a run need a model key (§Variables, A model key). The
-session refuses a descriptor whose keys break one of these rules when it reads it:
+an agent's model id and effort value. `formats` lists one or more formats of
+`api-format.schema.json`. `model` is the place of the model id. A place is exactly one
+of `flag`, an argument the runtime is started with, which takes the value; `setting`, a
+dotted key in the JSON settings file the launch passes, or with `config` a `key=value`
+pair of `config.flag` (Config, below); or `variable`, an environment variable. An agent
+place is where a value goes in an agent's file, exactly one of `frontmatter`, a key of
+the file's frontmatter, for an agent file of Markdown such as Claude Code's, and `toml`,
+a key at the top of the file, for an agent file of TOML such as Codex's; each key is a
+letter, then up to 63 letters, digits, underscores and dashes. `agent`, optional, is the
+agent place of an agent's model id: `{frontmatter: …}` or `{toml: …}`, such as Codex's
+`{toml: model}`. `effort`, optional, has `run`, the place of the run's effort value with
+`values`, the 1 to 16 values the runtime accepts there, and optionally `agent`, the
+agent place of an agent's effort value with `values`, the values the runtime accepts
+there, such as `{frontmatter: effort, values: [low, high]}`. A value is a lower-case
+letter, then up to 31 lower-case letters, digits and dashes. Codex's descriptor places
+an agent's model id in `{toml: model}` and an agent's effort value in `{toml:
+model_reasoning_effort}`, with the run's values, `none`, `low`, `medium`, `high`,
+`xhigh`, `max` and `ultra`: a Codex 0.167.2 agent file is a TOML file below `agents/` of
+a config folder, such as `$CODEX_HOME/agents/reviewer.toml`, that takes the keys of
+`config.toml` at its top. `endpoint` is where the base URL of the run's model API goes,
+exactly one of `{variable}`, the variable the runtime reads it from, `{variable:
+ANTHROPIC_BASE_URL}`, and `{setting}`, a dotted key of the runtime's settings, written
+as a place's setting, `{setting: model_providers.qory.base_url}`; with `config`, the
+session passes the URL as a TOML string. A flag is no place of the endpoint. The session
+sets the default model provider credential's endpoint in an endpoint variable; for an
+endpoint in a setting it sets no variable, and with `config` passes the endpoint as that
+setting's pair (Config, below). `keys` lists 1 to 32 variables the runtime reads a model
+key from, each `{format, auth, variable}`: the API format the key is for, how the
+runtime sends it, `auth.schema.json` with `oauth` for an OAuth token, and the variable.
+The session gives the default model provider credential's placeholder, that of its key
+group for a key of one, to the variable of the key whose format is the default model
+provider credential's and whose `auth` has its scheme, its header's name, case ignored,
+and its `oauth` (§Credentials, The variable of a model key). Optional in the schema,
+`keys` is what makes a run need a model key (§Variables, A model key). The session
+refuses a descriptor whose keys break one of these rules when it reads it:
 
 - A key's variable is not `HOME`, `LD_PRELOAD`, `NODE_OPTIONS` or `BASH_ENV`, in any
   letter case: `model.keys: read the key from another variable than HOME: a key may not be
@@ -6270,16 +6313,16 @@ session refuses a descriptor whose keys break one of these rules when it reads i
   variable.
 - A key's variable that is also in `secrets.declares` has the same `auth` there.
 
-`overrides`, optional, lists 1 to 64
-distinct variables that would override the model id or effort value a composer writes.
-Behind a wall the session treats each as a name of `denies`, and also leaves out the
-harness's computed value of it (§Variables); without a wall `overrides` changes
-nothing. Every object of the section is closed. The session uses `keys`, `overrides`
-and `endpoint` of the section, and the gateway uses none of it. In a run with a start
-key, the session sets the endpoint's variable to the start key's endpoint. Without one,
-behind a wall, and without a wall for a run whose answer has `credential_hosts`, the
-endpoint rule sets whether a value of the endpoint's variable reaches the runtime,
-in place of `denies` (§Variables, The model endpoint); otherwise `denies` applies.
+`overrides`, optional, lists 1 to 64 distinct variables that would override the model id
+or effort value a composer writes. Behind a wall the session treats each as a name of
+`denies`, and also leaves out the harness's computed value of it (§Variables); without a
+wall `overrides` changes nothing. Every object of the section is closed. The session
+uses `keys`, `overrides` and `endpoint` of the section, and the gateway uses none of it.
+In a run with a default model provider credential, the session sets the endpoint's
+variable to the default model provider credential's endpoint. Without one, behind a
+wall, and without a wall for a run whose answer has `credential_hosts`, the endpoint
+rule sets whether a value of the endpoint's variable reaches the runtime, in place of
+`denies` (§Variables, The model endpoint); otherwise `denies` applies.
 
 **Config**, optional: how the session passes settings to a runtime that reads them as
 TOML, such as Codex. `flag` is the argument that takes one `key=value` pair, `--config`,
@@ -6304,21 +6347,21 @@ or one inside the other, such as `a` and `a.b`, since a TOML key has a value or 
 of keys, not both. Absent, a `setting` goes in
 the JSON settings file the launch passes; the session writes none there.
 
-With `config`, the session puts the pairs right after the launch's command, before
-every argument of the launch: `config.flag` and `key=value` for each key of `fixed`
-and, in a run with a start key whose `endpoint` is a setting, the start key's endpoint
-in that setting, sorted by key. A string is a TOML basic string in quotes, in which a
-quote, a backslash and every control character are escaped, so the pair is one line; a
-boolean is `true` or `false`; an integer is written in decimal. For Codex,
-`codex exec --json --model gpt-x "Fix the test"` starts as `codex --config
-analytics.enabled=false ... --config model_providers.qory.base_url="https://api.openai.com/v1"
-... --config web_search="disabled" exec --json --model gpt-x "Fix the test"`. Codex
-0.167.2 reads pairs before its subcommand for every subcommand. A later `--config` or
-`-c` of the same key in the launch's arguments wins over the session's pair. Refuse
-such a run in the composer: one whose arguments set a key of `fixed` or the
-endpoint's setting. The pairs come before the resume's `args` are inserted and before
-the session's setup wraps the launch, and the session's record of the launch lists
-them.
+With `config`, the session puts the pairs right after the launch's command, before every
+argument of the launch: `config.flag` and `key=value` for each key of `fixed` and, in a
+run with a default model provider credential whose `endpoint` is a setting, the default
+model provider credential's endpoint in that setting, sorted by key. A string is a TOML
+basic string in quotes, in which a quote, a backslash and every control character are
+escaped, so the pair is one line; a boolean is `true` or `false`; an integer is written
+in decimal. For Codex, `codex exec --json --model gpt-x "Fix the test"` starts as `codex
+--config analytics.enabled=false ... --config
+model_providers.qory.base_url="https://api.openai.com/v1" ... --config
+web_search="disabled" exec --json --model gpt-x "Fix the test"`. Codex 0.167.2 reads
+pairs before its subcommand for every subcommand. A later `--config` or `-c` of the same
+key in the launch's arguments wins over the session's pair. Refuse such a run in the
+composer: one whose arguments set a key of `fixed` or the endpoint's setting. The pairs
+come before the resume's `args` are inserted and before the session's setup wraps the
+launch, and the session's record of the launch lists them.
 
 The join fails before the runtime starts when the launch's arguments set a setting the
 session passes, because a later pair would win over the session's. Its error starts with
@@ -6473,9 +6516,9 @@ result and each denied tool call (§The events). Its `tools.summary` lists
 and both `Agent: description` and `Task: description`, because the 2.1.316 binary has
 both names for the tool that starts a subagent and the init line of a recorded 2.1.316
 run lists `Task`. Its `secrets` declare no secret, reserve no variable and have no `one_of` group: the run's model key is a model
-key from the server or the machine (§Credentials). Its `model` lists
-`anthropic-messages`; it places the model id as `--model`, the run's effort value as
-`--effort` and an agent's effort value in the `effort` frontmatter, each of the two
+key from the server or a local model provider credential (§Credentials). Its `model`
+lists `anthropic-messages`; it places the model id as `--model`, the run's effort value
+as `--effort` and an agent's effort value in the `effort` frontmatter, each of the two
 taking `low`, `medium`, `high`, `xhigh` and `max`; it places the endpoint in
 `ANTHROPIC_BASE_URL`; its `keys` are `ANTHROPIC_API_KEY`, an API key sent as the
 header `x-api-key`, `ANTHROPIC_AUTH_TOKEN`, an API key sent as a bearer, and
@@ -7483,7 +7526,7 @@ the option experimental.
 | `fixtures/batch-answer/` | bodies of a signed `2xx` to a batch: an `end` with a reason, one without, and none | `batch-answer.schema.json` |
 | `fixtures/api-format/` | each API format of the list, one per file | `api-format.schema.json` |
 | `fixtures/descriptor/` | descriptors that are accepted: one whose `model` places the model id in a setting, the run's effort in a variable and an agent's in the frontmatter, with two formats, a key for each, one of them in two auths, and two `overrides`, one whose `model` has no `effort`, and one with `resume`; one of a runtime that reads its settings as TOML, `config.yaml`, with its endpoint in a setting, an agent's model id and effort value in `toml` keys of the agent's file, `config` with `--config` and fixed settings of each value type, and a `resume` with `*` in its path, an absolute `prefix`, no `path_from` and `after` | `descriptor.schema.json` |
-| `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, with neither, which leaves the node's policy in force, and with an image named by its reference pinned by digest and no policy; `credentials.json`, with `model_credential`, an API credential with `key_prefixes` and `pause_for_s`, an API credential whose endpoint has an IPv6 host and a port, and a host credential on an IPv4 host and a name; `credentials-forge.json`, with an API credential with `oauth` and `pause_for_s` and a forge's host credential with two `apply` items and a placeholder; `credentials-forge-push.json`, a forge's host credential whose `apply` item has `push_ref` and paths with a `{}` segment; `stack-hosts.json`, with `stack_hosts` of two names, a `*.` suffix and an IPv4 address; `harness.json`, with `harness_hidden`, a harness credential and a work credential on one host; `push.json`, with a read work credential and a push credential on the same git paths, the push credential's item with a `push_ref`; `model-keys.json`, a key group of three API credentials with `resets_at`, `schedule_resets_at` and `pause_for_s`, and a host credential; `model-keys-cooling.json`, a key group whose start key has `chosen` and whose third key has `cooldown_until`; `model-keys-groups.json`, two key groups, `anthropic` and `openai`, whose keys alternate in `credentials`, each group with one key with `chosen`; `model-keys-no-pause-for.json`, a key group of two subscription keys whose second key has no `pause_for_s`; `model-keys-use-up-to.json`, a key group of two subscription keys, each with `use_up_to_percent` and `use_up_to_windows`, the second with `cooldown_until`; `resume.json`, with `resume`; `model-keys-openai.json`, two keys of the `openai-responses` format with `paths`, in the key groups `openai` and `openai-2` of one key each, one a subscription whose `auth` has `oauth`, `account_header` and `account_claim`; `resume-runs.json`, with `resume` and its `runs` of three runs; `model-keys-openai-paths-segment.json`, a subscription key of the `openai-responses` format whose `paths` have a `{}` segment | `run-configuration.schema.json` |
+| `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, with neither, which leaves the node's policy in force, and with an image named by its reference pinned by digest and no policy; `credentials.json`, with `default_model_provider_credential_name`, an API credential with `key_prefixes` and `pause_for_s`, an API credential whose endpoint has an IPv6 host and a port, and a host credential on an IPv4 host and a name; `credentials-forge.json`, with an API credential with `oauth` and `pause_for_s` and a forge's host credential with two `apply` items and a placeholder; `credentials-forge-push.json`, a forge's host credential whose `apply` item has `push_ref` and paths with a `{}` segment; `stack-hosts.json`, with `stack_hosts` of two names, a `*.` suffix and an IPv4 address; `harness.json`, with `harness_hidden`, a harness credential and a work credential on one host; `push.json`, with a read work credential and a push credential on the same git paths, the push credential's item with a `push_ref`; `model-keys.json`, a key group of three API credentials with `resets_at`, `schedule_resets_at` and `pause_for_s`, and a host credential; `model-keys-cooling.json`, a key group whose third key has `cooldown_until`; `model-keys-groups.json`, two key groups, `anthropic` and `openai`, whose keys alternate in `credentials`; `model-keys-no-pause-for.json`, a key group of two subscription keys whose second key has no `pause_for_s`; `model-keys-use-up-to.json`, a key group of two subscription keys, each with `use_up_to_percent` and `use_up_to_windows`, the second with `cooldown_until`; `resume.json`, with `resume`; `model-keys-openai.json`, two keys of the `openai-responses` format with `paths`, in the key groups `openai` and `openai-2` of one key each, one a subscription whose `auth` has `oauth`, `account_header` and `account_claim`; `resume-runs.json`, with `resume` and its `runs` of three runs; `model-keys-openai-paths-segment.json`, a subscription key of the `openai-responses` format whose `paths` have a `{}` segment | `run-configuration.schema.json` |
 | `fixtures/model-keys-report/` | model keys reports: windows of two keys, one `rejected` with its cooldown, one `allowed_warning` and one `allowed`; cooldowns from `schedule` and `pause_for` with the windows `key` and `spend_limit`; one with no window; one with `unauthorized`; and one made while session 2 is open | `model-keys-report.schema.json` |
 | `fixtures/model-keys-answer/` | answers to a model keys report: the windows of three keys, and none | `model-keys-answer.schema.json` |
 | `fixtures/secrets-request/` | secrets requests: one when the run starts, and the renewal of a model key after a `401`, with `unauthorized` | `secrets-request.schema.json` |
@@ -7491,8 +7534,8 @@ the option experimental.
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal: discovery, batches, registrations and a reload | the receiver, replaying each in the order of their names with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each, each run opened and joined by one session, or by two where this row states it: four closed, one on a developer machine, with a line of host work, which has no `session`, `session` `1` on each `dev.qory.run.log`, `dev.qory.run.resized` and runtime event of its session, and a `harness` of a 40-character commit, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints, and one behind a wall in an image its policy names by reference, with its workspace at `/workspace`, its `join`, `image` and `wall` steps, a `harness` of a 64-character commit and a `dev.qory.session.exited` with `peak_memory_bytes` and `cpu_time_ms`, and one with two steps of host work, a `fetch` and a `compose`, each with its `dev.qory.run.log` lines with `step`, then the `join` step of its session; and one whose starter ended it with no outcome while its session ran, with the gateway's `dev.qory.session.exited` and `dev.qory.run.exited`, each `cancelled` with `stopped` and `exit_code` `-1`; and one joined by two sessions behind a wall, the second with no runtime and `bare: true`, whose `join` and `wall` steps lie inside a `copy` step | `event.schema.json` per line, plus the sequence, source and concatenation rules, that every `dev.qory.run.exited` contains `state` and `exit_code`, and that the sessions are numbered from 1, each `dev.qory.session.started` followed by its `dev.qory.session.exited` before the next one and before `dev.qory.run.exited`, and that a `dev.qory.run.log`, `dev.qory.run.resized` or runtime event with `session` lies inside that session, and that the steps are numbered from 1 after `dev.qory.run.started`, each `dev.qory.run.step_exited` once after its `dev.qory.run.step_started`, a `dev.qory.run.log` with `step` between the two, every step ended before a `dev.qory.run.exited` the close wrote, a `join` step outside every session with no session starting during it, an `image` or `wall` step inside a session, a session's `dev.qory.run.log` with `step` in an `image` or `wall` step only, and one step open at a time, apart from a `join`, `image`, `wall` or `setup` step that starts and ends inside an open `copy` step, a session inside a `copy` step with `bare: true`, and no session running when a `copy` step exits |
 | `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |
-| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall, one with a wall and its `images`, and one with a narrowing as well, one with `images.allow` and a policy that sets its image by reference, a run answer with a wall, its labels, `placeholders`, `reserved`, `credential_hosts`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one with an image by reference, its `reference` and `relay_image`, one whose `credential_hosts` has an API credential from the server with its `auth`, `format` and `endpoint`, with `model_credential`, one without a wall, with its `stack_proxy_secret`, and one without a policy, each with its `applied`, one of a run with a push credential, with its `push_proxy_secret` and the push credential's item in `applied` with `purpose: push`, one without a wall whose gateway holds a credential, with its `placeholders`, `credential_hosts` and `certificate_authority` and no `image`, one of a run with a control plane, with its `run_api`, one that continues a paused run, with its `resume`, one behind a separate gateway, without labels, `proxy_secret` and `stack_proxy_secret`, a reload answer with and without a policy, each with its `applied`, and one whose `applied` has `ceiling_paths`, a batch of a session's events without `sequence`, its `dev.qory.run.started` and `dev.qory.session.started` first, a batch of the `dev.qory.run.refused` of a session's code, a batch of a `dev.qory.session.exited` and a `dev.qory.run.exited` with `timeout`, `cancelled`, the run's with exit code `124`, two with `interrupted`, `cancelled`, one with the runtime's exit status and one with its signal, one of a refused join, `mount_mode_conflict`, one of a failure at the join after `dev.qory.session.started`, `failed` with `exit_code` `-1` and no reason, one of the wall's refusal at the join after `dev.qory.session.started`, `failed` with `exit_code` `-1` and `image_user_root`, one with `image_missing`, one each with `image_access_denied`, `image_rate_limited` and `image_registry_unreachable`, and one of a run closed with `no_session` after a line of host work, one of a run closed with `no_session` after a `fetch` step that failed with exit status `128`, `link-batch-step-failed.json`, one of a run closed with `no_session` after a `build` step and its `dev.qory.run.built` with `environment_image` and `base`, `link-batch-built.json`, one of a `push` step after a `dev.qory.session.exited`, before the `dev.qory.run.exited`, `link-batch-push-step.json`, one of a `machine` step, `start machine`, with the machine's start lines, right after `dev.qory.run.started`, `link-batch-machine-step.json`, one of a `copy` step after a `dev.qory.session.exited`, before the `dev.qory.run.exited`, `link-batch-copy-step.json`, one with a session's two decisions of the route to `host.qory.invalid`, a request the handler answered with `202` and one with no session running, `503`, `link-batch-qory-host.json`, one of a session with no runtime, with `bare`, `link-batch-session-bare.json`, a join request with `passes` and `model_key`, with `model_credential` too, and with `model_key` false, a join answer with `model_credential` and one of a run with no model key, a batch answer with `stop` and one with no member, a batch of a `dev.qory.session.exited` with `model_key_limit`, a `push` step and the run's `dev.qory.run.exited`, each `paused` with `model_key_limit`, `link-batch-exited-model-key-limit.json`, one of a `dev.qory.session.exited` `paused` with `model_key_limit` and the runtime's exit status, and one of two `dev.qory.session.transcript` chunks, `link-batch-session-transcript.json`, and refusals: `run_closed`, `session_lost` with its `state` and `reason`, `stopped` with `cancelled` and `stopped` and with the starter's `failed` and `checks_failed`, `batch_refused` with its `state` and `reason`, `placeholder_conflict`, `image_unknown`, `image_not_allowed`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, `run_key_invalid` and `run_attached`, from `gateway`, each with today's text as its `message` but `run_closed`, which shows it optional, and the signed `409` `instance_limit` to the registration and `run_key_expired` to the attach from `apiary` with Qory Apiary's `run.url` in its `message`, each the body alone; a batch answer with `stop` `model_key_switch` and one with `model_key_unauthorized`; a batch of a `dev.qory.session.exited`, a `push` step and the run's `dev.qory.run.exited`, each `paused` with `model_key_switch`, and the same `failed` with `model_key_unauthorized`, and one of a `dev.qory.session.exited` alone with each | the `link-*.schema.json` its name starts with |
-| `fixtures/invalid/` | documents that fail their schema, whose name is `<schema>-<reason>`, a session's `dev.qory.run.exited` with `timeout` and `succeeded`, one with `timeout` and an exit code other than `124`, and one with `interrupted` and `failed`, a `dev.qory.run.started` opened by a session or with a runtime member, a `dev.qory.run.log` whose `session` is `0` or whose `step` is `0` and a `dev.qory.runtime.started` whose `session` is text, a `dev.qory.run.step_started` with a `kind` outside the list, with no `name` or numbered `0`, a `dev.qory.run.step_exited` with no `state`, with a `state` outside the three, `paused` among them, with an `exit_code` of `-2` or with no `duration_ms`, a `dev.qory.session.started` whose `bare` is `false`, one whose `harness` is empty, has a member it does not define or a commit of 39 characters, a `dev.qory.session.exited` `cancelled` with no reason, `succeeded` with exit status 1, of a refused join with exit status 1, with `stopped` and an exit status, `cancelled` with `gateway_lost`, with `peak_memory_bytes` on a refused join, with a `cpu_time_ms` of `-1`, with a `peak_memory_bytes` of `1.5` and with one of 2^53, and, in a session's batch, with `stopped`, `succeeded` with no exit status and `cancelled` with a refusal's code, a run configuration whose `image` has a tag, one whose `image` is the machine's name for one, and one whose `stack_hosts` entry is a URL, a run configuration with an API credential that has `purpose`, with a `purpose` outside the three, and with a `harness_hidden` of text, a `dev.qory.run.egress` with a `channel` other than `stack`, `push`, `run_api` and `qory_host`, a run answer whose `push_proxy_secret` is too short, a run answer whose `credential_hosts` entry has `group` and no `format`, a reload answer with a `push_proxy_secret`, and a `dev.qory.run.policy_applied` whose credential has `hosts` and no `scheme`, or `name` alone, a descriptor rule whose `data` maps `session`, `line`, `truncated` or `summary`, or a member of `session`, a descriptor rule whose `set` sets `session` or a field to an object, whose `from_started` lists `agent_id`, is on a rule of the hooks source or on one of `dev.qory.runtime.started`, and a rule with none of `data`, `set` and `from_started`, a descriptor rule whose `sum` sets `summary`, has no `over`, an `over` that is no dotted path or no `fields`, a descriptor with the type `dev.qory.runtime.message`, a descriptor whose `tools` has no `summary` or a member it does not define, whose `tools.summary` is a list, is empty, has an empty tool name, or has a path that is a number or not a dotted path, a `dev.qory.runtime.text` with no `kind`, a `kind` outside the list, `truncated: false` or a `text` over 64 KiB, a `dev.qory.runtime.tool_result` with no `content`, a `content` that is an object or text over 64 KiB, `truncated: false` or an `agent_type`, a `dev.qory.runtime.tool_denied` with no `tool_use_id` or with a `summary`, a `dev.qory.runtime.tool_started` whose `summary` is a list or over 1 KiB, a runtime event whose `line` is `0` or text, and a `dev.qory.runtime.message`, a run configuration whose API credential has a `pause_for_s` of `0` or of `604801`, a `resets_at` or a `cooldown_until` that is no time, `chosen: false`, a `use_up_to_percent` of `0` or of `100`, `use_up_to_percent` without `use_up_to_windows`, `use_up_to_windows` without `use_up_to_percent`, an empty `use_up_to_windows`, or one with 12 windows, a window twice or a window in upper case, a host credential with `chosen`, with seven API credentials, an API credential with no `group`, a host credential with `group`, with a host credential that has `pause_for_s` or `use_up_to_percent` with `use_up_to_windows`, and whose `resume` has no `session_id`, a `run_id` in upper case, or `runs` that are empty, list a run twice, list 257 runs or list a run in upper case, a model keys report whose entry has a `utilization` of `101`, a `status` or a `source` outside the list, a `window` in upper case, `rejected` with no `cooldown_until`, `cooldown_until` with another status, or no `observed_at`, or whose `time` has a fraction or whose `session` is `0`, a model keys answer with no `version`, a link batch answer whose `stop` has no reason or `timeout`, a `dev.qory.session.exited` `failed` or `cancelled` with `model_key_limit`, in an event and in a session's batch, a `dev.qory.session.exited` `paused` with no reason or with `stopped` and exit code `-1`, a session's `dev.qory.run.exited` `failed` or `cancelled` with `model_key_limit` or `paused` with no reason, a run outcome and a batch answer's `end` `paused`, a link refusal whose `state` is `paused`, a `dev.qory.session.transcript` numbered `0`, with an `offset` of `-1`, with no `session_id` or with `bytes` over 32 KiB, a descriptor whose `resume` has no `args`, a relative `prefix` or a `path` without `{session_id}`, a descriptor whose agent place of an agent's effort has both `frontmatter` and `toml` or neither, one whose `model.agent` has `values` or both keys, a `dev.qory.run.target_write` with a `state` outside the four, with no `path`, with an empty `system`, with a `ref` or with a `request_id` in upper case, and a link batch with a `dev.qory.run.target_write`, among them; and, named `<schema>-beyond-schema-<reason>`, documents that break a rule only the gateway checks, or for a descriptor the session, and pass the schema: a session's `dev.qory.run.exited` `succeeded` with a reason of the starter's, a link batch with a `dev.qory.run.egress` of the gateway's, a CONNECT with no channel, and one each of the route to `host.qory.invalid` with another channel, rule, host or port, a run configuration whose harness credential has `placeholders`, a run configuration whose push credential has `placeholders`, a run configuration whose start key has a `cooldown_until` in 2099, one with two keys of one group with `chosen`, one whose two keys of one group have two endpoints, one whose `resume.runs` ends in another run than `resume.run_id`, and a descriptor rule that sets a field in both `data` and `sum`, or a field and a member of it, or a field in both `set` and `sum`; for model keys of another format, an API credential whose `account_header` or `account_claim` comes alone, without `oauth`, with `oauth` false or beside a header scheme, or is out of its grammar, an `account_header` that is a reserved header or `Authorization`, an `account_claim` of `/` alone or with a control character, and whose `paths` are empty, 33, twice, with an inner `*`, with a `{` or `}` outside a `{}` segment or relative; a secrets request and a model keys report whose `unauthorized` is empty, of 7 or out of its grammar; a `dev.qory.session.exited` and a `dev.qory.run.exited`, in an event and in a link batch, with `model_key_switch` and another state than `paused`, or with `model_key_unauthorized` and another state than `failed`; and a descriptor whose endpoint is a flag or two places, whose `config` breaks its grammar or its limits, whose model key or declared secret has an `account_header`, or whose `resume` has a `prefix` with `*` or an empty `after` | the schema the name starts with, expecting a failure, and a pass for each one the name marks beyond the schema |
+| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall, one with a wall and its `images`, and one with a narrowing as well, one with `images.allow` and a policy that sets its image by reference, a run answer with a wall, its labels, `placeholders`, `reserved`, `credential_hosts`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one with an image by reference, its `reference` and `relay_image`, one whose `credential_hosts` has an API credential from the server with its `auth`, `format` and `endpoint`, with `default_model_provider_credential_name`, one without a wall, with its `stack_proxy_secret`, and one without a policy, each with its `applied`, one of a run with a push credential, with its `push_proxy_secret` and the push credential's item in `applied` with `purpose: push`, one without a wall whose gateway holds a credential, with its `placeholders`, `credential_hosts` and `certificate_authority` and no `image`, one of a run with a control plane, with its `run_api`, one that continues a paused run, with its `resume`, one behind a separate gateway, without labels, `proxy_secret` and `stack_proxy_secret`, a reload answer with and without a policy, each with its `applied`, and one whose `applied` has `ceiling_paths`, a batch of a session's events without `sequence`, its `dev.qory.run.started` and `dev.qory.session.started` first, a batch of the `dev.qory.run.refused` of a session's code, a batch of a `dev.qory.session.exited` and a `dev.qory.run.exited` with `timeout`, `cancelled`, the run's with exit code `124`, two with `interrupted`, `cancelled`, one with the runtime's exit status and one with its signal, one of a refused join, `mount_mode_conflict`, one of a failure at the join after `dev.qory.session.started`, `failed` with `exit_code` `-1` and no reason, one of the wall's refusal at the join after `dev.qory.session.started`, `failed` with `exit_code` `-1` and `image_user_root`, one with `image_missing`, one each with `image_access_denied`, `image_rate_limited` and `image_registry_unreachable`, and one of a run closed with `no_session` after a line of host work, one of a run closed with `no_session` after a `fetch` step that failed with exit status `128`, `link-batch-step-failed.json`, one of a run closed with `no_session` after a `build` step and its `dev.qory.run.built` with `environment_image` and `base`, `link-batch-built.json`, one of a `push` step after a `dev.qory.session.exited`, before the `dev.qory.run.exited`, `link-batch-push-step.json`, one of a `machine` step, `start machine`, with the machine's start lines, right after `dev.qory.run.started`, `link-batch-machine-step.json`, one of a `copy` step after a `dev.qory.session.exited`, before the `dev.qory.run.exited`, `link-batch-copy-step.json`, one with a session's two decisions of the route to `host.qory.invalid`, a request the handler answered with `202` and one with no session running, `503`, `link-batch-qory-host.json`, one of a session with no runtime, with `bare`, `link-batch-session-bare.json`, a join request with `passes` and `model_key`, with `model_provider_credential_name` too, and with `model_key` false, a join answer with `model_provider_credential_name` and one of a run with no model key, a batch answer with `stop` and one with no member, a batch of a `dev.qory.session.exited` with `model_key_limit`, a `push` step and the run's `dev.qory.run.exited`, each `paused` with `model_key_limit`, `link-batch-exited-model-key-limit.json`, one of a `dev.qory.session.exited` `paused` with `model_key_limit` and the runtime's exit status, and one of two `dev.qory.session.transcript` chunks, `link-batch-session-transcript.json`, and refusals: `run_closed`, `session_lost` with its `state` and `reason`, `stopped` with `cancelled` and `stopped` and with the starter's `failed` and `checks_failed`, `batch_refused` with its `state` and `reason`, `placeholder_conflict`, `image_unknown`, `image_not_allowed`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, `run_key_invalid` and `run_attached`, from `gateway`, each with today's text as its `message` but `run_closed`, which shows it optional, and the signed `409` `instance_limit` to the registration and `run_key_expired` to the attach from `apiary` with Qory Apiary's `run.url` in its `message`, each the body alone; a batch answer with `stop` `model_key_switch` and one with `model_key_unauthorized`; a batch of a `dev.qory.session.exited`, a `push` step and the run's `dev.qory.run.exited`, each `paused` with `model_key_switch`, and the same `failed` with `model_key_unauthorized`, and one of a `dev.qory.session.exited` alone with each | the `link-*.schema.json` its name starts with |
+| `fixtures/invalid/` | documents that fail their schema, whose name is `<schema>-<reason>`, a session's `dev.qory.run.exited` with `timeout` and `succeeded`, one with `timeout` and an exit code other than `124`, and one with `interrupted` and `failed`, a `dev.qory.run.started` opened by a session or with a runtime member, a `dev.qory.run.log` whose `session` is `0` or whose `step` is `0` and a `dev.qory.runtime.started` whose `session` is text, a `dev.qory.run.step_started` with a `kind` outside the list, with no `name` or numbered `0`, a `dev.qory.run.step_exited` with no `state`, with a `state` outside the three, `paused` among them, with an `exit_code` of `-2` or with no `duration_ms`, a `dev.qory.session.started` whose `bare` is `false`, one whose `harness` is empty, has a member it does not define or a commit of 39 characters, a `dev.qory.session.exited` `cancelled` with no reason, `succeeded` with exit status 1, of a refused join with exit status 1, with `stopped` and an exit status, `cancelled` with `gateway_lost`, with `peak_memory_bytes` on a refused join, with a `cpu_time_ms` of `-1`, with a `peak_memory_bytes` of `1.5` and with one of 2^53, and, in a session's batch, with `stopped`, `succeeded` with no exit status and `cancelled` with a refusal's code, a run configuration whose `image` has a tag, one whose `image` is the machine's name for one, and one whose `stack_hosts` entry is a URL, a run configuration with an API credential that has `purpose`, with a `purpose` outside the three, and with a `harness_hidden` of text, a `dev.qory.run.egress` with a `channel` other than `stack`, `push`, `run_api` and `qory_host`, a run answer whose `push_proxy_secret` is too short, a run answer whose `credential_hosts` entry has `group` and no `format`, a reload answer with a `push_proxy_secret`, and a `dev.qory.run.policy_applied` whose credential has `hosts` and no `scheme`, or `name` alone, a descriptor rule whose `data` maps `session`, `line`, `truncated` or `summary`, or a member of `session`, a descriptor rule whose `set` sets `session` or a field to an object, whose `from_started` lists `agent_id`, is on a rule of the hooks source or on one of `dev.qory.runtime.started`, and a rule with none of `data`, `set` and `from_started`, a descriptor rule whose `sum` sets `summary`, has no `over`, an `over` that is no dotted path or no `fields`, a descriptor with the type `dev.qory.runtime.message`, a descriptor whose `tools` has no `summary` or a member it does not define, whose `tools.summary` is a list, is empty, has an empty tool name, or has a path that is a number or not a dotted path, a `dev.qory.runtime.text` with no `kind`, a `kind` outside the list, `truncated: false` or a `text` over 64 KiB, a `dev.qory.runtime.tool_result` with no `content`, a `content` that is an object or text over 64 KiB, `truncated: false` or an `agent_type`, a `dev.qory.runtime.tool_denied` with no `tool_use_id` or with a `summary`, a `dev.qory.runtime.tool_started` whose `summary` is a list or over 1 KiB, a runtime event whose `line` is `0` or text, and a `dev.qory.runtime.message`, a run configuration whose API credential has a `pause_for_s` of `0` or of `604801`, a `resets_at` or a `cooldown_until` that is no time, a `use_up_to_percent` of `0` or of `100`, `use_up_to_percent` without `use_up_to_windows`, `use_up_to_windows` without `use_up_to_percent`, an empty `use_up_to_windows`, or one with 12 windows, a window twice or a window in upper case, with seven API credentials, an API credential with no `group`, a host credential with `group`, with a host credential that has `pause_for_s` or `use_up_to_percent` with `use_up_to_windows`, and whose `resume` has no `session_id`, a `run_id` in upper case, or `runs` that are empty, list a run twice, list 257 runs or list a run in upper case, a model keys report whose entry has a `utilization` of `101`, a `status` or a `source` outside the list, a `window` in upper case, `rejected` with no `cooldown_until`, `cooldown_until` with another status, or no `observed_at`, or whose `time` has a fraction or whose `session` is `0`, a model keys answer with no `version`, a link batch answer whose `stop` has no reason or `timeout`, a `dev.qory.session.exited` `failed` or `cancelled` with `model_key_limit`, in an event and in a session's batch, a `dev.qory.session.exited` `paused` with no reason or with `stopped` and exit code `-1`, a session's `dev.qory.run.exited` `failed` or `cancelled` with `model_key_limit` or `paused` with no reason, a run outcome and a batch answer's `end` `paused`, a link refusal whose `state` is `paused`, a `dev.qory.session.transcript` numbered `0`, with an `offset` of `-1`, with no `session_id` or with `bytes` over 32 KiB, a descriptor whose `resume` has no `args`, a relative `prefix` or a `path` without `{session_id}`, a descriptor whose agent place of an agent's effort has both `frontmatter` and `toml` or neither, one whose `model.agent` has `values` or both keys, a `dev.qory.run.target_write` with a `state` outside the four, with no `path`, with an empty `system`, with a `ref` or with a `request_id` in upper case, and a link batch with a `dev.qory.run.target_write`, among them; and, named `<schema>-beyond-schema-<reason>`, documents that break a rule only the gateway checks, or for a descriptor the session, and pass the schema: a session's `dev.qory.run.exited` `succeeded` with a reason of the starter's, a link batch with a `dev.qory.run.egress` of the gateway's, a CONNECT with no channel, and one each of the route to `host.qory.invalid` with another channel, rule, host or port, a run configuration whose harness credential has `placeholders`, a run configuration whose push credential has `placeholders`, a run configuration whose default model provider credential has a `cooldown_until` in 2099, one whose two keys of one group have two endpoints, one whose `resume.runs` ends in another run than `resume.run_id`, and a descriptor rule that sets a field in both `data` and `sum`, or a field and a member of it, or a field in both `set` and `sum`; for model keys of another format, an API credential whose `account_header` or `account_claim` comes alone, without `oauth`, with `oauth` false or beside a header scheme, or is out of its grammar, an `account_header` that is a reserved header or `Authorization`, an `account_claim` of `/` alone or with a control character, and whose `paths` are empty, 33, twice, with an inner `*`, with a `{` or `}` outside a `{}` segment or relative; a secrets request and a model keys report whose `unauthorized` is empty, of 7 or out of its grammar; a `dev.qory.session.exited` and a `dev.qory.run.exited`, in an event and in a link batch, with `model_key_switch` and another state than `paused`, or with `model_key_unauthorized` and another state than `failed`; and a descriptor whose endpoint is a flag or two places, whose `config` breaks its grammar or its limits, whose model key or declared secret has an `account_header`, or whose `resume` has a `prefix` with `*` or an empty `after` | the schema the name starts with, expecting a failure, and a pass for each one the name marks beyond the schema |
 | `fixtures/enrolment/` | enrolment requests with a node's code, `qecn_`, one carrying one fingerprint and one carrying two, and a gateway's request with a gateway's code, `qecg_`, under the fixture gateway key, the answer, the answer to the gateway's request, the answer for an adapter's key, `answer-adapter.json`, and for a diagnostics key, `answer-diagnostics.json`, both unsigned, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, the gateway's under the fixture gateway key, each answer's and refusal's signature under the fixture signing key, `answer-adapter.json` and `answer-diagnostics.json` being checked against the schema alone |
 | `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, a registration among the requests, and its answer and the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `registration.json` and `registration-answer.json`, the registration's body and its answer's; `small-order.json`, the public keys enrolment refuses; `keys.json`'s fixture gateway key, the seed being bytes 97 to 128, with its id `ak_f1xt0re00000000g`; `through-gateway.json`, the run key of `run-key-payload.json` and the requests and answers of a run through a gateway, line by line with their signatures, over `registration-gateway.json`, `registration-gateway-answer.json`, `attach.json`, `attach-answer.json`, `attach-run-configuration.json`, `discovery-gateway.json`, `outcome.json` and `outcome-answer.json`, and, for a fixed exporter value, a binding and an answer of the gateway on its link, signed under the fixture gateway key (Known answers of a run through a gateway, §The server) | `configuration.schema.json` for `discovery.json`, `run-registration.schema.json` for `registration.json` and `run-configuration.schema.json` for `registration-answer.json`, and each file of a run through a gateway against its schema, `run-key.schema.json` for the payload; each key recomputed from its seed, the files of a run through a gateway written again by `go generate ./runkey` and compared, each signature verified and signed again, each point checked with integer arithmetic |
 | `fixtures/sealed/` | the secrets request's fixture: `run-configuration.json`, a run configuration with two credentials; `secrets-request.json`, the request for them; `secrets-answer.json`, its envelope, sealed to the fixture access key with a fixed ephemeral key, bytes 33 to 64, and signed under the fixture signing key; `sealed-plaintext.json`, what it opens to; `vectors.json`, its `info`, `aad`, lengths and hashes and the refused cases; and under `invalid/` envelopes each refused at one step, a wrong `aad`, a wrong `info`, a bad signature, an `exp` past the window, an `exp` too far ahead, another digest, another run id, an unknown suite and a value for a credential not requested, and `plaintext-other-digest.json` and `plaintext-not-requested.json`, the plaintexts the cases of another digest and of a value not requested were sealed from | each file against its schema, and `invalid/` against `secrets-answer.schema.json`, which refuses only the unknown suite; each envelope sealed again with the standard library, its signature verified and signed again, and opened with `crypto/hpke`; each refused one at its step and at no step before |

@@ -43,9 +43,9 @@ secrets:
 # Codex sends OpenAI's Responses format through the provider qory of config.fixed,
 # below, for an API key and for a subscription login's token alike: the provider reads
 # the key from OPENAI_API_KEY, its env_key, and sends it as a bearer. The session sets
-# the start key's endpoint in model_providers.qory.base_url, as a --config pair. A
-# composer writes the run's model id as --model and its effort value in
-# model_reasoning_effort, as a --config pair.
+# the default model provider credential's endpoint in model_providers.qory.base_url, as
+# a --config pair. A composer writes the run's model id as --model and its effort value
+# in model_reasoning_effort, as a --config pair.
 #
 # An agent file of Codex 0.167.2 is a TOML file in agents/ of a config folder, such as
 # $CODEX_HOME/agents/<name>.toml (codex-rs agent-roles/src/loader.rs:78,
@@ -67,12 +67,13 @@ model:
     - {format: openai-responses, auth: {scheme: bearer}, variable: OPENAI_API_KEY}
     - {format: openai-responses, auth: {scheme: bearer, oauth: true}, variable: OPENAI_API_KEY}
 # Codex takes a setting as --config key=value, the value in TOML, over every config.toml.
-# The provider qory sends every request to the start key's endpoint with the key from
-# OPENAI_API_KEY; Codex's built-in provider would send the key to paths outside the
-# model API and open WebSockets. The other settings turn off what reaches hosts other
-# than the endpoint: plugins, apps, analytics, feedback, the update check, the
-# OpenTelemetry logs, traces and metrics, and web search. features.connectors, the
-# legacy name of apps, is not set: Codex 0.167.2 prints a deprecation error for it.
+# The provider qory sends every request to the default model provider credential's
+# endpoint with the key from OPENAI_API_KEY; Codex's built-in provider would send the
+# key to paths outside the model API and open WebSockets. The other settings turn off
+# what reaches hosts other than the endpoint: plugins, apps, analytics, feedback, the
+# update check, the OpenTelemetry logs, traces and metrics, and web search.
+# features.connectors, the legacy name of apps, is not set: Codex 0.167.2 prints a
+# deprecation error for it.
 config:
   flag: --config
   fixed:

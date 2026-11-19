@@ -87,19 +87,20 @@ type Attach struct {
 	// enclosure, and a tool's, whose host the tool serves outside it. The session sets
 	// them with or without a wall.
 	Placeholders []string
-	// ModelVariables, in a run with a start key, are the variables of the runtime's
-	// model keys, the start key's among them, and its model endpoint variable, from its
-	// descriptor's model section. The session sets the start key's variable and the
+	// ModelVariables, in a run with a default model provider credential, are the
+	// variables of the runtime's model keys, the default model provider credential's
+	// among them, and its model endpoint variable, from its descriptor's model section.
+	// The session sets the default model provider credential's variable and the
 	// endpoint's and leaves out the others; a runtime that copies a file whose values
 	// reach the program's environment leaves these names out of the copy. Empty when
-	// the run has no start key.
+	// the run has no default model provider credential.
 	ModelVariables []string
 	// DeniedVariables are the runtime's denies, the names of forge_tokens and
 	// model_keys of denied-variables.json and, behind a wall, the runtime's model
 	// overrides: names the session leaves out of the values of the server, the run, the
-	// machine and the harness's defaults, with or without a start key. A runtime that
-	// copies a file whose values reach the program's environment leaves these names out
-	// of the copy, regardless of case.
+	// machine and the harness's defaults, with or without a default model provider
+	// credential. A runtime that copies a file whose values reach the program's
+	// environment leaves these names out of the copy, regardless of case.
 	DeniedVariables []string
 	// Fixed is the variables of the runtime's descriptor's fixed, NAME=value, sorted by
 	// name, which the launch's Env sets too. A runtime that copies a file whose values

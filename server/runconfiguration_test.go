@@ -177,8 +177,8 @@ func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
 	api := func(extra string) string {
 		return `{"version":1,"credentials":[{"name":"model","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer"}` + extra + `}]}`
 	}
-	// counted has api API credentials, the first the start key, and then hosts host
-	// credentials, each on the host <name>.git.example.
+	// counted has api API credentials, the first the default model provider credential,
+	// and then hosts host credentials, each on the host <name>.git.example.
 	counted := func(api, hosts int) string {
 		var items []string
 		for i := range api + hosts {
@@ -191,7 +191,7 @@ func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
 		}
 		start := ""
 		if api > 0 {
-			start = `"model_credential":"cred-00",`
+			start = `"default_model_provider_credential_name":"cred-00",`
 		}
 		return `{"version":1,` + start + `"credentials":[` + strings.Join(items, ",") + `]}`
 	}
@@ -259,9 +259,9 @@ func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
 // credential with one, fail the schema; and CheckCredentials refuses, with the fix on
 // the first line and the cause on the second, two keys of one group that differ in a
 // member KeyGroupDiffers compares, as the fixture
-// run-configuration-beyond-schema-model-keys-group-mixed.json has, and two keys of one
-// group with chosen, as run-configuration-beyond-schema-model-keys-two-chosen.json has.
-// Two groups with a chosen key each, and two keys of two groups that differ, are read.
+// run-configuration-beyond-schema-model-keys-group-mixed.json has. Two groups, and two
+// keys of two groups that differ, are read. A key with chosen fails the schema, as any
+// member the schema does not define.
 func TestKeyGroupsAreChecked(t *testing.T) {
 	read := func(path string) string {
 		b, err := fs.ReadFile(contracts.FS, path)
@@ -285,9 +285,12 @@ func TestKeyGroupsAreChecked(t *testing.T) {
 			t.Errorf("%s: %v; want run_configuration_invalid at /credentials", f, err)
 		}
 	}
+	withChosen := strings.Replace(read("fixtures/run-configuration/model-keys-groups.json"), `"pause_for_s": 18000}`, `"pause_for_s": 18000, "chosen": true}`, 1)
+	if r, err := (*accesskey.Refusal)(nil), register(withChosen); !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !strings.Contains(err.Error(), "/credentials") {
+		t.Errorf("a key with chosen: %v; want run_configuration_invalid at /credentials", err)
+	}
 	for f, want := range map[string]string{
 		"run-configuration-beyond-schema-model-keys-group-mixed.json": "Give the keys of group \"anthropic\" one format, endpoint and auth.\nThe credentials \"model\" and \"model-2\" differ in endpoint",
-		"run-configuration-beyond-schema-model-keys-two-chosen.json":  "Set chosen on one key of group \"anthropic\".\nThe credentials \"model\" and \"model-2\" both have it",
 	} {
 		var r *accesskey.Refusal
 		if err := register(read("fixtures/invalid/" + f)); !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !strings.Contains(err.Error(), want) {

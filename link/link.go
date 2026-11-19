@@ -151,7 +151,7 @@ func KeyPlaceholder(name string) string {
 }
 
 // GroupKey is a model key as [GroupPlaceholder] reads it: its name, and its key group,
-// empty for a key of no group, such as a model key of the machine's.
+// empty for a key of no group, such as a local model provider credential.
 type GroupKey struct {
 	Name, Group string
 }

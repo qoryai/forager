@@ -100,7 +100,7 @@ func opensOnce(t *testing.T, wall bool) {
 	}
 	other := strings.Replace(same, `"scheme":"bearer"`, `"scheme":"basic","username":"x"`, 1)
 	_, err = reload(t, r, computed(t, other, digest('3')))
-	if err == nil || err.Error() != "run configuration "+runURL+": start a new run to use other credentials; a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays" {
+	if err == nil || err.Error() != "Start a new run to use other credentials.\nrun configuration "+runURL+": a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays" {
 		t.Errorf("a reload with other credentials: %v", err)
 	}
 	none := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}}}`
@@ -273,6 +273,9 @@ func TestARunConfigurationURLWithASecretIsAPhrase(t *testing.T) {
 	}
 	defer r.Close()
 	other := strings.Replace(storedDoc, `"scheme":"bearer"`, `"scheme":"basic","username":"x"`, 1)
+	// The fix is the first line, and the phrase starts the second.
 	_, err = reload(t, r, at(computed(t, other, digest('2'))))
-	check("start a new run to use other credentials", err)
+	if want := "Start a new run to use other credentials.\n" + phrase + "a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays"; err == nil || err.Error() != want {
+		t.Errorf("a reload with other credentials:\n got %v\nwant %s", err, want)
+	}
 }

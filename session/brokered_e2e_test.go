@@ -33,8 +33,8 @@ const (
 	brokeredSource = "SESSION_TEST_BROKERED_VALUE"
 )
 
-// brokeredCredential is the machine's model key for Claude Code, an API key in the
-// header x-api-key, set in place of the key's placeholder in ANTHROPIC_API_KEY.
+// brokeredCredential is the local model provider credential for Claude Code, an API key
+// in the header x-api-key, set in place of the key's placeholder in ANTHROPIC_API_KEY.
 var brokeredCredential = gateway.Credential{Name: "model", Env: brokeredSource, Format: "anthropic-messages", Endpoint: "https://api.anthropic.com",
 	Scheme: "header", Header: "x-api-key", KeyPrefixes: []string{"fake-model-"}}
 

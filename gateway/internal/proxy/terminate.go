@@ -130,7 +130,8 @@ type modelKey struct {
 // SetModelKey sets the model key, by its name, that the proxy sets from now on: of the
 // credentials with a Placeholder, the model keys, it sets this one alone and none of
 // the others, whose values it still replaces in every answer. The gateway sets the key
-// of the session that runs, and the run's start key between sessions.
+// of the session that runs, and the run's default model provider credential between
+// sessions.
 func (p *Proxy) SetModelKey(name string) { p.model.Store(&modelKey{name: name}) }
 
 // SetNoModelKey makes the proxy set no model key from now on, until [Proxy.SetModelKey]:

@@ -54,7 +54,7 @@ func TestAJoinWithNoAnswerIsSentAgain(t *testing.T) {
 		t.Fatalf("%d join requests, want 3", len(joins))
 	}
 	for i, j := range joins[1:] {
-		if !slices.Equal(j.Request.Passes, joins[0].Request.Passes) || j.Request.ModelKey != joins[0].Request.ModelKey || j.Request.ModelCredential != joins[0].Request.ModelCredential {
+		if !slices.Equal(j.Request.Passes, joins[0].Request.Passes) || j.Request.ModelKey != joins[0].Request.ModelKey || j.Request.ModelProviderCredentialName != joins[0].Request.ModelProviderCredentialName {
 			t.Errorf("try %d %+v is not the first try %+v", i+2, j.Request, joins[0].Request)
 		}
 		if step := joinStepBatch(g); step < 0 || j.Answered <= step {

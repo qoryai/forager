@@ -149,8 +149,8 @@ func TestCredentialCountBounds(t *testing.T) {
 		b, _ := json.Marshal(items)
 		return string(b)
 	}
-	// runConfiguration has api API credentials, the first the start key, and then hosts
-	// host credentials, each on the host <name>.git.example.
+	// runConfiguration has api API credentials, the first the default model provider
+	// credential, and then hosts host credentials, each on the host <name>.git.example.
 	runConfiguration := func(api, hosts int) string {
 		var items []string
 		for i, n := range names(api + hosts) {
@@ -160,11 +160,11 @@ func TestCredentialCountBounds(t *testing.T) {
 			}
 			items = append(items, `{"name":"`+n+`","apply":[{"hosts":["`+n+`.git.example"],"scheme":"bearer"}]}`)
 		}
-		start := ""
+		defaultField := ""
 		if api > 0 {
-			start = `"model_credential":"cred-00",`
+			defaultField = `"default_model_provider_credential_name":"cred-00",`
 		}
-		return `{"version":1,` + start + `"credentials":[` + strings.Join(items, ",") + `]}`
+		return `{"version":1,` + defaultField + `"credentials":[` + strings.Join(items, ",") + `]}`
 	}
 	request := func(n int) string {
 		return `{"version":1,"run_id":"01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a","run_configuration":"` + digest +
@@ -266,29 +266,31 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 	return kind
 }
 
-// TestLinkFixturesValidate pins that every document under fixtures/link passes the schema
-// of the gateway's link its name starts with: the discovery of the local link and of a
-// separate gateway, each with its proxy address, a run request without a wall, one with a
-// wall and its images, and one with a narrowing as well, a run
-// answer with a wall, its placeholders, reserved names, credential hosts, image, applied
-// and certificate authority, one with a wall and an image but no certificate
-// authority, one without a wall, one without a wall whose gateway holds a credential,
-// with its certificate authority, and one without a policy, a reload answer with and
-// without a policy and one whose applied has ceiling_paths, a batch of a session's events without sequence, a batch of
-// a run.refused with a code the session decides, a batch of a session.exited and a run.exited
-// with timeout, two with interrupted, one of a refused join, two of a failure at the join
-// after its session.started, with no reason and with the wall's refusal's code, and one
-// of a run closed with no session, a batch of a setup step after a run.started with
-// machine and setup, a batch of a build step and the run's run.built, a batch of a push
-// step after a session.exited and before the run.exited, a batch of a machine step right
-// after the run.started, a batch of a session with no runtime, with bare, a join request
-// with and without model_credential, a join answer with and
-// without model_credential, a batch answer with stop and an empty one, a batch of a
-// session.exited and a run.exited paused with model_key_limit and one of a session.exited
-// alone, the same two with model_key_switch, and with model_key_unauthorized and failed,
-// a batch answer with each of those two stops, a batch of two session.transcript chunks,
-// and refusals from the gateway, two internal ones among them, one whose message spans
-// lines, two 410s with the state and the reason of the run's end, and from apiary.
+// TestLinkFixturesValidate pins that every document under fixtures/link passes the
+// schema of the gateway's link its name starts with: the discovery of the local link
+// and of a separate gateway, each with its proxy address, a run request without a wall,
+// one with a wall and its images, and one with a narrowing as well, a run answer with a
+// wall, its placeholders, reserved names, credential hosts, image, applied and
+// certificate authority, one with a wall and an image but no certificate authority, one
+// without a wall, one without a wall whose gateway holds a credential, with its
+// certificate authority, and one without a policy, a reload answer with and without a
+// policy and one whose applied has ceiling_paths, a batch of a session's events without
+// sequence, a batch of a run.refused with a code the session decides, a batch of a
+// session.exited and a run.exited with timeout, two with interrupted, one of a refused
+// join, two of a failure at the join after its session.started, with no reason and with
+// the wall's refusal's code, and one of a run closed with no session, a batch of a
+// setup step after a run.started with machine and setup, a batch of a build step and
+// the run's run.built, a batch of a push step after a session.exited and before the
+// run.exited, a batch of a machine step right after the run.started, a batch of a
+// session with no runtime, with bare, a join request with and without
+// model_provider_credential_name, a join answer with and without
+// model_provider_credential_name, a batch answer with stop and an empty one, a batch of
+// a session.exited and a run.exited paused with model_key_limit and one of a
+// session.exited alone, the same two with model_key_switch, and with
+// model_key_unauthorized and failed, a batch answer with each of those two stops, a
+// batch of two session.transcript chunks, and refusals from the gateway, two internal
+// ones among them, one whose message spans lines, two 410s with the state and the
+// reason of the run's end, and from apiary.
 func TestLinkFixturesValidate(t *testing.T) {
 	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal,
 		linkJoinReq, linkJoinAnswer, linkBatchAns)
@@ -373,86 +375,87 @@ func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {
 // reason of the starter's, which the close never writes.
 const beyondLinkSchema = "-beyond-schema-"
 
-// TestInvalidFixturesAreRefused pins that each document under fixtures/invalid fails the
-// schema its name starts with: a policy that widens or whose allow_first holds a *.
-// pattern or 65 entries, a server without its access key id
-// or its pin or with a secret, a configuration without events, without its run
-// endpoint, without workspaces or with two, or whose run endpoint has a query, a fragment
-// or a trailing slash, a batch that holds a
-// run.registered, a run registration with a member it does not define, with an interval over
-// 300 seconds or with a time that is not UTC in whole seconds, a run configuration
-// whose image has a tag or is the machine's name for one, whose API credential has
-// hosts or placeholders, no endpoint, an endpoint that is not https or has a user, a
-// query or a fragment, a format outside the list, oauth beside a header or set to
-// false, or key prefixes that are none, five, with a space or of 33 characters, or
-// whose model_credential is no credential's name, or whose host credential has hosts and
-// auth in place of apply, an apply item with a token or a bearer item with a username, a
-// sealed plaintext whose expires_at is not a time or whose apply has a token or a *.
-// pattern host, a run.registered whose
-// interval is over 300 seconds or without its workspace, an event with an unpadded sequence, a run.started without opened_by,
-// with an unknown one, opened by a session, with a runtime member, with a machine in
-// upper case or with a setup other than outside and inside, a session.started
-// without its command, numbered 0, with preparation, whose bare is false, whose
-// setup_commands is empty, or whose harness is empty, has a member it does not define or a commit of 39 characters, a session.exited without its session, failed
-// with exit status 0 and no reason, cancelled with stopped and an exit status, cancelled
-// with gateway_lost, or of a refused join with an exit status other than -1, a run.log
-// whose step is 0, a run.step_started with an unknown kind, without its name or numbered
-// 0, a run.built whose image has a tag, whose size is 0, whose commit is in upper case
-// or of 39 characters, whose environment_ref is empty or missing, whose environment_image
-// or base has a tag, whose environment_image is empty, or with a member it does not
-// define, a
-// run.step_exited without its state, with a state other than the three, paused among
-// them, with an
-// exit code below -1 or without its duration, a run.exited with no_session and succeeded,
-// a run.exited without state, with a state other than the four, with a reason that is
-// not a code, with gateway_lost and a state other than failed, with quiet and no
-// quiet_seconds or with quiet_seconds and another reason, a run.refused with a code outside the list and no
-// status, a descriptor with an expression, a descriptor rule that maps a member of
-// session, or whose sum sets summary, has no over or fields or an over that is no
-// dotted path, a descriptor whose model section has a
-// format outside the list, a place of two kinds or of none, an empty list of values,
-// no formats, a member it does not define, an endpoint that is no variable,
-// overrides that are empty, list a name twice or list something other than a
-// variable's name, or keys that are empty, read from HOME, of a format outside the
-// list, without a variable or with oauth beside a header, a descriptor that declares a
-// secret read from LD_PRELOAD, a descriptor whose egress_hosts are empty, list a host
-// twice or list a wildcard or an IP literal, a link run request
-// without wall, whose run id is not lower-case or whose narrowing holds a member it does
-// not define, that has passes, a member only a join request has, or whose image has no
-// reference, a link run
-// answer without applied, with a proxy secret or a stack proxy secret too short, whose image has no reference
-// or whose credential_hosts entry has a member it does not define, no hosts, no
-// placeholders, a format without an endpoint or an endpoint without a format, a link reload answer with the proxy secret, the stack proxy secret or the
-// certificate authority or whose applied holds variables, a link batch whose event carries a sequence, that holds a
-// run.registered, a run.egress or a run.target_write, a run.started opened by a gateway or a session, a run.exited with one of Forager's reasons
-// other than timeout, interrupted and no_session, its old names among them, or with timeout and a state other than cancelled
-// or an exit code other than 124, a session.exited cancelled with no reason, succeeded with exit status 1, with stopped,
-// succeeded with no exit status or cancelled with a refusal's code, or a run.refused with a gateway's code,
-// its old codes among them, run_closed, another code of the
-// server's or a name of the form <member>=<value>, a link discovery that lists a node or
-// workspaces or has no heartbeat interval or proxy, a link join request without passes,
-// with a member it does not define or a name of the form <name>=<value> in passes, a
-// link join answer without its session or numbered 0, and a link refusal without from, with a control
-// character other than tab and newline in its message, C0, DEL or C1, or with a state
-// other than the three, paused among them, a run outcome and a batch answer's end
-// paused, and an API format outside the list, in upper case or as an
-// object; and, for several model keys and a resume, a run configuration whose API
-// credential has a pause_for_s of 0 or over a week or a resets_at that is no time, with
-// seven API credentials, a host credential with pause_for_s or with use_up_to_percent
-// and use_up_to_windows, an API credential with a use_up_to_percent of 0 or 100,
-// without use_up_to_windows, or with use_up_to_windows alone, empty, of 12 windows,
-// with a window twice or a window in upper case, or a resume without its
-// session id, with a run id in upper case, or with runs empty, with a run twice, with
-// 257 runs or with a run in upper case, a model keys report whose entry has a
-// utilization over 100, a status, a source or a window outside the grammar, rejected
-// without cooldown_until or cooldown_until with another status, or no observed_at, or
-// whose time has a fraction or whose session is 0, a model keys answer without
-// version, a link batch answer whose stop has no reason or another one, a
+// TestInvalidFixturesAreRefused pins that each document under fixtures/invalid fails
+// the schema its name starts with: a policy that widens or whose allow_first holds a *.
+// pattern or 65 entries, a server without its access key id or its pin or with a
+// secret, a configuration without events, without its run endpoint, without workspaces
+// or with two, or whose run endpoint has a query, a fragment or a trailing slash, a
+// batch that holds a run.registered, a run registration with a member it does not
+// define, with an interval over 300 seconds or with a time that is not UTC in whole
+// seconds, a run configuration whose image has a tag or is the machine's name for one,
+// whose API credential has hosts or placeholders, no endpoint, an endpoint that is not
+// https or has a user, a query or a fragment, a format outside the list, oauth beside a
+// header or set to false, or key prefixes that are none, five, with a space or of 33
+// characters, or whose default_model_provider_credential_name is no credential's name,
+// or whose host credential has hosts and auth in place of apply, an apply item with a
+// token or a bearer item with a username, a sealed plaintext whose expires_at is not a
+// time or whose apply has a token or a *. pattern host, a run.registered whose interval
+// is over 300 seconds or without its workspace, an event with an unpadded sequence, a
+// run.started without opened_by, with an unknown one, opened by a session, with a
+// runtime member, with a machine in upper case or with a setup other than outside and
+// inside, a session.started without its command, numbered 0, with preparation, whose
+// bare is false, whose setup_commands is empty, or whose harness is empty, has a member
+// it does not define or a commit of 39 characters, a session.exited without its
+// session, failed with exit status 0 and no reason, cancelled with stopped and an exit
+// status, cancelled with gateway_lost, or of a refused join with an exit status other
+// than -1, a run.log whose step is 0, a run.step_started with an unknown kind, without
+// its name or numbered 0, a run.built whose image has a tag, whose size is 0, whose
+// commit is in upper case or of 39 characters, whose environment_ref is empty or
+// missing, whose environment_image or base has a tag, whose environment_image is empty,
+// or with a member it does not define, a run.step_exited without its state, with a
+// state other than the three, paused among them, with an exit code below -1 or without
+// its duration, a run.exited with no_session and succeeded, a run.exited without state,
+// with a state other than the four, with a reason that is not a code, with gateway_lost
+// and a state other than failed, with quiet and no quiet_seconds or with quiet_seconds
+// and another reason, a run.refused with a code outside the list and no status, a
+// descriptor with an expression, a descriptor rule that maps a member of session, or
+// whose sum sets summary, has no over or fields or an over that is no dotted path, a
+// descriptor whose model section has a format outside the list, a place of two kinds or
+// of none, an empty list of values, no formats, a member it does not define, an
+// endpoint that is no variable, overrides that are empty, list a name twice or list
+// something other than a variable's name, or keys that are empty, read from HOME, of a
+// format outside the list, without a variable or with oauth beside a header, a
+// descriptor that declares a secret read from LD_PRELOAD, a descriptor whose
+// egress_hosts are empty, list a host twice or list a wildcard or an IP literal, a link
+// run request without wall, whose run id is not lower-case or whose narrowing holds a
+// member it does not define, that has passes, a member only a join request has, or
+// whose image has no reference, a link run answer without applied, with a proxy secret
+// or a stack proxy secret too short, whose image has no reference or whose
+// credential_hosts entry has a member it does not define, no hosts, no placeholders, a
+// format without an endpoint or an endpoint without a format, a link reload answer with
+// the proxy secret, the stack proxy secret or the certificate authority or whose
+// applied holds variables, a link batch whose event carries a sequence, that holds a
+// run.registered, a run.egress or a run.target_write, a run.started opened by a gateway
+// or a session, a run.exited with one of Forager's reasons other than timeout,
+// interrupted and no_session, its old names among them, or with timeout and a state
+// other than cancelled or an exit code other than 124, a session.exited cancelled with
+// no reason, succeeded with exit status 1, with stopped, succeeded with no exit status
+// or cancelled with a refusal's code, or a run.refused with a gateway's code, its old
+// codes among them, run_closed, another code of the server's or a name of the form
+// <member>=<value>, a link discovery that lists a node or workspaces or has no
+// heartbeat interval or proxy, a link join request without passes, with a member it
+// does not define, the old model_credential among them, or with a name of the form
+// <name>=<value> in passes, a link join answer without its session or numbered 0, and
+// a link refusal without from, with a control character other than tab and newline in
+// its message, C0, DEL or C1, or with a state other than the three, paused among them,
+// a run outcome and a batch answer's end paused, and an API format outside the list, in
+// upper case or as an object; and, for several model keys and a resume, a run
+// configuration whose API credential has a pause_for_s of 0 or over a week or a
+// resets_at that is no time, with seven API credentials, a host credential with
+// pause_for_s or with use_up_to_percent and use_up_to_windows, an API credential with a
+// use_up_to_percent of 0 or 100, without use_up_to_windows, or with use_up_to_windows
+// alone, empty, of 12 windows, with a window twice or a window in upper case, or a
+// resume without its session id, with a run id in upper case, or with runs empty, with
+// a run twice, with 257 runs or with a run in upper case, a model keys report whose
+// entry has a utilization over 100, a status, a source or a window outside the grammar,
+// rejected without cooldown_until or cooldown_until with another status, or no
+// observed_at, or whose time has a fraction or whose session is 0, a model keys answer
+// without version, a link batch answer whose stop has no reason or another one, a
 // session.exited or a session's run.exited failed or cancelled with model_key_limit, a
-// session.exited paused with no reason or
-// with stopped and exit code -1, a session's run.exited paused with no reason, a session.transcript numbered 0, with a negative offset,
-// without its session id or over 32 KiB, a descriptor whose resume has no args, a
-// prefix outside the home or a path without {session_id}, a descriptor rule whose set
+// session.exited paused with no reason or with stopped and exit code -1, a session's
+// run.exited paused with no reason, a session.transcript numbered 0, with a negative
+// offset, without its session id or over 32 KiB, a descriptor whose resume has no args,
+// a prefix outside the home or a path without {session_id}, a descriptor rule whose set
 // sets session or a field to an object, whose from_started lists agent_id or is on a
 // hook rule or a rule of runtime.started, or with none of data, set and from_started,
 // and a run.target_write with a state outside the four, without its path, with an empty
@@ -464,20 +467,20 @@ const beyondLinkSchema = "-beyond-schema-"
 // header, Authorization, Host, Content-Length with _, Cookie, a Proxy-, X-Qory- or
 // Qory- header, or paths that are empty, 33, twice, with an inner *, with a { or }
 // outside a {} segment or relative; a secrets request whose unauthorized is empty, of
-// 7, twice or not a name; a model keys report whose unauthorized is empty, of 7, a
-// list of names, or has an entry without at or credential, with an at that is no time
-// or with a member it does not define; a link batch, a session.exited or a run.exited
-// with model_key_switch and a state other than paused, or with model_key_unauthorized
-// and a state other than failed; and a descriptor whose endpoint is a flag or two
-// places, whose config has no flag, a short flag, a member it does not define, an
-// empty fixed or one of 65 keys, a fixed value that is a fraction, a table, an integer
-// over 2^53-1, or a string with a line feed or over 4096 characters, or a key with a
-// space, whose model key or declared secret has an account_header, or whose resume has
-// a prefix with * or an empty after. A fixture whose name contains -beyond-schema-
-// breaks a rule only the gateway checks, or for a descriptor the session, and passes
-// its schema. The longest schema name the file name starts with is the schema, so
-// run-configuration-variable-value-not-string is held to the run configuration and not
-// to a schema named run.
+// 7, twice or not a name; a model keys report whose unauthorized is empty, of 7, a list
+// of names, or has an entry without at or credential, with an at that is no time or
+// with a member it does not define; a link batch, a session.exited or a run.exited with
+// model_key_switch and a state other than paused, or with model_key_unauthorized and a
+// state other than failed; and a descriptor whose endpoint is a flag or two places,
+// whose config has no flag, a short flag, a member it does not define, an empty fixed
+// or one of 65 keys, a fixed value that is a fraction, a table, an integer over 2^53-1,
+// or a string with a line feed or over 4096 characters, or a key with a space, whose
+// model key or declared secret has an account_header, or whose resume has a prefix
+// with * or an empty after.
+// A fixture whose name contains -beyond-schema- breaks a rule only the gateway checks,
+// or for a descriptor the session, and passes its schema. The longest schema name the
+// file name starts with is the schema, so run-configuration-variable-value-not-string
+// is held to the run configuration and not to a schema named run.
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-registration.schema.json", "run-configuration.schema.json", "event.schema.json", "batch.schema.json",

@@ -110,8 +110,8 @@ func TestCodexDeniesTheVariablesThatMoveItsRequests(t *testing.T) {
 }
 
 // TestCodexPassesTheProviderQoryAsConfigPairs pins the config: --config and the
-// provider qory with the off settings, and the pairs the session passes with a start
-// key's endpoint, sorted by key, each a TOML value.
+// provider qory with the off settings, and the pairs the session passes with a default
+// model provider credential's endpoint, sorted by key, each a TOML value.
 func TestCodexPassesTheProviderQoryAsConfigPairs(t *testing.T) {
 	rt, err := codex.New()
 	if err != nil {

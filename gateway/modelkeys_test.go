@@ -149,7 +149,7 @@ func openGroupRun(t *testing.T, format string, forge bool) *groupRun {
 		extra = `,{"name":"forge","apply":[{"hosts":["git.example"],"scheme":"bearer"}],"placeholders":["GIT_TOKEN"]}`
 		secrets["forge"] = forgeValue
 	}
-	doc := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":[` + allow + `]}},"model_credential":"model","credentials":[` +
+	doc := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":[` + allow + `]}},"default_model_provider_credential_name":"model","credentials":[` +
 		entry("model") + `,` + entry("model-2") + `,` + entry("model-3") + extra + `]}`
 	g.c = newControl(t)
 	g.c.serveDocument(doc, 'a')
@@ -188,8 +188,8 @@ func openGroupRun(t *testing.T, format string, forge bool) *groupRun {
 	}
 	a := g.h.open(server.LinkRunRequest{Wall: true})
 	g.runID = a.RunID
-	if a.ModelCredential != "model" {
-		t.Fatalf("the run's start key %q", a.ModelCredential)
+	if a.DefaultModelProviderCredentialName != "model" {
+		t.Fatalf("the run's default model provider credential %q", a.DefaultModelProviderCredentialName)
 	}
 	if d := g.h.post(started(g.runID, nil), applied(g.runID, a.Applied)); !d.Accepted() {
 		t.Fatalf("the first batch: %+v", d)
@@ -201,8 +201,8 @@ func openGroupRun(t *testing.T, format string, forge bool) *groupRun {
 	return g
 }
 
-// send sends a model request with the start key's placeholder and returns its status
-// and the keys the provider received since the last send.
+// send sends a model request with the default model provider credential's placeholder
+// and returns its status and the keys the provider received since the last send.
 func (g *groupRun) send(t *testing.T) (int, []string) {
 	t.Helper()
 	return g.sendTo(t, "/messages")
@@ -258,7 +258,7 @@ func (g *groupRun) batch(t *testing.T, evs ...map[string]any) (int, string) {
 func TestAKeyGroupResendsReportsAndStops(t *testing.T) {
 	g := startGroupRun(t)
 	one, err := g.h.join(g.runID)
-	if err != nil || one.ModelCredential != "model" {
+	if err != nil || one.ModelProviderCredentialName != "model" {
 		t.Fatalf("join 1: %+v, %v", one, err)
 	}
 	g.h.post(sessionStarted(g.runID, 1))
@@ -293,8 +293,8 @@ func TestAKeyGroupResendsReportsAndStops(t *testing.T) {
 	}
 	g.h.post(sessionExited(g.runID, 1))
 
-	two, err := g.h.linkOf(g.runID).Join(t.Context(), server.LocalOrigin+"/v1/run-configuration", g.runID, server.LinkJoinRequest{Passes: []string{}, ModelKey: true, ModelCredential: "model-3"})
-	if err != nil || two.ModelCredential != "model-2" {
+	two, err := g.h.linkOf(g.runID).Join(t.Context(), server.LocalOrigin+"/v1/run-configuration", g.runID, server.LinkJoinRequest{Passes: []string{}, ModelKey: true, ModelProviderCredentialName: "model-3"})
+	if err != nil || two.ModelProviderCredentialName != "model-2" {
 		t.Fatalf("join 2 naming model-3: %+v, %v; want the active key, model-2", two, err)
 	}
 	g.h.post(sessionStarted(g.runID, 2))
@@ -330,7 +330,7 @@ func TestAKeyGroupResendsReportsAndStops(t *testing.T) {
 func TestAnOpenAIKeyGroupStopsAtTheFirstRefusal(t *testing.T) {
 	g := startGroupRunOf(t, "openai-responses")
 	one, err := g.h.join(g.runID)
-	if err != nil || one.ModelCredential != "model" {
+	if err != nil || one.ModelProviderCredentialName != "model" {
 		t.Fatalf("join 1: %+v, %v", one, err)
 	}
 	g.h.post(sessionStarted(g.runID, 1))
@@ -376,7 +376,7 @@ func TestAnOpenAIKeyCooledByAReportStopsTheSession(t *testing.T) {
 			`","source":"provider","observed_at":"` + time.Now().Add(time.Minute).UTC().Format(time.RFC3339) + `"}]}`
 	}
 	g.mu.Unlock()
-	if one, err := g.h.join(g.runID); err != nil || one.ModelCredential != "model" {
+	if one, err := g.h.join(g.runID); err != nil || one.ModelProviderCredentialName != "model" {
 		t.Fatalf("join 1: %+v, %v", one, err)
 	}
 	g.h.post(sessionStarted(g.runID, 1))
@@ -537,7 +537,7 @@ const modelPath = "/v1/messages"
 // and the session and the run end failed with it.
 func TestAnAnthropicGroupEndsWhenEveryKeyGets401(t *testing.T) {
 	g := startGroupRun(t)
-	if one, err := g.h.join(g.runID); err != nil || one.ModelCredential != "model" {
+	if one, err := g.h.join(g.runID); err != nil || one.ModelProviderCredentialName != "model" {
 		t.Fatalf("join 1: %+v, %v", one, err)
 	}
 	g.h.post(sessionStarted(g.runID, 1))
@@ -604,7 +604,7 @@ func TestAnAnthropicGroupEndsWhenEveryKeyGets401(t *testing.T) {
 // end paused with it. The next session joins with model-2.
 func TestAnOpenAIGroupSwitchesAfterA401(t *testing.T) {
 	g := startGroupRunOf(t, "openai-responses")
-	if one, err := g.h.join(g.runID); err != nil || one.ModelCredential != "model" {
+	if one, err := g.h.join(g.runID); err != nil || one.ModelProviderCredentialName != "model" {
 		t.Fatalf("join 1: %+v, %v", one, err)
 	}
 	g.h.post(sessionStarted(g.runID, 1))
@@ -623,7 +623,7 @@ func TestAnOpenAIGroupSwitchesAfterA401(t *testing.T) {
 		t.Errorf("the session's end: %d %q", status, body)
 	}
 	two, err := g.h.join(g.runID)
-	if err != nil || two.ModelCredential != "model-2" {
+	if err != nil || two.ModelProviderCredentialName != "model-2" {
 		t.Fatalf("join 2: %+v, %v; want model-2", two, err)
 	}
 	g.h.post(sessionStarted(g.runID, 2))
@@ -915,7 +915,7 @@ func TestTheOneAddressReportsReplayedAndReopenedJoins(t *testing.T) {
 		return `{"name":"` + name + `","group":"anthropic","format":"anthropic-messages","endpoint":"` + url + `","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
 	}
 	c := gatewayControl(t)
-	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"model_credential":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
+	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"default_model_provider_credential_name":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
 	c.mu.Lock()
 	c.secrets = map[string]string{"model": "fake-group-value-0001", "model-2": "fake-group-value-0002"}
 	c.mu.Unlock()

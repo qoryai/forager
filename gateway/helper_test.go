@@ -761,6 +761,24 @@ func (h *harness) reported(part string) bool {
 	return len(h.reportsWith(part)) > 0
 }
 
+// reportedWhole reports whether the gateway reported line, the whole report.
+func (h *harness) reportedWhole(line string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Contains(h.reports, line)
+}
+
+// reloadRefused is the report of a reload of c's run configuration that the gateway
+// refuses, with its fix first: fix, at most 100 characters, on the first line, and on
+// the second "the reload failed: ", the run configuration's URL and cause.
+func reloadRefused(t *testing.T, c *control, fix, cause string) string {
+	t.Helper()
+	if len(fix) > 100 {
+		t.Errorf("the fix line has %d characters, over 100: %s", len(fix), fix)
+	}
+	return fix + "\nthe reload failed: run configuration " + c.srv.URL + runsPath + ": " + cause
+}
+
 // reportsWith are the lines the gateway reported that hold part.
 func (h *harness) reportsWith(part string) []string {
 	h.mu.Lock()

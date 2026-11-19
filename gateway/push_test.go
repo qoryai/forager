@@ -635,10 +635,10 @@ func TestAReloadAddsNoPushCredential(t *testing.T) {
 	}
 	o.c.serveDocument(pushRunDoc(true), 'b')
 	h.post(logged(a.RunID))
-	const line = "start a new run to use other credentials; a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays"
+	line := reloadRefused(t, o.c, "Start a new run to use other credentials.", "a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays")
 	eventually(t, "the failed reload's report", func() bool {
 		h.post(heartbeat(a.RunID))
-		return h.reported(line)
+		return h.reportedWhole(line)
 	})
 	if d := h.post(heartbeat(a.RunID)); !d.Accepted() || d.Digests.RunConfiguration != first {
 		t.Errorf("the batch after the failed reload: %+v; want the run configuration %s in force", d, first)

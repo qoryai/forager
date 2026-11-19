@@ -59,7 +59,8 @@ type accountFixture struct {
 }
 
 // subscriptionKey is a subscription key on chatHost's codex paths with the account
-// header, whose value is value and whose placeholder is the start key's.
+// header, whose value is value and whose placeholder is the default model provider
+// credential's.
 func subscriptionKey(name, value string) Credential {
 	return Credential{Name: name, Hosts: []string{chatHost}, Scheme: "bearer", Paths: []string{"/backend-api/codex/*"},
 		Placeholder: link.KeyPlaceholder("subscription"), Stored: true, Value: func() []byte { return []byte(value) },
@@ -131,9 +132,10 @@ func newAccountFixture(t *testing.T, paths map[string][]string, g *modelkey.Grou
 	return f
 }
 
-// send sends method to path on chatHost with the start key's placeholder when keyed is
-// true, and the account header the agent chose in two spellings, and returns the
-// status and what the provider received of it, nothing when it received none.
+// send sends method to path on chatHost with the default model provider credential's
+// placeholder when keyed is true, and the account header the agent chose in two
+// spellings, and returns the status and what the provider received of it, nothing when
+// it received none.
 func (f *accountFixture) send(t *testing.T, method, path string, keyed bool) (int, []seenRequest) {
 	t.Helper()
 	f.mu.Lock()

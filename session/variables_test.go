@@ -1197,9 +1197,9 @@ func TestAgentEnvRefusesWhatAJoinRefuses(t *testing.T) {
 
 // TestAgentEnvLeavesOutWhatTheGatewayHolds pins what Run.AgentEnv leaves out of the
 // environment a run without a wall inherits, as Join does: a value of a name the
-// machine's credentials are read from, a value of the start key's variable and of the
-// runtime's other model-key variable, and a value of a placeholder's name, whose
-// placeholder the agent gets in its place.
+// machine's credentials are read from, a value of the default model provider
+// credential's variable and of the runtime's other model-key variable, and a value of a
+// placeholder's name, whose placeholder the agent gets in its place.
 func TestAgentEnvLeavesOutWhatTheGatewayHolds(t *testing.T) {
 	ctx := context.Background()
 	agentEnv := func(t *testing.T, sp runSpec) string {
@@ -1231,7 +1231,7 @@ func TestAgentEnvLeavesOutWhatTheGatewayHolds(t *testing.T) {
 		answeringWith(g, []map[string]any{model(), sealed("forge", "api.github.com", "GITHUB_TOKEN")}, []string{"GITHUB_TOKEN"})
 		env := agentEnv(t, sp)
 		if strings.Contains(env, "sk-fake-inherited") {
-			t.Errorf("AgentEnv has the inherited value of the start key's variable:\n%s", env)
+			t.Errorf("AgentEnv has the inherited value of the default model provider credential's variable:\n%s", env)
 		}
 		if strings.Contains(env, "sk-fake-other") {
 			t.Errorf("AgentEnv has the inherited value of the other model-key variable:\n%s", env)

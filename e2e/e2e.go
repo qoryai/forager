@@ -161,10 +161,10 @@ const (
 	credentialPath = "/inside-the-paths"
 )
 
-// What a runtime's credentials are in the suite: Claude Code's API key, a model key
-// of the machine's whose endpoint is the first recorder, set in x-api-key in place of
-// the key's placeholder in ANTHROPIC_API_KEY; and a bearer for the second recorder, a
-// host credential whose stand-in is in PROBE_OAUTH_TOKEN, a variable no model key is
+// What a runtime's credentials are in the suite: Claude Code's API key, a local model
+// provider credential whose endpoint is the first recorder, set in x-api-key in place
+// of the key's placeholder in ANTHROPIC_API_KEY; and a bearer for the second recorder,
+// a host credential whose stand-in is in PROBE_OAUTH_TOKEN, a variable no model key is
 // read from. Each is a fake key in the suite's environment. keyMark is in both keys and
 // nowhere else: the full keys are made when the suite runs, so they exist only in the
 // suite's environment while it runs.
@@ -182,12 +182,13 @@ const (
 )
 
 // What the run's model key is without the recorders: a fake key in the suite's
-// environment, with keyMark, a model key of the machine's whose endpoint is Claude
+// environment, with keyMark, a local model provider credential whose endpoint is Claude
 // Code's model host, sent as a bearer, so the session sets its placeholder in
-// ANTHROPIC_AUTH_TOKEN. A walled run whose gateway holds credentials needs a model
-// key. With the recorders, the API key is the run's one model key, since a run with no
-// control plane has no model_credential to choose between two. The allow list has the
-// host, as it must for a model key's endpoint host; the probe sends nothing to it.
+// ANTHROPIC_AUTH_TOKEN. A walled run whose gateway holds credentials needs a model key.
+// With the recorders, the API key is the run's one model key, since a run with no
+// control plane has no default_model_provider_credential_name to choose between two.
+// The allow list has the host, as it must for a model key's endpoint host; the probe
+// sends nothing to it.
 const (
 	modelKeyVar = "QORY_WALLTEST_MODEL_KEY"
 	modelHost   = "api.anthropic.com"

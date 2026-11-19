@@ -23,26 +23,27 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// mixedValues are the fake values of the model keys of mixedRun, by name: the
-// machine's key machine, and the server's keys a-1 and a-2 of group a and b-1 and b-2
-// of group b.
-var mixedValues = map[string]string{"machine": "fake-machine-value-0001", "a-1": "fake-a-value-0001", "a-2": "fake-a-value-0002", "b-1": "fake-b-value-0001", "b-2": "fake-b-value-0002"}
+// mixedValues are the fake values of the model keys of mixedRun, by name: the local
+// model provider credential local, and the server's keys a-1 and a-2 of group a and
+// b-1 and b-2 of group b.
+var mixedValues = map[string]string{"local": "fake-local-value-0001", "a-1": "fake-a-value-0001", "a-2": "fake-a-value-0002", "b-1": "fake-b-value-0001", "b-2": "fake-b-value-0002"}
 
-// mixedRun is a walled run whose start key is the machine's model key machine, and whose
-// run configuration has two key groups of the server's, a with a-1 and a-2 and b with
-// b-1 and b-2, all of the format anthropic-messages on one fake provider. The machine's
-// key reaches the provider at 127.0.0.1 and the server's keys at localhost: a
-// credential from the server replaces a machine's credential of its host. The provider
-// returns a limit refusal for each key in limited, and a 401 for each key in
-// unauthorized. A request with the key held waits at the provider until release is
-// closed, then gets the answer of that moment.
+// mixedRun is a walled run whose default model provider credential is the local model
+// provider credential local, and whose run configuration has two key groups of the
+// server's, a with a-1 and a-2 and b with b-1 and b-2, all of the format
+// anthropic-messages on one fake provider. The local model provider credential reaches
+// the provider at 127.0.0.1 and the server's keys at localhost: a credential from the
+// server replaces a local credential of its host. The provider returns a limit
+// refusal for each key in limited, and a 401 for each key in unauthorized. A request
+// with the key held waits at the provider until release is closed, then gets the answer
+// of that moment.
 type mixedRun struct {
 	h     *harness
 	runID string
 	url   string
-	// machineURL is the endpoint of the machine's key.
-	machineURL string
-	agent      *http.Client
+	// localURL is the endpoint of the local model provider credential.
+	localURL string
+	agent    *http.Client
 	// hosts are the run answer's credential_hosts, from which a session computes its
 	// key's placeholder (link.GroupPlaceholder).
 	hosts []server.LinkCredentialHosts
@@ -58,15 +59,16 @@ type mixedRun struct {
 
 func startMixedRun(t *testing.T) *mixedRun {
 	t.Helper()
-	return startKeyGroupsRun(t, true, "machine")
+	return startKeyGroupsRun(t, true, "local")
 }
 
-// startKeyGroupsRun opens the run of mixedRun with the start key startKey; with machine
-// false, the run has no key of the machine's.
-func startKeyGroupsRun(t *testing.T, machine bool, startKey string) *mixedRun {
+// startKeyGroupsRun opens the run of mixedRun with the default model provider
+// credential defaultCredential; with local false, the run has no local model provider
+// credential.
+func startKeyGroupsRun(t *testing.T, local bool, defaultCredential string) *mixedRun {
 	t.Helper()
 	m := &mixedRun{limited: map[string]bool{}, unauthorized: map[string]bool{}}
-	t.Setenv("GATEWAY_TEST_MACHINE_KEY", mixedValues["machine"])
+	t.Setenv("GATEWAY_TEST_LOCAL_MODEL_PROVIDER_CREDENTIAL", mixedValues["local"])
 	certFile, keyFile, roots := testCertificate(t, t.TempDir())
 	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
@@ -110,16 +112,16 @@ func startKeyGroupsRun(t *testing.T, machine bool, startKey string) *mixedRun {
 	t.Cleanup(origin.Close)
 	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
 	m.url = "https://localhost:" + port + "/v1"
-	m.machineURL = "https://127.0.0.1:" + port + "/v1"
+	m.localURL = "https://127.0.0.1:" + port + "/v1"
 	entry := func(name, group string) string {
 		return `{"name":"` + name + `","group":"` + group + `","format":"anthropic-messages","endpoint":"` + m.url + `","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
 	}
 	c := newControl(t)
-	policy := `{"version":1,"egress":{"mode":"enforce","allow":["localhost","127.0.0.1"]},"credentials":[{"name":"machine"}]}`
-	if !machine {
+	policy := `{"version":1,"egress":{"mode":"enforce","allow":["localhost","127.0.0.1"]},"credentials":[{"name":"local"}]}`
+	if !local {
 		policy = `{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}}`
 	}
-	c.serveDocument(`{"version":1,"security_policy":`+policy+`,"model_credential":"`+startKey+`","credentials":[`+
+	c.serveDocument(`{"version":1,"security_policy":`+policy+`,"default_model_provider_credential_name":"`+defaultCredential+`","credentials":[`+
 		entry("a-1", "a")+`,`+entry("b-1", "b")+`,`+entry("a-2", "a")+`,`+entry("b-2", "b")+`]}`, 'a')
 	c.mu.Lock()
 	c.secrets = map[string]string{"a-1": mixedValues["a-1"], "a-2": mixedValues["a-2"], "b-1": mixedValues["b-1"], "b-2": mixedValues["b-2"]}
@@ -139,8 +141,8 @@ func startKeyGroupsRun(t *testing.T, machine bool, startKey string) *mixedRun {
 	}
 	c.intercept.Store(&intercept)
 	var creds []gateway.Credential
-	if machine {
-		creds = []gateway.Credential{{Name: "machine", Env: "GATEWAY_TEST_MACHINE_KEY", Format: "anthropic-messages", Endpoint: m.machineURL, Scheme: "header", Header: "x-api-key"}}
+	if local {
+		creds = []gateway.Credential{{Name: "local", Env: "GATEWAY_TEST_LOCAL_MODEL_PROVIDER_CREDENTIAL", Format: "anthropic-messages", Endpoint: m.localURL, Scheme: "header", Header: "x-api-key"}}
 	}
 	node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost", "127.0.0.1"}}}
 	cfg := gateway.Config{Server: c.server(), Credentials: creds, Policy: node}
@@ -151,12 +153,12 @@ func startKeyGroupsRun(t *testing.T, machine bool, startKey string) *mixedRun {
 	}
 	a := m.h.open(server.LinkRunRequest{Wall: true})
 	m.runID, m.hosts = a.RunID, a.CredentialHosts
-	if a.ModelCredential != startKey {
-		t.Fatalf("the run's start key %q; want %s", a.ModelCredential, startKey)
+	if a.DefaultModelProviderCredentialName != defaultCredential {
+		t.Fatalf("the run's default model provider credential %q; want %s", a.DefaultModelProviderCredentialName, defaultCredential)
 	}
 	for _, c := range a.CredentialHosts {
-		if c.Name == "machine" && c.Group != "" {
-			t.Errorf("the machine's key has the group %q in the run answer", c.Group)
+		if c.Name == "local" && c.Group != "" {
+			t.Errorf("the local model provider credential has the group %q in the run answer", c.Group)
 		}
 	}
 	if d := m.h.post(started(m.runID, nil), applied(m.runID, a.Applied)); !d.Accepted() {
@@ -182,8 +184,8 @@ func (m *mixedRun) send(t *testing.T, name string) (int, string) {
 func (m *mixedRun) sendTo(t *testing.T, name, path string) (int, string) {
 	t.Helper()
 	url := m.url
-	if name == "machine" {
-		url = m.machineURL
+	if name == "local" {
+		url = m.localURL
 	}
 	return m.request(t, url+path, link.KeyPlaceholder(name))
 }
@@ -247,29 +249,30 @@ func (m *mixedRun) limit(names ...string) {
 // the answer.
 func (m *mixedRun) join(t *testing.T, name string) string {
 	t.Helper()
-	a, err := m.h.linkOf(m.runID).Join(t.Context(), server.LocalOrigin+"/v1/run-configuration", m.runID, server.LinkJoinRequest{Passes: []string{}, ModelKey: true, ModelCredential: name})
+	a, err := m.h.linkOf(m.runID).Join(t.Context(), server.LocalOrigin+"/v1/run-configuration", m.runID, server.LinkJoinRequest{Passes: []string{}, ModelKey: true, ModelProviderCredentialName: name})
 	if err != nil {
 		t.Fatalf("the join naming %q: %v", name, err)
 	}
-	return a.ModelCredential
+	return a.ModelProviderCredentialName
 }
 
-// TestAMachineKeyIsInNoKeyGroup pins a run whose start key is the machine's model key,
-// beside two key groups of the server's, a and b. Session 1 joins with no key in its
-// request and gets the machine's key alone: a request with the placeholder of group a
-// gets no key. Session 2 joins with a-2, of group a, which no session used: it gets
-// a-2, a limit refusal of a-2 goes again with a-1, and the machine's key and group b get
-// no key. Session 3 joins with no key in its request and gets the machine's key again,
-// with no rotation and no stop after group a's refusal. The model keys reports list the
-// keys of both groups and never the machine's.
-func TestAMachineKeyIsInNoKeyGroup(t *testing.T) {
+// TestALocalModelProviderCredentialIsInNoKeyGroup pins a run whose default model
+// provider credential is the local model provider credential, beside two key groups of
+// the server's, a and b. Session 1 joins with no key in its request and gets the local
+// model provider credential alone: a request with the placeholder of group a gets no
+// key. Session 2 joins with a-2, of group a, which no session used: it gets a-2, a
+// limit refusal of a-2 goes again with a-1, and the local model provider credential and
+// group b get no key. Session 3 joins with no key in its request and gets the local
+// model provider credential again, with no rotation and no stop after group a's
+// refusal. The model keys reports list the keys of both groups and never the local one.
+func TestALocalModelProviderCredentialIsInNoKeyGroup(t *testing.T) {
 	m := startMixedRun(t)
-	if key := m.join(t, ""); key != "machine" {
-		t.Fatalf("join 1: %q; want machine", key)
+	if key := m.join(t, ""); key != "local" {
+		t.Fatalf("join 1: %q; want local", key)
 	}
 	m.h.post(sessionStarted(m.runID, 1))
-	if status, calls := m.send(t, "machine"); status != http.StatusOK || calls != "machine" {
-		t.Errorf("session 1, machine's placeholder: %d %q; want machine", status, calls)
+	if status, calls := m.send(t, "local"); status != http.StatusOK || calls != "local" {
+		t.Errorf("session 1, local placeholder: %d %q; want local", status, calls)
 	}
 	if status, calls := m.send(t, "a-1"); status != http.StatusOK || calls != link.KeyPlaceholder("a-1") {
 		t.Errorf("session 1, group a's placeholder: %d %q; want no key", status, calls)
@@ -286,8 +289,8 @@ func TestAMachineKeyIsInNoKeyGroup(t *testing.T) {
 	if status, calls := m.send(t, "a-1"); status != http.StatusOK || calls != "a-2,a-1" {
 		t.Errorf("session 2, group a's placeholder: %d %q; want a-2 refused, then a-1", status, calls)
 	}
-	if status, calls := m.send(t, "machine"); status != http.StatusOK || calls != link.KeyPlaceholder("machine") {
-		t.Errorf("session 2, machine's placeholder: %d %q; want no key", status, calls)
+	if status, calls := m.send(t, "local"); status != http.StatusOK || calls != link.KeyPlaceholder("local") {
+		t.Errorf("session 2, local placeholder: %d %q; want no key", status, calls)
 	}
 	if status, calls := m.send(t, "b-1"); status != http.StatusOK || calls != link.KeyPlaceholder("b-1") {
 		t.Errorf("session 2, group b's placeholder: %d %q; want no key", status, calls)
@@ -297,12 +300,12 @@ func TestAMachineKeyIsInNoKeyGroup(t *testing.T) {
 	}
 	m.h.post(sessionExited(m.runID, 2))
 
-	if key := m.join(t, ""); key != "machine" {
-		t.Fatalf("join 3: %q; want machine", key)
+	if key := m.join(t, ""); key != "local" {
+		t.Fatalf("join 3: %q; want local", key)
 	}
 	m.h.post(sessionStarted(m.runID, 3))
-	if status, calls := m.send(t, "machine"); status != http.StatusOK || calls != "machine" {
-		t.Errorf("session 3, machine's placeholder: %d %q; want machine", status, calls)
+	if status, calls := m.send(t, "local"); status != http.StatusOK || calls != "local" {
+		t.Errorf("session 3, local placeholder: %d %q; want local", status, calls)
 	}
 	if status, calls := m.send(t, "a-1"); status != http.StatusOK || calls != link.KeyPlaceholder("a-1") {
 		t.Errorf("session 3, group a's placeholder: %d %q; want no key", status, calls)
@@ -320,21 +323,22 @@ func TestAMachineKeyIsInNoKeyGroup(t *testing.T) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, r := range m.reports {
-		if strings.Contains(r, `"machine"`) {
-			t.Errorf("a report lists the machine's key: %s", r)
+		if strings.Contains(r, `"local"`) {
+			t.Errorf("a report lists the local model provider credential: %s", r)
 		}
 	}
 }
 
-// TestALaterSessionGetsItsGroupsKey pins a run of two key groups of the server's, a with
-// the start key a-1 and b. Session 1 joins with no key in its request and gets a-1; a
-// limit refusal of a-1 goes again with a-2, and a request with group b's placeholder
-// gets no key. Session 2 joins with b-2, of group b, which no session used, and gets
-// b-2: the proxy sets it on a request with b-1's placeholder, the placeholder of group
-// b's first key, and sets no key of group a. With every key of group b at its limit, the
-// refusal reaches the session, the next request gets the gateway's 429, and the next
-// batch's answer has stop, model_key_limit; group a takes no part. Session 3 joins with
-// no key in its request and gets a-2, group a's active key, with no stop in its batches.
+// TestALaterSessionGetsItsGroupsKey pins a run of two key groups of the server's, a
+// with the default model provider credential a-1 and b. Session 1 joins with no key in
+// its request and gets a-1; a limit refusal of a-1 goes again with a-2, and a request
+// with group b's placeholder gets no key. Session 2 joins with b-2, of group b, which
+// no session used, and gets b-2: the proxy sets it on a request with b-1's placeholder,
+// the placeholder of group b's first key, and sets no key of group a. With every key of
+// group b at its limit, the refusal reaches the session, the next request gets the
+// gateway's 429, and the next batch's answer has stop, model_key_limit; group a takes
+// no part. Session 3 joins with no key in its request and gets a-2, group a's active
+// key, with no stop in its batches.
 func TestALaterSessionGetsItsGroupsKey(t *testing.T) {
 	m := startKeyGroupsRun(t, false, "a-1")
 	if key := m.join(t, ""); key != "a-1" {
@@ -385,11 +389,12 @@ func TestALaterSessionGetsItsGroupsKey(t *testing.T) {
 }
 
 // TestAGroupWithEveryKeyOutStopsItsSessionAlone pins a 401 for every key of group b, of
-// a run whose start key is a-1, of group a. Session 1 joins with b-2: the proxy sets
-// b-2, then b-1, and the provider returns a 401 for each, whose values have no
-// expires_at, so both are out for the run. The 401 reaches the session, and the answer
-// to the next batch has stop, model_key_unauthorized. Session 2 then joins with no key in
-// its request and gets a-1, of group a, with no stop in its batches.
+// a run whose default model provider credential is a-1, of group a. Session 1 joins
+// with b-2: the proxy sets b-2, then b-1, and the provider returns a 401 for each,
+// whose values have no expires_at, so both are out for the run. The 401 reaches the
+// session, and the answer to the next batch has stop, model_key_unauthorized. Session 2
+// then joins with no key in its request and gets a-1, of group a, with no stop in its
+// batches.
 func TestAGroupWithEveryKeyOutStopsItsSessionAlone(t *testing.T) {
 	m := startKeyGroupsRun(t, false, "a-1")
 	m.mu.Lock()
@@ -419,14 +424,15 @@ func TestAGroupWithEveryKeyOutStopsItsSessionAlone(t *testing.T) {
 	}
 }
 
-// TestALateRefusalLeavesASessionOnTheMachinesKeyAlone pins a limit refusal of group a
-// that reaches the proxy after a session on the machine's model key joined. The run's
-// start key is a-1, of group a, beside the machine's key. Session 1 joins with no key
-// in its request and gets a-1, and its request waits at the provider. Session 1 ends,
-// and session 2 joins with the machine's key. Only then does the provider refuse a-1
-// and a-2 at their limit, so the proxy passes the refusal for group a. Session 2's
-// batches have no stop: its key is in no group.
-func TestALateRefusalLeavesASessionOnTheMachinesKeyAlone(t *testing.T) {
+// TestALateRefusalLeavesASessionOnTheLocalModelProviderCredentialAlone pins a limit
+// refusal of group a that reaches the proxy after a session on the local model provider
+// credential joined. The run's default model provider credential is a-1, of group a,
+// beside the local model provider credential. Session 1 joins with no key in its
+// request and gets a-1, and its request waits at the provider. Session 1 ends, and
+// session 2 joins with the local model provider credential. Only then does the provider
+// refuse a-1 and a-2 at their limit, so the proxy passes the refusal for group a.
+// Session 2's batches have no stop: its key is in no group.
+func TestALateRefusalLeavesASessionOnTheLocalModelProviderCredentialAlone(t *testing.T) {
 	m := startKeyGroupsRun(t, true, "a-1")
 	release := make(chan struct{})
 	var once sync.Once
@@ -459,8 +465,8 @@ func TestALateRefusalLeavesASessionOnTheMachinesKeyAlone(t *testing.T) {
 		return slices.Contains(m.calls, "a-1")
 	})
 	m.h.post(sessionExited(m.runID, 1))
-	if key := m.join(t, "machine"); key != "machine" {
-		t.Fatalf("join 2 naming machine: %q; want machine", key)
+	if key := m.join(t, "local"); key != "local" {
+		t.Fatalf("join 2 naming local: %q; want local", key)
 	}
 	m.h.post(sessionStarted(m.runID, 2))
 	m.limit("a-1", "a-2")
@@ -478,32 +484,33 @@ func TestALateRefusalLeavesASessionOnTheMachinesKeyAlone(t *testing.T) {
 	if status, body := m.batch(t); status != http.StatusAccepted || body != "" {
 		t.Errorf("a batch of session 2: %d %q; want 202 with no stop", status, body)
 	}
-	if status, calls := m.send(t, "machine"); status != http.StatusOK || calls != "machine" {
-		t.Errorf("session 2, machine's placeholder: %d %q; want machine", status, calls)
+	if status, calls := m.send(t, "local"); status != http.StatusOK || calls != "local" {
+		t.Errorf("session 2, local placeholder: %d %q; want local", status, calls)
 	}
 }
 
 // TestTheNextSessionGetsTheGroupsPlaceholder pins the placeholder of a key group across
-// the sessions of one run of the group a, with a-1 and then a-2, for each start key.
-// Session 1 joins with no key in its request and gets the start key. The placeholder
-// computed from the run answer's credential_hosts is a-1's, the group's first key's, and
-// a request with it reaches the provider with the start key, gets a limit refusal, and
-// goes again with the other key. Session 2 joins with no key in its request and gets
-// the other key, the group's active key: its placeholder is a-1's too, and a request
-// with it reaches the provider with the active key alone.
+// the sessions of one run of the group a, with a-1 and then a-2, for each default model
+// provider credential. Session 1 joins with no key in its request and gets the default
+// model provider credential. The placeholder computed from the run answer's
+// credential_hosts is a-1's, the group's first key's, and a request with it reaches the
+// provider with the default model provider credential, gets a limit refusal, and goes
+// again with the other key. Session 2 joins with no key in its request and gets the
+// other key, the group's active key: its placeholder is a-1's too, and a request with
+// it reaches the provider with the active key alone.
 func TestTheNextSessionGetsTheGroupsPlaceholder(t *testing.T) {
-	for _, c := range []struct{ start, next string }{{"a-1", "a-2"}, {"a-2", "a-1"}} {
-		t.Run("start key "+c.start, func(t *testing.T) {
-			m := startKeyGroupsRun(t, false, c.start)
+	for _, c := range []struct{ defaultKey, next string }{{"a-1", "a-2"}, {"a-2", "a-1"}} {
+		t.Run("default model provider credential "+c.defaultKey, func(t *testing.T) {
+			m := startKeyGroupsRun(t, false, c.defaultKey)
 			want := link.KeyPlaceholder("a-1")
 			key := m.join(t, "")
-			if p := m.placeholder(key); key != c.start || p != want {
-				t.Fatalf("join 1: %q with the placeholder %q; want %s with %q", key, p, c.start, want)
+			if p := m.placeholder(key); key != c.defaultKey || p != want {
+				t.Fatalf("join 1: %q with the placeholder %q; want %s with %q", key, p, c.defaultKey, want)
 			}
 			m.h.post(sessionStarted(m.runID, 1))
-			m.limit(c.start)
-			if status, calls := m.sendWith(t, m.placeholder(key)); status != http.StatusOK || calls != c.start+","+c.next {
-				t.Errorf("session 1: %d %q; want %s refused, then %s", status, calls, c.start, c.next)
+			m.limit(c.defaultKey)
+			if status, calls := m.sendWith(t, m.placeholder(key)); status != http.StatusOK || calls != c.defaultKey+","+c.next {
+				t.Errorf("session 1: %d %q; want %s refused, then %s", status, calls, c.defaultKey, c.next)
 			}
 			m.h.post(sessionExited(m.runID, 1))
 
@@ -520,12 +527,12 @@ func TestTheNextSessionGetsTheGroupsPlaceholder(t *testing.T) {
 }
 
 // TestASessionOnAnotherGroupGetsThatGroupsPlaceholder pins two key groups whose keys
-// alternate in the run configuration: a with the start key a-1 and a-2, and b with b-1
-// and b-2. Session 1 joins with no key in its request and gets a-1, whose placeholder,
-// computed from the run answer's credential_hosts, is a-1's; a request with it reaches
-// the provider with a-1. Session 2 joins with b-2, of group b, which no session used:
-// its placeholder is b-1's, the placeholder of group b's first key, and a request with
-// it reaches the provider with b-2.
+// alternate in the run configuration: a with the default model provider credential a-1
+// and a-2, and b with b-1 and b-2. Session 1 joins with no key in its request and gets
+// a-1, whose placeholder, computed from the run answer's credential_hosts, is a-1's; a
+// request with it reaches the provider with a-1. Session 2 joins with b-2, of group b,
+// which no session used: its placeholder is b-1's, the placeholder of group b's first
+// key, and a request with it reaches the provider with b-2.
 func TestASessionOnAnotherGroupGetsThatGroupsPlaceholder(t *testing.T) {
 	m := startKeyGroupsRun(t, false, "a-1")
 	key := m.join(t, "")
@@ -548,13 +555,14 @@ func TestASessionOnAnotherGroupGetsThatGroupsPlaceholder(t *testing.T) {
 	}
 }
 
-// TestALaterJoinOnAGroupInCooldownStops pins a join on a key group whose keys are all in
-// cooldown, in a run whose start key is a-1, of group a. Session 1 joins with b-2, and
-// the provider refuses b-2 and b-1 at their limit: both keys of group b are in cooldown
-// for an hour, and session 1 pauses with model_key_limit. Session 2 then joins with
-// b-1: the gateway accepts the join with b-1, the group's active key, and a request
-// with group b's placeholder gets the gateway's 429 with no call to the provider. The
-// answer to session 2's next batch has stop, model_key_limit.
+// TestALaterJoinOnAGroupInCooldownStops pins a join on a key group whose keys are all
+// in cooldown, in a run whose default model provider credential is a-1, of group a.
+// Session 1 joins with b-2, and the provider refuses b-2 and b-1 at their limit: both
+// keys of group b are in cooldown for an hour, and session 1 pauses with
+// model_key_limit. Session 2 then joins with b-1: the gateway accepts the join with
+// b-1, the group's active key, and a request with group b's placeholder gets the
+// gateway's 429 with no call to the provider. The answer to session 2's next batch has
+// stop, model_key_limit.
 func TestALaterJoinOnAGroupInCooldownStops(t *testing.T) {
 	m := startKeyGroupsRun(t, false, "a-1")
 	if key := m.join(t, "b-2"); key != "b-2" {

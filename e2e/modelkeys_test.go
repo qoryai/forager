@@ -868,13 +868,13 @@ func keysCredential(name, endpoint string) map[string]any {
 }
 
 // configure sets the run configuration of the run runID: egress to host alone, the
-// credentials, each with its value, model_credential the first one's name, and resume
-// when it is not nil.
+// credentials, each with its value, default_model_provider_credential_name the first
+// one's name, and resume when it is not nil.
 func (c *keysControl) configure(t *testing.T, runID, host string, creds []map[string]any, values []string, resume map[string]any) {
 	t.Helper()
 	doc := map[string]any{"version": 1,
-		"security_policy":  map[string]any{"version": 1, "egress": map[string]any{"mode": "enforce", "allow": []string{host}}},
-		"model_credential": creds[0]["name"], "credentials": creds}
+		"security_policy":                        map[string]any{"version": 1, "egress": map[string]any{"mode": "enforce", "allow": []string{host}}},
+		"default_model_provider_credential_name": creds[0]["name"], "credentials": creds}
 	if resume != nil {
 		doc["resume"] = resume
 	}
