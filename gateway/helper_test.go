@@ -768,9 +768,9 @@ func (h *harness) reportedWhole(line string) bool {
 	return slices.Contains(h.reports, line)
 }
 
-// reloadRefused is the report of a reload that a run configuration of c refuses with
-// its fix first: fix, at most 100 characters, on the first line, and on the second
-// "the reload failed: ", the run configuration's URL and cause.
+// reloadRefused is the report of a reload of c's run configuration that the gateway
+// refuses, with its fix first: fix, at most 100 characters, on the first line, and on
+// the second "the reload failed: ", the run configuration's URL and cause.
 func reloadRefused(t *testing.T, c *control, fix, cause string) string {
 	t.Helper()
 	if len(fix) > 100 {

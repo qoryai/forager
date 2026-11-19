@@ -1134,7 +1134,7 @@ func TestAReloadKeepsAnImageByReference(t *testing.T) {
 // none is refused.
 func TestAReloadKeepsTheDefaultCredential(t *testing.T) {
 	t.Setenv("QORY_TEST_MODEL_TOKEN", "sk-ant-fake-value")
-	const oneModelKey = "without default_model_provider_credential_name, the default model provider credential is the run's one model key; the policy in force stays"
+	const oneModelKey = "without default_model_provider_credential_name, the default model provider credential is the run configuration's one model key, or unset when it has none; the policy in force stays"
 	doc := func(key string) string {
 		return `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","api.other-model.example"]},` +
 			`"credentials":[{"name":"` + key + `"}]}}`

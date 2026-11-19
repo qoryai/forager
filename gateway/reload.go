@@ -134,7 +134,7 @@ func (l *live) failed(err error) {
 	}
 	var fix *run.FixFirstError
 	if errors.As(err, &fix) {
-		l.report(fix.Fix + "\nthe reload failed: " + accesskey.ShownValue(fix.Cause, false))
+		l.report(accesskey.ShownValue(fix.Fix, false) + "\nthe reload failed: " + accesskey.ShownValue(fix.Cause, false))
 		return
 	}
 	l.report("the reload failed: " + accesskey.ShownError(err).Error())

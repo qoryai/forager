@@ -478,7 +478,7 @@ func TestAReloadKeepsTheDefaultModelProviderCredentialFixed(t *testing.T) {
 		fix, cause string
 	}{
 		{'b', doc("second", ""), "Start a new run to change the default model provider credential.",
-			`the run started with the default model provider credential "first", and this run configuration sets it to "second"; without default_model_provider_credential_name, the default model provider credential is the run's one model key; the policy in force stays`},
+			`the run started with the default model provider credential "first", and this run configuration sets it to "second"; without default_model_provider_credential_name, the default model provider credential is the run configuration's one model key, or unset when it has none; the policy in force stays`},
 		{'c', doc("first", "first"), "Start a new run to change default_model_provider_credential_name.",
 			`the run started with default_model_provider_credential_name unset, and this run configuration sets it to "first"; the policy in force stays`},
 	} {

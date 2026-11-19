@@ -1456,14 +1456,14 @@ host credential gets the variables its `placeholders` list, such as a tool's
 `GITHUB_TOKEN`.
 
 The credentials and `default_model_provider_credential_name` are fixed when the run
-starts. Each reload below fails with its fix on the first line, and the policy in force
-stays; the gateway reports it with `the reload failed: ` at the start of the second
-line. A reload whose `credentials` differ fails with `Start a new run to use other
-credentials.`, and `run configuration <url>: a run's credentials from the control plane
-are fixed when it starts, and this run configuration has other credentials than the run
-started with; the policy in force stays` on a second line. A reload that sets, changes
-or removes `default_model_provider_credential_name` fails too, even when the value is
-the key the run uses: `Start a new run to change
+starts. Each of these three reloads fails with its fix on the first line, and the policy
+in force stays; the gateway reports it with `the reload failed: ` at the start of the
+second line. A reload whose `credentials` differ fails with `Start a new run to use
+other credentials.`, and `run configuration <url>: a run's credentials from the control
+plane are fixed when it starts, and this run configuration has other credentials than
+the run started with; the policy in force stays` on a second line. A reload that sets,
+changes or removes `default_model_provider_credential_name` fails too, even when the
+value is the key the run uses: `Start a new run to change
 default_model_provider_credential_name.`, with `run configuration <url>: the run started
 with default_model_provider_credential_name unset, and this run configuration sets it to
 "first"; the policy in force stays` on a second line, or `run configuration <url>: the
@@ -1474,18 +1474,18 @@ without `default_model_provider_credential_name`: `Start a new run to change the
 model provider credential.`, with `run configuration <url>: the run started with the
 default model provider credential "first", and this run configuration sets it to
 "second"; without default_model_provider_credential_name, the default model provider
-credential is the run's one model key; the policy in force stays` on a second line.
-`unset` takes the place of a quoted name for a run that started with no model key, and
-`leaves it unset` the place of `sets it to` and a name for a reload with none. The
-active key changes during the run, and a reload is compared with the default model
-provider credential, never with the active key. A private host gets a value only through
-an exact entry, as a credential of the machine's does, and the proxy verifies the host's
-certificate against the gateway machine's trust store. A host on the gateway machine
-gets a value only when the node's policy names it, as for every name on the machine. On
-a host that gets a credential, from the server or the machine, a `TRACE` or `TRACK`
-through `CONNECT` is denied with the rule `wall:echo-method` (§Credentials, The answer).
-The values stay bytes until the proxy sets the header, and are overwritten when the run
-ends.
+credential is the run configuration's one model key, or unset when it has none; the
+policy in force stays` on a second line. `unset` takes the place of a quoted name for a
+run that started with no model key, and `leaves it unset` the place of `sets it to` and
+a name for a reload with none. The active key changes during the run, and a reload is
+compared with the default model provider credential, never with the active key. A
+private host gets a value only through an exact entry, as a credential of the machine's
+does, and the proxy verifies the host's certificate against the gateway machine's trust
+store. A host on the gateway machine gets a value only when the node's policy names it,
+as for every name on the machine. On a host that gets a credential, from the server or
+the machine, a `TRACE` or `TRACK` through `CONNECT` is denied with the rule
+`wall:echo-method` (§Credentials, The answer). The values stay bytes until the proxy
+sets the header, and are overwritten when the run ends.
 
 **Stack hosts from the server.** A run configuration may have `stack_hosts`, the
 hosts the run's stack proxy allows beside `gateway.stack_hosts` (§The gateway's link,

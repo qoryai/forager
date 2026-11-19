@@ -1008,7 +1008,8 @@ func Narrow(pol *policy.Loaded, n *Narrowing) *policy.Loaded {
 // FixFirstError is a refusal whose report starts with its fix: Fix is the first line,
 // and Cause, after the context the caller puts before it, the second. [Run.Reload]
 // returns one whose Cause starts with "run configuration" and the URL, and ends with
-// "the policy in force stays".
+// "the policy in force stays". The error is returned unwrapped, because a wrapper's
+// text is not reported.
 type FixFirstError struct {
 	// Fix is a sentence the reader acts on, such as "Start a new run to use other
 	// credentials.".
@@ -1136,14 +1137,14 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded, named string) (*D
 		return nil, err
 	}
 	// Without default_model_provider_credential_name the default model provider
-	// credential is the run's one model key, and a reload may select another: the
-	// runtime started with the first one's variable and endpoint, so the default model
-	// provider credential is fixed as well.
+	// credential is the run configuration's one model key, or unset when it has none,
+	// and a reload may select another: the runtime started with the first one's
+	// variable and endpoint, so the default model provider credential is fixed as well.
 	if started := defaultOf(r.Held()); fresh.DefaultCredential != started {
 		fresh.Close()
 		return nil, &FixFirstError{
 			Fix:   "Start a new run to change the default model provider credential.",
-			Cause: fmt.Sprintf("the run started with the default model provider credential %s, and this run configuration %s; without default_model_provider_credential_name, the default model provider credential is the run's one model key", shownField(started), setsTo(fresh.DefaultCredential)),
+			Cause: fmt.Sprintf("the run started with the default model provider credential %s, and this run configuration %s; without default_model_provider_credential_name, the default model provider credential is the run configuration's one model key, or unset when it has none", shownField(started), setsTo(fresh.DefaultCredential)),
 		}
 	}
 	if err := tool.Check(r.chosen, in.Policy.Egress.Mode, in.Policy.Egress.Listed(), claimedBy(fresh)); err != nil {

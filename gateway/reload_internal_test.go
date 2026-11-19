@@ -39,8 +39,8 @@ func TestAReloadThatPanicsLetsTheNextAnswerReload(t *testing.T) {
 
 // TestAFailedReloadReportsItsFixFirst pins the report of a failed reload. A
 // [run.FixFirstError] has its fix on the first line and "the reload failed: " before
-// its cause on the second, a cause with qak_ shown as the phrase; any other error is
-// "the reload failed: " and its text, as before the fix-first refusals.
+// its cause on the second, a fix or a cause with qak_ shown as the phrase; any other
+// error is "the reload failed: " and its text, as before the fix-first refusals.
 func TestAFailedReloadReportsItsFixFirst(t *testing.T) {
 	var got []string
 	l := newLive(context.Background(), nil, &server.Configuration{}, "sha256=start", "run-a", func(line string) { got = append(got, line) })
@@ -48,11 +48,13 @@ func TestAFailedReloadReportsItsFixFirst(t *testing.T) {
 	const fix = "Start a new run to use other credentials."
 	l.failed(&run.FixFirstError{Fix: fix, Cause: "run configuration https://apiary.example/v1/runs: the credentials differ; the policy in force stays"})
 	l.failed(&run.FixFirstError{Fix: fix, Cause: "run configuration https://apiary.example/v1/qak_not-a-real-secret/runs: the credentials differ"})
+	l.failed(&run.FixFirstError{Fix: "Start a new run without qak_not-a-real-secret.", Cause: "run configuration https://apiary.example/v1/runs: the credentials differ"})
 	l.failed(errors.New("start another run to use other stack hosts: a run's stack_hosts are fixed when it starts"))
 	l.failed(errors.New("run configuration https://apiary.example/v1/qak_not-a-real-secret/runs: refused"))
 	want := []string{
 		fix + "\nthe reload failed: run configuration https://apiary.example/v1/runs: the credentials differ; the policy in force stays",
 		fix + "\nthe reload failed: (a value that contains an access key secret)",
+		"(a value that contains an access key secret)\nthe reload failed: run configuration https://apiary.example/v1/runs: the credentials differ",
 		"the reload failed: start another run to use other stack hosts: a run's stack_hosts are fixed when it starts",
 		"the reload failed: (a value that contains an access key secret)",
 	}
