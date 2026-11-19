@@ -194,6 +194,37 @@ shows the cause, a `404` from the gateway among the causes. Behind a wall the sa
 happens when the wall cannot bind the transcript directory where the agent's user writes
 it. See the contract's §The events, A session's transcript.
 
+Codex prints no result line, so the session writes the `dev.qory.runtime.result` of
+each launch of Codex itself, right before the session's `dev.qory.session.exited`, for
+a launch that wrote `dev.qory.runtime.started`. `outcome` is `success` for a launch whose
+session ended `succeeded`, and `error_during_execution` otherwise; `is_error` is false for `success` and
+for a launch paused with `model_key_limit` or `model_key_switch`, and true otherwise.
+`usage` is the launch's tokens, read from the rollouts below `resume.prefix` once Codex
+exited: for the launch's thread and each child agent's rollout, the children of
+children included, the total less what the file had before the launch started.
+`input` is Codex's `input_tokens` less its cached and cache-write tokens. The session
+reads the first 64 KiB of every other rollout that changed during the launch to find
+the child agents. When a changed file that it cannot read so, such as a symbolic link,
+a FIFO or a file with a broken first line, has in its name the id of a thread that a
+spawn started, the result has no `usage`; any other such file counts for nothing. The
+ids of spawned threads are in these lines of the thread's rollout and of each child
+agent's that changed: the `receiver_thread_ids` of an `item_completed` of a
+`CollabAgentToolCall` of `spawn_agent`; the `agent_thread_id` of an `item_completed` of
+a `SubAgentActivity`, or of a `sub_agent_activity`, of kind `started`; and the
+`agent_id` in the output of a `spawn_agent` call, in its `function_call_output` or in
+an `item_completed` of a `FunctionCallOutput`. The session takes no id from a child
+agent's rollout that did not change: when an agent's parent is such a child agent, a
+file of that agent that the session cannot read counts for nothing. It reads the
+first 64 KiB of a rollout that did not change only to link a child agent that changed
+to the thread. It reads the thread's rollout and the child agents' that changed with
+the same checks as the transcript, and at most 256 files and 256 MiB together. Past
+them, for a first line with no ids in its first 64 KiB, for a child agent's file that
+changed between the session's reads, for a baseline whose `fstatat` of a file failed
+with an error other than `ENOENT`, and for a count above 2^53, a count below -2^53, a
+count that is not an integer or a sum of a count above 2^53, the result has no
+`usage`, and the session writes one line on `stderr` with the fix first. See the
+contract's §The events, Codex's result.
+
 Behind a wall, the `dev.qory.session.exited` of a runtime that exited also has the
 enclosure's peak memory and CPU time, as measured inside the enclosure, to size machine
 types; they are not for limits or billing:
@@ -372,7 +403,7 @@ records come from outside. A **descriptor** maps those reports to events:
 | `dev.qory.runtime.text`              | The runtime printed a text block      |
 | `dev.qory.runtime.notification`      | The runtime notified its user         |
 | `dev.qory.runtime.ended`             | The runtime closed its session        |
-| `dev.qory.runtime.result`            | A headless session printed its result |
+| `dev.qory.runtime.result`            | A headless session printed its result, or a launch of Codex ended |
 
 Forager ships the descriptor for Claude Code. A runtime that nothing describes still
 runs: its run, its log and its egress are recorded, with no runtime events. See

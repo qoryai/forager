@@ -27,6 +27,7 @@ import (
 	"github.com/qoryai/forager/session/internal/socket"
 	"github.com/qoryai/forager/session/internal/variables"
 	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/session/runtimes/codex"
 	"github.com/qoryai/forager/wall"
 )
 
@@ -989,6 +990,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// true once that first event was seen.
 	var resumedID atomic.Value
 	var firstSeen atomic.Bool
+	// launchThread is the session id, a string, of the last dev.qory.runtime.started
+	// of the main agent, the one without agent_id: for Codex, the launch's thread.
+	var launchThread atomic.Value
 	mapper := parents.New(rt, func(e runtimes.Event) {
 		if e.Type == "dev.qory.runtime.started" {
 			id, _ := resumedID.Load().(string)
@@ -998,6 +1002,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			}
 			if id, ok := e.Data["session_id"].(string); ok && tr != nil {
 				tr.started(id)
+			}
+			if id, ok := e.Data["session_id"].(string); ok && e.Data["agent_id"] == nil {
+				launchThread.Store(id)
 			}
 		}
 		masked := maskedRecord(texts{secrets: masker, harness: hidden}, e.Data)
@@ -1148,6 +1155,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		trDir = shown.Dir
 	}
 	tr = r.sessionTranscript(resume, n, spec.Wall != nil, transcriptAt, launch.Env, trDir, masker, hidden, restore)
+	// Codex's usage is each rollout's tokens since this point, before the launch
+	// starts and after a restore.
+	if tr != nil && rt.Name() == codex.Name {
+		tr.codexBaseline(restore)
+	}
 	// The transcript's reads end before the join returns, on every path: the end of
 	// the runtime below, and a panic in between.
 	endTranscript := func() {}
@@ -1230,10 +1242,27 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if tr != nil && !closed {
 		tr.finish()
 	}
+	// Codex prints no result line: the session writes the launch's
+	// dev.qory.runtime.result before its dev.qory.session.exited, with the usage
+	// it reads from the rollouts, which are complete once Codex exited. A launch
+	// with no dev.qory.runtime.started has no thread, and gets none.
+	codexThread, _ := launchThread.Load().(string)
+	writesResult := rt.Name() == codex.Name && codexThread != ""
+	var codexUsage map[string]any
+	switch {
+	case !writesResult || closed:
+	case tr == nil:
+		r.writeLog("stderr", n, 0, []byte(neutral(noTranscriptUsage)+"\n"))
+	default:
+		codexUsage = tr.codexUsage(codexThread)
+	}
 	// A setup step still open when the launch ended has no exit status.
 	setupSteps.finish(closed || timedOut || cancelled)
 	if err != nil && !closed {
 		r.stops.end()
+		if writesResult {
+			r.writeCodexResult(n, codexThread, event.StateFailed, codexUsage, masker, hidden, neutralText)
+		}
 		r.write(event.SessionExited, map[string]any{"session": n, "state": event.StateFailed, "exit_code": -1, "duration_ms": time.Since(start).Milliseconds()})
 		r.lastExit, r.lastReason = -1, ""
 		return nil, err
@@ -1311,6 +1340,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		// The session was open at the gateway's 410: it has no exit status in the run's
 		// record.
 		r.lastExit = -1
+	}
+	if writesResult && !closed {
+		r.writeCodexResult(n, codexThread, state, codexUsage, masker, hidden, neutralText)
 	}
 	res := &Result{RunID: r.id, Dir: dir, SessionDir: sessionDir, Session: n, ExitCode: exit.code, Signal: exit.signal, State: state, Reason: reason, TimedOut: timedOut && !closed, Cancelled: cancelled, RunClosed: closed, After: afterSteps.result()}
 	switch {

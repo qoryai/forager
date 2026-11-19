@@ -46,11 +46,22 @@ secrets:
 # the start key's endpoint in model_providers.qory.base_url, as a --config pair. A
 # composer writes the run's model id as --model and its effort value in
 # model_reasoning_effort, as a --config pair.
+#
+# An agent file of Codex 0.167.2 is a TOML file in agents/ of a config folder, such as
+# $CODEX_HOME/agents/<name>.toml (codex-rs agent-roles/src/loader.rs:78,
+# discovery.rs:31). The file takes the keys of config.toml at its top
+# (agent_role_config.rs:22-28), and Codex applies its model and model_reasoning_effort
+# to the agent (core/src/agent/role.rs:82-83). A composer writes an agent's model id in
+# the key model and its effort value in the key model_reasoning_effort. Codex 0.167.2
+# also reads minimal, persistent and any other text that is not empty there
+# (protocol/src/openai_models.rs:149-166); the agent's values are the run's.
 model:
   formats: [openai-responses]
   model: {flag: --model}
+  agent: {toml: model}
   effort:
     run: {setting: model_reasoning_effort, values: [none, low, medium, high, xhigh, max, ultra]}
+    agent: {toml: model_reasoning_effort, values: [none, low, medium, high, xhigh, max, ultra]}
   endpoint: {setting: model_providers.qory.base_url}
   keys:
     - {format: openai-responses, auth: {scheme: bearer}, variable: OPENAI_API_KEY}

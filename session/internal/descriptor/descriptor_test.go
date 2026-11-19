@@ -270,9 +270,10 @@ func TestModelIsChecked(t *testing.T) {
 			t.Errorf("%s was accepted", e.Name())
 		}
 	}
-	if n < 8 {
+	if n < 12 {
 		t.Errorf("%d invalid model fixtures; want one per rule: an unknown format, two places, "+
-			"empty values, no formats, an extra member, and overrides empty, with a duplicate or with a non-name", n)
+			"empty values, no formats, an extra member, overrides empty, with a duplicate or with a non-name, "+
+			"an agent place with two keys or none, and an agent's model place with values or two keys", n)
 	}
 }
 
@@ -825,7 +826,7 @@ func TestRuntimesJSONShape(t *testing.T) {
 			strs("of", gr["of"])
 		}
 		if m, ok := rt["model"]; ok {
-			model := members("model", m, []string{"formats", "model", "endpoint"}, "effort", "keys", "overrides")
+			model := members("model", m, []string{"formats", "model", "endpoint"}, "agent", "effort", "keys", "overrides")
 			strs("formats", model["formats"])
 			keys, _ := model["keys"].([]any)
 			for _, k := range keys {
@@ -851,7 +852,17 @@ func TestRuntimesJSONShape(t *testing.T) {
 				effort := members("effort", e, []string{"run"}, "agent")
 				strs("values", place(effort["run"], "values")["values"])
 				if a, ok := effort["agent"]; ok {
-					strs("values", members("agent", a, []string{"frontmatter", "values"})["values"])
+					agent := members("agent", a, []string{"values"}, "frontmatter", "toml")
+					strs("values", agent["values"])
+					if _, f := agent["frontmatter"]; f == (agent["toml"] != nil) {
+						t.Errorf("effort.agent %v has %d of frontmatter and toml; want one", agent, len(agent)-1)
+					}
+				}
+			}
+			if a, ok := model["agent"]; ok {
+				agent := members("agent", a, nil, "frontmatter", "toml")
+				if _, f := agent["frontmatter"]; f == (agent["toml"] != nil) {
+					t.Errorf("model.agent %v has %d of frontmatter and toml; want one", agent, len(agent))
 				}
 			}
 		} else if rt["name"] == "claude" {
@@ -1031,6 +1042,10 @@ func TestConfigDecodes(t *testing.T) {
 	}
 	if d.Model == nil || d.Model.Endpoint != (descriptor.Endpoint{Setting: "model_providers.qory.base_url"}) {
 		t.Errorf("Model.Endpoint = %+v; want the setting model_providers.qory.base_url", d.Model)
+	}
+	if d.Model == nil || !reflect.DeepEqual(d.Model.Agent, &descriptor.AgentKey{TOML: "model"}) || d.Model.Effort == nil ||
+		!reflect.DeepEqual(d.Model.Effort.Agent, &descriptor.AgentPlace{TOML: "model_reasoning_effort", Values: []string{"low", "high"}}) {
+		t.Errorf("Model = %+v; want an agent's model id in the TOML key model and its effort in model_reasoning_effort", d.Model)
 	}
 	j, err := json.Marshal(d)
 	if err != nil {

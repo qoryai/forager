@@ -31,9 +31,11 @@ func TestCodexIsARuntime(t *testing.T) {
 }
 
 // TestCodexReadsItsKeyFromOpenAIAPIKey pins the model section: the Responses format,
-// the model id as --model, the effort in model_reasoning_effort with its seven values,
-// the endpoint in the provider's base_url, and OPENAI_API_KEY for an API key and for a
-// subscription login's token alike.
+// the model id as --model, an agent's model id in the key model of its TOML file, the
+// effort in model_reasoning_effort with its seven values, an agent's effort in the key
+// model_reasoning_effort of its TOML file with the same values, the endpoint in the
+// provider's base_url, and OPENAI_API_KEY for an API key and for a subscription
+// login's token alike.
 func TestCodexReadsItsKeyFromOpenAIAPIKey(t *testing.T) {
 	rt, err := codex.New()
 	if err != nil {
@@ -43,11 +45,15 @@ func TestCodexReadsItsKeyFromOpenAIAPIKey(t *testing.T) {
 	if !ok {
 		t.Fatal("no model section")
 	}
+	efforts := []string{"none", "low", "medium", "high", "xhigh", "max", "ultra"}
 	want := runtimes.ModelPlaces{
 		Formats: []string{"openai-responses"},
 		Model:   runtimes.Place{Flag: "--model"},
-		Effort: &runtimes.Effort{Run: runtimes.ValuedPlace{Place: runtimes.Place{Setting: "model_reasoning_effort"},
-			Values: []string{"none", "low", "medium", "high", "xhigh", "max", "ultra"}}},
+		Agent:   &runtimes.AgentKey{TOML: "model"},
+		Effort: &runtimes.Effort{
+			Run:   runtimes.ValuedPlace{Place: runtimes.Place{Setting: "model_reasoning_effort"}, Values: efforts},
+			Agent: &runtimes.AgentPlace{TOML: "model_reasoning_effort", Values: efforts},
+		},
 		Endpoint: runtimes.Endpoint{Setting: "model_providers.qory.base_url"},
 		Keys: []runtimes.Key{
 			{Format: "openai-responses", Auth: runtimes.Auth{Scheme: "bearer"}, Variable: "OPENAI_API_KEY"},
@@ -303,9 +309,9 @@ func TestCodexRefusesArgumentsThatChangeItsSettings(t *testing.T) {
 		}
 	}
 	for args, want := range map[string]string{
-		"--dangerously-bypass-hook-trust": "remove --dangerously-bypass-hook-trust from the launch's arguments: it lets Codex run hooks that have no trust stored for them",
-		"--remote=ws://x:1":               "remove --remote from the launch's arguments: it connects Codex to a remote app server, so the work runs outside the session",
-		"-cskills={}":                     "remove the -c that sets skills from the launch's arguments: it changes the skills Codex loads, which the composer places below CODEX_HOME",
+		"--dangerously-bypass-hook-trust": "remove --dangerously-bypass-hook-trust from the launch's arguments\nit lets Codex run hooks that have no trust stored for them",
+		"--remote=ws://x:1":               "remove --remote from the launch's arguments\nit connects Codex to a remote app server, so the work runs outside the session",
+		"-cskills={}":                     "remove the -c that sets skills from the launch's arguments\nit changes the skills Codex loads, which the composer places below CODEX_HOME",
 	} {
 		if err := c.CheckArgs([]string{"exec", args, "Say hi"}); err == nil || err.Error() != want {
 			t.Errorf("%s: %v; want %s", args, err, want)
@@ -314,6 +320,7 @@ func TestCodexRefusesArgumentsThatChangeItsSettings(t *testing.T) {
 	ordinary := []string{"exec", "--json", "--skip-git-repo-check", "--sandbox", "danger-full-access", "--model", "gpt-x",
 		"--config", "model_reasoning_effort=\"high\"", "-c", "model=\"gpt-x\"", "--enable", "undo", "-c", "model_provider_note=x",
 		"--config", "experimental_realtime_base_url=x", "-c", "features.connectors_extra=true", "-c", "cloud.other=1", "-c", "skills_extra=1",
+		"-c", "features.unified_exec=false", "-c", "features.unified_exec_tty_extra=true", "--enable", "unified_exec", "-c", "features.hooks_extra=1",
 		"--remote-auth-token-env", "X", "--", "--oss", "-p", "x", "--remote", "ws://x:1", "--dangerously-bypass-hook-trust"}
 	if err := c.CheckArgs(ordinary); err != nil {
 		t.Errorf("%q: %v; want no refusal", ordinary, err)
@@ -324,5 +331,269 @@ func TestCodexRefusesArgumentsThatChangeItsSettings(t *testing.T) {
 	}
 	if err := cl.(runtimes.ArgsChecker).CheckArgs([]string{"-p", "Say hi", "--config", "model_provider=x", "--profile", "x"}); err != nil {
 		t.Errorf("Claude Code: %v; want no refusal", err)
+	}
+}
+
+// TestCodexRefusesTheFeaturesOfItsHooks pins the features that decide whether Codex
+// runs the run's hooks before each tool call: unified_exec_tty, hooks and codex_hooks,
+// the legacy name of hooks. With the contract's descriptor and with a descriptor
+// without config, the join fails on each form of --config and -c that sets one, with
+// spaces around the key and as the table form features.<name>.enabled, and on
+// --enable and --disable of one, with the fix on the first line, at most 100
+// characters, and the cause on the second. Other features, a key that only starts
+// with a name, the effort pair a composer passes, and a flag after -- pass. A pair
+// whose value is a table is in [TestCodexNamesTheKeyATableSets].
+func TestCodexRefusesTheFeaturesOfItsHooks(t *testing.T) {
+	contract, err := codex.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare, err := codex.Described("codex.yaml", []byte("version: 1\nruntime: codex\nsources: {output: {format: jsonl}}\n"+
+		"rules: [{source: output, match: {type: thread.started}, type: dev.qory.runtime.started, data: {session_id: thread_id}, set: {source: startup}}]\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := bare.(runtimes.Configs).Config(); ok {
+		t.Fatal("the bare descriptor has config")
+	}
+	const cause = "the setting can turn off the hooks Codex runs before each tool call, or make Codex run no hook for a command sent to a shell with a terminal"
+	for name, rt := range map[string]runtimes.Runtime{"the contract's descriptor": contract, "a descriptor without config": bare} {
+		c := rt.(runtimes.ArgsChecker)
+		for _, feature := range []string{"unified_exec_tty", "hooks", "codex_hooks"} {
+			key := "features." + feature
+			for _, r := range []struct {
+				flag string
+				args []string
+			}{
+				{"--config", []string{"--config", key + "=true"}},
+				{"--config", []string{"--config=" + key + "=false"}},
+				{"-c", []string{"-c", key + "=true"}},
+				{"-c", []string{"-c" + key + "=true"}},
+				{"-c", []string{"-c=" + key + "=true"}},
+				{"-c", []string{"-c", " " + key + " = true"}},
+				{"-c", []string{"-c", key + ".enabled=true"}},
+				{"--config", []string{"--config", key + "={enabled=true}"}},
+				{"--enable", []string{"--enable", feature}},
+				{"--enable", []string{"--enable=" + feature}},
+				{"--disable", []string{"--disable", feature}},
+				{"--disable", []string{"--disable=" + feature}},
+			} {
+				args := slices.Concat([]string{"exec", "--json"}, r.args, []string{"Say hi"})
+				want := "remove the " + r.flag + " that sets " + key + " from the launch's arguments\n" + cause
+				err := c.CheckArgs(args)
+				if err == nil || err.Error() != want {
+					t.Errorf("%s, %q: %v; want %s", name, args, err, want)
+					continue
+				}
+				if first, _, _ := strings.Cut(err.Error(), "\n"); len(first) > 100 {
+					t.Errorf("%s, %q: the first line has %d characters; want 100 at most", name, args, len(first))
+				}
+			}
+		}
+		ordinary := []string{"exec", "--json", "--enable", "undo", "--disable", "undo", "--enable=unified_exec",
+			"--config", "model_reasoning_effort=\"high\"", "-c", "features.unified_exec=false", "-c", "features.unified_exec_tty_extra=true",
+			"-c", "features.hooks_extra=1", "-c", "hooks_note=x", "--", "--enable", "hooks", "-c", "features.hooks=false", "Say hi"}
+		if err := c.CheckArgs(ordinary); err != nil {
+			t.Errorf("%s, %q: %v; want no refusal", name, ordinary, err)
+		}
+	}
+}
+
+// TestCodexNamesTheKeyATableSets pins the error for a --config or -c pair whose value
+// is an inline table, with the contract's descriptor and with a descriptor without
+// config: it contains the key that the table sets, at any depth, through quoted and
+// dotted keys, and not the key above it or another setting of the session's. A table
+// that sets no such key, an empty table, and a table that does not parse are refused
+// as their pair's key is, with the setting below it. With the contract's descriptor,
+// config.flag's check of each pair's key comes before Codex's check, so a --config
+// table at features, which is above the session's setting features.plugins, gets the
+// error of features.plugins, as a --config pair below features.plugins does.
+func TestCodexNamesTheKeyATableSets(t *testing.T) {
+	contract, err := codex.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare, err := codex.Described("codex.yaml", []byte("version: 1\nruntime: codex\nsources: {output: {format: jsonl}}\n"+
+		"rules: [{source: output, match: {type: thread.started}, type: dev.qory.runtime.started, data: {session_id: thread_id}, set: {source: startup}}]\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const hookCause = "\nthe setting can turn off the hooks Codex runs before each tool call, or make Codex run no hook for a command sent to a shell with a terminal"
+	hook := func(flag, key string) string {
+		return "remove the " + flag + " that sets " + key + " from the launch's arguments" + hookCause
+	}
+	reserved := func(flag, key string) string {
+		return "remove the " + flag + " that sets " + key + " from the launch's arguments\nthe session sets that setting for Codex, or the setting changes where Codex sends its requests"
+	}
+	skill := func(flag, key string) string {
+		return "remove the " + flag + " that sets " + key + " from the launch's arguments\nit changes the skills Codex loads, which the composer places below CODEX_HOME"
+	}
+	// sessionKey is the error for a pair that sets a setting the session passes: for
+	// --config, config.flag, the check of config.flag's; for -c, Codex's.
+	sessionKey := func(flag, key string) string {
+		if flag == "-c" {
+			return reserved(flag, key)
+		}
+		return "remove the --config pair that sets " + key + " from the launch's arguments\nthe session sets " + key + ", and a later pair overrides the session's value"
+	}
+	// features is the error, with the contract's descriptor, for a pair whose value is a
+	// table at features that sets key: for --config, config.flag's check comes first,
+	// and the pair's key, features, is above the session's setting features.plugins.
+	features := func(flag, key string) string {
+		if flag == "--config" {
+			return sessionKey(flag, "features.plugins")
+		}
+		return hook(flag, key)
+	}
+	for _, flag := range []string{"-c", "--config"} {
+		for _, r := range []struct {
+			pair           string
+			contract, bare string
+		}{
+			{"features={hooks=false}", features(flag, "features.hooks"), hook(flag, "features.hooks")},
+			{" features = { hooks = false } ", features(flag, "features.hooks"), hook(flag, "features.hooks")},
+			{"features={undo=true, codex_hooks=false}", features(flag, "features.codex_hooks"), hook(flag, "features.codex_hooks")},
+			{`features={"hooks"=false}`, features(flag, "features.hooks"), hook(flag, "features.hooks")},
+			{"features={'unified_exec_tty'=true}", features(flag, "features.unified_exec_tty"), hook(flag, "features.unified_exec_tty")},
+			{"features={hooks={enabled=false}}", features(flag, "features.hooks"), hook(flag, "features.hooks")},
+			{"features={hooks.enabled=false}", features(flag, "features.hooks"), hook(flag, "features.hooks")},
+			{"features={hooks . enabled=false}", features(flag, "features.hooks"), hook(flag, "features.hooks")},
+			{`features={note="a,}b", list=[1, {x=2}], hooks=false}`, features(flag, "features.hooks"), hook(flag, "features.hooks")},
+			{"model_providers={qory={base_url=\"x\"}}", sessionKey(flag, "model_providers.qory.base_url"), reserved(flag, "model_providers")},
+			{"cloud={skills={x=1}}", skill(flag, "cloud.skills"), skill(flag, "cloud.skills")},
+			{"features={apps=true}", sessionKey(flag, "features.apps"), hook(flag, "features.unified_exec_tty")},
+			{"features={undo=true}", sessionKey(flag, "features.plugins"), hook(flag, "features.unified_exec_tty")},
+			{"features={}", sessionKey(flag, "features.plugins"), hook(flag, "features.unified_exec_tty")},
+			{"features={hooks=", sessionKey(flag, "features.plugins"), hook(flag, "features.unified_exec_tty")},
+			{"features={hooks=false} trailing", sessionKey(flag, "features.plugins"), hook(flag, "features.unified_exec_tty")},
+			{"features={hooks=false}}", sessionKey(flag, "features.plugins"), hook(flag, "features.unified_exec_tty")},
+			{`features={"h\u006Foks"=false}`, features(flag, "features.hooks"), hook(flag, "features.hooks")},
+		} {
+			for name, rt := range map[string]runtimes.Runtime{"the contract's descriptor": contract, "a descriptor without config": bare} {
+				want := r.contract
+				if rt == bare {
+					want = r.bare
+				}
+				args := []string{"exec", "--json", flag, r.pair, "Say hi"}
+				if err := rt.(runtimes.ArgsChecker).CheckArgs(args); err == nil || err.Error() != want {
+					t.Errorf("%s, %q: %v; want %s", name, args, err, want)
+				}
+			}
+		}
+	}
+	// A --config pair that sets a session key gets the error of config.flag's check
+	// whether its value is a table above the key or a key below it.
+	for _, pair := range []string{"features={undo=true}", "features.plugins.x=1", "features.plugins=true"} {
+		args := []string{"exec", "--json", "--config", pair, "Say hi"}
+		if err := contract.(runtimes.ArgsChecker).CheckArgs(args); err == nil || err.Error() != sessionKey("--config", "features.plugins") {
+			t.Errorf("%q: %v; want %s", args, err, sessionKey("--config", "features.plugins"))
+		}
+	}
+}
+
+// TestCodexRefusalsHaveTheFixWithin100Characters pins the first line of each refusal,
+// for each key of the contract's descriptor, the longest reserved settings of Codex's
+// check, the skills settings and the hook features, and each flag that Codex's check
+// returns an error for: it starts with remove, has at most 100 characters, and the
+// cause is on a second line.
+func TestCodexRefusalsHaveTheFixWithin100Characters(t *testing.T) {
+	rt, err := codex.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := rt.(runtimes.Configs).Config()
+	keys := []string{"model_providers.qory.base_url", "experimental_realtime_x_base_url", "responses_api_metadata",
+		"chatgpt_base_url", "cloud.skills", "features.unified_exec_tty", "features.codex_hooks"}
+	for k := range c.Fixed {
+		keys = append(keys, k)
+	}
+	var cases [][]string
+	for _, flag := range []string{"--config", "-c"} {
+		for _, k := range keys {
+			cases = append(cases, []string{flag, k + "=1"}, []string{flag, k + "={x=1}"})
+		}
+	}
+	cases = append(cases, []string{"--local-provider", "x"}, []string{"--profile", "x"}, []string{"-px"},
+		[]string{"--oss"}, []string{"--search"}, []string{"--ignore-user-config"}, []string{"--dangerously-bypass-hook-trust"},
+		[]string{"--remote", "ws://x:1"}, []string{"--enable", "plugins"}, []string{"--disable", "hooks"})
+	for _, args := range cases {
+		err := rt.(runtimes.ArgsChecker).CheckArgs(slices.Concat([]string{"exec", "--json"}, args, []string{"Say hi"}))
+		if err == nil {
+			t.Errorf("%q: no refusal", args)
+			continue
+		}
+		first, cause, ok := strings.Cut(err.Error(), "\n")
+		if !strings.HasPrefix(first, "remove ") || len(first) > 100 || !ok || cause == "" {
+			t.Errorf("%q: %q; want the fix on a first line of at most 100 characters and the cause on a second", args, err)
+		}
+	}
+}
+
+// TestCodexReadsTheFormsAsCodex0169Does pins the check of argument forms by how
+// Codex 0.169.0 (rust-v0.169.0, d32063f96c2d) parses them, with the contract's
+// descriptor and with a descriptor without config. Paths are below codex-rs/; clap is
+// 4.5.58 (Cargo.lock:1774-1775).
+func TestCodexReadsTheFormsAsCodex0169Does(t *testing.T) {
+	contract, err := codex.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare, err := codex.Described("codex.yaml", []byte("version: 1\nruntime: codex\nsources: {output: {format: jsonl}}\n"+
+		"rules: [{source: output, match: {type: thread.started}, type: dev.qory.runtime.started, data: {session_id: thread_id}, set: {source: startup}}]\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const hookCause = "\nthe setting can turn off the hooks Codex runs before each tool call, or make Codex run no hook for a command sent to a shell with a terminal"
+	for _, r := range []struct {
+		args []string
+		// want is the error, empty for none.
+		want string
+	}{
+		// Codex trims the key as a whole and splits it on each dot as it is written
+		// (utils/cli/src/config_override.rs:55-57, config/src/overrides.rs:22): a
+		// quoted part keeps its quotes, so these set the feature "hooks" with its
+		// quotes, which Codex ignores with a warning (features/src/lib.rs:825). They
+		// set no hook feature.
+		{args: []string{"-c", `features."hooks"=false`}},
+		{args: []string{"-c", "features.'hooks'=false"}},
+		// Codex compares keys and feature names in their case (features/src/lib.rs:935,
+		// legacy.rs:61): Codex ignores the key Features
+		// (config/src/config_toml.rs:164-166 has no serde deny_unknown_fields).
+		{args: []string{"-c", "Features.Hooks=false"}},
+		{args: []string{"--config", "features.HOOKS=false"}},
+		// Codex trims only the whole key (config_override.rs:57), so the parts are
+		// "features " and " hooks", keys that Codex ignores.
+		{args: []string{"-c", "features . hooks=false"}},
+		// A space before the = is trimmed with the key, which sets features.hooks.
+		{args: []string{"-c", "features.hooks =false"}, want: "remove the -c that sets features.hooks from the launch's arguments" + hookCause},
+		// --enable and --disable take one feature each, with no delimiter
+		// (cli/src/main.rs:971, 975), and Codex exits with Unknown feature flag:
+		// hooks,undo for a name outside its list of features (main.rs:1008-1011).
+		{args: []string{"--enable", "hooks,undo"}},
+		{args: []string{"--disable=undo,hooks"}},
+		// Codex sets no infer_long_args, so clap 4.5.58 matches a long flag only as it
+		// is written (clap_builder/src/parser/parser.rs:799-815), and clap exits with an
+		// unexpected-argument error for each of these.
+		{args: []string{"--enab", "hooks"}},
+		{args: []string{"--disab", "hooks"}},
+		{args: []string{"--conf", "features.hooks=false"}},
+		{args: []string{"--conf=features.hooks=false"}},
+		// A -- right after -c ends the flags with -c left without a value (clap
+		// parser.rs:130-145), and clap exits with an error that --config requires a
+		// value (parser.rs:1341-1352). The check reads -- as the value of -c and reads
+		// on, so a pair after it is refused.
+		{args: []string{"-c", "--"}},
+		{args: []string{"-c", "--", "-c", "features.hooks=false"}, want: "remove the -c that sets features.hooks from the launch's arguments" + hookCause},
+		// After --, clap reads each argument as a positional one (parser.rs:130-145),
+		// the prompt of codex exec (exec/src/cli.rs:89-90): -c sets nothing.
+		{args: []string{"--", "-c", "features.hooks=false"}},
+	} {
+		for name, rt := range map[string]runtimes.Runtime{"the contract's descriptor": contract, "a descriptor without config": bare} {
+			args := slices.Concat([]string{"exec", "--json"}, r.args, []string{"Say hi"})
+			err := rt.(runtimes.ArgsChecker).CheckArgs(args)
+			if (err == nil) != (r.want == "") || (err != nil && err.Error() != r.want) {
+				t.Errorf("%s, %q: %v; want %q", name, args, err, r.want)
+			}
+		}
 	}
 }

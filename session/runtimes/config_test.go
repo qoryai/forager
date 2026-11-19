@@ -2,6 +2,7 @@ package runtimes_test
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -148,5 +149,57 @@ func TestALaunchMayNotSetASettingTheSessionPasses(t *testing.T) {
 	}
 	if err := plain.(runtimes.ArgsChecker).CheckArgs([]string{"--config", "model_provider=x", "--set", "provider=x"}); err != nil {
 		t.Errorf("a runtime without config: %v; want no refusal", err)
+	}
+}
+
+// TestPairKeysReadsAnInlineTable pins the keys a pair sets: the key alone with the
+// spaces around it removed for a value that is no inline table, and for a table each
+// key below the pair's, through nested tables, dotted and quoted keys with their
+// escapes decoded, strings with commas and braces, arrays, dates with a time after a
+// space, and comments. An empty table is its key. For a table that does not parse, and
+// for a value with more than spaces, tabs and a comment after its table, the result is
+// the pair's key alone.
+func TestPairKeysReadsAnInlineTable(t *testing.T) {
+	for pair, want := range map[string][]string{
+		" a.b = 1":                          {"a.b"},
+		"a":                                 {"a"},
+		`a="{b=1}"`:                         {"a"},
+		"a={b=1}":                           {"a.b"},
+		"a = { b = 1 , c = { d = 2 } }":     {"a.b", "a.c.d"},
+		`a={"b"=1, 'c'=2, "d e"=3}`:         {"a.b", "a.c", "a.d e"},
+		"a={b . c=true, d.e={f=1}}":         {"a.b.c", "a.d.e.f"},
+		`a={s="x,}y", t='}', u="""m}"""}`:   {"a.s", "a.t", "a.u"},
+		"a={l=[1, [2, 3], {x=1}], m=2}":     {"a.l", "a.m"},
+		"a={b={}, c=1}":                     {"a.b", "a.c"},
+		"a={}":                              {"a"},
+		"a={b=1,}":                          {"a.b"},
+		"a={\n# note\nb=1\n}":               {"a.b"},
+		"a={b=":                             {"a"},
+		"a={b=1 c=2}":                       {"a"},
+		"a={=1}":                            {"a"},
+		`a={"b=1}`:                          {"a"},
+		"a={b=1} trailing":                  {"a"},
+		"a={b=1}}":                          {"a"},
+		"a={b=1},":                          {"a"},
+		"a={b=1}\nc=2":                      {"a"},
+		"a={b=1} # c=2\nd=3":                {"a"},
+		"a={b=1} \t# note":                  {"a.b"},
+		"a={b=1}  ":                         {"a.b"},
+		`a={"h\u006Foks"=1}`:                {"a.hooks"},
+		`a={"\x68ooks"=1, "\U00000068x"=2}`: {"a.hooks", "a.hx"},
+		`a={"b\"c"=1, "d\\e"=2, "f\te"=3}`:  {"a.b\"c", "a.d\\e", "a.f\te"},
+		`a={"b\u002Ec"=1}`:                  {"a.b.c"},
+		`a={'h\u006Foks'=1}`:                {`a.h\u006Foks`},
+		`a={"\q"=1}`:                        {"a"},
+		`a={"\u00"=1}`:                      {"a"},
+		`a={"\uD800"=1}`:                    {"a"},
+		`a={"""b"""=1}`:                     {"a"},
+		"a={t=1979-05-27 07:32:00Z, b=1}":   {"a.t", "a.b"},
+		"a={t=1979-05-27, b=1}":             {"a.t", "a.b"},
+		"a={t=1979-05-27 x, b=1}":           {"a"},
+	} {
+		if got := runtimes.PairKeys(pair); !slices.Equal(got, want) {
+			t.Errorf("PairKeys(%q) = %q; want %q", pair, got, want)
+		}
 	}
 }

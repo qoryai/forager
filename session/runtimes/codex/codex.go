@@ -89,6 +89,16 @@ var reserved = []string{
 // not set one, a key under one or a key above one, such as cloud.
 var skills = []string{"skills", "cloud.skills"}
 
+// hookFeatures are the features of Codex 0.167.2 that decide whether the run's hooks
+// run before each tool call: hooks, and codex_hooks, its legacy name, turn them off
+// (codex-rs features/src/lib.rs:1468-1473, features/src/legacy.rs); with
+// unified_exec_tty on, a shell started with a terminal takes later commands through
+// write_stdin, which runs no hook (probe U2). Hooks are on by default, and qory turns
+// unified_exec_tty off in the config.toml it writes for the run, so a launch's pair,
+// --enable or --disable may not set one, a key under one, such as
+// features.hooks.enabled, or a key above one.
+var hookFeatures = []string{"features.unified_exec_tty", "features.hooks", "features.codex_hooks"}
+
 // connectors is the legacy name of the feature apps: Codex 0.167.2 reads
 // features.connectors as features.apps, after apps, so connectors wins
 // (codex-rs features/src/legacy.rs).
@@ -98,11 +108,11 @@ const (
 )
 
 // checkArgs returns an error, up to an argument --, for each flag of Codex 0.167.2
-// that changes one of keys, the settings the session passes, or a setting of
-// [reserved]:
+// that changes one of keys, the settings the session passes, a setting of [reserved]
+// or a feature of [hookFeatures]:
 //   - --config or -c with a pair that sets one, as --config k=v, --config=k=v, -c k=v,
 //     -ck=v or -c=k=v, where features.connectors counts as features.apps;
-//   - --enable or --disable of a feature whose features.<name> is one of keys, as
+//   - --enable or --disable of a feature whose features.<name> is one of them, as
 //     --enable x or --enable=x, where connectors counts as apps;
 //   - --oss and --search;
 //   - --config or -c with a pair that sets a setting of [skills];
@@ -112,7 +122,11 @@ const (
 //   - --local-provider, --profile and -p in every form: --profile x, --profile=x,
 //     -p x, -px and -p=x.
 //
-// The error contains the flag and never the argument's value.
+// The error contains the flag and never the argument's value. For a pair whose value is
+// an inline table, such as features={hooks=false}, it contains the key that the table
+// sets, features.hooks ([checkPair]). TestCodexReadsTheFormsAsCodex0169Does pins the
+// forms that Codex 0.169.0 reads in another way: quoted parts, other letter cases and
+// spaces in a key, --enable a,b, a shortened long flag, -c -- and -- before -c.
 func checkArgs(args, keys []string) error {
 	for i := 0; i < len(args) && args[i] != "--"; i++ {
 		a := args[i]
@@ -142,8 +156,8 @@ func checkArgs(args, keys []string) error {
 			if !attached {
 				feature = value()
 			}
-			if k, ok := runtimes.SessionKey(canonical("features."+feature), keys); ok {
-				return keyRefused(flag, k)
+			if err := checkKey(flag, canonical("features."+feature), keys); err != nil {
+				return err
 			}
 		case a == flagOSS || a == flagSearch:
 			return flagRefused(a)
@@ -164,10 +178,25 @@ func checkArgs(args, keys []string) error {
 	return nil
 }
 
-// checkPair returns an error when pair, the value of flag, sets one of keys or a
-// setting of [reserved].
+// checkPair returns an error when pair, the value of flag, sets one of keys, a setting
+// of [reserved], [skills] or [hookFeatures]. It checks each key that the pair sets
+// first ([runtimes.PairKeys]), so that for a value that is an inline table, such as
+// features={hooks=false}, the error contains the key the table sets, features.hooks.
+// The pair's key comes last: it is above each key of its table, and a table replaces
+// the settings below the key that earlier pairs set (codex-rs config/src/overrides.rs:64
+// in 0.169.0).
 func checkPair(flag, pair string, keys []string) error {
-	key := canonical(runtimes.PairKey(pair))
+	for _, key := range runtimes.PairKeys(pair) {
+		if err := checkKey(flag, canonical(key), keys); err != nil {
+			return err
+		}
+	}
+	return checkKey(flag, canonical(runtimes.PairKey(pair)), keys)
+}
+
+// checkKey returns an error when key, which flag sets, is one of keys, or a setting of
+// [reserved], [skills] or [hookFeatures], a key under one or a key above one.
+func checkKey(flag, key string, keys []string) error {
 	if k, ok := runtimes.SessionKey(key, keys); ok {
 		return keyRefused(flag, k)
 	}
@@ -178,8 +207,13 @@ func checkPair(flag, pair string, keys []string) error {
 	}
 	for _, r := range skills {
 		if covers(r, key) {
-			return fmt.Errorf("remove the %s that sets %s from the launch's arguments: it changes the skills Codex loads, which the composer places below CODEX_HOME",
+			return fmt.Errorf("remove the %s that sets %s from the launch's arguments\nit changes the skills Codex loads, which the composer places below CODEX_HOME",
 				accesskey.ShownName(flag, false), accesskey.ShownName(r, false))
+		}
+	}
+	for _, r := range hookFeatures {
+		if covers(r, key) {
+			return hookFeatureRefused(flag, r)
 		}
 	}
 	return nil
@@ -218,27 +252,38 @@ func part(p, k string) bool {
 	return len(k) > len(before)+len(after) && strings.HasPrefix(k, before) && strings.HasSuffix(k, after)
 }
 
-// keyRefused is the error for flag with a pair that sets k.
+// keyRefused is the error for flag with a pair that sets k: the fix on the first line,
+// the cause on the second.
 func keyRefused(flag, k string) error {
-	return fmt.Errorf("remove the %s that sets %s from the launch's arguments: the session sets that setting for Codex, or the setting changes where Codex sends its requests",
+	return fmt.Errorf("remove the %s that sets %s from the launch's arguments\nthe session sets that setting for Codex, or the setting changes where Codex sends its requests",
 		accesskey.ShownName(flag, false), accesskey.ShownName(k, false))
 }
 
+// hookFeatureRefused is the error for flag with an argument that sets the feature r
+// of [hookFeatures]: the fix on the first line, the cause on the second.
+func hookFeatureRefused(flag, r string) error {
+	return fmt.Errorf("remove the %s that sets %s from the launch's arguments\n"+
+		"the setting can turn off the hooks Codex runs before each tool call, or make Codex run no hook for a command sent to a shell with a terminal",
+		accesskey.ShownName(flag, false), accesskey.ShownName(r, false))
+}
+
 // flagRefused is the error for a flag that changes the model provider, web search or
-// the settings as a whole.
+// the settings as a whole: the fix on the first line, the cause on the second.
 func flagRefused(flag string) error {
-	return fmt.Errorf("remove %s from the launch's arguments: it changes the model provider, web search or other settings the session sets for Codex",
+	return fmt.Errorf("remove %s from the launch's arguments\nit changes the model provider, web search or other settings the session sets for Codex",
 		accesskey.ShownName(flag, false))
 }
 
-// hookTrustRefused is the error for --dangerously-bypass-hook-trust.
+// hookTrustRefused is the error for --dangerously-bypass-hook-trust: the fix on the
+// first line, the cause on the second.
 func hookTrustRefused() error {
-	return fmt.Errorf("remove %s from the launch's arguments: it lets Codex run hooks that have no trust stored for them",
+	return fmt.Errorf("remove %s from the launch's arguments\nit lets Codex run hooks that have no trust stored for them",
 		flagHookTrust)
 }
 
-// remoteRefused is the error for --remote.
+// remoteRefused is the error for --remote: the fix on the first line, the cause on the
+// second.
 func remoteRefused() error {
-	return fmt.Errorf("remove %s from the launch's arguments: it connects Codex to a remote app server, so the work runs outside the session",
+	return fmt.Errorf("remove %s from the launch's arguments\nit connects Codex to a remote app server, so the work runs outside the session",
 		flagRemote)
 }

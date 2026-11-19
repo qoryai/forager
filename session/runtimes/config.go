@@ -147,24 +147,41 @@ func (r *described) CheckArgs(args []string) error {
 		return nil
 	}
 	flag := r.d.Config.Flag
+	var pairs []string
 	for i := 0; i < len(args) && args[i] != "--"; i++ {
-		var pair string
 		switch {
 		case args[i] == flag && i+1 < len(args):
 			i++
-			pair = args[i]
+			pairs = append(pairs, args[i])
 		case strings.HasPrefix(args[i], flag+"="):
-			pair = strings.TrimPrefix(args[i], flag+"=")
-		default:
-			continue
+			pairs = append(pairs, strings.TrimPrefix(args[i], flag+"="))
 		}
+	}
+	// The keys that the pairs set come first, so that the error contains the key a
+	// table's value sets, then each pair's key, which also covers a table that sets no
+	// session key and replaces one, and then the runtime's check. A pair of config.flag
+	// that sets a session key so gets the same error whether its value is a table or not.
+	for _, pair := range pairs {
+		for _, key := range PairKeys(pair) {
+			if k, ok := SessionKey(key, keys); ok {
+				return pairRefused(flag, k)
+			}
+		}
+	}
+	for _, pair := range pairs {
 		if k, ok := SessionKey(PairKey(pair), keys); ok {
-			return fmt.Errorf("remove the %s pair that sets %s from the launch's arguments: the session sets %s, and a later pair overrides the session's value",
-				accesskey.ShownName(flag, false), accesskey.ShownName(k, false), accesskey.ShownName(k, false))
+			return pairRefused(flag, k)
 		}
 	}
 	if r.check != nil {
 		return r.check(args, keys)
 	}
 	return nil
+}
+
+// pairRefused is the error for a pair of flag, config.flag, that sets the session's
+// setting k: the fix on the first line, the cause on the second.
+func pairRefused(flag, k string) error {
+	return fmt.Errorf("remove the %s pair that sets %s from the launch's arguments\nthe session sets %s, and a later pair overrides the session's value",
+		accesskey.ShownName(flag, false), accesskey.ShownName(k, false), accesskey.ShownName(k, false))
 }

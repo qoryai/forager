@@ -138,7 +138,7 @@ func (r *Run) resumeLaunch(ctx context.Context, rs *sessionResume, sessionDir st
 			return failed("Check the session's transcript directory "+pathShown(root.dir), fmt.Sprintf("the write to %s failed: %s", want.Path, accesskey.ShownError(err).Error()))
 		}
 		launch.Args = slices.Concat(launch.Args[:at], args, launch.Args[at:])
-		return launch, "", &restored{sessionID: want.SessionID, rel: rel, args: args, after: len(launch.Args) - at - len(args)}, nil
+		return launch, "", &restored{sessionID: want.SessionID, rel: rel, args: args, after: len(launch.Args) - at - len(args), size: int64(len(b))}, nil
 	}
 	b, err := r.fetchTranscript(ctx)
 	if err != nil {
@@ -161,7 +161,7 @@ func (r *Run) resumeLaunch(ctx context.Context, rs *sessionResume, sessionDir st
 	}
 	launch.Args = append([]string{script, launch.Command}, launch.Args...)
 	launch.Command = "/bin/sh"
-	return launch, "", &restored{sessionID: want.SessionID, rel: rel}, nil
+	return launch, "", &restored{sessionID: want.SessionID, rel: rel, size: int64(len(b))}, nil
 }
 
 // resumedArgs is base, a launch's arguments before the n settings arguments of
@@ -176,12 +176,15 @@ func resumedArgs(base []string, n, at int, added []string) []string {
 // is resume.path relative to the runtime's home, such as
 // .claude/projects/<slug of the paused run>/<session id>.jsonl, or to / for an absolute
 // one, the file the resumed runtime appends to; args are the arguments a walled session added to the launch, and
-// after the count of the launch's arguments that follow them, 0 when args are last.
+// after the count of the launch's arguments that follow them, 0 when args are last; size
+// is the count of bytes the session restored, the part of the file the paused run wrote,
+// which a run with no wall copies to its place only when the launch starts.
 type restored struct {
 	sessionID string
 	rel       string
 	args      []string
 	after     int
+	size      int64
 }
 
 // resumeAt is where the resume arguments go in args, a launch's arguments: right after

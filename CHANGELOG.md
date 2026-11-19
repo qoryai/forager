@@ -10,6 +10,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Read an agent place in `runtimes.json` as one of `frontmatter` and `toml`: a
+  composer that reads `frontmatter` alone finds no agent place in Codex's entry,
+  `{toml: model}` for an agent's model id and `{toml: model_reasoning_effort}` for an
+  agent's effort value.
 - Give each API credential of a run configuration `group`, the id of its provider as
   the server sets it, such as `anthropic`: the schema refuses an API credential without
   it, and a host credential with it. The API credentials with one `group` value are one
@@ -334,6 +338,15 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- The agent places of an agent file of TOML, and Codex's: a descriptor's agent place,
+  `model.effort.agent`, takes `toml`, a key at the top of the agent's file, in place of
+  `frontmatter`, exactly one of the two; and `model.agent`, optional, is where an
+  agent's model id goes, `{frontmatter}` or `{toml}` with no `values`. Codex's
+  descriptor places an agent's model id in `{toml: model}` and an agent's effort value
+  in `{toml: model_reasoning_effort}`, with the run's seven values, `none` to `ultra`:
+  a Codex 0.167.2 agent file, such as `$CODEX_HOME/agents/reviewer.toml`, takes the
+  keys of `config.toml` at its top. `runtimes.json` lists both, `runtimes.ModelPlaces`
+  has `Agent`, a `*runtimes.AgentKey`, and `runtimes.AgentPlace` has `TOML`.
 - Two host calls of the gateway's link, `POST <run.url>/<run_id>/next-session` and
   `POST <run.url>/<run_id>/pushed-commits`, and `Run.NextSession` and
   `Run.PushedCommits`, which send them: the gateway forwards the body unread to Qory
@@ -388,6 +401,15 @@ release may change what an existing document does, and says so under Upgrading.
   sums `modelUsage` over the models; a line with no `modelUsage` has no `usage`. Fixture:
   `runtimes/claude/fixtures/background-result/`, three result lines of one launch with
   a subagent in the background.
+- A launch of Codex has a `dev.qory.runtime.result`, which the session writes right
+  before `dev.qory.session.exited`, since Codex 0.167.2 prints no result line:
+  `success` with `is_error` false for a session that ended `succeeded`,
+  `error_during_execution` with `is_error` false for a pause with `model_key_limit` or
+  `model_key_switch`, and `error_during_execution` with `is_error` true for any other
+  end. Its `usage` is the launch's tokens from Codex's rollouts, its child agents
+  included, with `input` less the cached and cache-write tokens; it has no `line`,
+  `turns`, `duration_ms`, `cost_usd` or `result`. A launch with no `dev.qory.runtime.started` has none. See the
+  contract's README, §The events, Codex's result.
 - A descriptor rule can have `sum`: more fields of the event's data, each the sum of a
   named number over the members of one object of the record, `over`. A field of `data`
   or `sum` with dots, such as `usage.input`, is a member of a nested object. The
@@ -2105,6 +2127,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- docs/wall.md, Codex's hooks file: `qory` passes a walled Codex run's hooks file
+  read-only at `/etc/codex/hooks.json`, with the owner it has on the node, and the wall
+  copies nothing. Codex 0.167.2 reads that path as managed hooks, and the agent cannot
+  change, rename or replace the file, or add a file beside it when the image has no
+  `/etc/codex`. In an image with `/etc/codex`, give it to root, with no write for the
+  group or others. The contract's wall section has the same in one sentence.
 - `SessionSpec.Mounts[].Target`, `wall.Mount.Target` from a caller: the place inside
   where the wall shows a mount, such as a composed home at `/var/lib/agent-home` and a
   read-only `/var/lib/agent-home/hooks.json` inside it (docs/wall.md, No bind from a
@@ -2372,6 +2400,31 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- At the end of each launch of Codex the session reads the rollouts below the
+  descriptor's `resume.prefix`: the launch's thread's, the one file `resume.path`
+  matches, and every rollout of a child agent of it, found by `parent_thread_id` up to
+  16 levels down in the first 64 KiB of each other file. Right before the launch, after
+  a restore, the session records each rollout's device, inode and length, and each file
+  counts its last total less the last total in its bytes before the launch: a child
+  agent of an earlier launch adds nothing, and a `resume <id>` without a restore counts
+  only the new tokens. When a file that changed and whose ids the session cannot read,
+  such as a symbolic link, a FIFO or a file with a broken first line, has in its name
+  the id of a thread that a spawn started, the result has no `usage`; a file of another
+  thread counts for nothing. The ids of spawned threads are in these lines of the
+  thread's rollout and of each child agent's that changed: the `receiver_thread_ids` of
+  an `item_completed` of a `CollabAgentToolCall` of `spawn_agent`; the `agent_thread_id`
+  of an `item_completed` of a `SubAgentActivity`, or of a `sub_agent_activity`, of kind
+  `started`; and the `agent_id` in the output of a `spawn_agent` call, in its
+  `function_call_output` or in an `item_completed` of a `FunctionCallOutput`. The
+  session takes no id from a child agent's rollout that did not change: when an agent's
+  parent is such a child agent, a file of that agent that the session cannot read counts
+  for nothing. It reads the thread's rollout and the child agents' that changed with the
+  transcript's rules, with at most 256 files and 256 MiB together. After such a file
+  that the session does not read, a child agent's file that changed between the
+  session's reads, a baseline whose `fstatat` of a file failed with an error other than
+  `ENOENT`, more files or bytes, or a count or a sum above 2^53, the result has no
+  `usage`, and the session writes one line on `stderr`: the fix on its first line, the
+  cause on the second.
 - `runtimes.Configs`, `runtimes.ConfigArgs`, `runtimes.TOMLValue`: for a descriptor
   with `config`, the session puts `config.flag` and `key=value` for each key of
   `config.fixed`, and for an endpoint that is a setting, right after the command,
@@ -2381,7 +2434,11 @@ release may change what an existing document does, and says so under Upgrading.
   fails before the runtime starts when the launch's arguments set a setting the session
   passes through `config.flag`, as `flag k=v` or `flag=k=v`: the key, a key under it, or
   a key it is under. The error starts with the fix, contains the flag and no value of
-  the arguments.
+  the arguments, and the cause is on its second line. For a pair whose value is a TOML
+  inline table, such as `model_providers={qory={base_url="x"}}`, the error contains the
+  key that the table sets when that key is a setting the session passes
+  (`runtimes.PairKeys`), and otherwise the setting below the pair's key, as for a pair
+  of no table.
 - `codex.New()` and `codex.Described`: Codex by the contract's descriptor or by another
   descriptor document, with the check of Codex 0.167.2's flags. `catalog.Lookup` builds
   Codex with it, from the contract's descriptor and from a machine's `codex.yaml`, and
@@ -2389,9 +2446,13 @@ release may change what an existing document does, and says so under Upgrading.
   join also fails on `--config` and `-c` with a pair at, under or above
   `model_providers`, `profile`, `profiles`, `projects`, `responses_api_metadata`,
   `skills` or `cloud.skills`, or that sets `openai_base_url`, `chatgpt_base_url` or an
-  `experimental_realtime_*_base_url`; on `--enable` and `--disable` only of a feature
-  that `config.fixed` sets, such as `plugins` or `apps` (`connectors` counts as
-  `apps`); and on `--oss`, `--local-provider`, `--profile`, `-p`, `--search`,
+  `experimental_realtime_*_base_url`; on `--config` and `-c` with a pair at, under or
+  above `features.unified_exec_tty`, `features.hooks` or `features.codex_hooks`, which
+  can turn off the hooks Codex runs before each tool call or let a command sent to a
+  shell with a terminal run no hook, such as `features.hooks.enabled=false`; on
+  `--enable` and `--disable` of a feature that `config.fixed` sets, such as `plugins`
+  or `apps` (`connectors` counts as `apps`), or of `unified_exec_tty`, `hooks` or
+  `codex_hooks`; and on `--oss`, `--local-provider`, `--profile`, `-p`, `--search`,
   `--ignore-user-config`, `--dangerously-bypass-hook-trust` and `--remote`, in every
   form Codex takes. A session that resumes checks the arguments again with the resume
   arguments at their place, so a pair that a flag took as its value before the resume
@@ -3194,15 +3255,25 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
-- Five tests run Codex 0.167.2 behind the wall, against a stub of the Responses API,
+- `TestDockerConforms` has the case "a read-only file at /etc/codex/hooks.json stays
+  as it is": in busybox, with the file at mode `0666` on this machine, the agent reads
+  it exactly, cannot write, append to, chmod, remove, rename or replace it, cannot add a
+  file or a symbolic link in `/etc/codex`, which is root's with mode `0755`, and cannot
+  rename `/etc/codex`: `/etc` is root's with mode `0755`, so the rename fails with
+  "Permission denied". The file is the same afterwards, inside and on this machine. The
+  jobs Wall conformance and Wall conformance, containerd image store run it.
+- Six tests run Codex 0.167.2 behind the wall, against a stub of the Responses API,
   with the image in `QORY_WALL_CODEX_IMAGE`; each skips without it, and fails under
   `QORY_WALL_REQUIRE`:
   - `TestDockerCodexThroughTheWall`, with an API key and with a subscription login's
     token: Codex prints the stub's text, each request has the key as a bearer and,
-    with the token, the account header from its claim, and the run reaches no host but
-    the stub;
+    with the token, the account header from its claim, the run reaches no host but
+    the stub, and the launch's `dev.qory.runtime.result` is `success` with the stub's
+    tokens;
   - `TestDockerCodexPausesOnAUsageLimit`: a `429` with the `x-codex-*` headers ends
-    the session and the run `paused` with `model_key_limit`;
+    the session and the run `paused` with `model_key_limit`, and the launch's
+    `dev.qory.runtime.result` is `error_during_execution` with `is_error` false and no
+    `usage`;
   - `TestDockerCodexEndsOrSwitchesOnARejectedKey`: a `401` ends them `failed` with
     `model_key_unauthorized` with one key, and `paused` with `model_key_switch` with a
     second key;
@@ -3211,7 +3282,11 @@ release may change what an existing document does, and says so under Upgrading.
     the session passes fail the join, and Codex does not start;
   - `TestDockerCodexResumesAPausedRunUnderAnotherKey`: run 2 restores run 1's rollout,
     starts `codex exec` with `resume <thread id>` right before the prompt, and sends its
-    first request with the second key.
+    first request with the second key;
+  - `TestDockerCodexCountsItsChildAgentsInTheResult`: launch 1's thread starts one
+    child agent, and its `dev.qory.runtime.result` has the usage of the thread's three
+    requests and the child's one; launch 2 resumes the thread from launch 1's restored
+    rollout, and its usage has its one request alone.
 - CI's Wall conformance jobs fetch npm's linux-x64 package of `@openai/codex` 0.167.2,
   check it against its SHA-512, npm's `dist.integrity`, build an image with `codex` on
   its `PATH`, and set `QORY_WALL_CODEX_IMAGE` to it.

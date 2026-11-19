@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -97,6 +98,17 @@ type transcript struct {
 	sent    int64
 	seen    bool
 	ended   bool
+	// bases is the state of each rollout of Codex before the launch, by its path below
+	// resume.prefix, nil before [transcript.codexBaseline]; baseFailed is the line of a
+	// baseline whose search failed, empty otherwise. copied is the transcript a run
+	// with no wall restored, which the resume script copies to its place after the
+	// baseline, nil for none.
+	bases      map[string]rolloutState
+	baseFailed string
+	copied     *restored
+	// hooks, when not nil, gets each open of a rollout and each read of a rollout's
+	// first bytes; a test counts them or changes the file there. Nil outside tests.
+	hooks *rolloutHooks
 }
 
 // maxTranscriptLine is the longest line of a transcript the session sends, 8 MiB: the
@@ -487,28 +499,8 @@ var errLinked = errors.New("the transcript's path is a symbolic link or no regul
 // instead of waiting for a writer. The open file that is no regular file is
 // [errLinked], and one over [maxTranscript] bytes is [errTooLarge], as behind a wall.
 func readUnlinked(base, rel string, offset int64) ([]byte, int64, error) {
-	dirFD, err := openDirFollowing(base)
+	fd, err := openUnlinkedFile(base, rel)
 	if err != nil {
-		return nil, 0, err
-	}
-	names := strings.Split(rel, "/")
-	for _, name := range names[:len(names)-1] {
-		next, err := openDirAt(dirFD, name)
-		unix.Close(dirFD)
-		switch {
-		case errors.Is(err, unix.ELOOP), errors.Is(err, unix.ENOTDIR):
-			return nil, 0, errLinked
-		case err != nil:
-			return nil, 0, err
-		}
-		dirFD = next
-	}
-	fd, err := unix.Openat(dirFD, names[len(names)-1], unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
-	unix.Close(dirFD)
-	switch {
-	case errors.Is(err, unix.ELOOP):
-		return nil, 0, errLinked
-	case err != nil:
 		return nil, 0, err
 	}
 	f := os.NewFile(uintptr(fd), rel)
@@ -528,6 +520,38 @@ func readUnlinked(base, rel string, offset int64) ([]byte, int64, error) {
 	}
 	b, err := io.ReadAll(io.NewSectionReader(f, offset, fi.Size()-offset))
 	return b, fi.Size(), err
+}
+
+// openUnlinkedFile opens the file at rel below base for [readUnlinked], and returns
+// its descriptor: base through any symbolic link, each directory of rel with
+// [openDirAt], and the file with O_NOFOLLOW and O_NONBLOCK. A symbolic link among the
+// names below base is [errLinked].
+func openUnlinkedFile(base, rel string) (int, error) {
+	dirFD, err := openDirFollowing(base)
+	if err != nil {
+		return -1, err
+	}
+	names := strings.Split(rel, "/")
+	for _, name := range names[:len(names)-1] {
+		next, err := openDirAt(dirFD, name)
+		unix.Close(dirFD)
+		switch {
+		case errors.Is(err, unix.ELOOP), errors.Is(err, unix.ENOTDIR):
+			return -1, errLinked
+		case err != nil:
+			return -1, err
+		}
+		dirFD = next
+	}
+	fd, err := unix.Openat(dirFD, names[len(names)-1], unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
+	unix.Close(dirFD)
+	switch {
+	case errors.Is(err, unix.ELOOP):
+		return -1, errLinked
+	case err != nil:
+		return -1, err
+	}
+	return fd, nil
 }
 
 // sessionTranscript is the transcript of session n's runtime, whose resume is rs, nil
@@ -696,6 +720,19 @@ var errTooManyEntries = fmt.Errorf("the search listed more than %d entries", max
 // exist matches nothing. With limit above 0, more than limit entries listed is
 // [errTooManyEntries]; with 0, the search lists every entry.
 func findMatches(base, start string, p *pathPattern, limit int, follow bool) ([]string, error) {
+	return findUpTo(base, start, p, limit, follow, 0)
+}
+
+// findUpTo is [findMatches] that ends the search once it found stop paths, 2 when
+// stop is 0.
+func findUpTo(base, start string, p *pathPattern, limit int, follow bool, stop int) ([]string, error) {
+	s := &search{pattern: p, limit: limit, stop: stop}
+	err := s.run(base, start, follow)
+	return s.found, err
+}
+
+// run is the search of [findMatches] below start, below base.
+func (s *search) run(base, start string, follow bool) error {
 	var fd int
 	var err error
 	if follow {
@@ -705,13 +742,11 @@ func findMatches(base, start string, p *pathPattern, limit int, follow bool) ([]
 	}
 	switch {
 	case errors.Is(err, unix.ENOENT):
-		return nil, nil
+		return nil
 	case err != nil:
-		return nil, err
+		return err
 	}
-	s := &search{pattern: p, limit: limit}
-	err = s.below(fd, "", 0)
-	return s.found, err
+	return s.below(fd, "", 0)
 }
 
 // openUnlinked opens start below base, base's last name and each name of start with
@@ -776,6 +811,17 @@ type search struct {
 	found   []string
 	listed  int
 	limit   int
+	// stop is how many paths end the search, 2 when it is 0.
+	stop int
+	// states, when not nil, gets the [rolloutState] of each path found, by fstatat
+	// without following a symbolic link; a path whose fstatat fails has none, and
+	// statErr gets the first such error other than ENOENT, the error of a file removed
+	// between the listing of its directory and the fstatat.
+	states  map[string]rolloutState
+	statErr error
+	// beforeStat, when not nil, gets each path found just before its fstatat; a test
+	// removes the file there. Nil outside tests.
+	beforeStat func(rel string)
 	// beforeOpen, when not nil, gets the name of each directory below just before its
 	// open; a test changes the entry there. Nil outside tests.
 	beforeOpen func(dirFD int, name string)
@@ -783,11 +829,12 @@ type search struct {
 
 // below adds to found the paths below the directory fd, which it closes, relative to
 // the start of the search with rel the path of the directory, whose names from the
-// i-th on match the pattern, until found has two.
+// i-th on match the pattern, until found has s.stop paths, two when s.stop is 0.
 func (s *search) below(fd int, rel string, i int) error {
 	f := os.NewFile(uintptr(fd), "")
 	defer f.Close()
 	last := i == len(s.pattern.names)-1
+	stop := cmp.Or(s.stop, 2)
 	for {
 		entries, err := f.ReadDir(findBatch)
 		for _, e := range entries {
@@ -800,6 +847,18 @@ func (s *search) below(fd int, rel string, i int) error {
 			at := path.Join(rel, e.Name())
 			if last {
 				s.found = append(s.found, at)
+				if s.states != nil {
+					if s.beforeStat != nil {
+						s.beforeStat(at)
+					}
+					var st unix.Stat_t
+					switch err := unix.Fstatat(fd, e.Name(), &st, unix.AT_SYMLINK_NOFOLLOW); {
+					case err == nil:
+						s.states[at] = stateOf(&st)
+					case !errors.Is(err, unix.ENOENT):
+						s.statErr = cmp.Or(s.statErr, err)
+					}
+				}
 			} else if e.Type().IsDir() {
 				if s.beforeOpen != nil {
 					s.beforeOpen(fd, e.Name())
@@ -815,7 +874,7 @@ func (s *search) below(fd int, rel string, i int) error {
 					return err
 				}
 			}
-			if len(s.found) > 1 {
+			if len(s.found) >= stop {
 				return nil
 			}
 		}

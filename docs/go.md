@@ -1342,10 +1342,13 @@ res, err := session.Resend(ctx, session.ResendSpec{
   command. `runtimes.ConfigArgs` builds those pairs. Through the optional
   `runtimes.ArgsChecker`, the join fails before the runtime starts when the launch's
   arguments set one of those settings, with an error that starts with the fix and
-  contains no value of the arguments. A session that resumes checks the arguments
-  again with the resume arguments at their place: in `exec --json --enable -cx=y`,
-  `--enable` takes `-cx=y` as its value, and `resume <id>` right before the last
-  argument leaves `-cx=y` alone, a pair that sets `x`.
+  contains no value of the arguments. `runtimes.PairKeys` is the keys that a pair sets,
+  each key of a value that is a TOML inline table among them, so that the error
+  contains the key the table sets when that key is a setting the session passes. A
+  session that resumes checks the arguments again with the resume arguments at their
+  place: in `exec --json --enable -cx=y`, `--enable` takes `-cx=y` as its value, and
+  `resume <id>` right before the last argument leaves `-cx=y` alone, a pair that sets
+  `x`.
 
 `catalog.Lookup(name, dir)` resolves a name to the first of these that applies:
 
@@ -1380,9 +1383,11 @@ Two packages add to the contract's runtimes what a descriptor cannot contain:
   and `-c` with a pair that sets one of the session's settings, a setting at, under or above `model_providers`,
   `profile`, `profiles`, `projects`, `responses_api_metadata`, `skills` or
   `cloud.skills`, or one of `openai_base_url`, `chatgpt_base_url` and
-  `experimental_realtime_*_base_url`; on `--enable` and `--disable` only of a
-  feature that `config.fixed` sets, such as `plugins` or `apps` (`connectors` counts
-  as `apps`); and on `--oss`, `--local-provider`,
+  `experimental_realtime_*_base_url`, or at, under or above one of the hook features
+  `features.unified_exec_tty`, `features.hooks` and `features.codex_hooks`; on
+  `--enable` and `--disable` of a feature that `config.fixed` sets, such as `plugins`
+  or `apps` (`connectors` counts as `apps`), or of a hook feature; and on `--oss`,
+  `--local-provider`,
   `--profile`, `-p`, `--search`, `--ignore-user-config`, `--dangerously-bypass-hook-trust` and `--remote`. The
   contract's README, §The descriptor, Config, lists every form. Build Codex with
   `codex.New`, `codex.Described` or `catalog.Lookup`; `runtimes.Described` adds no

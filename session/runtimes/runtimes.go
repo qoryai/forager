@@ -194,7 +194,8 @@ type Model interface {
 
 // ModelPlaces is a descriptor's model section: Formats, the model API formats the
 // runtime sends its requests in, from the contract's api-format.schema.json; Model,
-// where a run's model id goes; Effort, where an effort value goes, nil when the runtime
+// where a run's model id goes; Agent, where an agent's model id goes, nil when the
+// runtime has no place for one; Effort, where an effort value goes, nil when the runtime
 // has no place for one; Endpoint, where the base URL of its model API goes; Keys, the variables it reads a model key from, one per API format
 // and auth; and Overrides, the variables that would override the model id or effort
 // value a composer writes, which a walled run leaves out and unsets inside.
@@ -213,8 +214,13 @@ type Place = descriptor.Place
 // ValuedPlace is a [Place] and the values the runtime accepts there.
 type ValuedPlace = descriptor.ValuedPlace
 
-// AgentPlace is where a value goes in an agent's file: Frontmatter, a key of the file's
-// frontmatter, and the values the runtime accepts there.
+// AgentKey is where a value goes in an agent's file, exactly one of its fields set:
+// Frontmatter, a key of the file's frontmatter, for an agent file of Markdown; TOML, a
+// key at the top of the file, for an agent file of TOML.
+type AgentKey = descriptor.AgentKey
+
+// AgentPlace is where a value goes in an agent's file, exactly one of Frontmatter and
+// TOML set as in [AgentKey], and the values the runtime accepts there.
 type AgentPlace = descriptor.AgentPlace
 
 // Effort is where an effort value goes: Run, the run's; Agent, an agent's, nil when the
@@ -535,11 +541,15 @@ func (r *described) Model() (ModelPlaces, bool) {
 		return ModelPlaces{}, false
 	}
 	out := ModelPlaces{Formats: slices.Clone(m.Formats), Model: m.Model, Endpoint: m.Endpoint, Keys: slices.Clone(m.Keys), Overrides: slices.Clone(m.Overrides)}
+	if a := m.Agent; a != nil {
+		agent := *a
+		out.Agent = &agent
+	}
 	if e := m.Effort; e != nil {
 		effort := Effort{Run: e.Run}
 		effort.Run.Values = slices.Clone(e.Run.Values)
 		if a := e.Agent; a != nil {
-			effort.Agent = &AgentPlace{Frontmatter: a.Frontmatter, Values: slices.Clone(a.Values)}
+			effort.Agent = &AgentPlace{Frontmatter: a.Frontmatter, TOML: a.TOML, Values: slices.Clone(a.Values)}
 		}
 		out.Effort = &effort
 	}
