@@ -207,15 +207,15 @@ One run, on a developer machine, with a server configured:
    answers. Without a wall the proxy URL carries a password of the run's forwarder
    alone, which the forwarder checks (§The gateway's link, Agent traffic). It opens the
    local socket and sets `QORY_RUN_SOCKET` to its path, `QORY_RUN_ID` to the run id,
-   `QORY_SESSION` to the session's number in the run from the join answer's `session`,
-   1 for the run's first session, `QORY_RUN_API` to the run API's base URL for a run
-   with a control plane (§The run API),
-   `QORY_HOST_URL` to `http://host.qory.invalid` for a run with a route to its caller
-   (§The route to the caller), and `QORY_HARNESS_HOME` to the harness's home when the
-   launch spec has one. Nothing else
-   of Forager's enters the environment but the variables (§Variables) and the
-   placeholders; in a walled run the runtime's declared, reserved and denied variables
-   and the node's denied ones that nothing sets are unset inside (§The wall).
+   `QORY_SESSION` to the join answer's `session`, `QORY_RUN_API` to the run API's base
+   URL for a run with a control plane (§The run API), `QORY_HOST_URL` to
+   `http://host.qory.invalid` for a run with a route to its caller (§The route to the
+   caller), and `QORY_HARNESS_HOME` to the harness's home when the launch spec has one.
+   `QORY_SESSION` is the number the gateway assigns to the session's join, counted from
+   1 in the run; the gateway also numbers a join that it refuses. Nothing else of
+   Forager's enters the environment but the variables (§Variables) and the placeholders;
+   in a walled run the runtime's declared, reserved and denied variables and the node's
+   denied ones that nothing sets are unset inside (§The wall).
 6. It has the runtime prepare the launch (§The runtime): for a runtime that takes hooks,
    Forager's forwarder as a command hook for each event the runtime lists. For Claude
    Code that is a copy of the first settings file the launch passes, written as
@@ -1748,23 +1748,28 @@ and the machine's variables. They keep the node's secrets and the stand-ins out 
 enclosure. A walled run that passes a `QORY_` variable, or a variable a value of the
 machine's is read from, into the enclosure is no run, `variable_reserved`; `QORY_RUN_ID`
 and `QORY_RUN_SOCKET` are exempt, and `QORY_SESSION` is refused like any other `QORY_`
-name. So `--env QORY_X` or `wall.env: [QORY_X]` behind a wall stops the run. A session that passes a value for a placeholder does not start, with or
-without a wall: its join fails, `placeholder_conflict`, and the run stays open. Without
-a wall, a value of a placeholder the run inherits is not passed: the placeholder wins
-over it. Without a wall, the variables the machine's credentials are read from, the run
-answer's `reserved`, are left out of what the run inherits. These are the only refusals
-before the variables are resolved; after, a run without a model key is
-`model_key_missing` (A model key, below). The server's values are never refused; its
-`QORY_` names are left out by the deny list, apart from two (below). `QORY_HARNESS_HOME`
-is one of Forager's names when the launch spec has a harness home, and the session sets
-it after the check. Behind a wall, a value any node source passes for it is
-`variable_reserved`, as any `QORY_` name is. Without a wall, the deny list leaves out a
-value of the server, the run, the machine or the harness for it, and Forager's value
-wins over the one the run inherits: the record lists that one as `shell`, lost as
-`fixed`, when another source set the name too. `QORY_RUN_API` is one of Forager's names in
-every run (§The run API). Behind a wall, a value any node source passes for it is
-`variable_reserved`. Without a wall, the value the run inherits is left out, and a run
-with no control plane has no such variable.
+name. So `--env QORY_X` or `wall.env: [QORY_X]` behind a wall stops the run. A session
+that passes a value for a placeholder does not start, with or without a wall: its join
+fails, `placeholder_conflict`, and the run stays open. Without a wall, a value of a
+placeholder the run inherits is not passed: the placeholder wins over it. Without a
+wall, the variables the machine's credentials are read from, the run answer's
+`reserved`, are left out of what the run inherits. These are the only refusals before
+the variables are resolved; after, a run without a model key is `model_key_missing` (A
+model key, below). The server's values are never refused; its `QORY_` names are left out
+by the deny list, apart from two (below). `QORY_HARNESS_HOME` is one of Forager's names
+when the launch spec has a harness home, and the session sets it after the check. Behind
+a wall, a value any node source passes for it is `variable_reserved`, as any `QORY_`
+name is. Without a wall, the deny list leaves out a value of the server, the run, the
+machine or the harness for it, and Forager's value wins over the one the run inherits:
+the record lists that one as `shell`, lost as `fixed`, when another source set the name
+too. `QORY_RUN_API` is one of Forager's names in every run (§The run API). Behind a
+wall, a value any node source passes for it is `variable_reserved`. Without a wall, the
+value the run inherits is left out, and a run with no control plane has no such
+variable. `QORY_SESSION` is one of Forager's names in every run (§Sequence step 5).
+Behind a wall, a value any node source passes for it is `variable_reserved`. Without a
+wall, the deny list leaves out a value of the server, the run, the machine or the
+harness for it, and Forager's value wins over the one the run inherits: the record lists
+that one as `shell`, lost as `fixed`, when another source set the name too.
 
 **Denied names.** The deny list leaves out a value of the server, the run, the machine
 or the harness's defaults whose name it matches: the built-in list

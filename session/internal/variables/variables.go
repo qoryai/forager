@@ -46,8 +46,7 @@ const (
 	Accept = "accept"
 )
 
-// The variables Forager sets for the session itself, the one QORY_ names a run's
-// environment may contain.
+// The two names Forager sets that a walled run may also pass.
 const (
 	envRunID  = "QORY_RUN_ID"
 	envSocket = "QORY_RUN_SOCKET"
