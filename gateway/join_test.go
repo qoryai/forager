@@ -63,9 +63,9 @@ func TestJoinsAreNumberedInTheOrderTheyArrive(t *testing.T) {
 
 // TestAJoinTheGatewayDoesNotAccept pins the join refusals that number no session: 400
 // invalid_request for a body the schema refuses, a member it does not define among
-// them, for another content type, for a model_provider_credential_name of no model key
-// of the run, and for a run id of no run here; the run stays open, and the next join is
-// session 1.
+// them, the old model_credential too, for another content type, for a
+// model_provider_credential_name of no model key of the run, and for a run id of no run
+// here; the run stays open, and the next join is session 1.
 func TestAJoinTheGatewayDoesNotAccept(t *testing.T) {
 	h := start(t, gateway.Config{})
 	a := h.open(server.LinkRunRequest{})
@@ -73,6 +73,7 @@ func TestAJoinTheGatewayDoesNotAccept(t *testing.T) {
 	for name, req := range map[string]struct{ path, contentType, body string }{
 		"no passes":             {joinPath(a.RunID), server.LinkContentType, `{"version":1,"model_key":true}`},
 		"a member undefined":    {joinPath(a.RunID), server.LinkContentType, `{"version":1,"passes":[],"model_key":true,"wall":true}`},
+		"model_credential":      {joinPath(a.RunID), server.LinkContentType, `{"version":1,"passes":[],"model_key":true,"model_credential":"backup"}`},
 		"a value in passes":     {joinPath(a.RunID), server.LinkContentType, `{"version":1,"passes":["HOME=/root"],"model_key":true}`},
 		"another content type":  {joinPath(a.RunID), "text/plain", `{"version":1,"passes":[],"model_key":true}`},
 		"no model key":          {joinPath(a.RunID), server.LinkContentType, `{"version":1,"passes":[],"model_key":true,"model_provider_credential_name":"backup"}`},

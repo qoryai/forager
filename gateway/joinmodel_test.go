@@ -146,6 +146,26 @@ func TestAJoinSetsItsModelKey(t *testing.T) {
 	h.post(exited(runID))
 }
 
+// TestAJoinWithTheOldModelCredentialIsRefused pins that a join request with
+// model_credential, the member's name before model_provider_credential_name, is a 400
+// invalid_request from the gateway that numbers no session, though it names second, a
+// model key of the run. The next join, with no name, is session 1 and gets first.
+func TestAJoinWithTheOldModelCredentialIsRefused(t *testing.T) {
+	h, runID, _, _ := modelKeyRun(t)
+	c := raw(t, h.g.LocalLink())
+	status, got := rawPost(t, c, joinPath(runID), server.LinkContentType, `{"version":1,"passes":[],"model_key":true,"model_credential":"second"}`)
+	if r := refusalOf([]byte(got)); status != http.StatusBadRequest || r["error"] != "invalid_request" || r["from"] != "gateway" {
+		t.Errorf("a join with model_credential: %d %s", status, got)
+	}
+	one, err := h.join(runID)
+	if err != nil || one.Session != 1 || one.ModelProviderCredentialName != "first" {
+		t.Fatalf("the join after the refusal: %+v, %v", one, err)
+	}
+	h.post(sessionStarted(runID, 1))
+	h.post(sessionExited(runID, 1))
+	h.post(exited(runID))
+}
+
 // TestAJoinWithNoModelKeySetsNone pins a join whose model_key is false in a run with
 // the model keys first, its default model provider credential, and second: its answer
 // has no model_provider_credential_name, and from its 200 until its session.exited the
