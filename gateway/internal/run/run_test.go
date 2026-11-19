@@ -1117,8 +1117,9 @@ func TestAReloadKeepsAnImageByReference(t *testing.T) {
 // TestAReloadKeepsTheDefaultCredential pins that, without
 // default_model_provider_credential_name, a reload that selects another local model
 // provider credential than the run started with, or none, is refused, one that selects
-// the same key is accepted, and one that selects a model key for a run that started
-// with none is refused.
+// the same key is accepted, one that sets default_model_provider_credential_name to
+// that key is refused, and one that selects a model key for a run that started with
+// none is refused.
 func TestAReloadKeepsTheDefaultCredential(t *testing.T) {
 	t.Setenv("QORY_TEST_MODEL_TOKEN", "sk-ant-fake-value")
 	doc := func(key string) string {
@@ -1151,6 +1152,15 @@ func TestAReloadKeepsTheDefaultCredential(t *testing.T) {
 	}
 	if _, err := reload(t, r, document(t, doc("first"), digest('4'))); err != nil {
 		t.Errorf("a reload with the same model key: %v", err)
+	}
+	// A reload that sets default_model_provider_credential_name to the key the run
+	// started with is refused too: the check compares the field, which the run started
+	// without. The text shows the key the run started with.
+	named := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","api.other-model.example"]},` +
+		`"credentials":[{"name":"first"}]},"default_model_provider_credential_name":"first"}`
+	_, err = reload(t, r, document(t, named, digest('7')))
+	if want := "run configuration " + runURL + `: Start a new run to change default_model_provider_credential_name: the run started with "first", and this configuration selects "first"; the policy in force stays`; err == nil || err.Error() != want {
+		t.Errorf("a reload that names the key the run started with:\n got %v\nwant %s", err, want)
 	}
 	cfg.Fetched = document(t, none, digest('5'))
 	r = open(t, cfg)
