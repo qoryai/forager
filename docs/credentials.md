@@ -391,10 +391,11 @@ values. An entry is one of two kinds:
   credential "forge" expired at 2026-10-24T13:00:00Z`, and the proxy sets the value no
   more.
 - On a host that one of these credentials is for, its value replaces the machine's
-  credential, such as the model key in `forager.yaml` for the same endpoint host,
+  credential, such as a local model provider credential for the same endpoint host,
   whatever its name.
 - `default_model_provider_credential_name` names the default model provider credential:
-  an API credential of the run configuration, or a model key of `forager.yaml`.
+  an API credential of the run configuration, or a local model provider credential, a
+  model key of `forager.yaml`.
 - A placeholder goes only into a variable for a credential. A host credential whose
   `placeholders` list a variable the runtime denies, a model override, the model
   endpoint's variable or a model key's variable stops the run

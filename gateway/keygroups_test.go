@@ -24,16 +24,16 @@ import (
 )
 
 // mixedValues are the fake values of the model keys of mixedRun, by name: the local
-// model provider credential machine, and the server's keys a-1 and a-2 of group a and
+// model provider credential local, and the server's keys a-1 and a-2 of group a and
 // b-1 and b-2 of group b.
-var mixedValues = map[string]string{"machine": "fake-machine-value-0001", "a-1": "fake-a-value-0001", "a-2": "fake-a-value-0002", "b-1": "fake-b-value-0001", "b-2": "fake-b-value-0002"}
+var mixedValues = map[string]string{"local": "fake-local-value-0001", "a-1": "fake-a-value-0001", "a-2": "fake-a-value-0002", "b-1": "fake-b-value-0001", "b-2": "fake-b-value-0002"}
 
 // mixedRun is a walled run whose default model provider credential is the local model
-// provider credential machine, and whose run configuration has two key groups of the
+// provider credential local, and whose run configuration has two key groups of the
 // server's, a with a-1 and a-2 and b with b-1 and b-2, all of the format
 // anthropic-messages on one fake provider. The local model provider credential reaches
 // the provider at 127.0.0.1 and the server's keys at localhost: a credential from the
-// server replaces a machine's credential of its host. The provider returns a limit
+// server replaces a local credential of its host. The provider returns a limit
 // refusal for each key in limited, and a 401 for each key in unauthorized. A request
 // with the key held waits at the provider until release is closed, then gets the answer
 // of that moment.
@@ -41,9 +41,9 @@ type mixedRun struct {
 	h     *harness
 	runID string
 	url   string
-	// machineURL is the endpoint of the local model provider credential.
-	machineURL string
-	agent      *http.Client
+	// localURL is the endpoint of the local model provider credential.
+	localURL string
+	agent    *http.Client
 	// hosts are the run answer's credential_hosts, from which a session computes its
 	// key's placeholder (link.GroupPlaceholder).
 	hosts []server.LinkCredentialHosts
@@ -59,16 +59,16 @@ type mixedRun struct {
 
 func startMixedRun(t *testing.T) *mixedRun {
 	t.Helper()
-	return startKeyGroupsRun(t, true, "machine")
+	return startKeyGroupsRun(t, true, "local")
 }
 
 // startKeyGroupsRun opens the run of mixedRun with the default model provider
-// credential defaultCredential; with machine false, the run has no local model provider
+// credential defaultCredential; with local false, the run has no local model provider
 // credential.
-func startKeyGroupsRun(t *testing.T, machine bool, defaultCredential string) *mixedRun {
+func startKeyGroupsRun(t *testing.T, local bool, defaultCredential string) *mixedRun {
 	t.Helper()
 	m := &mixedRun{limited: map[string]bool{}, unauthorized: map[string]bool{}}
-	t.Setenv("GATEWAY_TEST_LOCAL_MODEL_PROVIDER_CREDENTIAL", mixedValues["machine"])
+	t.Setenv("GATEWAY_TEST_LOCAL_MODEL_PROVIDER_CREDENTIAL", mixedValues["local"])
 	certFile, keyFile, roots := testCertificate(t, t.TempDir())
 	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
@@ -112,13 +112,13 @@ func startKeyGroupsRun(t *testing.T, machine bool, defaultCredential string) *mi
 	t.Cleanup(origin.Close)
 	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
 	m.url = "https://localhost:" + port + "/v1"
-	m.machineURL = "https://127.0.0.1:" + port + "/v1"
+	m.localURL = "https://127.0.0.1:" + port + "/v1"
 	entry := func(name, group string) string {
 		return `{"name":"` + name + `","group":"` + group + `","format":"anthropic-messages","endpoint":"` + m.url + `","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
 	}
 	c := newControl(t)
-	policy := `{"version":1,"egress":{"mode":"enforce","allow":["localhost","127.0.0.1"]},"credentials":[{"name":"machine"}]}`
-	if !machine {
+	policy := `{"version":1,"egress":{"mode":"enforce","allow":["localhost","127.0.0.1"]},"credentials":[{"name":"local"}]}`
+	if !local {
 		policy = `{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}}`
 	}
 	c.serveDocument(`{"version":1,"security_policy":`+policy+`,"default_model_provider_credential_name":"`+defaultCredential+`","credentials":[`+
@@ -141,8 +141,8 @@ func startKeyGroupsRun(t *testing.T, machine bool, defaultCredential string) *mi
 	}
 	c.intercept.Store(&intercept)
 	var creds []gateway.Credential
-	if machine {
-		creds = []gateway.Credential{{Name: "machine", Env: "GATEWAY_TEST_LOCAL_MODEL_PROVIDER_CREDENTIAL", Format: "anthropic-messages", Endpoint: m.machineURL, Scheme: "header", Header: "x-api-key"}}
+	if local {
+		creds = []gateway.Credential{{Name: "local", Env: "GATEWAY_TEST_LOCAL_MODEL_PROVIDER_CREDENTIAL", Format: "anthropic-messages", Endpoint: m.localURL, Scheme: "header", Header: "x-api-key"}}
 	}
 	node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost", "127.0.0.1"}}}
 	cfg := gateway.Config{Server: c.server(), Credentials: creds, Policy: node}
@@ -157,7 +157,7 @@ func startKeyGroupsRun(t *testing.T, machine bool, defaultCredential string) *mi
 		t.Fatalf("the run's default model provider credential %q; want %s", a.DefaultModelProviderCredentialName, defaultCredential)
 	}
 	for _, c := range a.CredentialHosts {
-		if c.Name == "machine" && c.Group != "" {
+		if c.Name == "local" && c.Group != "" {
 			t.Errorf("the local model provider credential has the group %q in the run answer", c.Group)
 		}
 	}
@@ -184,8 +184,8 @@ func (m *mixedRun) send(t *testing.T, name string) (int, string) {
 func (m *mixedRun) sendTo(t *testing.T, name, path string) (int, string) {
 	t.Helper()
 	url := m.url
-	if name == "machine" {
-		url = m.machineURL
+	if name == "local" {
+		url = m.localURL
 	}
 	return m.request(t, url+path, link.KeyPlaceholder(name))
 }
@@ -264,15 +264,15 @@ func (m *mixedRun) join(t *testing.T, name string) string {
 // limit refusal of a-2 goes again with a-1, and the local model provider credential and
 // group b get no key. Session 3 joins with no key in its request and gets the local
 // model provider credential again, with no rotation and no stop after group a's
-// refusal. The model keys reports list the keys of both groups and never the machine's.
+// refusal. The model keys reports list the keys of both groups and never the local one.
 func TestALocalModelProviderCredentialIsInNoKeyGroup(t *testing.T) {
 	m := startMixedRun(t)
-	if key := m.join(t, ""); key != "machine" {
-		t.Fatalf("join 1: %q; want machine", key)
+	if key := m.join(t, ""); key != "local" {
+		t.Fatalf("join 1: %q; want local", key)
 	}
 	m.h.post(sessionStarted(m.runID, 1))
-	if status, calls := m.send(t, "machine"); status != http.StatusOK || calls != "machine" {
-		t.Errorf("session 1, machine's placeholder: %d %q; want machine", status, calls)
+	if status, calls := m.send(t, "local"); status != http.StatusOK || calls != "local" {
+		t.Errorf("session 1, local placeholder: %d %q; want local", status, calls)
 	}
 	if status, calls := m.send(t, "a-1"); status != http.StatusOK || calls != link.KeyPlaceholder("a-1") {
 		t.Errorf("session 1, group a's placeholder: %d %q; want no key", status, calls)
@@ -289,8 +289,8 @@ func TestALocalModelProviderCredentialIsInNoKeyGroup(t *testing.T) {
 	if status, calls := m.send(t, "a-1"); status != http.StatusOK || calls != "a-2,a-1" {
 		t.Errorf("session 2, group a's placeholder: %d %q; want a-2 refused, then a-1", status, calls)
 	}
-	if status, calls := m.send(t, "machine"); status != http.StatusOK || calls != link.KeyPlaceholder("machine") {
-		t.Errorf("session 2, machine's placeholder: %d %q; want no key", status, calls)
+	if status, calls := m.send(t, "local"); status != http.StatusOK || calls != link.KeyPlaceholder("local") {
+		t.Errorf("session 2, local placeholder: %d %q; want no key", status, calls)
 	}
 	if status, calls := m.send(t, "b-1"); status != http.StatusOK || calls != link.KeyPlaceholder("b-1") {
 		t.Errorf("session 2, group b's placeholder: %d %q; want no key", status, calls)
@@ -300,12 +300,12 @@ func TestALocalModelProviderCredentialIsInNoKeyGroup(t *testing.T) {
 	}
 	m.h.post(sessionExited(m.runID, 2))
 
-	if key := m.join(t, ""); key != "machine" {
-		t.Fatalf("join 3: %q; want machine", key)
+	if key := m.join(t, ""); key != "local" {
+		t.Fatalf("join 3: %q; want local", key)
 	}
 	m.h.post(sessionStarted(m.runID, 3))
-	if status, calls := m.send(t, "machine"); status != http.StatusOK || calls != "machine" {
-		t.Errorf("session 3, machine's placeholder: %d %q; want machine", status, calls)
+	if status, calls := m.send(t, "local"); status != http.StatusOK || calls != "local" {
+		t.Errorf("session 3, local placeholder: %d %q; want local", status, calls)
 	}
 	if status, calls := m.send(t, "a-1"); status != http.StatusOK || calls != link.KeyPlaceholder("a-1") {
 		t.Errorf("session 3, group a's placeholder: %d %q; want no key", status, calls)
@@ -323,7 +323,7 @@ func TestALocalModelProviderCredentialIsInNoKeyGroup(t *testing.T) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, r := range m.reports {
-		if strings.Contains(r, `"machine"`) {
+		if strings.Contains(r, `"local"`) {
 			t.Errorf("a report lists the local model provider credential: %s", r)
 		}
 	}
@@ -465,8 +465,8 @@ func TestALateRefusalLeavesASessionOnTheLocalModelProviderCredentialAlone(t *tes
 		return slices.Contains(m.calls, "a-1")
 	})
 	m.h.post(sessionExited(m.runID, 1))
-	if key := m.join(t, "machine"); key != "machine" {
-		t.Fatalf("join 2 naming machine: %q; want machine", key)
+	if key := m.join(t, "local"); key != "local" {
+		t.Fatalf("join 2 naming local: %q; want local", key)
 	}
 	m.h.post(sessionStarted(m.runID, 2))
 	m.limit("a-1", "a-2")
@@ -484,8 +484,8 @@ func TestALateRefusalLeavesASessionOnTheLocalModelProviderCredentialAlone(t *tes
 	if status, body := m.batch(t); status != http.StatusAccepted || body != "" {
 		t.Errorf("a batch of session 2: %d %q; want 202 with no stop", status, body)
 	}
-	if status, calls := m.send(t, "machine"); status != http.StatusOK || calls != "machine" {
-		t.Errorf("session 2, machine's placeholder: %d %q; want machine", status, calls)
+	if status, calls := m.send(t, "local"); status != http.StatusOK || calls != "local" {
+		t.Errorf("session 2, local placeholder: %d %q; want local", status, calls)
 	}
 }
 
@@ -499,18 +499,18 @@ func TestALateRefusalLeavesASessionOnTheLocalModelProviderCredentialAlone(t *tes
 // other key, the group's active key: its placeholder is a-1's too, and a request with
 // it reaches the provider with the active key alone.
 func TestTheNextSessionGetsTheGroupsPlaceholder(t *testing.T) {
-	for _, c := range []struct{ start, next string }{{"a-1", "a-2"}, {"a-2", "a-1"}} {
-		t.Run("default model provider credential "+c.start, func(t *testing.T) {
-			m := startKeyGroupsRun(t, false, c.start)
+	for _, c := range []struct{ defaultKey, next string }{{"a-1", "a-2"}, {"a-2", "a-1"}} {
+		t.Run("default model provider credential "+c.defaultKey, func(t *testing.T) {
+			m := startKeyGroupsRun(t, false, c.defaultKey)
 			want := link.KeyPlaceholder("a-1")
 			key := m.join(t, "")
-			if p := m.placeholder(key); key != c.start || p != want {
-				t.Fatalf("join 1: %q with the placeholder %q; want %s with %q", key, p, c.start, want)
+			if p := m.placeholder(key); key != c.defaultKey || p != want {
+				t.Fatalf("join 1: %q with the placeholder %q; want %s with %q", key, p, c.defaultKey, want)
 			}
 			m.h.post(sessionStarted(m.runID, 1))
-			m.limit(c.start)
-			if status, calls := m.sendWith(t, m.placeholder(key)); status != http.StatusOK || calls != c.start+","+c.next {
-				t.Errorf("session 1: %d %q; want %s refused, then %s", status, calls, c.start, c.next)
+			m.limit(c.defaultKey)
+			if status, calls := m.sendWith(t, m.placeholder(key)); status != http.StatusOK || calls != c.defaultKey+","+c.next {
+				t.Errorf("session 1: %d %q; want %s refused, then %s", status, calls, c.defaultKey, c.next)
 			}
 			m.h.post(sessionExited(m.runID, 1))
 

@@ -74,20 +74,20 @@ func sealed(name, host string, placeholders ...string) map[string]any {
 // answeringWith makes the gateway's run answer carry credential_hosts and
 // placeholders.
 func answeringWith(g *linktest.Fake, hosts []map[string]any, placeholders []string) {
-	answeringStart(g, hosts, placeholders, "")
+	answeringDefault(g, hosts, placeholders, "")
 }
 
-// answeringStart is answeringWith with default_model_provider_credential_name set to
-// start, when start is not empty.
-func answeringStart(g *linktest.Fake, hosts []map[string]any, placeholders []string, start string) {
+// answeringDefault is answeringWith with default_model_provider_credential_name set to
+// defaultName, when defaultName is not empty.
+func answeringDefault(g *linktest.Fake, hosts []map[string]any, placeholders []string, defaultName string) {
 	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
 		a := linktest.RunAnswer(req)
 		a["credential_hosts"] = hosts
 		if placeholders != nil {
 			a["placeholders"] = placeholders
 		}
-		if start != "" {
-			a["default_model_provider_credential_name"] = start
+		if defaultName != "" {
+			a["default_model_provider_credential_name"] = defaultName
 		}
 		return linktest.Reply{Status: 200, Body: a}
 	})
@@ -296,7 +296,7 @@ func TestADefaultCredentialTheRuntimeDoesNotReadIsRefused(t *testing.T) {
 // Session 4, of Claude Code with model, joins and starts after it.
 func TestEachJoinChecksItsDefaultCredentialAgainstItsRuntime(t *testing.T) {
 	sp, g := specGateway(t)
-	answeringStart(g, []map[string]any{model(), apiKey("codex-key", "openai-responses", "https://api.openai.example/v1", "bearer")}, nil, "model")
+	answeringDefault(g, []map[string]any{model(), apiKey("codex-key", "openai-responses", "https://api.openai.example/v1", "bearer")}, nil, "model")
 	ctx := context.Background()
 	r, err := session.Open(ctx, opened(sp))
 	if err != nil {
@@ -346,10 +346,10 @@ func TestEachJoinChecksItsDefaultCredentialAgainstItsRuntime(t *testing.T) {
 func TestASessionWithNoRuntimeHasNoDefaultCredential(t *testing.T) {
 	keys := []map[string]any{model(), apiKey("backup", "anthropic-messages", "https://backup.model.example", "bearer")}
 	for _, tc := range []struct {
-		what   string
-		keys   []map[string]any
-		start  string
-		walled bool
+		what        string
+		keys        []map[string]any
+		defaultName string
+		walled      bool
 	}{
 		{"one key, walled", keys[:1], "", true},
 		{"one key, unwalled", keys[:1], "", false},
@@ -363,7 +363,7 @@ func TestASessionWithNoRuntimeHasNoDefaultCredential(t *testing.T) {
 			if tc.walled {
 				sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 			}
-			answeringStart(g, tc.keys, nil, tc.start)
+			answeringDefault(g, tc.keys, nil, tc.defaultName)
 			r, err := session.Open(ctx, opened(sp))
 			if err != nil {
 				t.Fatal(err)
@@ -440,12 +440,12 @@ func TestASessionWithNoRuntimeNamesNoModelKey(t *testing.T) {
 	sp, g := specGateway(t)
 	dumpsEnv(t, &sp)
 	sp.Runtime, sp.ModelProviderCredentialName = nil, "backup"
-	answeringStart(g, []map[string]any{model(), apiKey("backup", "anthropic-messages", "https://backup.model.example", "bearer")}, nil, "model")
+	answeringDefault(g, []map[string]any{model(), apiKey("backup", "anthropic-messages", "https://backup.model.example", "bearer")}, nil, "model")
 	r, err := session.Open(ctx, opened(sp))
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "Set SessionSpec.Runtime, or leave SessionSpec.ModelProviderCredentialName empty.\nA session with no runtime starts with no model key, and the spec names the model key \"backup\""
+	const want = "Set SessionSpec.Runtime, or leave SessionSpec.ModelProviderCredentialName empty.\nA session with no runtime starts with no model key, and the spec sets ModelProviderCredentialName to \"backup\""
 	if _, err := r.AgentEnv(sp.SessionSpec); err == nil || err.Error() != want {
 		t.Errorf("AgentEnv: %v\nwant %s", err, want)
 	}
@@ -485,7 +485,7 @@ func TestTheNameChoosesTheDefaultCredential(t *testing.T) {
 			if walled {
 				sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 			}
-			answeringStart(g, keys, nil, "backup")
+			answeringDefault(g, keys, nil, "backup")
 			res, err := run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
@@ -503,9 +503,9 @@ func TestTheNameChoosesTheDefaultCredential(t *testing.T) {
 		})
 	}
 	for _, tc := range []struct {
-		what, start string
-		names       []string
-		detail      string
+		what, defaultName string
+		names             []string
+		detail            string
 	}{
 		{"no default_model_provider_credential_name", "", nil,
 			"Set default_model_provider_credential_name, or give the run one model key.\nThe run has the model keys model, backup"},
@@ -515,7 +515,7 @@ func TestTheNameChoosesTheDefaultCredential(t *testing.T) {
 		t.Run(tc.what, func(t *testing.T) {
 			sp, g := specGateway(t)
 			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
-			answeringStart(g, append(slices.Clone(keys), sealed("forge", "api.github.com", "GITHUB_TOKEN")), []string{"GITHUB_TOKEN"}, tc.start)
+			answeringDefault(g, append(slices.Clone(keys), sealed("forge", "api.github.com", "GITHUB_TOKEN")), []string{"GITHUB_TOKEN"}, tc.defaultName)
 			_, err := run(context.Background(), sp)
 			refusedWith(t, err, "run_configuration_invalid", tc.names, tc.detail)
 		})
@@ -826,10 +826,10 @@ func variableEntry(t *testing.T, res *session.Result, name string) map[string]an
 // others include ANTHROPIC_API_KEY.
 func TestOtherKeyVariablesDoNotReachTheRuntime(t *testing.T) {
 	const value = "sk-fake-dev-token"
-	for _, start := range []struct{ auth, variable string }{{"header", apiKeyVariable}, {"bearer", authTokenVariable}} {
+	for _, key := range []struct{ auth, variable string }{{"header", apiKeyVariable}, {"bearer", authTokenVariable}} {
 		var others []string
 		for _, k := range modelKeys {
-			if k != start.variable {
+			if k != key.variable {
 				others = append(others, k)
 			}
 		}
@@ -845,7 +845,7 @@ func TestOtherKeyVariablesDoNotReachTheRuntime(t *testing.T) {
 				if source == "image" && !walled {
 					continue
 				}
-				t.Run(fmt.Sprintf("%s start %s walled %v", source, start.auth, walled), func(t *testing.T) {
+				t.Run(fmt.Sprintf("%s default %s walled %v", source, key.auth, walled), func(t *testing.T) {
 					var env []string
 					if source == "shell" {
 						env = withValue()
@@ -875,14 +875,14 @@ func TestOtherKeyVariablesDoNotReachTheRuntime(t *testing.T) {
 					case "fixed":
 						sp.LaunchFixed = withValue()
 					}
-					answering(g, []map[string]any{apiKey("model", "anthropic-messages", modelEndpoint, start.auth)}, vars)
+					answering(g, []map[string]any{apiKey("model", "anthropic-messages", modelEndpoint, key.auth)}, vars)
 					res, err := run(context.Background(), sp)
 					if err != nil {
 						t.Fatal(err)
 					}
 					got := envOf(t, out)
-					if got[start.variable] != link.KeyPlaceholder("model") {
-						t.Errorf("%s=%q; want the default model provider credential's placeholder", start.variable, got[start.variable])
+					if got[key.variable] != link.KeyPlaceholder("model") {
+						t.Errorf("%s=%q; want the default model provider credential's placeholder", key.variable, got[key.variable])
 					}
 					var names []string
 					if walled {

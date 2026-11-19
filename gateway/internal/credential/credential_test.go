@@ -1034,7 +1034,7 @@ func TestAModelKeyIsHeldOnItsEndpointsHost(t *testing.T) {
 		t.Errorf("credentials %+v, want %+v", got, want)
 	}
 	if len(held.Placeholders) != 0 || held.DefaultCredential != "model" {
-		t.Errorf("placeholders %v, start %q", held.Placeholders, held.DefaultCredential)
+		t.Errorf("placeholders %v, default %q", held.Placeholders, held.DefaultCredential)
 	}
 }
 

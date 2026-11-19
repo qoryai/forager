@@ -515,11 +515,11 @@ func TestEveryModelKeyReachesTheProxy(t *testing.T) {
 		t.Errorf("the reload's uses %+v, want %+v", got, want)
 	}
 	_, err = reload(t, r, document(t, modelKeysDoc("first", ""), digest('3')))
-	if want := "run configuration " + runURL + ": start a new run to start with another model key; a run's default_model_provider_credential_name is fixed when it starts, and this run configuration names another; the policy in force stays"; err == nil || err.Error() != want {
+	if want := "run configuration " + runURL + `: Start a new run to change default_model_provider_credential_name: the run started with "second", and this configuration selects "first"; the policy in force stays`; err == nil || err.Error() != want {
 		t.Errorf("a reload with another default_model_provider_credential_name:\n got %v\nwant %s", err, want)
 	}
 	if r.RunConfiguration() != digest('2') || r.Held().DefaultCredential != "second" {
-		t.Errorf("after a refused reload: %q, start %q", r.RunConfiguration(), r.Held().DefaultCredential)
+		t.Errorf("after a refused reload: %q, default %q", r.RunConfiguration(), r.Held().DefaultCredential)
 	}
 	if got := shown(run.ProxyUses(nil)); len(got) != 0 {
 		t.Errorf("ProxyUses of no credentials %+v", got)
@@ -1135,14 +1135,14 @@ func TestAReloadKeepsTheDefaultCredential(t *testing.T) {
 	}
 	r := open(t, cfg)
 	if r.Held().DefaultCredential != "first" {
-		t.Fatalf("start %q", r.Held().DefaultCredential)
+		t.Fatalf("default %q", r.Held().DefaultCredential)
 	}
 	_, err := reload(t, r, document(t, doc("second"), digest('2')))
 	if want := "run configuration " + runURL + `: Start a new run to change the default model provider credential: the run started with "first", and this configuration selects "second"; the policy in force stays`; err == nil || err.Error() != want {
 		t.Errorf("a reload with another model key:\n got %v\nwant %s", err, want)
 	}
 	if r.RunConfiguration() != digest('1') || r.Held().DefaultCredential != "first" {
-		t.Errorf("after a refused reload: %q, start %q", r.RunConfiguration(), r.Held().DefaultCredential)
+		t.Errorf("after a refused reload: %q, default %q", r.RunConfiguration(), r.Held().DefaultCredential)
 	}
 	none := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}}}`
 	_, err = reload(t, r, document(t, none, digest('3')))
@@ -1155,7 +1155,7 @@ func TestAReloadKeepsTheDefaultCredential(t *testing.T) {
 	cfg.Fetched = document(t, none, digest('5'))
 	r = open(t, cfg)
 	if r.Held().DefaultCredential != "" {
-		t.Fatalf("start %q", r.Held().DefaultCredential)
+		t.Fatalf("default %q", r.Held().DefaultCredential)
 	}
 	_, err = reload(t, r, document(t, doc("first"), digest('6')))
 	if want := "run configuration " + runURL + `: Start a new run to change the default model provider credential: the run started with no model key, and this configuration selects "first"; the policy in force stays`; err == nil || err.Error() != want {

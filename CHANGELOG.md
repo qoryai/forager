@@ -131,9 +131,8 @@ release may change what an existing document does, and says so under Upgrading.
   to 99, or one of the two without the other, is `run_configuration_invalid` too. Send
   the windows of the provider's catalogue entry, and `cooldown_until`, the window's
   reset, for a key whose stored use is at or above its percentage at the claim.
-- Send the key group in the order that breaks ties: the provider's default key first;
-  then the others by when they were added; then the keys in cooldown at the claim, each
-  with `cooldown_until`. A default model provider credential in cooldown is `run_configuration_invalid`.
+- Send the key group in the order that breaks ties: by when the keys were added, then the keys in cooldown at the claim, each
+  with `cooldown_until`. When the active key goes into cooldown, the gateway makes active a key with no known reset first, in the order the run configuration lists them, then the key with the closest reset. A default model provider credential in cooldown is `run_configuration_invalid`.
 - Read `paused`, a state of `dev.qory.run.exited` and `dev.qory.session.exited`, always
   with `model_key_limit`, as a pause of the run, not as a person's cancel: the run's work
   is kept, and a continuation of the run can resume its runtime session.
@@ -1019,14 +1018,18 @@ release may change what an existing document does, and says so under Upgrading.
   characters of printable ASCII without a space. The gateway refuses a stored value
   that starts with none of them, `run_configuration_invalid`, without printing the
   value.
-- A run configuration's `default_model_provider_credential_name`: the name of the default model provider credential, the model key
-  the runtime starts with, an API credential of `credentials` or a local model provider credential. A run with two or more model keys, the server's and the machine's
-  together, needs it; with one, that one is the default model provider credential. A name of a host
-  credential, of no model key of the run, and none beside two or more model keys are
-  `run_configuration_invalid`. A reload that names another fails, and the policy in
-  force stays. A reload whose default model provider credential differs from the run's fails too, without
-  `default_model_provider_credential_name`: `Start a new run to change the default model provider credential`. `server.RunConfiguration` has `DefaultModelProviderCredentialName`, and
-  `server.CheckCredentials` takes it.
+- A run configuration's `default_model_provider_credential_name`: the name of the
+  default model provider credential, the model key the runtime starts with, an API
+  credential of `credentials` or a local model provider credential. A run with two or
+  more model keys, the server's and the local ones together, needs it; with one, that
+  one is the default model provider credential. A name of a host credential, of no model
+  key of the run, and none beside two or more model keys are
+  `run_configuration_invalid`. A reload that names another fails, `Start a new run to
+  change default_model_provider_credential_name`, and the policy in force stays. A
+  reload whose default model provider credential differs from the run's fails too,
+  without `default_model_provider_credential_name`: `Start a new run to change the
+  default model provider credential`. `server.RunConfiguration` has
+  `DefaultModelProviderCredentialName`, and `server.CheckCredentials` takes it.
 - The gateway sets a run configuration's `credentials`, with or without a wall. When the run
   starts it sends a secrets request under the access key, for the digest it computes of
   the document's bytes, opens the answer with `sealed.Open`, and the proxy sets each value
@@ -1189,7 +1192,7 @@ release may change what an existing document does, and says so under Upgrading.
   no `declares` and no `one_of` group, and in `runtimes.json` its `declares` and
   `one_of` are `[]`, no longer `api_key` and `oauth_token` and the required group
   `model_key` of both. Its model keys are in `model.keys`, and the run's model key is a
-  model key from the server or the machine. A descriptor may still define `declares`
+  model key from the server or a local model provider credential. A descriptor may still define `declares`
   and `one_of` groups.
 - Enrolment: an access key can belong to an adapter, `node_kind` `adapter` with an
   `na_` id.
@@ -1326,7 +1329,7 @@ release may change what an existing document does, and says so under Upgrading.
   key of the session's group out after a `401`, the session ends
   `model_key_unauthorized`, `failed`, with no continuation. A key of another group never
   takes the place of the session's group. The model keys reports list the keys of every
-  group. A model key of `forager.yaml` is in no group, as before. A run whose default model provider credential is a local model provider credential has key groups for its keys from the server, and sends model keys
+  group. A local model provider credential is in no group, as before. A run whose default model provider credential is a local model provider credential has key groups for its keys from the server, and sends model keys
   reports for them.
 - Write each path of a machine credential's `paths` in `forager.yaml` without a `.` or
   `..` segment, an empty segment, a backslash, or an encoded slash, backslash, dot or

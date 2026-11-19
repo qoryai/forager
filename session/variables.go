@@ -111,10 +111,10 @@ func passes(spec runSpec) []string {
 // that nothing sets. Forager, the wall and the preparation set names too, [wall.Nest]
 // among them for a run with nested Docker, docker, so none of theirs is ever unset; the
 // wall's names for a run with an authority count as set only when the run has one,
-// authority. Without a wall, bundle are the variables Forager sets to the run's bundle,
-// Forager's own names. When the run has a default model provider credential, key, its
-// endpoint variable is one of the run's fixed names: every other value of it is left
-// out, the harness's computed ones included, and the endpoint rule does not apply.
+// authority. Without a wall, bundle are the names Forager sets to the run's bundle.
+// When the run has a default model provider credential, key, its endpoint variable is
+// one of the run's fixed names: every other value of it is left out, the harness's
+// computed ones included, and the endpoint rule does not apply.
 func resolve(spec runSpec, rt runtimes.Runtime, served map[string]string, credentials []server.LinkCredentialHosts, prepared runtimes.Launch, placeholderNames, reserved []string, docker, authority bool, bundle []string, key keyed) (variables.Resolved, []string, error) {
 	var decl runtimes.Declarations
 	if s, ok := rt.(runtimes.Secrets); ok {

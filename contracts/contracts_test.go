@@ -160,11 +160,11 @@ func TestCredentialCountBounds(t *testing.T) {
 			}
 			items = append(items, `{"name":"`+n+`","apply":[{"hosts":["`+n+`.git.example"],"scheme":"bearer"}]}`)
 		}
-		start := ""
+		defaultField := ""
 		if api > 0 {
-			start = `"default_model_provider_credential_name":"cred-00",`
+			defaultField = `"default_model_provider_credential_name":"cred-00",`
 		}
-		return `{"version":1,` + start + `"credentials":[` + strings.Join(items, ",") + `]}`
+		return `{"version":1,` + defaultField + `"credentials":[` + strings.Join(items, ",") + `]}`
 	}
 	request := func(n int) string {
 		return `{"version":1,"run_id":"01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a","run_configuration":"` + digest +

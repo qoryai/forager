@@ -508,12 +508,12 @@ func (r *Run) checkClaims(values sealed.Values) error {
 	// The default model provider credential's group first, by its default model
 	// provider credential, so its refusal is the one a run gets when another group has
 	// no key left too.
-	start := defaultGroup(r.stored, r.storedDefault)
-	if err := refuse(start, defaultName(start, r.storedDefault)); err != nil {
+	defaultKeys := defaultGroup(r.stored, r.storedDefault)
+	if err := refuse(defaultKeys, defaultName(defaultKeys, r.storedDefault)); err != nil {
 		return err
 	}
 	for _, group := range storedGroups(r.stored) {
-		if len(start) > 0 && group[0].Name == start[0].Name {
+		if len(defaultKeys) > 0 && group[0].Name == defaultKeys[0].Name {
 			continue
 		}
 		if err := refuse(group, group[0].Name); err != nil {
@@ -1068,7 +1068,7 @@ func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error
 		return nil, fmt.Errorf("run configuration %s: start a new run to use other credentials; a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays", accesskey.ShownValue(next.URL, false))
 	}
 	if creds.defaultName != r.storedDefault {
-		return nil, fmt.Errorf("run configuration %s: start a new run to start with another model key; a run's default_model_provider_credential_name is fixed when it starts, and this run configuration names another; the policy in force stays", accesskey.ShownValue(next.URL, false))
+		return nil, fmt.Errorf("run configuration %s: Start a new run to change default_model_provider_credential_name: the run started with %s, and this configuration selects %s; the policy in force stays", accesskey.ShownValue(next.URL, false), shownKey(r.storedDefault), shownKey(creds.defaultName))
 	}
 	if !sameHosts(stack, r.stack) {
 		return nil, errors.New("start another run to use other stack hosts: a run's stack_hosts are fixed when it starts")

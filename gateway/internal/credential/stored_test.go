@@ -13,8 +13,8 @@ import (
 	"github.com/qoryai/forager/policy"
 )
 
-// storedDefault is a credential from the server for api.model.example.
-func storedDefault(value string) Stored {
+// storedModel is a credential from the server for api.model.example.
+func storedModel(value string) Stored {
 	return Stored{Name: "server-model", Apply: []StoredApply{{Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key"}}, Placeholders: []string{"MODEL_API_KEY"},
 		Value: func() []byte { return []byte(value) }}
 }
@@ -36,7 +36,7 @@ func TestACredentialFromTheServerReplacesTheMachinesOnItsHost(t *testing.T) {
 				{Name: "model", Env: "MODEL_TOKEN", Hosts: hosts, Scheme: "bearer", Placeholders: []string{"LOCAL_MODEL_PROVIDER_CREDENTIAL"}},
 				{Name: "plain", Env: "MODEL_TOKEN", Hosts: []string{"plain.example"}, Scheme: "bearer"},
 			}
-			held, err := ResolveWith(context.Background(), defs, []policy.Selected{{Name: "model"}, {Name: "plain"}}, []Stored{storedDefault("server-value")}, "", policy.Observe, nil, func(l string) { t.Log(l) })
+			held, err := ResolveWith(context.Background(), defs, []policy.Selected{{Name: "model"}, {Name: "plain"}}, []Stored{storedModel("server-value")}, "", policy.Observe, nil, func(l string) { t.Log(l) })
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -67,7 +67,7 @@ func TestACredentialFromTheServerReplacesTheMachinesOnItsHost(t *testing.T) {
 	}
 	t.Run("an adapter", func(t *testing.T) {
 		defs := []Definition{{Name: "product", Adapter: []string{adapter(t, `echo '{"version":1,"token":"t","apply":[{"hosts":["api.model.example"],"scheme":"bearer"}]}'`+"\n")}}}
-		held, err := ResolveWith(context.Background(), defs, []policy.Selected{{Name: "product"}}, []Stored{storedDefault("server-value")}, "", policy.Observe, nil, func(l string) { t.Log(l) })
+		held, err := ResolveWith(context.Background(), defs, []policy.Selected{{Name: "product"}}, []Stored{storedModel("server-value")}, "", policy.Observe, nil, func(l string) { t.Log(l) })
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -79,9 +79,10 @@ func TestACredentialFromTheServerReplacesTheMachinesOnItsHost(t *testing.T) {
 }
 
 // TestACredentialFromTheServerOfTheSameNameReplacesTheMachines pins the plan's case:
-// forager.yaml's model on api.anthropic.com and the run configuration's model on the
-// same host. The server's replaces the machine's, the name check runs against the
-// machine's credentials that stay, and the one use is the server's model.
+// the local model provider credential model on api.anthropic.com and the run
+// configuration's model on the same host. The server's replaces the local one, the name
+// check runs against the machine's credentials that stay, and the one use is the
+// server's model.
 func TestACredentialFromTheServerOfTheSameNameReplacesTheMachines(t *testing.T) {
 	t.Setenv("MODEL_TOKEN", "a-token")
 	defs := []Definition{{Name: "model", Env: "MODEL_TOKEN", Hosts: []string{"api.anthropic.com"}, Scheme: "header", Header: "x-api-key", Placeholders: []string{"ANTHROPIC_API_KEY"}}}
@@ -104,7 +105,7 @@ func TestACredentialFromTheServerOfTheSameNameReplacesTheMachines(t *testing.T) 
 // of two credentials from the server whose names contain qak_: the phrase in place of
 // each name.
 func TestTwoCredentialsFromTheServerOnOneHostShowNoSecretInAName(t *testing.T) {
-	a, b := storedDefault("server-value"), storedDefault("server-value")
+	a, b := storedModel("server-value"), storedModel("server-value")
 	a.Name, b.Name = "x-qak_not-a-real-secret", "y-qak_not-a-real-secret"
 	_, err := ResolveWith(context.Background(), nil, nil, []Stored{a, b}, "", policy.Observe, nil, func(l string) { t.Log(l) })
 	if err == nil || strings.Contains(strings.ToLower(err.Error()), "qak_") || !strings.HasPrefix(err.Error(), "claim api.model.example in only one of the credentials") {
@@ -133,7 +134,7 @@ func TestNoCredentialFromTheServerIsResolveUnchanged(t *testing.T) {
 // message.
 func TestACredentialFromTheServerIsCheckedAsTheMachines(t *testing.T) {
 	t.Setenv("MODEL_TOKEN", "a-token")
-	other := storedDefault("server-value")
+	other := storedModel("server-value")
 	other.Name = "server-other"
 	for name, c := range map[string]struct {
 		defs   []Definition
@@ -143,10 +144,10 @@ func TestACredentialFromTheServerIsCheckedAsTheMachines(t *testing.T) {
 		want   string
 	}{
 		"a name the machine's has": {[]Definition{{Name: "server-model", Env: "MODEL_TOKEN", Hosts: []string{"plain.example"}, Scheme: "bearer"}}, []policy.Selected{{Name: "server-model"}},
-			[]Stored{storedDefault("server-value")}, []string{"plain.example", "api.model.example"},
+			[]Stored{storedModel("server-value")}, []string{"plain.example", "api.model.example"},
 			`rename the run configuration's credential "server-model" or this machine's credential of that name; the machine's is for other hosts, so it stays, and the record lists each credential once`},
-		"two on one host": {nil, nil, []Stored{storedDefault("server-value"), other}, []string{"api.model.example"}, "claim api.model.example in only one of the credentials"},
-		"a host the run does not reach": {nil, nil, []Stored{storedDefault("server-value")}, []string{"plain.example"},
+		"two on one host": {nil, nil, []Stored{storedModel("server-value"), other}, []string{"api.model.example"}, "claim api.model.example in only one of the credentials"},
+		"a host the run does not reach": {nil, nil, []Stored{storedModel("server-value")}, []string{"plain.example"},
 			"add api.model.example to the run's egress allow list, or remove the credential server-model: the credential server-model is for api.model.example, which no allow entry covers"},
 	} {
 		held, err := ResolveWith(context.Background(), c.defs, c.sel, c.stored, "", policy.Enforce, c.allow, func(l string) { t.Log(l) })
@@ -172,12 +173,13 @@ func startRefusal(err error) (code string, names []string, text string) {
 }
 
 // TestTheDefaultCredentialIsTheNamedModelKey pins Held.DefaultCredential: the model key
-// that start names, the run's one model key when start is empty, and none when the run
-// has no model key and start is empty. It pins each refusal, run_configuration_invalid
-// with its text word for word: an empty start beside two model keys, with no name; a
-// start beside no model key; and a start that names no model key of the run, a host
-// credential included, each with the start as its name. A model key from the server
-// counts as the machine's does.
+// whose name is the default name, the run's one model key when the default name is
+// empty, and none when the run has no model key and the default name is empty. It pins
+// each refusal, run_configuration_invalid with its text word for word: an empty default
+// name beside two model keys, with no name; a default name beside no model key; and a
+// default name of no model key of the run, a host credential's name included, each with
+// the default name in the refusal's names. A model key from the server counts as a
+// local model provider credential does.
 func TestTheDefaultCredentialIsTheNamedModelKey(t *testing.T) {
 	t.Setenv("MODEL_TOKEN", "sk-ant-fake-value")
 	first, second := modelKey("first"), modelKey("second")
@@ -193,51 +195,51 @@ func TestTheDefaultCredentialIsTheNamedModelKey(t *testing.T) {
 		return out
 	}
 	for name, c := range map[string]struct {
-		defs   []Definition
-		stored []Stored
-		start  string
-		want   string
+		defs        []Definition
+		stored      []Stored
+		defaultName string
+		want        string
 	}{
-		"no model key and no start":         {[]Definition{plain}, nil, "", ""},
-		"one model key and no start":        {[]Definition{plain, first}, nil, "", "first"},
+		"no model key and no default":       {[]Definition{plain}, nil, "", ""},
+		"one model key and no default":      {[]Definition{plain, first}, nil, "", "first"},
 		"one model key from the server":     {[]Definition{plain}, []Stored{server}, "", "server-model"},
-		"the start among two":               {[]Definition{first, second}, nil, "second", "second"},
+		"the default among two":             {[]Definition{first, second}, nil, "second", "second"},
 		"the server's among two":            {[]Definition{first}, []Stored{server}, "server-model", "server-model"},
-		"the machine's beside the server's": {[]Definition{first}, []Stored{server}, "first", "first"},
+		"the local one beside the server's": {[]Definition{first}, []Stored{server}, "first", "first"},
 	} {
-		held, err := ResolveWith(context.Background(), c.defs, selected(c.defs), c.stored, c.start, policy.Observe, nil, func(l string) { t.Log(l) })
+		held, err := ResolveWith(context.Background(), c.defs, selected(c.defs), c.stored, c.defaultName, policy.Observe, nil, func(l string) { t.Log(l) })
 		if err != nil {
 			t.Errorf("%s: %v", name, err)
 			continue
 		}
 		if held.DefaultCredential != c.want {
-			t.Errorf("%s: the start %q, want %q", name, held.DefaultCredential, c.want)
+			t.Errorf("%s: the default %q, want %q", name, held.DefaultCredential, c.want)
 		}
 		held.Close()
 	}
 	for name, c := range map[string]struct {
-		defs   []Definition
-		stored []Stored
-		start  string
-		names  []string
-		want   string
+		defs        []Definition
+		stored      []Stored
+		defaultName string
+		names       []string
+		want        string
 	}{
-		"two model keys and no start": {[]Definition{first, plain, second}, nil, "", nil,
+		"two model keys and no default": {[]Definition{first, plain, second}, nil, "", nil,
 			"Set default_model_provider_credential_name, or give the run one model key.\nThe run has the model keys first, second: run_configuration_invalid"},
-		"a model key of each and no start": {[]Definition{first}, []Stored{server}, "", nil,
+		"a model key of each and no default": {[]Definition{first}, []Stored{server}, "", nil,
 			"Set default_model_provider_credential_name, or give the run one model key.\nThe run has the model keys first, server-model: run_configuration_invalid"},
-		"a start and no model key": {[]Definition{plain}, nil, "first", []string{"first"},
+		"a default and no model key": {[]Definition{plain}, nil, "first", []string{"first"},
 			"Remove default_model_provider_credential_name, or give the run a model key \"first\".\nThe run has no model key: run_configuration_invalid: first"},
-		"a start and no credential": {nil, nil, "first", []string{"first"},
+		"a default and no credential": {nil, nil, "first", []string{"first"},
 			"Remove default_model_provider_credential_name, or give the run a model key \"first\".\nThe run has no model key: run_configuration_invalid: first"},
-		"a start that names no model key": {[]Definition{first, second}, nil, "third", []string{"third"},
+		"a default of no model key": {[]Definition{first, second}, nil, "third", []string{"third"},
 			"Set default_model_provider_credential_name to one of the run's model keys.\nThe run has the model keys first, second, and no model key \"third\": run_configuration_invalid: third"},
-		"a start that names a host credential": {[]Definition{first, plain}, nil, "plain", []string{"plain"},
+		"a default that is a host credential": {[]Definition{first, plain}, nil, "plain", []string{"plain"},
 			"Set default_model_provider_credential_name to one of the run's model keys.\nThe run has the model keys first, and no model key \"plain\": run_configuration_invalid: plain"},
-		"a start with a secret in its name": {[]Definition{first}, nil, "x-qak_not-a-real-secret", []string{"(a name that contains an access key secret)"},
+		"a default with a secret in its name": {[]Definition{first}, nil, "x-qak_not-a-real-secret", []string{"(a name that contains an access key secret)"},
 			"Set default_model_provider_credential_name to one of the run's model keys.\nThe run has the model keys first, and no model key (a name that contains an access key secret): run_configuration_invalid: (a name that contains an access key secret)"},
 	} {
-		held, err := ResolveWith(context.Background(), c.defs, selected(c.defs), c.stored, c.start, policy.Observe, nil, func(l string) { t.Log(l) })
+		held, err := ResolveWith(context.Background(), c.defs, selected(c.defs), c.stored, c.defaultName, policy.Observe, nil, func(l string) { t.Log(l) })
 		if err == nil {
 			held.Close()
 			t.Errorf("%s: the credentials resolved", name)
@@ -266,7 +268,7 @@ func TestTwoModelKeysMayShareAHost(t *testing.T) {
 		t.Fatalf("two model keys on one host: %v", err)
 	}
 	if len(held.Uses) != 2 || held.Uses[0].Name != "first" || held.Uses[1].Name != "second" || held.DefaultCredential != "second" {
-		t.Errorf("uses %+v, start %q", held.Uses, held.DefaultCredential)
+		t.Errorf("uses %+v, default %q", held.Uses, held.DefaultCredential)
 	}
 	held.Close()
 	host := Definition{Name: "plain", Env: "MODEL_TOKEN", Hosts: []string{"api.model.example"}, Scheme: "bearer"}
@@ -290,7 +292,7 @@ func TestTwoModelKeysMayShareAHost(t *testing.T) {
 	}
 	stored := Stored{Name: "server-key", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Apply: []StoredApply{{Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key"}},
 		Value: func() []byte { return []byte("sk-ant-fake-server-value") }}
-	held, err = ResolveWith(context.Background(), []Definition{first}, []policy.Selected{{Name: "first"}}, []Stored{stored, storedDefault("server-value")}, "server-key", policy.Observe, nil, func(l string) { t.Log(l) })
+	held, err = ResolveWith(context.Background(), []Definition{first}, []policy.Selected{{Name: "first"}}, []Stored{stored, storedModel("server-value")}, "server-key", policy.Observe, nil, func(l string) { t.Log(l) })
 	if err == nil {
 		held.Close()
 		t.Error("a model key and a host credential from the server on one host resolved")
@@ -308,7 +310,7 @@ func TestAValueThatExpiresIsRenewedOnA401(t *testing.T) {
 		{Hosts: []string{"git.example"}, Scheme: "basic", Username: "x-access-token", Paths: []string{"/example-org/app.git/*"}},
 		{Hosts: []string{"api.git.example"}, Scheme: "bearer"},
 	}, Value: func() []byte { return []byte("forge-value") }, Rejected: func() { calls++ }}
-	model := storedDefault("model-value")
+	model := storedModel("model-value")
 	held, err := ResolveWith(context.Background(), nil, nil, []Stored{forge, model}, "", policy.Observe, nil, func(l string) { t.Log(l) })
 	if err != nil {
 		t.Fatal(err)

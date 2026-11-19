@@ -222,7 +222,7 @@ func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) 
 		// A session with no runtime has no default model provider credential, so it
 		// names none.
 		if spec.ModelProviderCredentialName != "" {
-			return runSpec{}, nil, fmt.Errorf("Set SessionSpec.Runtime, or leave SessionSpec.ModelProviderCredentialName empty.\nA session with no runtime starts with no model key, and the spec names the model key %s",
+			return runSpec{}, nil, fmt.Errorf("Set SessionSpec.Runtime, or leave SessionSpec.ModelProviderCredentialName empty.\nA session with no runtime starts with no model key, and the spec sets ModelProviderCredentialName to %s",
 				accesskey.ShownName(spec.ModelProviderCredentialName, true))
 		}
 		rt = runtimes.Bare(filepath.Base(spec.Command))

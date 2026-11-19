@@ -47,7 +47,8 @@ type linkRun struct {
 	// credentials; nil when the run has none.
 	keys *modelkey.Set
 	// defaultKeys is the key group of the run's default model provider credential, nil
-	// when the run has none or its default model provider credential is the machine's.
+	// when the run has none or its default model provider credential is a local model
+	// provider credential.
 	defaultKeys *modelkey.Group
 	// groupNames is the group value of each key group of keys, [run.KeyGroup.Name].
 	groupNames map[*modelkey.Group]string

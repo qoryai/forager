@@ -774,13 +774,14 @@ func TestTheRunAnswerHasTheHostsOfEachCredential(t *testing.T) {
 	h.close()
 }
 
-// TestAModelKeyOfTheMachineReachesTheRunAnswer pins a model key of forager.yaml's, one
-// with format and endpoint, through the gateway: the run answer, read through the
-// session's link client, which holds it to the schema, has its credential_hosts entry
-// with the endpoint's host, no placeholder, its format, endpoint and auth, and its name
-// as default_model_provider_credential_name; the run has no placeholder variable, and
-// the proxy sets the key. applied.credentials lists the key on the endpoint's host.
-func TestAModelKeyOfTheMachineReachesTheRunAnswer(t *testing.T) {
+// TestALocalModelProviderCredentialReachesTheRunAnswer pins a local model provider
+// credential, one with format and endpoint, through the gateway: the run answer, read
+// through the session's link client, which holds it to the schema, has its
+// credential_hosts entry with the endpoint's host, no placeholder, its format, endpoint
+// and auth, and its name as default_model_provider_credential_name; the run has no
+// placeholder variable, and the proxy sets the key. applied.credentials lists the key
+// on the endpoint's host.
+func TestALocalModelProviderCredentialReachesTheRunAnswer(t *testing.T) {
 	const key = "sk-ant-fake-value-of-the-test"
 	t.Setenv("GATEWAY_TEST_SECRET", key)
 	ref := "registry.example/agents/base@sha256:" + strings.Repeat("0", 64)

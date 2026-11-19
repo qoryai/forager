@@ -963,7 +963,7 @@ refusal's `names`.
 `default_model_provider_credential_name` is the name of the default model provider
 credential, the model key the runtime starts with: an API credential of `credentials`,
 or a local model provider credential that the run's policy selects. A run with two or
-more model keys, the server's and the machine's together, needs it; in a run with one,
+more model keys, the server's and the local ones together, needs it; in a run with one,
 that one is the default model provider credential, and
 `default_model_provider_credential_name` may name it. Each of these is
 `run_configuration_invalid`: a `default_model_provider_credential_name` that names a
@@ -971,7 +971,7 @@ host credential of the document; none beside two or more API credentials, whose 
 is `Set default_model_provider_credential_name to the model provider credential the
 first session uses: the document lists model, backup.`; and, when the gateway resolves
 the run's credentials, a name of no model key of the run, and none beside two or more
-model keys of the server's and the machine's together.
+model keys, the server's and the local model provider credentials together.
 
 The gateway sets these credentials for every run, with or without a wall. A run
 configuration with `credentials` from a server whose discovery lists no `secrets` is
@@ -1000,12 +1000,12 @@ item with the host has, such as `Tell whoever runs the control plane: credential
 else, for hosts of two entry items in one item, `Tell whoever runs the control plane:
 credential "forge" merges two apply items of its entry`. No message contains a value. A credential from the
 server replaces each credential of the machine's whose hosts claim one of its hosts, or
-a host above or below one; the host of a model key, from the server or the machine, is
-its endpoint's. A key from `env` or `file`, such as forager.yaml's model key for that
-host, is then not read; an adapter still runs, and its answer is dropped. The run
+a host above or below one; the host of a model key, from the server or a local model
+provider credential, is its endpoint's. A key from `env` or `file`, such as a local
+model provider credential for that host, is then not read; an adapter still runs, and its answer is dropped. The run
 answer, the record and `placeholders` list the server's credential instead. The
-replaced credential may have the same name: forager.yaml's `model` on
-`api.anthropic.com` and a run configuration's `model` on `api.anthropic.com` give the
+replaced credential may have the same name: the local model provider credential `model`
+on `api.anthropic.com` and a run configuration's `model` on `api.anthropic.com` give the
 run the server's `model`. A credential of the machine's that stays, because its hosts
 claim none of the server's credential's hosts, and that has the same name is no run, so
 the record lists each name once. Without `credentials` the run gets the machine's
@@ -1130,10 +1130,8 @@ twice`, and `set each window in use_up_to_windows of the model key "model-2" to 
 of a-z, 0-9 and underscore, starting with a letter, such as five_hour: window 1 is
 "Five_Hour"`.
 
-The server sends each group's keys in the order that breaks ties: the provider's default
-key first; then the others by when they were added; then the keys in cooldown at the
-claim, each with `cooldown_until`. When the active key goes into cooldown, the gateway
-makes active a key out of cooldown: a key with no known reset first; then the key with
+The server sends each group's keys in the order that breaks ties: by when they were added, then the keys in cooldown at the claim, each with `cooldown_until`. When the active key goes into cooldown, the gateway
+makes active a key out of cooldown: a key with no known reset first, in the order the run configuration lists them; then the key with
 the closest reset; among equals, the first by the order (step 2 below). When the run's
 API credentials, across every group, would pass 6, the keys out of cooldown come first,
 then the keys in cooldown by the earliest `cooldown_until`. The gateway starts a key
@@ -4941,8 +4939,8 @@ document:
   and its `scheme`, `username` and `header` as `auth`, and the credential's
   `placeholders` on the first entry alone, empty on the others. A harness credential
   (§Credentials, Harness credentials) and a push credential (§Credentials, Push
-  credentials) have no entry. A model key, from the server or the machine, also has
-  `format` and `endpoint`; its `hosts` are the endpoint's host alone, and its
+  credentials) have no entry. A model key, from the server or a local model provider
+  credential, also has `format` and `endpoint`; its `hosts` are the endpoint's host alone, and its
   `placeholders` are empty. An entry with `format` has `auth` and `endpoint`, and one
   with `endpoint` has `format`. The session adds the variable it gives the default model
   provider credential (§Credentials, The variable of a model key) to the default model
@@ -6494,7 +6492,7 @@ result and each denied tool call (§The events). Its `tools.summary` lists
 and both `Agent: description` and `Task: description`, because the 2.1.316 binary has
 both names for the tool that starts a subagent and the init line of a recorded 2.1.316
 run lists `Task`. Its `secrets` declare no secret, reserve no variable and have no `one_of` group: the run's model key is a model
-key from the server or the machine (§Credentials). Its `model` lists
+key from the server or a local model provider credential (§Credentials). Its `model` lists
 `anthropic-messages`; it places the model id as `--model`, the run's effort value as
 `--effort` and an agent's effort value in the `effort` frontmatter, each of the two
 taking `low`, `medium`, `high`, `xhigh` and `max`; it places the endpoint in

@@ -223,7 +223,7 @@ func TestAKeyGroupInCooldownAtTheClaim(t *testing.T) {
 		t.Errorf("the keys %+v", keys)
 	}
 	for _, c := range []struct{ fixture, name, line string }{
-		{"run-configuration-beyond-schema-model-keys-start-cooling.json", "model", "Set default_model_provider_credential_name to a model key out of cooldown.\nThe default model provider credential \"model\" is in cooldown until 2099-01-01T00:00:00Z"},
+		{"run-configuration-beyond-schema-model-keys-default-cooling.json", "model", "Set default_model_provider_credential_name to a model key out of cooldown.\nThe default model provider credential \"model\" is in cooldown until 2099-01-01T00:00:00Z"},
 		{"run-configuration-beyond-schema-model-keys-group-mixed.json", "model-2", "run configuration https://apiary.example/v1/run-configuration: Give the keys of group \"anthropic\" one format, endpoint and auth.\nThe credentials \"model\" and \"model-2\" differ in endpoint"},
 	} {
 		s := &controlPlane{answer: harnessValue}
