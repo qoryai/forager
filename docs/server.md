@@ -227,12 +227,13 @@ checks every value the node passes: `Env`, `LaunchFixed`, `LaunchDefaults`,
 | a `QORY_` variable, or one the gateway sets, such as one a credential is read from | a walled run | `variable_reserved` |
 | a value for a placeholder | any run | `placeholder_conflict` |
 
-`QORY_RUN_ID` and `QORY_RUN_SOCKET` are exempt from the first. Without a wall, a
-`QORY_` value of the server, the run, the machine or the harness is denied instead. A
-server's `QORY_` value is denied in any run, apart from `QORY_RUN_SYSTEM` and
-`QORY_RUN_REPOSITORIES`, the system and the repositories a session's setup commands
-may use, which the server's variables may set and which reach the agent as any server variable
-does. Set by the node, they are `QORY_` names like any other.
+`QORY_RUN_ID` and `QORY_RUN_SOCKET` are exempt from the first; `QORY_SESSION`, which
+Forager sets to the session's number, is not. Without a wall, a `QORY_` value of the
+server, the run, the machine or the harness is denied instead. A server's `QORY_` value
+is denied in any run, apart from `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`, the
+system and the repositories a session's setup commands may use, which the server's
+variables may set and which reach the agent as any server variable does. Set by the
+node, they are `QORY_` names like any other.
 
 Before it resolves the variables, the session refuses a placeholder that goes into a
 variable for no credential, `run_configuration_invalid`: one of the run's placeholders,

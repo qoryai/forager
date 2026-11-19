@@ -132,6 +132,9 @@ type report struct {
 	// Transcript is what the probe planted at its transcript's path, when
 	// PROBE_TRANSCRIPT is set.
 	Transcript *transcriptReport `json:"transcript,omitempty"`
+	// SessionNumber is the value of QORY_SESSION, or "unset", in the report of
+	// [modeSessionNumber].
+	SessionNumber string `json:"session_number,omitempty"`
 	// SessionEnv is how the probe's mkdir of ~/.claude/session-env failed, beside the
 	// transcript bind at ~/.claude/projects, as Claude Code makes it; empty when it did
 	// not, and "no HOME" when HOME is empty.

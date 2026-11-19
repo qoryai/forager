@@ -543,15 +543,15 @@ func (r *Run) setupEnv(env []string) ([]string, error) {
 
 // checkSetupEnv refuses a setup variable of env by the rules that hold for every
 // session of a walled run, each text starting with the fix. A QORY_ name, in any case,
-// is [refusal.VariableReserved], QORY_RUN_ID and QORY_RUN_SOCKET among them; only
-// QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES, the server's names a setup command may
-// use, are not refused. A name of reserved, the names the machine's credentials are
-// read from, is [refusal.VariableReserved] too, and a value for one of placeholders,
-// the run's placeholders, is [refusal.PlaceholderConflict]. A name the built-in deny
-// list, denied-variables.json, matches is refused with no code, such as LD_PRELOAD or
-// HTTPS_PROXY; a credential's name of that list, such as GH_TOKEN, with the fix of
-// moving it to the gateway's credentials. The deny entries of a session, Variables.Deny and the runtime's denies,
-// apply in [Run.AgentEnv].
+// is [refusal.VariableReserved], QORY_RUN_ID, QORY_SESSION and QORY_RUN_SOCKET among
+// them; only QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES, the server's names a setup
+// command may use, are not refused. A name of reserved, the names the machine's
+// credentials are read from, is [refusal.VariableReserved] too, and a value for one of
+// placeholders, the run's placeholders, is [refusal.PlaceholderConflict]. A name the
+// built-in deny list, denied-variables.json, matches is refused with no code, such as
+// LD_PRELOAD or HTTPS_PROXY; a credential's name of that list, such as GH_TOKEN, with
+// the fix of moving it to the gateway's credentials. The deny entries of a session,
+// Variables.Deny and the runtime's denies, apply in [Run.AgentEnv].
 func checkSetupEnv(env, placeholders, reserved []string) error {
 	checked := names(withoutNames(env, []string{envRunSystem, envRunRepositories}))
 	slices.Sort(checked)

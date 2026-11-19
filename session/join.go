@@ -728,7 +728,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if spec.Wall == nil {
 		spec.Env = withoutNames(spec.Env, []string{EnvRunAPI, EnvQoryHost})
 	}
-	ownEnv := []string{EnvRunID + "=" + r.id}
+	ownEnv := []string{EnvRunID + "=" + r.id, EnvSession + "=" + strconv.Itoa(n)}
 	if r.answer.RunAPI != "" {
 		ownEnv = append(ownEnv, EnvRunAPI+"="+r.answer.RunAPI)
 	}

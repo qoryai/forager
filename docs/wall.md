@@ -1106,7 +1106,7 @@ if err := run.RemoveSetup(ctx); err != nil {
   container gets the agent's variables. The result has `QORY_RUN_SYSTEM` and
   `QORY_RUN_REPOSITORIES` when the server sets them, and `Setup` accepts both. `Setup`
   refuses, before any step, a value for one of the run's placeholders
-  (`placeholder_conflict`), any other `QORY_` name, `QORY_RUN_ID` and
+  (`placeholder_conflict`), any other `QORY_` name, `QORY_RUN_ID`, `QORY_SESSION` and
   `QORY_RUN_SOCKET` among them, or a name the machine's credentials are read from
   (`variable_reserved`), and a name of `denied-variables.json`, such as `LD_PRELOAD`; for
   a credential's name of that list, such as `GH_TOKEN`, the error starts with `Move
