@@ -106,6 +106,9 @@ type transcript struct {
 	bases      map[string]rolloutState
 	baseFailed string
 	copied     *restored
+	// hooks, when not nil, gets each open of a rollout and each read of a rollout's
+	// first bytes; a test counts them or changes the file there. Nil outside tests.
+	hooks *rolloutHooks
 }
 
 // maxTranscriptLine is the longest line of a transcript the session sends, 8 MiB: the

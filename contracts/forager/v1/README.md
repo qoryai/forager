@@ -2118,10 +2118,16 @@ shorter; a new file, a file replaced and a file shorter have the baseline 0, sin
 0.167.2 only appends to a rollout. Without a wall, the restored rollout's baseline is the
 restored length, since the session's script copies that file to its place only once
 the launch starts. The thread's rollout is the one file that `resume.path` matches for
-the thread id. Of every other file, the session reads at most the first 64 KiB, for the
-`id` and the `parent_thread_id` of its `session_meta`, and skips the file when it cannot
-read them that way or when either id is longer than 128 bytes: a symbolic link, a FIFO,
-a file whose first line is longer than 64 KiB. The child agents are the files whose
+the thread id. Of every other file that changed since the baseline, the session reads
+at most the first 64 KiB, for the `id`, the `parent_thread_id` and the `source` of its
+`session_meta`. Codex 0.167.2 writes them before the base instructions, so a first line
+longer than 64 KiB counts. The session skips the file when it cannot read them that way
+or when either id is longer than 128 bytes: a symbolic link, a FIFO, a file with a
+second hard link behind a wall, a first line of another shape. A file that did not
+change adds nothing, and the session reads its first 64 KiB only to link a file that
+changed to the thread: when no file it read has the id of that file's parent, it reads
+each file that did not change and that `resume.path` matches with that id, and links
+the file whose `session_meta` has that id. The child agents are the files whose
 `parent_thread_id` is the thread or one of its child agents, up to 16 levels down. The
 usage is the sum, over the thread and its child agents, of the last total less the
 baseline. `usage.input` is `input_tokens` less `cached_input_tokens` and
@@ -2135,10 +2141,11 @@ the session does not use it. The session reads in full the thread's rollout and 
 child agent's that changed since the baseline, as it reads the transcript: no symbolic
 link, FIFO or file with a second hard link behind a wall, each file at most 64 MiB, and
 at most 256 files and 256 MiB together. After such a file that it does not read, more
-files or bytes, a count above 2^53 or below -2^53, a sum of a count above 2^53, a launch
-with no rollout, and a launch for which the session reads no transcript, the result has
-no `usage`, and the session writes one `dev.qory.run.log` line: the fix on its first
-line, the cause on the second. A launch whose rollouts have no total since the baseline
+files or bytes, a file whose first line has no `id` and `source` in its first 64 KiB, a
+count above 2^53, a count below -2^53, a count that is not an integer, a sum of a count
+above 2^53, a launch with no rollout, and a launch for which the session reads no
+transcript, the result has no `usage`, and the session writes one `dev.qory.run.log`
+line: the fix on its first line, the cause on the second. A launch whose rollouts have no total since the baseline
 has no `usage`.
 
 **A subagent's parent.** `dev.qory.runtime.subagent_started` contains `parent_agent_id`

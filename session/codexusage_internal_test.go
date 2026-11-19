@@ -272,9 +272,10 @@ func usageWithin(t *testing.T, tr *transcript) map[string]any {
 
 // TestCodexUsageRefusesWhatTheAgentPlants pins the checks of the files the session
 // reads in full, the thread's rollout and its child agents', with a wall and without
-// one: a symbolic link, a FIFO, which the session opens without blocking, a file with
-// a second hard link behind a wall, and a file over 64 MiB. For each the usage is nil,
-// and the session writes one line that starts with the fix.
+// one: a symbolic link, a FIFO, which the session opens without blocking, the thread's
+// file with a second hard link behind a wall, and a file over 64 MiB. For each the
+// usage is nil, and the session writes one line that starts with the fix. A child's
+// file with a second hard link is in [TestCodexUsageSkipsAHardLinkBehindAWall].
 func TestCodexUsageRefusesWhatTheAgentPlants(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "outside.jsonl")
 	if err := os.WriteFile(outside, fixture(t, "launch1-parent-rollout.jsonl"), 0o600); err != nil {
@@ -305,13 +306,6 @@ func TestCodexUsageRefusesWhatTheAgentPlants(t *testing.T) {
 		"the thread over 64 MiB": {plant: func(t *testing.T, dir string) {
 			sparse(t, dir, thread, meta(fixtureThread, ""), maxTranscript+1)
 		}, fix: fixRolloutSize},
-		"a child with a hard link": {plant: func(t *testing.T, dir string) {
-			appendTo(t, dir, thread, fixture(t, "launch1-parent-rollout.jsonl"))
-			appendTo(t, dir, child, fixture(t, "launch1-child-rollout.jsonl"))
-			if err := os.Link(filepath.Join(dir, child), filepath.Join(dir, "2026", "11", "19", "other")); err != nil {
-				t.Fatal(err)
-			}
-		}, walled: true, fix: fixRolloutHardLinks},
 		"a child over 64 MiB": {plant: func(t *testing.T, dir string) {
 			appendTo(t, dir, thread, fixture(t, "launch1-parent-rollout.jsonl"))
 			sparse(t, dir, child, meta(fixtureChild, fixtureThread), maxTranscript+1)
@@ -476,7 +470,7 @@ func TestCodexUsageClampsACountBelowZero(t *testing.T) {
 // the second, and the numbers of the fixes those of the caps.
 func TestCodexUsageLinesStartWithTheFix(t *testing.T) {
 	fixes := []string{fixRolloutEntries, fixRolloutFolders, fixRolloutCount, fixRolloutBytes, fixRolloutLinked, fixRolloutHardLinks,
-		fixRolloutSize, fixRolloutRead, fixThreadOne, fixThreadShape, fixThreadMissing, fixRolloutDepth, fixRolloutCounts, fixNoTranscript}
+		fixRolloutSize, fixRolloutRead, fixThreadOne, fixThreadShape, fixThreadMissing, fixRolloutDepth, fixRolloutCounts, fixRolloutMeta, fixNoTranscript}
 	for _, fix := range fixes {
 		l := noUsage(fix, "a cause")
 		first, second, ok := strings.Cut(l, "\n")
@@ -493,5 +487,317 @@ func TestCodexUsageLinesStartWithTheFix(t *testing.T) {
 		if !strings.Contains(fix, fmt.Sprint(" ", n, " ")) {
 			t.Errorf("%q has no %d", fix, n)
 		}
+	}
+}
+
+// Ids of child agents of the tests below.
+const (
+	childA = "33333333-3333-4333-8333-333333333333"
+	childB = "44444444-4444-4444-8444-444444444444"
+)
+
+// longMeta is a session_meta line of id with parent, as Codex 0.167.2 writes a child
+// agent's: the ids and the source first, then base instructions of 70 KiB, so that the
+// line is longer than [maxRolloutHead].
+func longMeta(id, parent string) string {
+	return fmt.Sprintf(`{"type":"session_meta","payload":{"session_id":%q,"id":%q,"parent_thread_id":%q,"source":{"subagent":{"thread_spawn":{"parent_thread_id":%q,"depth":1}}},"base_instructions":{"text":%q}}}`+"\n",
+		parent, id, parent, parent, strings.Repeat("x", 70<<10))
+}
+
+// TestCodexUsageReadsALongSessionMeta pins a child whose first line is longer than 64
+// KiB, with a wall and without one: its ids come before the base instructions, so the
+// thread with count 1 and the child with count 10 give the usage 11. A first line of
+// 70 KiB with the ids after the first 64 KiB gives no usage and one line.
+func TestCodexUsageReadsALongSessionMeta(t *testing.T) {
+	for _, walled := range []bool{false, true} {
+		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+			tr, s, dir := codexUsageTranscript(t, walled)
+			tr.codexBaseline(nil)
+			appendTo(t, dir, rolloutAt(walledID), []byte(meta(walledID, "")+count(1)))
+			appendTo(t, dir, rolloutAt(childA), []byte(longMeta(childA, walledID)+count(10)))
+			if got := tr.codexUsage(walledID); !reflect.DeepEqual(got, usage(11)) || len(s.lines) != 0 {
+				t.Errorf("usage %v, lines %q; want %v", got, s.lines, usage(11))
+			}
+
+			late := fmt.Sprintf(`{"type":"session_meta","payload":{"cwd":%q,"id":%q,"parent_thread_id":%q}}`+"\n", strings.Repeat("x", 70<<10), childB, walledID)
+			appendTo(t, dir, rolloutAt(childB), []byte(late+count(100)))
+			if got := tr.codexUsage(walledID); got != nil {
+				t.Errorf("ids after 64 KiB: usage %v; want none", got)
+			}
+			checkLines(t, s, fixRolloutMeta)
+			if !strings.Contains(s.lines[0], "the first 65536 bytes (64 KiB) of a rollout at ~/.rollouts/sessions/*/*/*/rollout-*-*.jsonl end before the id and source of its session_meta") {
+				t.Errorf("line %q", s.lines[0])
+			}
+		})
+	}
+}
+
+// readCounts counts the opens of rollouts and the reads of their first bytes by
+// [rolloutHooks], by path below the prefix, with the bytes of each head read.
+type readCounts struct {
+	opens, heads map[string]int
+	headBytes    map[string][]int
+}
+
+// countReads sets tr's hooks to count into a new readCounts; opened, when not nil,
+// also gets each open with its number for that path, from 1.
+func countReads(tr *transcript, opened func(rel string, n int, f *os.File)) *readCounts {
+	c := &readCounts{opens: map[string]int{}, heads: map[string]int{}, headBytes: map[string][]int{}}
+	tr.hooks = &rolloutHooks{
+		opened: func(rel string, f *os.File) {
+			c.opens[rel]++
+			if opened != nil {
+				opened(rel, c.opens[rel], f)
+			}
+		},
+		head: func(rel string, n int) {
+			c.heads[rel]++
+			c.headBytes[rel] = append(c.headBytes[rel], n)
+		},
+	}
+	return c
+}
+
+// TestCodexUsageReadsOnlyChangedFiles pins the reads of a folder with 5000 rollouts
+// of an earlier launch that did not change, children of the thread, with a wall and
+// without one. A launch that changed the thread and one child opens the thread once,
+// and the child twice, its first bytes and then in full. A child that did not change
+// with a grandchild that changed costs one read of the child's first bytes, found by
+// the id in its name, to link the grandchild to the thread. A file whose name has the
+// id and whose session_meta has another id links nothing.
+func TestCodexUsageReadsOnlyChangedFiles(t *testing.T) {
+	const grandchild = "55555555-5555-4555-8555-555555555555"
+	for _, walled := range []bool{false, true} {
+		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+			tr, s, dir := codexUsageTranscript(t, walled)
+			for i := range 5000 {
+				appendTo(t, dir, fmt.Sprintf("2026/11/17/rollout-%d-old-%d.jsonl", i, i), []byte(meta(fmt.Sprint("old-", i), walledID)+count(1000)))
+			}
+			appendTo(t, dir, rolloutAt(walledID), []byte(meta(walledID, "")))
+			tr.codexBaseline(nil)
+			appendTo(t, dir, rolloutAt(walledID), []byte(count(1)))
+			appendTo(t, dir, rolloutAt(childA), []byte(meta(childA, walledID)+count(10)))
+			c := countReads(tr, nil)
+			if got := tr.codexUsage(walledID); !reflect.DeepEqual(got, usage(11)) || len(s.lines) != 0 {
+				t.Errorf("a changed child: usage %v, lines %q; want %v", got, s.lines, usage(11))
+			}
+			wantOpens := map[string]int{rolloutAt(walledID): 1, rolloutAt(childA): 2}
+			if !reflect.DeepEqual(c.opens, wantOpens) || !reflect.DeepEqual(c.heads, map[string]int{rolloutAt(childA): 1}) {
+				t.Errorf("a changed child: opens %v, head reads %v; want %v and the child's one", c.opens, c.heads, wantOpens)
+			}
+
+			// The next launch changes a grandchild below the child, which did not change.
+			tr.codexBaseline(nil)
+			appendTo(t, dir, rolloutAt(walledID), []byte(count(2)))
+			appendTo(t, dir, rolloutAt(grandchild), []byte(meta(grandchild, childA)+count(100)))
+			c = countReads(tr, nil)
+			if got := tr.codexUsage(walledID); !reflect.DeepEqual(got, usage(101)) || len(s.lines) != 0 {
+				t.Errorf("a changed grandchild: usage %v, lines %q; want %v", got, s.lines, usage(101))
+			}
+			wantHeads := map[string]int{rolloutAt(grandchild): 1, rolloutAt(childA): 1}
+			if !reflect.DeepEqual(c.heads, wantHeads) || c.opens[rolloutAt(childA)] != 1 {
+				t.Errorf("a changed grandchild: head reads %v, opens %v; want %v and one open of the child", c.heads, c.opens, wantHeads)
+			}
+
+			// A grandchild whose parent has no rollout, and a file whose name has the
+			// parent's id and whose session_meta has another id: the grandchild adds
+			// nothing.
+			tr, s, dir = codexUsageTranscript(t, walled)
+			decoy := "2026/11/17/rollout-decoy-" + childB + ".jsonl"
+			appendTo(t, dir, decoy, []byte(meta("decoy", walledID)+count(1000)))
+			tr.codexBaseline(nil)
+			appendTo(t, dir, rolloutAt(walledID), []byte(meta(walledID, "")+count(1)))
+			appendTo(t, dir, rolloutAt(grandchild), []byte(meta(grandchild, childB)+count(100)))
+			c = countReads(tr, nil)
+			if got := tr.codexUsage(walledID); !reflect.DeepEqual(got, usage(1)) || len(s.lines) != 0 {
+				t.Errorf("a decoy: usage %v, lines %q; want %v", got, s.lines, usage(1))
+			}
+			if c.heads[decoy] != 1 {
+				t.Errorf("a decoy: head reads %v; want one of %s", c.heads, decoy)
+			}
+		})
+	}
+}
+
+// TestCodexUsageComparesTheInode pins the device and inode of a child's baseline,
+// with a wall and without one. A child replaced by a rename, a new inode, longer than
+// its baseline, adds its full total, 40: the bytes up to its baseline's length are no
+// bytes of the file before the launch. The test holds the old file open, so its inode
+// is not reused. A child rewritten in place with longer content keeps its inode: its
+// bytes up to the baseline's length count as the file's before the launch, since Codex
+// 0.167.2 only appends to a rollout and the baseline reads no file, so the child adds
+// 40 less the 21 in those bytes now, 19.
+func TestCodexUsageComparesTheInode(t *testing.T) {
+	old, now := meta(childA, walledID)+count(20), meta(childA, walledID)+count(21)+count(40)
+	if len(old) != len(meta(childA, walledID)+count(21)) {
+		t.Fatal("the counts 20 and 21 differ in length")
+	}
+	for _, walled := range []bool{false, true} {
+		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+			tr, s, dir := codexUsageTranscript(t, walled)
+			p := filepath.Join(dir, rolloutAt(childA))
+			appendTo(t, dir, rolloutAt(childA), []byte(old))
+			held, err := os.Open(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer held.Close()
+			tr.codexBaseline(nil)
+			appendTo(t, dir, rolloutAt(walledID), []byte(meta(walledID, "")+count(1)))
+			if err := os.WriteFile(p+".new", []byte(now), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(p+".new", p); err != nil {
+				t.Fatal(err)
+			}
+			if got := tr.codexUsage(walledID); !reflect.DeepEqual(got, usage(41)) || len(s.lines) != 0 {
+				t.Errorf("a child renamed over: usage %v, lines %q; want %v", got, s.lines, usage(41))
+			}
+
+			tr, s, dir = codexUsageTranscript(t, walled)
+			p = filepath.Join(dir, rolloutAt(childA))
+			appendTo(t, dir, rolloutAt(childA), []byte(old))
+			tr.codexBaseline(nil)
+			appendTo(t, dir, rolloutAt(walledID), []byte(meta(walledID, "")+count(1)))
+			f, err := os.OpenFile(p, os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.WriteAt([]byte(now), 0); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if got := tr.codexUsage(walledID); !reflect.DeepEqual(got, usage(20)) || len(s.lines) != 0 {
+				t.Errorf("a child rewritten in place: usage %v, lines %q; want %v", got, s.lines, usage(20))
+			}
+		})
+	}
+}
+
+// TestCodexUsageTakesACopiedShorterFileWhole pins a run with no wall whose resume
+// script copies a restored file shorter than the restored length: its baseline is 0,
+// and the usage is its full total, with no line.
+func TestCodexUsageTakesACopiedShorterFileWhole(t *testing.T) {
+	tr, s, dir := codexUsageTranscript(t, false)
+	launch1 := fixture(t, "launch1-parent-rollout.jsonl")
+	tr.codexBaseline(&restored{sessionID: fixtureThread, rel: ".rollouts/sessions/" + rolloutAt(fixtureThread), size: int64(len(launch1))})
+	short := meta(fixtureThread, "") + count(5)
+	if len(short) >= len(launch1) {
+		t.Fatal("the copy is not shorter")
+	}
+	appendTo(t, dir, rolloutAt(fixtureThread), []byte(short))
+	if got := tr.codexUsage(fixtureThread); !reflect.DeepEqual(got, usage(5)) || len(s.lines) != 0 {
+		t.Errorf("usage %v, lines %q; want %v", got, s.lines, usage(5))
+	}
+}
+
+// TestCodexUsageSkipsAFileSwappedBetweenItsReads pins a child whose file another file
+// replaces between the read of its first bytes and its read in full, with a wall and
+// without one: the new file's id is over 128 bytes, and the child adds nothing. A
+// swap to another id of 128 bytes or fewer adds nothing too.
+func TestCodexUsageSkipsAFileSwappedBetweenItsReads(t *testing.T) {
+	for name, swapped := range map[string]string{"a long id": strings.Repeat("a", maxSessionID+1), "another id": childB} {
+		for _, walled := range []bool{false, true} {
+			t.Run(fmt.Sprint(name, ", walled ", walled), func(t *testing.T) {
+				tr, s, dir := codexUsageTranscript(t, walled)
+				tr.codexBaseline(nil)
+				appendTo(t, dir, rolloutAt(walledID), []byte(meta(walledID, "")+count(1)))
+				appendTo(t, dir, rolloutAt(childA), []byte(meta(childA, walledID)+count(10)))
+				p := filepath.Join(dir, rolloutAt(childA))
+				countReads(tr, func(rel string, n int, _ *os.File) {
+					if rel != rolloutAt(childA) || n != 1 {
+						return
+					}
+					if err := os.WriteFile(p+".new", []byte(meta(swapped, walledID)+count(1000)), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Rename(p+".new", p); err != nil {
+						t.Fatal(err)
+					}
+				})
+				if got := tr.codexUsage(walledID); !reflect.DeepEqual(got, usage(1)) || len(s.lines) != 0 {
+					t.Errorf("usage %v, lines %q; want the thread's %v", got, s.lines, usage(1))
+				}
+			})
+		}
+	}
+}
+
+// TestCodexUsageReadsAtMost64KiBOfAHead pins the bytes of each read of a child's first
+// bytes: 65536 of a file of 70 KiB, and of a smaller file the length its fstat has,
+// though the file grows after the fstat.
+func TestCodexUsageReadsAtMost64KiBOfAHead(t *testing.T) {
+	for _, walled := range []bool{false, true} {
+		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+			tr, _, dir := codexUsageTranscript(t, walled)
+			tr.codexBaseline(nil)
+			appendTo(t, dir, rolloutAt(walledID), []byte(meta(walledID, "")+count(1)))
+			appendTo(t, dir, rolloutAt(childA), []byte(longMeta(childA, walledID)+count(10)))
+			small := meta(childB, walledID) + count(100)
+			appendTo(t, dir, rolloutAt(childB), []byte(small))
+			c := countReads(tr, func(rel string, n int, _ *os.File) {
+				if rel == rolloutAt(childB) && n == 1 {
+					appendTo(t, dir, rel, []byte(count(100)))
+				}
+			})
+			tr.codexUsage(walledID)
+			want := map[string][]int{rolloutAt(childA): {maxRolloutHead}, rolloutAt(childB): {len(small)}}
+			if !reflect.DeepEqual(c.headBytes, want) {
+				t.Errorf("head reads of %v bytes; want %v", c.headBytes, want)
+			}
+		})
+	}
+}
+
+// TestCodexUsageReadErrorHasNoName pins a read in full that fails, of a child whose
+// file name an agent chose, with a wall and without one: the usage is nil, and the
+// line contains the cause and not the name.
+func TestCodexUsageReadErrorHasNoName(t *testing.T) {
+	const planted = "2026/11/19/rollout-plantedname-x.jsonl"
+	for _, walled := range []bool{false, true} {
+		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+			tr, s, dir := codexUsageTranscript(t, walled)
+			tr.codexBaseline(nil)
+			appendTo(t, dir, rolloutAt(walledID), []byte(meta(walledID, "")+count(1)))
+			appendTo(t, dir, planted, []byte(meta(childA, walledID)+count(10)))
+			countReads(tr, func(rel string, n int, f *os.File) {
+				if rel == planted && n == 2 {
+					f.Close()
+				}
+			})
+			if got := tr.codexUsage(walledID); got != nil {
+				t.Errorf("usage %v; want none", got)
+			}
+			checkLines(t, s, fixRolloutRead)
+			if l := s.lines[0]; strings.Contains(l, "plantedname") || !strings.Contains(l, "a read of a rollout at ~/.rollouts/sessions/*/*/*/rollout-*-*.jsonl failed: read: file already closed") {
+				t.Errorf("line %q; want the cause and no name", l)
+			}
+		})
+	}
+}
+
+// TestCodexUsageSkipsAHardLinkBehindAWall pins a child whose file has a second hard
+// link: behind a wall the session reads none of it, so the usage is the thread's with
+// no line; without a wall it reads the child.
+func TestCodexUsageSkipsAHardLinkBehindAWall(t *testing.T) {
+	for walled, want := range map[bool]map[string]any{true: usage(1), false: usage(11)} {
+		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+			tr, s, dir := codexUsageTranscript(t, walled)
+			tr.codexBaseline(nil)
+			appendTo(t, dir, rolloutAt(walledID), []byte(meta(walledID, "")+count(1)))
+			appendTo(t, dir, rolloutAt(childA), []byte(meta(childA, walledID)+count(10)))
+			if err := os.Link(filepath.Join(dir, rolloutAt(childA)), filepath.Join(dir, "2026", "11", "18", "other")); err != nil {
+				t.Fatal(err)
+			}
+			c := countReads(tr, nil)
+			if got := tr.codexUsage(walledID); !reflect.DeepEqual(got, want) || len(s.lines) != 0 {
+				t.Errorf("usage %v, lines %q; want %v", got, s.lines, want)
+			}
+			if walled && c.opens[rolloutAt(childA)] != 1 {
+				t.Errorf("opens %v; want one of the child, for its fstat", c.opens)
+			}
+		})
 	}
 }

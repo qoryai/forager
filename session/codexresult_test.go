@@ -3,11 +3,13 @@ package session_test
 import (
 	"cmp"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -207,37 +209,55 @@ func TestACodexLaunchWritesItsResult(t *testing.T) {
 	})
 }
 
-// TestACodexResultHasNoUsageAbove2To53 pins a launch whose two child agents have
-// output_tokens 2^62 each, a sum beyond int64: the result has no usage, the session
-// writes one dev.qory.run.log line that starts with the fix, and the batches pass
-// link-batch.schema.json and the record event.schema.json ([usageResult]).
+// TestACodexResultHasNoUsageAbove2To53 pins a launch whose two child agents have the
+// same output_tokens: 2^62 each, a count above 2^53, and 2^52+1 each, counts of at
+// most 2^53 whose sum is above it. The result has no usage, the session writes one
+// dev.qory.run.log line that starts with the fix and has the cause, and the batches
+// pass link-batch.schema.json and the record event.schema.json ([usageResult]).
 func TestACodexResultHasNoUsageAbove2To53(t *testing.T) {
-	s := usageScript(t, true, 0, "launch1-parent-rollout.jsonl")
-	for _, child := range []string{"0d000000-0000-4000-8000-000000000001", "0d000000-0000-4000-8000-000000000002"} {
-		s = strings.Replace(s, "echo pause-now", fmt.Sprintf("printf '%%s\\n' '{\"type\":\"session_meta\",\"payload\":{\"id\":\"%s\",\"parent_thread_id\":\"%s\"}}' "+
-			"'{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"output_tokens\":4611686018427387904}}}}' > \"$d/2026/11/19/rollout-x-%s.jsonl\"\necho pause-now", child, usageThread, child), 1)
-	}
-	res, results := usageResult(t, s, usageRun{})
-	want := map[string]any{"session_id": usageThread, "session": 1.0, "outcome": "success", "is_error": false}
-	if len(results) != 1 || !reflect.DeepEqual(results[0], want) {
-		t.Errorf("the results %v; want %v", results, want)
-	}
-	if !hasLog(events(t, res), "Check the token counts in the rollouts of the launch.\n") {
-		t.Error("no line with the fix")
+	for _, c := range []struct{ name, count, cause string }{
+		{"a count", "4611686018427387904", "a token count is above 2^53 (9007199254740992)"},
+		{"a sum", "4503599627370497", "the launch's sum of a token count is above 2^53 (9007199254740992)"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := usageScript(t, true, 0, "launch1-parent-rollout.jsonl")
+			for _, child := range []string{"0d000000-0000-4000-8000-000000000001", "0d000000-0000-4000-8000-000000000002"} {
+				s = strings.Replace(s, "echo pause-now", fmt.Sprintf("printf '%%s\\n' '{\"type\":\"session_meta\",\"payload\":{\"id\":\"%s\",\"parent_thread_id\":\"%s\"}}' "+
+					"'{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"output_tokens\":%s}}}}' > \"$d/2026/11/19/rollout-x-%s.jsonl\"\necho pause-now", child, usageThread, c.count, child), 1)
+			}
+			res, results := usageResult(t, s, usageRun{})
+			want := map[string]any{"session_id": usageThread, "session": 1.0, "outcome": "success", "is_error": false}
+			if len(results) != 1 || !reflect.DeepEqual(results[0], want) {
+				t.Errorf("the results %v; want %v", results, want)
+			}
+			evs := events(t, res)
+			if !hasLog(evs, "Check the token counts in the rollouts of the launch.\n") || !hasLog(evs, "The session wrote no usage in the launch's dev.qory.runtime.result: "+c.cause+", at ") {
+				t.Error("no line with the fix and the cause")
+			}
+		})
 	}
 }
 
 // TestACodexResultWithNoTranscriptHasNoUsage pins a launch for which the session reads
 // no transcript, here a CODEX_HOME with a comma, which resume.prefix does not accept:
 // the result has no usage, and the session writes one dev.qory.run.log line that
-// starts with the fix.
+// starts with the fix, after the line about the transcript that the fix points to.
 func TestACodexResultWithNoTranscriptHasNoUsage(t *testing.T) {
 	res, results := usageResult(t, usageScript(t, true, 0, "launch1-parent-rollout.jsonl"), usageRun{home: "codex,home"})
 	want := map[string]any{"session_id": usageThread, "session": 1.0, "outcome": "success", "is_error": false}
 	if len(results) != 1 || !reflect.DeepEqual(results[0], want) {
 		t.Errorf("the results %v; want %v", results, want)
 	}
-	if !hasLog(events(t, res), "Let the session read the transcript below resume.prefix, where Codex writes its rollouts.\n") {
-		t.Error("no line with the fix")
+	var logs []string
+	for _, e := range ofType(events(t, res), event.RunLog) {
+		b, _ := base64.StdEncoding.DecodeString(fmt.Sprint(data(e)["bytes"]))
+		logs = append(logs, string(b))
+	}
+	transcript := slices.IndexFunc(logs, func(l string) bool { return strings.HasPrefix(l, "Set CODEX_HOME to an absolute path") })
+	fix := slices.IndexFunc(logs, func(l string) bool {
+		return strings.HasPrefix(l, "Fix the transcript line before this one, then start a new session.\n")
+	})
+	if transcript < 0 || fix < transcript {
+		t.Errorf("the lines %q; want the line about the transcript, then the fix", logs)
 	}
 }
