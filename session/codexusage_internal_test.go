@@ -342,9 +342,10 @@ func TestCodexUsageRefusesWhatTheAgentPlants(t *testing.T) {
 
 // TestCodexUsageSkipsTheOtherFiles pins a shared folder with the fixture's launch 1
 // and files that are no rollout of the launch, with a wall and without one: a symbolic
-// link, a FIFO, a file over 64 MiB, 300 rollouts of other threads, and 300 child
-// rollouts of an earlier launch that did not change, one of them over 64 MiB, over the
-// caps together. The session skips them, and the usage is launch 1's with no line.
+// link, a FIFO, a rollout of another thread over 64 MiB, 300 rollouts of other
+// threads, and 300 child rollouts of an earlier launch that did not change, one of
+// them over 64 MiB, over the caps together. The session skips them, and the usage is
+// launch 1's with no line.
 func TestCodexUsageSkipsTheOtherFiles(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "outside.jsonl")
 	if err := os.WriteFile(outside, []byte(meta(fixtureChild, fixtureThread)+count(1000)), 0o600); err != nil {
@@ -366,7 +367,7 @@ func TestCodexUsageSkipsTheOtherFiles(t *testing.T) {
 			if err := unix.Mkfifo(filepath.Join(dir, "2026", "11", "19", "rollout-fifo-x.jsonl"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			sparse(t, dir, "2026/11/19/rollout-big-x.jsonl", "", 65<<20)
+			sparse(t, dir, "2026/11/19/rollout-big-x.jsonl", meta("big-other", ""), 65<<20)
 			for i := range 300 {
 				appendTo(t, dir, fmt.Sprintf("2026/11/20/rollout-%d-x.jsonl", i), []byte(meta(fmt.Sprint("other-", i), "")+count(1000)))
 			}

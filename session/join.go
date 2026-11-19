@@ -1252,7 +1252,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	switch {
 	case !writesResult || closed:
 	case tr == nil:
-		r.writeLog("stderr", n, 0, []byte(noTranscriptUsage+"\n"))
+		r.writeLog("stderr", n, 0, []byte(neutral(noTranscriptUsage)+"\n"))
 	default:
 		codexUsage = tr.codexUsage(codexThread)
 	}

@@ -237,7 +237,7 @@ func TestACodexResultWithNoTranscriptHasNoUsage(t *testing.T) {
 	if len(results) != 1 || !reflect.DeepEqual(results[0], want) {
 		t.Errorf("the results %v; want %v", results, want)
 	}
-	if !hasLog(events(t, res), "Let the session read Codex's transcript, which it needs to read the rollouts.\n") {
+	if !hasLog(events(t, res), "Let the session read the transcript below resume.prefix, where Codex writes its rollouts.\n") {
 		t.Error("no line with the fix")
 	}
 }

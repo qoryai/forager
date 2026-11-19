@@ -38,7 +38,7 @@ const MaxCount = 1 << 53
 
 // ErrCount is the error of a token count above [MaxCount] or below -[MaxCount], of a
 // count that is no integer, and of a launch's sum of a count above [MaxCount].
-var ErrCount = errors.New("a token count is above 2^53 (9007199254740992), or the launch's sum of a count is")
+var ErrCount = errors.New("a token count is above 2^53 (9007199254740992), below -2^53 or no integer, or the launch's sum of a count is above 2^53")
 
 // counts is t's six counts.
 func (t Tokens) counts() []int64 {

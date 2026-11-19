@@ -55,7 +55,7 @@ const (
 	fixThreadMissing    = "Check that Codex writes the rollout of the launch's thread"
 	fixRolloutDepth     = "Keep child agents at most 16 levels below the launch's thread"
 	fixRolloutCounts    = "Check the token counts in the rollouts of the launch"
-	fixNoTranscript     = "Let the session read Codex's transcript, which it needs to read the rollouts"
+	fixNoTranscript     = "Let the session read the transcript below resume.prefix, where Codex writes its rollouts"
 )
 
 // noUsage is the line of a launch of Codex whose result has no usage: the fix on the
