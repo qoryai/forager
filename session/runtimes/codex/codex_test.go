@@ -356,7 +356,7 @@ func TestCodexRefusesTheFeaturesOfItsHooks(t *testing.T) {
 	if _, ok := bare.(runtimes.Configs).Config(); ok {
 		t.Fatal("the bare descriptor has config")
 	}
-	const cause = "the setting can turn off the hooks Codex runs before each tool call, or let commands sent to a terminal skip them"
+	const cause = "the setting can turn off the hooks Codex runs before each tool call, or make Codex run no hook for a command sent to a shell with a terminal"
 	for name, rt := range map[string]runtimes.Runtime{"the contract's descriptor": contract, "a descriptor without config": bare} {
 		c := rt.(runtimes.ArgsChecker)
 		for _, feature := range []string{"unified_exec_tty", "hooks", "codex_hooks"} {

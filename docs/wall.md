@@ -875,7 +875,7 @@ node. The read-only bind is enough for two reasons:
 
 - Codex 0.167.2 reads `hooks.json` in `/etc/codex`, its system configuration folder,
   as managed hooks because of that path, and runs them with no check against a stored
-  hash. The file's owner plays no part in this. In the source of Codex 0.167.2 this is
+  hash. Codex does not check the file's owner. In the source of Codex 0.167.2 this is
   `hook_metadata_for_config_layer_source` and `hook_trusted_hash` in
   `codex-rs/hooks/src/engine/discovery.rs`.
 - The agent cannot change the file. The bind is read-only, so a write, an append and a

@@ -10,6 +10,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Read an agent place in `runtimes.json` as one of `frontmatter` and `toml`: a
+  composer that reads `frontmatter` alone finds no agent place in Codex's entry,
+  `{toml: model}` for an agent's model id and `{toml: model_reasoning_effort}` for an
+  agent's effort value.
 - Give each API credential of a run configuration `group`, the id of its provider as
   the server sets it, such as `anthropic`: the schema refuses an API credential without
   it, and a host credential with it. The API credentials with one `group` value are one
@@ -342,8 +346,7 @@ release may change what an existing document does, and says so under Upgrading.
   in `{toml: model_reasoning_effort}`, with the run's seven values, `none` to `ultra`:
   a Codex 0.167.2 agent file, such as `$CODEX_HOME/agents/reviewer.toml`, takes the
   keys of `config.toml` at its top. `runtimes.json` lists both, `runtimes.ModelPlaces`
-  has `Agent`, a `*runtimes.AgentKey`, and `runtimes.AgentPlace` has `TOML`. A
-  composer that reads `frontmatter` alone finds no agent place in Codex's entry.
+  has `Agent`, a `*runtimes.AgentKey`, and `runtimes.AgentPlace` has `TOML`.
 - Two host calls of the gateway's link, `POST <run.url>/<run_id>/next-session` and
   `POST <run.url>/<run_id>/pushed-commits`, and `Run.NextSession` and
   `Run.PushedCommits`, which send them: the gateway forwards the body unread to Qory
@@ -3236,16 +3239,20 @@ release may change what an existing document does, and says so under Upgrading.
   it exactly, cannot write, append to, chmod, remove, rename or replace it, cannot add a
   file or a symbolic link in `/etc/codex`, which is root's with mode `0755`, and cannot
   rename or replace `/etc/codex`; the file is the same afterwards, inside and on this
-  machine. Both Wall conformance jobs run it.
-- Five tests run Codex 0.167.2 behind the wall, against a stub of the Responses API,
+  machine. The jobs Wall conformance and Wall conformance, containerd image store run
+  it.
+- Six tests run Codex 0.167.2 behind the wall, against a stub of the Responses API,
   with the image in `QORY_WALL_CODEX_IMAGE`; each skips without it, and fails under
   `QORY_WALL_REQUIRE`:
   - `TestDockerCodexThroughTheWall`, with an API key and with a subscription login's
     token: Codex prints the stub's text, each request has the key as a bearer and,
-    with the token, the account header from its claim, and the run reaches no host but
-    the stub;
+    with the token, the account header from its claim, the run reaches no host but
+    the stub, and the launch's `dev.qory.runtime.result` is `success` with the stub's
+    tokens;
   - `TestDockerCodexPausesOnAUsageLimit`: a `429` with the `x-codex-*` headers ends
-    the session and the run `paused` with `model_key_limit`;
+    the session and the run `paused` with `model_key_limit`, and the launch's
+    `dev.qory.runtime.result` is `error_during_execution` with `is_error` false and no
+    `usage`;
   - `TestDockerCodexEndsOrSwitchesOnARejectedKey`: a `401` ends them `failed` with
     `model_key_unauthorized` with one key, and `paused` with `model_key_switch` with a
     second key;
@@ -3254,7 +3261,11 @@ release may change what an existing document does, and says so under Upgrading.
     the session passes fail the join, and Codex does not start;
   - `TestDockerCodexResumesAPausedRunUnderAnotherKey`: run 2 restores run 1's rollout,
     starts `codex exec` with `resume <thread id>` right before the prompt, and sends its
-    first request with the second key.
+    first request with the second key;
+  - `TestDockerCodexCountsItsChildAgentsInTheResult`: launch 1's thread starts one
+    child agent, and its `dev.qory.runtime.result` has the usage of the thread's three
+    requests and the child's one; launch 2 resumes the thread from launch 1's restored
+    rollout, and its usage has its one request alone.
 - CI's Wall conformance jobs fetch npm's linux-x64 package of `@openai/codex` 0.167.2,
   check it against its SHA-512, npm's `dist.integrity`, build an image with `codex` on
   its `PATH`, and set `QORY_WALL_CODEX_IMAGE` to it.

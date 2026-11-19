@@ -6190,7 +6190,7 @@ agent's file, exactly one of `frontmatter`, a key of the file's frontmatter, for
 agent file of Markdown such as Claude Code's, and `toml`, a key at the top of the file,
 for an agent file of TOML such as Codex's; each key is a letter, then up to 63 letters,
 digits, underscores and dashes. `agent`, optional, is the agent place of an agent's
-model id, `{toml: model}`. `effort`, optional, has `run`,
+model id: `{frontmatter: …}` or `{toml: …}`, such as Codex's `{toml: model}`. `effort`, optional, has `run`,
 the place of the run's effort value with `values`, the 1 to 16 values the runtime
 accepts there, and optionally `agent`, the agent place of an agent's effort value with
 `values`, the values the runtime accepts there, such as

@@ -248,7 +248,7 @@ func keyRefused(flag, k string) error {
 // of [hookFeatures]: the fix on the first line, the cause on the second.
 func hookFeatureRefused(flag, r string) error {
 	return fmt.Errorf("remove the %s that sets %s from the launch's arguments\n"+
-		"the setting can turn off the hooks Codex runs before each tool call, or let commands sent to a terminal skip them",
+		"the setting can turn off the hooks Codex runs before each tool call, or make Codex run no hook for a command sent to a shell with a terminal",
 		accesskey.ShownName(flag, false), accesskey.ShownName(r, false))
 }
 
