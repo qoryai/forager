@@ -131,11 +131,13 @@ release may change what an existing document does, and says so under Upgrading.
   to 99, or one of the two without the other, is `run_configuration_invalid` too. Send
   the windows of the provider's catalogue entry, and `cooldown_until`, the window's
   reset, for a key whose stored use is at or above its percentage at the claim.
-- Send the key group in the order that breaks ties: by when the keys were added, then
-  the keys in cooldown at the claim, each with `cooldown_until`. When the active key
-  goes into cooldown, the gateway makes active a key with no known reset first, in the
-  order the run configuration lists them, then the key with the closest reset. A default
-  model provider credential in cooldown is `run_configuration_invalid`.
+- Send the key group in the order that breaks ties: the provider's default key in Qory
+  Apiary first, then the other keys by when they were added, then the keys in cooldown
+  at the claim, each with `cooldown_until`. The provider's default key and the run
+  configuration's `default_model_provider_credential_name` are separate settings. When
+  the active key goes into cooldown, the gateway makes active a key with no known reset
+  first, ties broken by the order the server sent, then the key with the closest reset.
+  A default model provider credential in cooldown is `run_configuration_invalid`.
 - Read `paused`, a state of `dev.qory.run.exited` and `dev.qory.session.exited`, always
   with `model_key_limit`, as a pause of the run, not as a person's cancel: the run's work
   is kept, and a continuation of the run can resume its runtime session.
