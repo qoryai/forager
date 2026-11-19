@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
+	"io"
+	"regexp"
 	"strings"
 )
 
@@ -36,9 +37,27 @@ type Tokens struct {
 // number above it loses digits in a reader that decodes numbers as float64.
 const MaxCount = 1 << 53
 
-// ErrCount is the error of a token count above [MaxCount] or below -[MaxCount], of a
-// count that is no integer, and of a launch's sum of a count above [MaxCount].
-var ErrCount = errors.New("a token count is above 2^53 (9007199254740992), below -2^53 or no integer, or the launch's sum of a count is above 2^53")
+// ErrCount is the error of a token count the session does not write: each of
+// [ErrCountAbove], [ErrCountBelow], [ErrCountNotInteger] and [ErrSumAbove] is
+// ErrCount for [errors.Is], and its text is the cause that applied.
+var ErrCount = errors.New("a token count is out of the range the session writes")
+
+// countError is one cause of [ErrCount].
+type countError string
+
+func (e countError) Error() string { return string(e) }
+
+// Is reports whether target is [ErrCount].
+func (e countError) Is(target error) bool { return target == ErrCount }
+
+// The causes of [ErrCount]: a count above [MaxCount], a count below -[MaxCount], a
+// count that is not an integer, and a launch's sum of a count above [MaxCount].
+var (
+	ErrCountAbove      error = countError("a token count is above 2^53 (9007199254740992)")
+	ErrCountBelow      error = countError("a token count is below -2^53 (-9007199254740992)")
+	ErrCountNotInteger error = countError("a token count is not an integer")
+	ErrSumAbove        error = countError("the launch's sum of a token count is above 2^53 (9007199254740992)")
+)
 
 // counts is t's six counts.
 func (t Tokens) counts() []int64 {
@@ -96,16 +115,108 @@ type Rollout struct {
 // errNoMeta is the error of a file whose first line is no session_meta with an id.
 var errNoMeta = errors.New("its first line is no session_meta with an id")
 
-// meta is the first line of a rollout.
-type meta struct {
-	Type    string `json:"type"`
-	Payload struct {
-		ID       string `json:"id"`
-		ParentID string `json:"parent_thread_id"`
-		// Source is "exec" for a thread codex exec started, and an object for a child
-		// agent's.
-		Source json.RawMessage `json:"source"`
-	} `json:"payload"`
+// ErrMetaCut is the error of bytes that end inside their first line before the
+// session_meta's id and source: [ParseMeta] of the first bytes of a file whose first
+// line is longer.
+var ErrMetaCut = errors.New("its first line ends before the id and source of its session_meta")
+
+// errEnd is the error of a read past the end of the bytes an [endReader] reads.
+var errEnd = errors.New("the end of the bytes")
+
+// endReader reads r, and returns [errEnd] at its end in place of [io.EOF]: a
+// [json.Decoder] returns the error of its reader as it is, so an error that is errEnd
+// marks a value the bytes cut, and every other error a value of another shape.
+type endReader struct{ r *bytes.Reader }
+
+func (e endReader) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	if err == io.EOF {
+		err = errEnd
+	}
+	return n, err
+}
+
+// metaLine is what [ParseMeta] reads of a first line: the type, and the payload's id,
+// parent_thread_id and source, with source set once source is read whole.
+type metaLine struct {
+	typ, id, parentID string
+	source            json.RawMessage
+	sourceRead        bool
+}
+
+// delim reads the next token of dec, which must be d.
+func delim(dec *json.Decoder, d json.Delim) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if tok != d {
+		return errNoMeta
+	}
+	return nil
+}
+
+// object reads an object of dec, key by key, with value for each key; value reads the
+// key's value.
+func object(dec *json.Decoder, value func(key string) error) error {
+	if err := delim(dec, '{'); err != nil {
+		return err
+	}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return errNoMeta
+		}
+		if err := value(key); err != nil {
+			return err
+		}
+	}
+	return delim(dec, '}')
+}
+
+// skip reads one value of dec and drops it.
+func skip(dec *json.Decoder) error {
+	var v json.RawMessage
+	return dec.Decode(&v)
+}
+
+// read reads the first line from dec, token by token, so that what comes before a cut
+// counts: Codex 0.167.2 writes type, then payload with id, parent_thread_id and source
+// before base_instructions (codex-rs protocol/src/protocol.rs, SessionMeta).
+func (m *metaLine) read(dec *json.Decoder) error {
+	return object(dec, func(key string) error {
+		switch key {
+		case "type":
+			if err := dec.Decode(&m.typ); err != nil {
+				return err
+			}
+			if m.typ != "session_meta" {
+				return errNoMeta
+			}
+			return nil
+		case "payload":
+			return object(dec, func(key string) error {
+				switch key {
+				case "id":
+					return dec.Decode(&m.id)
+				case "parent_thread_id":
+					return dec.Decode(&m.parentID)
+				case "source":
+					if err := dec.Decode(&m.source); err != nil {
+						return err
+					}
+					m.sourceRead = true
+					return nil
+				}
+				return skip(dec)
+			})
+		}
+		return skip(dec)
+	})
 }
 
 // spawned is the source of a child agent's thread.
@@ -131,16 +242,31 @@ type tokenCount struct {
 // ParseMeta reads the [Meta] of a rollout from b, the file's first bytes: the line
 // before the first newline, or all of b when it has none. The thread's parent is the
 // session_meta's parent_thread_id, or else that of source.subagent.thread_spawn. It
-// returns an error when that line is no session_meta with an id.
+// reads the line token by token, so a line that b cuts, such as one with base
+// instructions longer than b, has its Meta once its id and source are in b. It returns
+// [ErrMetaCut] for a line that b cuts before them, and another error when the line is
+// no session_meta with an id.
 func ParseMeta(b []byte) (Meta, error) {
-	first, _, _ := bytes.Cut(b, []byte("\n"))
-	var m meta
-	if json.Unmarshal(first, &m) != nil || m.Type != "session_meta" || m.Payload.ID == "" {
+	first, _, whole := bytes.Cut(b, []byte("\n"))
+	dec := json.NewDecoder(endReader{bytes.NewReader(first)})
+	var m metaLine
+	err := m.read(dec)
+	if err == nil {
+		if _, end := dec.Token(); !errors.Is(end, errEnd) {
+			err = errNoMeta
+		}
+	}
+	cut := !whole && errors.Is(err, errEnd)
+	switch {
+	case cut && m.typ == "session_meta" && m.id != "" && m.sourceRead:
+	case cut:
+		return Meta{}, ErrMetaCut
+	case err != nil || m.typ != "session_meta" || m.id == "":
 		return Meta{}, errNoMeta
 	}
-	r := Meta{ThreadID: m.Payload.ID, ParentID: m.Payload.ParentID}
+	r := Meta{ThreadID: m.id, ParentID: m.parentID}
 	var src spawned
-	if r.ParentID == "" && json.Unmarshal(m.Payload.Source, &src) == nil {
+	if r.ParentID == "" && m.sourceRead && json.Unmarshal(m.source, &src) == nil {
 		r.ParentID = src.Subagent.ThreadSpawn.ParentID
 	}
 	return r, nil
@@ -174,9 +300,14 @@ func ParseRollout(b []byte, before int64) (Rollout, error) {
 // not decoded.
 var tokenCountType = []byte(`"token_count"`)
 
+// integerLiteral matches a JSON number that is an integer as written, such as one
+// beyond the range of int64.
+var integerLiteral = regexp.MustCompile(`^-?[0-9]+$`)
+
 // lastTotal is the last total_token_usage of a token_count in b, nil for none, and
 // [ErrCount] for a total with a count that is no integer from -[MaxCount] to
-// [MaxCount], beyond the range of int64 included.
+// [MaxCount], beyond the range of int64 included: [ErrCountAbove], [ErrCountBelow] or
+// [ErrCountNotInteger].
 func lastTotal(b []byte) (*Tokens, error) {
 	var last *Tokens
 	for line := range bytes.SplitSeq(b, []byte("\n")) {
@@ -189,17 +320,28 @@ func lastTotal(b []byte) (*Tokens, error) {
 			continue
 		}
 		// A count that is no integer of int64 fails the decode of its field alone, and
-		// the decode goes on with the rest of the line.
+		// the decode goes on with the rest of the line. The error's value is "number "
+		// and the number as written for a number, and the JSON type otherwise.
 		var typed *json.UnmarshalTypeError
 		if errors.As(err, &typed) && strings.HasPrefix(typed.Field, "payload.info.total_token_usage.") {
-			return nil, ErrCount
+			n, isNumber := strings.CutPrefix(typed.Value, "number ")
+			switch {
+			case isNumber && integerLiteral.MatchString(n) && strings.HasPrefix(n, "-"):
+				return nil, ErrCountBelow
+			case isNumber && integerLiteral.MatchString(n):
+				return nil, ErrCountAbove
+			}
+			return nil, ErrCountNotInteger
 		}
 		if err != nil {
 			continue
 		}
 		for _, n := range c.Payload.Info.Total.counts() {
-			if n > MaxCount || n < -MaxCount {
-				return nil, ErrCount
+			switch {
+			case n > MaxCount:
+				return nil, ErrCountAbove
+			case n < -MaxCount:
+				return nil, ErrCountBelow
 			}
 		}
 		last = c.Payload.Info.Total
@@ -221,21 +363,27 @@ var ErrTooDeep = fmt.Errorf("a child agent is more than %d levels below the laun
 // rollout whose parent is thread or one of them. A thread id met again counts once.
 // A child agent deeper than [MaxDepth] is [ErrTooDeep].
 func Descendants(thread string, metas []Meta) ([]int, error) {
+	children := map[string][]int{}
+	for i, m := range metas {
+		children[m.ParentID] = append(children[m.ParentID], i)
+	}
 	threads := map[string]bool{thread: true}
 	level := []string{thread}
 	var out []int
 	for depth := 1; len(level) > 0; depth++ {
 		var next []string
-		for i, m := range metas {
-			if !slices.Contains(level, m.ParentID) || threads[m.ThreadID] {
-				continue
+		for _, parent := range level {
+			for _, i := range children[parent] {
+				if threads[metas[i].ThreadID] {
+					continue
+				}
+				if depth > MaxDepth {
+					return nil, ErrTooDeep
+				}
+				threads[metas[i].ThreadID] = true
+				next = append(next, metas[i].ThreadID)
+				out = append(out, i)
 			}
-			if depth > MaxDepth {
-				return nil, ErrTooDeep
-			}
-			threads[m.ThreadID] = true
-			next = append(next, m.ThreadID)
-			out = append(out, i)
 		}
 		level = next
 	}
@@ -243,12 +391,8 @@ func Descendants(thread string, metas []Meta) ([]int, error) {
 }
 
 // LaunchUsage is the usage of a launch whose thread's rollout is parent, with others
-// the other rollouts the session read: for the parent and for each of the thread's
-// [Descendants] among others, the last total less the total before the launch, mapped
-// ([Map]), summed. A rollout whose last total is the one before the launch, or that
-// has none, adds nothing. counted is false when no rollout adds a total. clamped is
-// true when a count of a difference was below 0, which [Map] wrote as 0. A sum above
-// [MaxCount] is [ErrCount].
+// the other rollouts the session read: [SumUsage] of the parent and of the thread's
+// [Descendants] among others.
 func LaunchUsage(parent Rollout, others []Rollout) (u Usage, counted, clamped bool, err error) {
 	metas := make([]Meta, len(others))
 	for i, r := range others {
@@ -262,6 +406,16 @@ func LaunchUsage(parent Rollout, others []Rollout) (u Usage, counted, clamped bo
 	for _, i := range below {
 		rollouts = append(rollouts, others[i])
 	}
+	return SumUsage(rollouts)
+}
+
+// SumUsage is the usage of a launch whose thread's rollout and child agents' are
+// rollouts: for each, the last total less the total before the launch, mapped
+// ([Map]), summed. A rollout whose last total is the one before the launch, or that
+// has none, adds nothing. counted is false when no rollout adds a total. clamped is
+// true when a count of a difference was below 0, which [Map] wrote as 0. A sum above
+// [MaxCount] is [ErrSumAbove].
+func SumUsage(rollouts []Rollout) (u Usage, counted, clamped bool, err error) {
 	for _, r := range rollouts {
 		if r.Last == nil || (r.Before != nil && *r.Last == *r.Before) {
 			continue
@@ -273,7 +427,7 @@ func LaunchUsage(parent Rollout, others []Rollout) (u Usage, counted, clamped bo
 		m, c := Map(t)
 		u, counted, clamped = u.Add(m), true, clamped || c
 		if u.Input > MaxCount || u.Output > MaxCount || u.CacheRead > MaxCount || u.CacheWrite > MaxCount {
-			return Usage{}, false, false, ErrCount
+			return Usage{}, false, false, ErrSumAbove
 		}
 	}
 	return u, counted, clamped, nil

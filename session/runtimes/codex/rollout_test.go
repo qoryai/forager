@@ -291,12 +291,22 @@ func TestCodexLaunchUsageCountsEachFileSinceTheLaunch(t *testing.T) {
 }
 
 // TestCodexLaunchUsageRefusesACountAbove2To53 pins [codex.ErrCount] for a count above
-// 2^53 or below -2^53, a count beyond int64, a count that is no integer, and a sum above
-// 2^53; a count of 2^53 and a sum of 2^53 pass.
+// 2^53 or below -2^53, beyond int64 included, a count that is not an integer, and a sum
+// above 2^53, each with its cause; a count of 2^53 and a sum of 2^53 pass.
 func TestCodexLaunchUsageRefusesACountAbove2To53(t *testing.T) {
-	for _, n := range []string{"9007199254740993", "-9007199254740993", "4611686018427387904", "100000000000000000000000000000", "1.5"} {
-		if _, err := codex.ParseRollout([]byte(meta("p", "")+"\n"+output(n)+"\n"), 0); !errors.Is(err, codex.ErrCount) {
-			t.Errorf("output_tokens %s: %v; want %v", n, err, codex.ErrCount)
+	for n, want := range map[string]error{
+		"9007199254740993":                codex.ErrCountAbove,
+		"4611686018427387904":             codex.ErrCountAbove,
+		"100000000000000000000000000000":  codex.ErrCountAbove,
+		"-9007199254740993":               codex.ErrCountBelow,
+		"-100000000000000000000000000000": codex.ErrCountBelow,
+		"1.5":                             codex.ErrCountNotInteger,
+		"1e3":                             codex.ErrCountNotInteger,
+		`"5"`:                             codex.ErrCountNotInteger,
+	} {
+		_, err := codex.ParseRollout([]byte(meta("p", "")+"\n"+output(n)+"\n"), 0)
+		if err != want || !errors.Is(err, codex.ErrCount) {
+			t.Errorf("output_tokens %s: %v; want %v", n, err, want)
 		}
 	}
 	if r := parsed(t, 0, meta("p", ""), output("9007199254740992")); r.Last == nil || r.Last.Output != codex.MaxCount {
@@ -308,19 +318,58 @@ func TestCodexLaunchUsageRefusesACountAbove2To53(t *testing.T) {
 		t.Errorf("a sum of 2^53: usage %+v, %v", u, err)
 	}
 	over := parsed(t, 0, meta("d", "p"), output("4503599627370497"))
-	if u, _, _, err := codex.LaunchUsage(parent, []codex.Rollout{half, over}); !errors.Is(err, codex.ErrCount) {
-		t.Errorf("a sum above 2^53: usage %+v, %v; want %v", u, err, codex.ErrCount)
+	if u, _, _, err := codex.LaunchUsage(parent, []codex.Rollout{half, over}); err != codex.ErrSumAbove || !errors.Is(err, codex.ErrCount) {
+		t.Errorf("a sum above 2^53: usage %+v, %v; want %v", u, err, codex.ErrSumAbove)
+	}
+	for _, err := range []error{codex.ErrCountAbove, codex.ErrCountBelow, codex.ErrCountNotInteger, codex.ErrSumAbove} {
+		if !strings.Contains(err.Error(), "token count") {
+			t.Errorf("%q has no cause", err)
+		}
 	}
 }
 
-// TestCodexParseMetaReadsTheFirstLine pins [codex.ParseMeta] of a file's first bytes
-// cut inside the second line, and of a first line cut before its end.
+// TestCodexParseMetaReadsTheFirstLine pins [codex.ParseMeta] of a file's first bytes:
+// cut inside the second line; the fixture's child cut inside its first line after its
+// source, and before it; a first line of another shape, whole and cut; and a first line
+// cut before its id.
 func TestCodexParseMetaReadsTheFirstLine(t *testing.T) {
 	b := []byte(meta("c", "p") + "\n" + total(5))
 	if m, err := codex.ParseMeta(b[:len(b)-10]); err != nil || m != (codex.Meta{ThreadID: "c", ParentID: "p"}) {
 		t.Errorf("meta %+v, %v; want c of p", m, err)
 	}
-	if _, err := codex.ParseMeta(b[:20]); err == nil {
-		t.Error("a first line cut before its end parsed")
+	if _, err := codex.ParseMeta(b[:20]); !errors.Is(err, codex.ErrMetaCut) {
+		t.Errorf("a first line cut before its id: %v; want %v", err, codex.ErrMetaCut)
+	}
+
+	child := usageFile(t, "launch1-child-rollout.jsonl")
+	first, _, _ := bytes.Cut(child, []byte("\n"))
+	source := bytes.Index(first, []byte(`"thread_source"`))
+	base := bytes.Index(first, []byte(`"base_instructions"`))
+	if source < 0 || base < source {
+		t.Fatalf("the fixture's child has thread_source at %d and base_instructions at %d", source, base)
+	}
+	want := codex.Meta{ThreadID: "01a1f100-885b-7140-a145-b604ffe0117a", ParentID: "01a1f100-87f8-7123-a174-ba291730eec1"}
+	for _, at := range []int{source, base + 40, len(first) - 1} {
+		if m, err := codex.ParseMeta(child[:at]); err != nil || m != want {
+			t.Errorf("the child cut at %d: meta %+v, %v; want %+v", at, m, err, want)
+		}
+	}
+	// Cut inside source, and before it: the source is not read whole.
+	for _, at := range []int{source - 30, 200} {
+		if _, err := codex.ParseMeta(child[:at]); !errors.Is(err, codex.ErrMetaCut) {
+			t.Errorf("the child cut at %d: %v; want %v", at, err, codex.ErrMetaCut)
+		}
+	}
+
+	other := []byte(`{"type":"turn_context","payload":{"id":"c","cwd":"/w"}}` + "\n")
+	for _, at := range []int{len(other), 30} {
+		if _, err := codex.ParseMeta(other[:at]); err == nil || errors.Is(err, codex.ErrMetaCut) {
+			t.Errorf("another type cut at %d: %v; want an error other than %v", at, err, codex.ErrMetaCut)
+		}
+	}
+	for _, line := range []string{`{"type":"session_meta","payload":{"id":"c"}} x`, `{"type":"session_meta","payload":{"id":""}}`, `{"type":"session_meta"`, `x`, ``} {
+		if _, err := codex.ParseMeta([]byte(line + "\n")); err == nil || errors.Is(err, codex.ErrMetaCut) {
+			t.Errorf("%q: %v; want an error other than %v", line, err, codex.ErrMetaCut)
+		}
 	}
 }
