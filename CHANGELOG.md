@@ -3259,9 +3259,9 @@ release may change what an existing document does, and says so under Upgrading.
   as it is": in busybox, with the file at mode `0666` on this machine, the agent reads
   it exactly, cannot write, append to, chmod, remove, rename or replace it, cannot add a
   file or a symbolic link in `/etc/codex`, which is root's with mode `0755`, and cannot
-  rename or replace `/etc/codex`; the file is the same afterwards, inside and on this
-  machine. The jobs Wall conformance and Wall conformance, containerd image store run
-  it.
+  rename `/etc/codex`: `/etc` is root's with mode `0755`, so the rename fails with
+  "Permission denied". The file is the same afterwards, inside and on this machine. The
+  jobs Wall conformance and Wall conformance, containerd image store run it.
 - Six tests run Codex 0.167.2 behind the wall, against a stub of the Responses API,
   with the image in `QORY_WALL_CODEX_IMAGE`; each skips without it, and fails under
   `QORY_WALL_REQUIRE`:

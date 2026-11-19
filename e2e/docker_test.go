@@ -784,10 +784,9 @@ func readOnlyTargetBelowSticky(t *testing.T) {
 // has no /etc/codex, as qory passes a Codex run's hooks file, and requires that the agent
 // reads it but cannot write, chmod, remove, rename or replace it, add a file or a link
 // beside it, or rename /etc/codex, which the engine makes as root's with mode 0755. The
-// file on this machine has mode 0666, so the bind's mode alone stops a write. No attempt
-// moves a directory over /etc/codex: rename(2) returns ENOTEMPTY for a destination
-// directory with an entry in it, /etc/codex always has hooks.json, and mv -T of busybox
-// removes no directory before its rename (it prints "Directory not empty").
+// file on this machine has mode 0666, so the bind's mode alone stops a write. /etc is
+// root's with mode 0755, and the agent's uid is not 0, so a rename of /etc/codex fails
+// with EACCES: the test requires busybox's "Permission denied" for it.
 func codexHooksFileStays(t *testing.T) {
 	command, helper := relayEngine(t)
 	const content = "{\"hooks\":{\"Stop\":[]}}\n"
@@ -808,6 +807,7 @@ cat "$f"
 echo x > ` + dir + `/written && echo wrote the workspace
 id -u
 stat -c '%u %a' /etc/codex
+stat -c '%u %a' /etc
 { echo x > "$f"; } 2>/dev/null && echo did write the file
 { echo x >> "$f"; } 2>/dev/null && echo did append to the file
 chmod 600 "$f" 2>/dev/null && echo did chmod the file
@@ -818,7 +818,7 @@ echo x > /tmp/other.json && echo set up /tmp/other.json
 mv -f /tmp/other.json "$f" 2>/dev/null && echo did replace the file
 { echo x > /etc/codex/new.json; } 2>/dev/null && echo did create a file beside it
 ln -s /tmp/other.json /etc/codex/link.json 2>/dev/null && echo did link beside it
-mv /etc/codex /etc/codex-moved 2>/dev/null && echo did rename the directory
+mv /etc/codex /etc/codex-moved 2>&1 && echo did rename the directory
 ls -A /etc/codex
 cat "$f"`
 	r := startEnclosureWith(t, command, helper, wall.Request{Image: busybox}, dir,
@@ -832,11 +832,12 @@ cat "$f"`
 			t.Errorf("the agent printed %q; want the line %q: a step that sets up an attempt failed", out, l)
 		}
 	}
-	want := regexp.MustCompile(`(?s)` + regexp.QuoteMeta(content) + "wrote the workspace\n([0-9]+)\n0 755\n" +
-		regexp.QuoteMeta(strings.Join(setUp, "\n")) + "\nhooks\\.json\n" + regexp.QuoteMeta(content) + `$`)
+	want := regexp.MustCompile(`(?s)` + regexp.QuoteMeta(content) + "wrote the workspace\n([0-9]+)\n0 755\n0 755\n" +
+		regexp.QuoteMeta(strings.Join(setUp, "\n")) + "\nmv: can't rename '/etc/codex': Permission denied\nhooks\\.json\n" + regexp.QuoteMeta(content) + `$`)
 	m := want.FindStringSubmatch(out)
 	if m == nil || m[1] == "0" || strings.Contains(out, "did ") {
-		t.Errorf("the agent printed %q; want the file, the workspace written, a uid other than 0, /etc/codex as 0 755, the lines of the steps that set up the attempts, hooks.json alone in /etc/codex, the file again, and no line with \"did\"", out)
+		t.Errorf("the agent printed %q; want the file, the workspace written, a uid other than 0, /etc/codex and /etc as 0 755, the lines of the steps that set up the attempts, "+
+			"the rename of /etc/codex failed with Permission denied, hooks.json alone in /etc/codex, the file again, and no line with \"did\"", out)
 	}
 	if b, err := os.ReadFile(hooks); err != nil || string(b) != content {
 		t.Errorf("the file on this machine is %q, %v", b, err)
