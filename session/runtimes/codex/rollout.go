@@ -105,11 +105,13 @@ type Meta struct {
 }
 
 // Rollout is what the session reads of one rollout: its [Meta], the last total in the
-// file, nil when the file has none, and Before, the last total in the bytes the file
-// had before the launch, nil when they have none.
+// file, nil when the file has none, Before, the last total in the bytes the file had
+// before the launch, nil when they have none, and Spawned, the ids of the threads that
+// the file's spawn_agent calls started ([spawnedIDs]).
 type Rollout struct {
 	Meta
 	Last, Before *Tokens
+	Spawned      []string
 }
 
 // errNoMeta is the error of a file whose first line is no session_meta with an id.
@@ -293,7 +295,50 @@ func ParseRollout(b []byte, before int64) (Rollout, error) {
 	if r.Last, err = lastTotal(b); err != nil {
 		return Rollout{}, err
 	}
+	r.Spawned = spawnedIDs(b)
 	return r, nil
+}
+
+// collabCallType is how the item of a line with an agent tool call starts; a line
+// without it is not decoded.
+var collabCallType = []byte(`"CollabAgentToolCall"`)
+
+// collabCall is a line with an agent tool call that completed.
+type collabCall struct {
+	Type    string `json:"type"`
+	Payload struct {
+		Type string `json:"type"`
+		Item struct {
+			Type      string   `json:"type"`
+			Tool      string   `json:"tool"`
+			Receivers []string `json:"receiver_thread_ids"`
+		} `json:"item"`
+	} `json:"payload"`
+}
+
+// spawnedIDs is the ids of the threads that the spawn_agent calls in b started, in
+// the order of the lines: the receiver_thread_ids of each event_msg of type
+// item_completed whose item is a CollabAgentToolCall of the tool spawn_agent. Codex
+// 0.167.2 and 0.169.0 write that line in the rollout of a thread in the paginated
+// history mode, the mode in which codex exec starts a thread that is not ephemeral
+// (codex-rs rollout/src/policy.rs:253-284, exec/src/lib.rs:1475 in 0.167.2 and :1542
+// in 0.169.0), and a child agent takes its parent's mode
+// (core/src/agent/control/spawn.rs:85-90 in 0.169.0). A line of another shape counts
+// for nothing.
+func spawnedIDs(b []byte) []string {
+	var ids []string
+	for line := range bytes.SplitSeq(b, []byte("\n")) {
+		if !bytes.Contains(line, collabCallType) {
+			continue
+		}
+		var c collabCall
+		if json.Unmarshal(line, &c) != nil || c.Type != "event_msg" || c.Payload.Type != "item_completed" ||
+			c.Payload.Item.Type != "CollabAgentToolCall" || c.Payload.Item.Tool != "spawn_agent" {
+			continue
+		}
+		ids = append(ids, c.Payload.Item.Receivers...)
+	}
+	return ids
 }
 
 // tokenCountType is how a line with a total starts its payload; a line without it is

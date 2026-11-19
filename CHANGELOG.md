@@ -2407,13 +2407,16 @@ release may change what an existing document does, and says so under Upgrading.
   a restore, the session records each rollout's device, inode and length, and each file
   counts its last total less the last total in its bytes before the launch: a child
   agent of an earlier launch adds nothing, and a `resume <id>` without a restore counts
-  only the new tokens. The session skips a file whose ids it cannot read, such as a
-  symbolic link, a FIFO or a file of another thread over 64 MiB. It reads the thread's
-  rollout and the child agents' that changed with the transcript's rules, with at most
-  256 files and 256 MiB together. After such a file that the session does not read,
-  more files or bytes, or a count or a sum above 2^53, the result has no `usage`, and
-  the session writes one line on `stderr`: the fix on its first line, the cause on the
-  second.
+  only the new tokens. A file that changed and whose ids the session cannot read, such
+  as a symbolic link, a FIFO or a file with a broken first line, gives the result no
+  `usage` when its name has the id of a thread that a `spawn_agent` call in the
+  thread's rollout or a child agent's started; a file of another thread counts for
+  nothing. It reads the thread's rollout and the child agents' that changed with the
+  transcript's rules, with at most 256 files and 256 MiB together. After such a file
+  that the session does not read, a child agent's file that changed between the
+  session's reads, a baseline that has no state for a file, more files or bytes, or a
+  count or a sum above 2^53, the result has no `usage`, and the session writes one line
+  on `stderr`: the fix on its first line, the cause on the second.
 - `runtimes.Configs`, `runtimes.ConfigArgs`, `runtimes.TOMLValue`: for a descriptor
   with `config`, the session puts `config.flag` and `key=value` for each key of
   `config.fixed`, and for an endpoint that is a setting, right after the command,
@@ -2423,7 +2426,9 @@ release may change what an existing document does, and says so under Upgrading.
   fails before the runtime starts when the launch's arguments set a setting the session
   passes through `config.flag`, as `flag k=v` or `flag=k=v`: the key, a key under it, or
   a key it is under. The error starts with the fix, contains the flag and no value of
-  the arguments.
+  the arguments. For a pair whose value is a TOML inline table, such as
+  `features={hooks=false}`, the error contains the key that the table sets
+  (`runtimes.PairKeys`).
 - `codex.New()` and `codex.Described`: Codex by the contract's descriptor or by another
   descriptor document, with the check of Codex 0.167.2's flags. `catalog.Lookup` builds
   Codex with it, from the contract's descriptor and from a machine's `codex.yaml`, and

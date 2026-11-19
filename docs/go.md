@@ -1342,7 +1342,9 @@ res, err := session.Resend(ctx, session.ResendSpec{
   command. `runtimes.ConfigArgs` builds those pairs. Through the optional
   `runtimes.ArgsChecker`, the join fails before the runtime starts when the launch's
   arguments set one of those settings, with an error that starts with the fix and
-  contains no value of the arguments. A session that resumes checks the arguments
+  contains no value of the arguments. `runtimes.PairKeys` is the keys that a pair sets,
+  each key of a value that is a TOML inline table among them, so that the error
+  contains the key the table sets. A session that resumes checks the arguments
   again with the resume arguments at their place: in `exec --json --enable -cx=y`,
   `--enable` takes `-cx=y` as its value, and `resume <id>` right before the last
   argument leaves `-cx=y` alone, a pair that sets `x`.

@@ -797,7 +797,10 @@ func codexHooksFileStays(t *testing.T) {
 	}
 	dir := t.TempDir()
 	// Each attempt prints a line with "did" only when it succeeds. The write into the
-	// workspace shows that the shell runs its commands.
+	// workspace shows that the shell runs its commands. Each step that sets up an
+	// attempt prints a line with "set up" when it succeeds, so an attempt cannot fail
+	// for a step that did not run: the file to move over hooks.json, the directory to
+	// move over /etc/codex, and a mv -T of busybox that moves a directory over another.
 	script := `f=/etc/codex/hooks.json
 cat "$f"
 echo x > ` + dir + `/written && echo wrote the workspace
@@ -809,12 +812,13 @@ chmod 600 "$f" 2>/dev/null && echo did chmod the file
 rm -f "$f" 2>/dev/null && echo did remove the file
 mv -f "$f" /etc/codex/moved.json 2>/dev/null && echo did rename the file
 mv -f "$f" /tmp/moved.json 2>/dev/null && echo did move the file out
-echo x > /tmp/other.json
+echo x > /tmp/other.json && echo set up /tmp/other.json
 mv -f /tmp/other.json "$f" 2>/dev/null && echo did replace the file
 { echo x > /etc/codex/new.json; } 2>/dev/null && echo did create a file beside it
 ln -s /tmp/other.json /etc/codex/link.json 2>/dev/null && echo did link beside it
 mv /etc/codex /etc/codex-moved 2>/dev/null && echo did rename the directory
-mkdir -p /tmp/codex && echo x > /tmp/codex/hooks.json
+mkdir /tmp/codex && echo x > /tmp/codex/hooks.json && echo set up /tmp/codex
+mkdir /tmp/mv-a /tmp/mv-b && mv -f -T /tmp/mv-a /tmp/mv-b && echo set up mv -T
 mv -f -T /tmp/codex /etc/codex 2>/dev/null && echo did replace the directory
 ls -A /etc/codex
 cat "$f"`
@@ -823,10 +827,17 @@ cat "$f"`
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	out := r.start(ctx, t)()
-	want := regexp.MustCompile(`(?s)` + regexp.QuoteMeta(content) + "wrote the workspace\n([0-9]+)\n0 755\nhooks\\.json\n" + regexp.QuoteMeta(content) + `$`)
+	setUp := []string{"set up /tmp/other.json", "set up /tmp/codex", "set up mv -T"}
+	for _, l := range setUp {
+		if !strings.Contains(out, l+"\n") {
+			t.Errorf("the agent printed %q; want the line %q: a step that sets up an attempt failed", out, l)
+		}
+	}
+	want := regexp.MustCompile(`(?s)` + regexp.QuoteMeta(content) + "wrote the workspace\n([0-9]+)\n0 755\n" +
+		regexp.QuoteMeta(strings.Join(setUp, "\n")) + "\nhooks\\.json\n" + regexp.QuoteMeta(content) + `$`)
 	m := want.FindStringSubmatch(out)
 	if m == nil || m[1] == "0" || strings.Contains(out, "did ") {
-		t.Errorf("the agent printed %q; want the file, the workspace written, a uid other than 0, /etc/codex as 0 755 with hooks.json alone, the file again, and no line with \"did\"", out)
+		t.Errorf("the agent printed %q; want the file, the workspace written, a uid other than 0, /etc/codex as 0 755, the lines of the steps that set up the attempts, hooks.json alone in /etc/codex, the file again, and no line with \"did\"", out)
 	}
 	if b, err := os.ReadFile(hooks); err != nil || string(b) != content {
 		t.Errorf("the file on this machine is %q, %v", b, err)

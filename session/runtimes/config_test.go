@@ -2,6 +2,7 @@ package runtimes_test
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -148,5 +149,36 @@ func TestALaunchMayNotSetASettingTheSessionPasses(t *testing.T) {
 	}
 	if err := plain.(runtimes.ArgsChecker).CheckArgs([]string{"--config", "model_provider=x", "--set", "provider=x"}); err != nil {
 		t.Errorf("a runtime without config: %v; want no refusal", err)
+	}
+}
+
+// TestPairKeysReadsAnInlineTable pins the keys a pair sets: the key alone with the
+// spaces around it removed for a value that is no inline table, and for a table each
+// key below the pair's, through nested tables, dotted and quoted keys, strings with
+// commas and braces, arrays and comments. An empty table is its key, and a table that
+// does not parse gives the pair's key alone.
+func TestPairKeysReadsAnInlineTable(t *testing.T) {
+	for pair, want := range map[string][]string{
+		" a.b = 1":                        {"a.b"},
+		"a":                               {"a"},
+		`a="{b=1}"`:                       {"a"},
+		"a={b=1}":                         {"a.b"},
+		"a = { b = 1 , c = { d = 2 } }":   {"a.b", "a.c.d"},
+		`a={"b"=1, 'c'=2, "d e"=3}`:       {"a.b", "a.c", "a.d e"},
+		"a={b . c=true, d.e={f=1}}":       {"a.b.c", "a.d.e.f"},
+		`a={s="x,}y", t='}', u="""m}"""}`: {"a.s", "a.t", "a.u"},
+		"a={l=[1, [2, 3], {x=1}], m=2}":   {"a.l", "a.m"},
+		"a={b={}, c=1}":                   {"a.b", "a.c"},
+		"a={}":                            {"a"},
+		"a={b=1,}":                        {"a.b"},
+		"a={\n# note\nb=1\n}":             {"a.b"},
+		"a={b=":                           {"a"},
+		"a={b=1 c=2}":                     {"a"},
+		"a={=1}":                          {"a"},
+		`a={"b=1}`:                        {"a"},
+	} {
+		if got := runtimes.PairKeys(pair); !slices.Equal(got, want) {
+			t.Errorf("PairKeys(%q) = %q; want %q", pair, got, want)
+		}
 	}
 }

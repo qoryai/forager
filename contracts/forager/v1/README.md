@@ -2109,8 +2109,8 @@ outside gets none.
 The session reads `usage` from the rollouts below `resume.prefix`, which Codex writes
 one per thread, `rollout-<time>-<thread id>.jsonl`, once Codex exited. Each
 `token_count` line has the thread's total so far in `info.total_token_usage`. A
-launch's usage is the launch's tokens: the tokens of its thread since the launch
-started, plus those of the thread's child agents. Right before the launch starts, after
+launch's usage is each rollout's last total less its total before the launch, for the
+rollout of the launch's thread and those of its child agents. Right before the launch starts, after
 a restore, the session records the device, inode and length of every rollout below
 `resume.prefix`, and reads none of them. At the end, a file's baseline is the last total
 in its first bytes up to that length, if it has the same device and inode and is not
@@ -2121,9 +2121,14 @@ the launch starts. The thread's rollout is the one file that `resume.path` match
 the thread id. Of every other file that changed since the baseline, the session reads
 at most the first 64 KiB, for the `id`, the `parent_thread_id` and the `source` of its
 `session_meta`. Codex 0.167.2 writes them before the base instructions, so a first line
-longer than 64 KiB counts. The session skips the file when it cannot read them that way
-or when either id is longer than 128 bytes: a symbolic link, a FIFO, a first line of
-another shape. A file that did not change adds nothing, and the session reads its first
+longer than 64 KiB counts. When the session cannot read them that way, for a symbolic
+link, a FIFO or another file that is no regular file, a failed open or read, a first
+line of another shape, or an id longer than 128 bytes, the file is a child agent's
+when its name is the one `resume.path` matches with the id of a thread that a
+`spawn_agent` call started in the thread's rollout or in a child agent's that changed:
+the `receiver_thread_ids` of an `item_completed` of a `CollabAgentToolCall`, which
+Codex 0.167.2 writes in a rollout of `codex exec`. For such a file the result has no
+`usage`; any other such file counts for nothing. A file that did not change adds nothing, and the session reads its first
 64 KiB only to link a file that changed to the thread: when no file it read has the id
 of that file's parent, it reads each file that did not change and that `resume.path`
 matches with that id, and links the file whose `session_meta` has that id. The child
@@ -2144,8 +2149,11 @@ at most 256 files and 256 MiB together. After such a file that it does not read,
 files or bytes, a file whose first line has no `id` and `source` in its first 64 KiB, a
 count above 2^53, a count below -2^53, a count that is not an integer, a sum of a count
 above 2^53, a launch with no rollout, and a launch for which the session reads no
-transcript, the result has no `usage`, and the session writes one `dev.qory.run.log`
-line: the fix on its first line, the cause on the second. A launch whose rollouts have no total since the baseline
+transcript, a child agent's file that another file replaced or whose `session_meta`
+changed between the read of its first bytes and its read in full, and a baseline whose
+`fstatat` of a file failed, the result has no `usage`, and the session writes one
+`dev.qory.run.log` line: the fix on its first line, the cause on the second. No line
+contains a name that a `*` of `resume.path` matched. A launch whose rollouts have no total since the baseline
 has no `usage`.
 
 **A subagent's parent.** `dev.qory.runtime.subagent_started` contains `parent_agent_id`
@@ -6301,7 +6309,9 @@ starts with the fix and contains the flag, and no value of the arguments. The se
 argument sets one when its key, with the spaces around it removed, is that key, a key
 under it, or a key it is under, which replaces the whole table:
 `model_providers.qory.name.x` and `model_providers.qory` both set
-`model_providers.qory.name`. Arguments after `--` are not read. For every runtime
+`model_providers.qory.name`. For a value that is a TOML inline table, such as
+`features={hooks=false}`, the error contains the key that the table sets,
+`features.hooks`, and not the key above it. Arguments after `--` are not read. For every runtime
 with `config`, the join fails on `config.flag` with such a pair, as `--config k=v`
 and `--config=k=v`. For Codex 0.167.2, it fails on these too:
 

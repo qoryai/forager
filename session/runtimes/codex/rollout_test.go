@@ -392,3 +392,26 @@ func TestCodexParseMetaReadsTheFirstLine(t *testing.T) {
 		}
 	}
 }
+
+// TestCodexParseRolloutReadsTheSpawnedThreads pins Spawned: the fixture's launch 1
+// thread started its one child agent with spawn_agent, and the child started none. A
+// call of another tool, a line of another type, a call not completed and a line that
+// is no JSON object count for nothing.
+func TestCodexParseRolloutReadsTheSpawnedThreads(t *testing.T) {
+	const child = "01a1f100-885b-7140-a145-b604ffe0117a"
+	if got := rollout(t, "launch1-parent-rollout.jsonl", 0).Spawned; len(got) != 1 || got[0] != child {
+		t.Errorf("the thread: spawned %q; want [%s]", got, child)
+	}
+	if got := rollout(t, "launch1-child-rollout.jsonl", 0).Spawned; len(got) != 0 {
+		t.Errorf("the child: spawned %q; want none", got)
+	}
+	call := func(typ, payload, tool string) string {
+		return fmt.Sprintf(`{"type":%q,"payload":{"type":%q,"item":{"type":"CollabAgentToolCall","tool":%q,"receiver_thread_ids":["x-%s-%s-%s"]}}}`, typ, payload, tool, typ, payload, tool)
+	}
+	r := parsed(t, 0, meta("t", ""), call("event_msg", "item_completed", "spawn_agent"), call("event_msg", "item_completed", "wait"),
+		call("response_item", "item_completed", "spawn_agent"), call("event_msg", "item_started", "spawn_agent"),
+		`{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CollabAgentToolCall"`)
+	if want := "x-event_msg-item_completed-spawn_agent"; len(r.Spawned) != 1 || r.Spawned[0] != want {
+		t.Errorf("spawned %q; want [%s]", r.Spawned, want)
+	}
+}

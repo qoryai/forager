@@ -57,6 +57,8 @@ const (
 	fixRolloutDepth     = "Keep child agents at most 16 levels below the launch's thread"
 	fixRolloutCounts    = "Check the token counts in the rollouts of the launch"
 	fixRolloutMeta      = "Check the first line of each rollout that changed during the launch"
+	fixRolloutSwapped   = "Leave the rollouts of the launch in place once Codex exits"
+	fixRolloutBaseline  = "Check the permissions of Codex's rollouts and of their folders"
 	fixNoTranscript     = "Fix the transcript line before this one, then start a new session"
 )
 
@@ -96,7 +98,10 @@ func (t *transcript) rolloutPatterns(id string) (thread, every *pathPattern) {
 // matches, with no cap on their count, and their [rolloutState]s, by fstatat. It
 // searches as [transcript.find] does: behind a wall it lists at most [maxFindEntries]
 // entries, and follows no symbolic link below the transcript directory. For a search
-// that fails it returns the line instead; when is "before" or "after" the launch.
+// that fails, and for a search before the launch with an fstatat that fails, which
+// would leave a file with no baseline, it returns the line instead; when is "before"
+// or "after" the launch. After the launch, a file whose fstatat fails counts as one
+// that changed.
 func (t *transcript) searchRollouts(every *pathPattern, when string) ([]string, map[string]rolloutState, string) {
 	base, start, limit, follow := t.home, t.prefix(), 0, true
 	if t.root != "" {
@@ -109,6 +114,8 @@ func (t *transcript) searchRollouts(every *pathPattern, when string) ([]string, 
 		return nil, nil, noUsage(fixRolloutEntries, fmt.Sprintf("the search %s the launch listed more than %d entries below %s", when, maxFindEntries, t.resume.Prefix))
 	case err != nil:
 		return nil, nil, noUsage(fixRolloutFolders, fmt.Sprintf("the search %s the launch below %s failed: %s", when, t.resume.Prefix, accesskey.ShownError(err).Error()))
+	case s.statErr != nil && when == "before":
+		return nil, nil, noUsage(fixRolloutBaseline, fmt.Sprintf("the fstatat of a rollout at %s before the launch failed: %s", t.resume.Prefix+every.shown, accesskey.ShownError(s.statErr).Error()))
 	}
 	return s.found, s.states, ""
 }
@@ -214,40 +221,56 @@ func pathless(err error) error {
 	return err
 }
 
-// rolloutMeta is the [codex.Meta] of the rollout at rel below resume.prefix, from at
-// most its first [maxRolloutHead] bytes, as its fstat has them, and false for a file
-// the session does not read that way: one gone, one with a symbolic link on its path,
-// no regular file, or one whose first line is no session_meta with ids of at most
-// [maxSessionID] bytes. It reads a file with a second hard link too, to learn its
+// headRead is what the session reads of the first bytes of a rollout: when ok, the
+// [codex.Meta] of its session_meta and the file's state at that read; otherwise
+// unread, the line for a file that the session could not read so, empty for a file
+// that is gone.
+type headRead struct {
+	meta   codex.Meta
+	st     rolloutState
+	ok     bool
+	unread string
+}
+
+// rolloutMeta reads the [headRead] of the rollout at rel below resume.prefix, from at
+// most its first [maxRolloutHead] bytes, as its fstat has them. Its unread line is
+// for a file with a symbolic link on its path, one that is no regular file, one whose
+// open or read failed, and one whose first line is no session_meta with ids of at
+// most [maxSessionID] bytes. It reads a file with a second hard link too, to learn its
 // ids: behind a wall, a child agent's that changed then gets the line of
 // [transcript.readCheck] and no usage, and the session reads no other such file in
-// full. For a file whose first line is longer than those bytes and
-// has no id and source in them ([codex.ErrMetaCut]), it returns the line instead;
-// shown is the file's place in it.
-func (t *transcript) rolloutMeta(rel, shown string) (codex.Meta, bool, string) {
+// full. For a file whose first line is longer than those bytes and has no id and
+// source in them ([codex.ErrMetaCut]), it returns the line instead; shown is the
+// file's place in it.
+func (t *transcript) rolloutMeta(rel, shown string) (headRead, string) {
 	f, st, err := t.openRollout(rel)
-	if err != nil {
-		return codex.Meta{}, false, ""
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return headRead{}, ""
+	case err != nil:
+		return headRead{unread: openLine(err, shown)}, ""
 	}
 	defer f.Close()
 	if st.Mode&unix.S_IFMT != unix.S_IFREG {
-		return codex.Meta{}, false, ""
+		return headRead{unread: noUsage(fixRolloutLinked, "a rollout of the launch at "+shown+" is no regular file")}, ""
 	}
 	head, err := io.ReadAll(io.NewSectionReader(f, 0, min(st.Size, maxRolloutHead)))
 	if t.hooks != nil && t.hooks.head != nil {
 		t.hooks.head(rel, len(head))
 	}
 	if err != nil {
-		return codex.Meta{}, false, ""
+		return headRead{unread: noUsage(fixRolloutRead, "a read of a rollout at "+shown+" failed: "+accesskey.ShownError(pathless(err)).Error())}, ""
 	}
 	m, err := codex.ParseMeta(head)
 	switch {
 	case errors.Is(err, codex.ErrMetaCut) && st.Size > maxRolloutHead:
-		return codex.Meta{}, false, noUsage(fixRolloutMeta, fmt.Sprintf("the first %d bytes (64 KiB) of a rollout at %s end before the id and source of its session_meta", maxRolloutHead, shown))
-	case err != nil || len(m.ThreadID) > maxSessionID || len(m.ParentID) > maxSessionID:
-		return codex.Meta{}, false, ""
+		return headRead{}, noUsage(fixRolloutMeta, fmt.Sprintf("the first %d bytes (64 KiB) of a rollout at %s end before the id and source of its session_meta", maxRolloutHead, shown))
+	case err != nil:
+		return headRead{unread: noUsage(fixRolloutMeta, "the first line of a rollout at "+shown+" is no session_meta with an id")}, ""
+	case len(m.ThreadID) > maxSessionID || len(m.ParentID) > maxSessionID:
+		return headRead{unread: noUsage(fixRolloutMeta, fmt.Sprintf("the session_meta of a rollout at %s has an id longer than %d bytes", shown, maxSessionID))}, ""
 	}
-	return m, true, ""
+	return headRead{meta: m, st: stateOf(st), ok: true}, ""
 }
 
 // readCheck is the line for a rollout of the launch at shown, in the state st, that
@@ -284,6 +307,44 @@ type fullRollout struct {
 	meta codex.Meta
 }
 
+// unreadRollout is a file that changed since the baseline and whose first bytes the
+// session could not read for its ids: its path below resume.prefix and the line of
+// [headRead].
+type unreadRollout struct {
+	rel, line string
+}
+
+// unreadChild is the line of the first file of unread whose name resume.path matches
+// with the id of a thread that a spawn_agent call in rollouts started: a child agent
+// of the launch's thread or of one of its child agents that the session could not
+// read. It is empty when no file of unread is such a file: a file of another thread
+// counts for nothing. An id longer than [maxSessionID] bytes matches no file.
+func (t *transcript) unreadChild(unread []unreadRollout, rollouts []codex.Rollout) string {
+	if len(unread) == 0 {
+		return ""
+	}
+	for _, r := range rollouts {
+		for _, id := range r.Spawned {
+			if id == "" || len(id) > maxSessionID {
+				continue
+			}
+			var named *pathPattern
+			for _, u := range unread {
+				if !strings.Contains(path.Base(u.rel), id) {
+					continue
+				}
+				if named == nil {
+					named, _ = t.rolloutPatterns(id)
+				}
+				if named.matches(u.rel) {
+					return u.line
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // codexUsage reads the rollouts of the Codex launch whose thread is id, after the
 // launch's end and [transcript.finish], and returns the launch's usage as
 // dev.qory.runtime.result's usage has it, nil when it is unknown. The baseline
@@ -292,22 +353,25 @@ type fullRollout struct {
 // The thread's rollout is the one file below resume.prefix that resume.path matches
 // with id. Of each other file that resume.path matches with any id and that changed
 // since the baseline, the session reads at most the first [maxRolloutHead] bytes, for
-// the thread and parent of its session_meta ([transcript.rolloutMeta]), and skips a
-// file it does not read so. A file that did not change adds nothing, and the session
+// the thread and parent of its session_meta ([transcript.rolloutMeta]). A file it
+// does not read so is a child agent's when a spawn_agent call in the rollouts it reads
+// in full started the thread whose id its name has ([transcript.unreadChild]), and
+// counts for nothing otherwise. A file that did not change adds nothing, and the session
 // reads its first bytes only to link a file that changed to the thread: when no file
 // it read has the id of that file's parent, it reads each file that did not change and
 // that resume.path matches with that id ([transcript.linkRollouts]). The thread's
 // child agents, at any depth, are the files whose parent is the thread or one of them
 // ([codex.Descendants]). The session reads in full the thread's rollout and each child
 // agent's that changed, at most [maxRollouts] files and [maxRolloutBytes] bytes
-// together, with the same rules as the transcript's reads, and skips a child agent's
-// whose ids changed since the read of its first bytes. The usage is, over the thread
+// together, with the same rules as the transcript's reads. The usage is, over the thread
 // and its child agents, the last total less the last total in the bytes the file had
 // before the launch ([transcript.before], [codex.SumUsage]). A file that is gone by
 // its read counts for nothing. For the thread's rollout or a child agent's that the
-// session does not read, a file whose first line has no ids in its first bytes, more
-// files or bytes than the caps, a failed search, a rollout of the thread of another
-// shape, or a count above 2^53, the session writes one line and returns nil; for a
+// session does not read, a child agent's that another file replaced or whose ids
+// changed between the read of its first bytes and its read in full, a file whose first
+// line has no ids in its first bytes, more files or bytes than the caps, a failed
+// search, a baseline whose fstatat of a file failed, a rollout of the thread of
+// another shape, or a count above 2^53, the session writes one line and returns nil; for a
 // count below 0, one line, and the count is 0. The lines contain no name a * of
 // resume.path matched.
 func (t *transcript) codexUsage(id string) map[string]any {
@@ -330,6 +394,8 @@ func (t *transcript) codexUsage(id string) map[string]any {
 	threadRel := ""
 	var rels, unchanged []string
 	var metas []codex.Meta
+	var heads []rolloutState
+	var unread []unreadRollout
 	for _, rel := range found {
 		if thread.matches(rel) {
 			if threadRel != "" {
@@ -343,13 +409,15 @@ func (t *transcript) codexUsage(id string) map[string]any {
 			unchanged = append(unchanged, rel)
 			continue
 		}
-		m, ok, line := t.rolloutMeta(rel, shownEvery)
-		if line != "" {
+		h, line := t.rolloutMeta(rel, shownEvery)
+		switch {
+		case line != "":
 			t.line(line)
 			return nil
-		}
-		if ok {
-			rels, metas = append(rels, rel), append(metas, m)
+		case h.ok:
+			rels, metas, heads = append(rels, rel), append(metas, h.meta), append(heads, h.st)
+		case h.unread != "":
+			unread = append(unread, unreadRollout{rel: rel, line: h.unread})
 		}
 	}
 	missing := noUsage(fixThreadMissing, "no file matches "+shownThread)
@@ -401,6 +469,11 @@ func (t *transcript) codexUsage(id string) map[string]any {
 			return nil
 		}
 		state := stateOf(st)
+		if i >= 0 && (state.dev != heads[i].dev || state.ino != heads[i].ino) {
+			f.Close()
+			t.line(swappedLine(shown))
+			return nil
+		}
 		if i >= 0 && t.unchanged(rel, state) {
 			f.Close()
 			continue
@@ -444,9 +517,14 @@ func (t *transcript) codexUsage(id string) map[string]any {
 			return nil
 		case i > 0 && (err != nil || ro.Meta != r.meta):
 			// The file changed between the read of its first bytes and this read.
-			continue
+			t.line(swappedLine(shown))
+			return nil
 		}
 		rollouts = append(rollouts, ro)
+	}
+	if line := t.unreadChild(unread, rollouts); line != "" {
+		t.line(line)
+		return nil
 	}
 	u, counted, clamped, err := codex.SumUsage(rollouts)
 	switch {
@@ -459,6 +537,13 @@ func (t *transcript) codexUsage(id string) map[string]any {
 		t.line(clampedUsage)
 	}
 	return map[string]any{"input": u.Input, "output": u.Output, "cache_read": u.CacheRead, "cache_write": u.CacheWrite}
+}
+
+// swappedLine is the line for a child agent's rollout at shown that changed between
+// the read of its first bytes and its read in full: another file at its path, or
+// another session_meta.
+func swappedLine(shown string) string {
+	return noUsage(fixRolloutSwapped, "a rollout of a child agent at "+shown+" changed between the session's reads of it")
 }
 
 // unchanged reports whether the rollout at rel below resume.prefix is in the state st
@@ -499,13 +584,13 @@ func (t *transcript) linkRollouts(id string, unchanged, rels []string, metas []c
 			if !named.matches(rel) {
 				continue
 			}
-			m, ok, line := t.rolloutMeta(rel, shown)
+			h, line := t.rolloutMeta(rel, shown)
 			if line != "" {
 				return nil, nil, line
 			}
-			if ok && m.ThreadID == parent {
+			if h.ok && h.meta.ThreadID == parent {
 				known[parent] = true
-				rels, metas = append(rels, rel), append(metas, m)
+				rels, metas = append(rels, rel), append(metas, h.meta)
 			}
 		}
 	}

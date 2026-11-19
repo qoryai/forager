@@ -122,7 +122,11 @@ const (
 //   - --local-provider, --profile and -p in every form: --profile x, --profile=x,
 //     -p x, -px and -p=x.
 //
-// The error contains the flag and never the argument's value.
+// The error contains the flag and never the argument's value. For a pair whose value is
+// an inline table, such as features={hooks=false}, it contains the key that the table
+// sets, features.hooks ([checkPair]). TestCodexReadsTheFormsAsCodex0169Does pins the
+// forms that Codex 0.169.0 reads in another way: quoted parts, other letter cases and
+// spaces in a key, --enable a,b, a shortened long flag, -c -- and -- before -c.
 func checkArgs(args, keys []string) error {
 	for i := 0; i < len(args) && args[i] != "--"; i++ {
 		a := args[i]
@@ -175,8 +179,18 @@ func checkArgs(args, keys []string) error {
 }
 
 // checkPair returns an error when pair, the value of flag, sets one of keys, a setting
-// of [reserved], [skills] or [hookFeatures].
+// of [reserved], [skills] or [hookFeatures]. It checks each key that the pair sets
+// first ([runtimes.PairKeys]), so that for a value that is an inline table, such as
+// features={hooks=false}, the error contains the key the table sets, features.hooks.
+// The pair's key comes last: it is above each key of its table, and a table replaces
+// the settings below the key that earlier pairs set (codex-rs config/src/overrides.rs:64
+// in 0.169.0).
 func checkPair(flag, pair string, keys []string) error {
+	for _, key := range runtimes.PairKeys(pair) {
+		if err := checkKey(flag, canonical(key), keys); err != nil {
+			return err
+		}
+	}
 	return checkKey(flag, canonical(runtimes.PairKey(pair)), keys)
 }
 

@@ -204,12 +204,17 @@ exited: for the launch's thread and each child agent's rollout, the children of
 children included, the total less what the file had before the launch started.
 `input` is Codex's `input_tokens` less its cached and cache-write tokens. The session
 reads the first 64 KiB of every other rollout that changed during the launch to find
-the child agents, and skips the files it cannot read so. It reads the first 64 KiB of a
+the child agents. A file it cannot read so, such as a symbolic link, a FIFO or a file
+with a broken first line, gives the result no `usage` when its name has the id of a
+thread that a `spawn_agent` call in the thread's rollout or a child agent's started,
+and counts for nothing otherwise. It reads the first 64 KiB of a
 rollout that did not change only to link a child agent that changed to the thread. It
 reads the thread's rollout and the child agents' that changed with the same checks as
 the transcript, and at most 256 files and 256 MiB together. Past them, for a first line
-with no ids in its first 64 KiB, and for a count above 2^53, a count below -2^53, a
-count that is not an integer or a sum of a count above 2^53, the result has no
+with no ids in its first 64 KiB, for a child agent's file that changed between the
+session's reads, for a baseline with no state for a file, and for a count above 2^53,
+a count below -2^53, a count that is not an integer or a sum of a count above 2^53,
+the result has no
 `usage`, and the session writes one line on `stderr` with the fix first. See the
 contract's §The events, Codex's result.
 
