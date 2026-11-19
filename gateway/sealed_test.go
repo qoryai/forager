@@ -419,10 +419,10 @@ func TestAReloadKeepsTheCredentialsFixed(t *testing.T) {
 	// Other credentials: the hosts differ.
 	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","c.example"]}},"credentials":[{"name":"model","apply":[{"hosts":["c.example"],"scheme":"bearer"}]}]}`, 'c')
 	h.post(logged(runID))
-	line := "start a new run to use other credentials; a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays"
+	line := reloadRefused(t, c, "Start a new run to use other credentials.", "a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays")
 	eventually(t, "the failed reload's report", func() bool {
 		h.post(heartbeat(runID))
-		return h.reported(line)
+		return h.reportedWhole(line)
 	})
 	again, err := h.linkOf(runID).Reload(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID)
 	if err != nil || again.Digest != reloaded.Digest {
@@ -433,6 +433,66 @@ func TestAReloadKeepsTheCredentialsFixed(t *testing.T) {
 	}
 	if reqs := c.requests(t); len(reqs) != 1 {
 		t.Errorf("%d secrets requests, want 1", len(reqs))
+	}
+	h.post(exited(runID))
+	h.close()
+}
+
+// TestAReloadKeepsTheDefaultModelProviderCredentialFixed pins the reports of the two
+// reloads that change a run's default model provider credential, each with the fix on
+// the first line and the policy in force staying. The run starts with the local model
+// key first and no default_model_provider_credential_name: a reload that selects the
+// model key second in its place, and one that sets
+// default_model_provider_credential_name to first, are refused.
+func TestAReloadKeepsTheDefaultModelProviderCredentialFixed(t *testing.T) {
+	t.Setenv("GATEWAY_TEST_FIRST_KEY", "fake-first-value-0001")
+	t.Setenv("GATEWAY_TEST_SECOND_KEY", "fake-second-value-0002")
+	creds := []gateway.Credential{
+		{Name: "first", Env: "GATEWAY_TEST_FIRST_KEY", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Scheme: "header", Header: "x-api-key"},
+		{Name: "second", Env: "GATEWAY_TEST_SECOND_KEY", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Scheme: "header", Header: "x-api-key"},
+	}
+	// doc selects the model key key, with default_model_provider_credential_name set to
+	// field, or unset when field is empty.
+	doc := func(key, field string) string {
+		out := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"credentials":[{"name":"` + key + `"}]}`
+		if field != "" {
+			out += `,"default_model_provider_credential_name":"` + field + `"`
+		}
+		return out + "}"
+	}
+	c := newControl(t)
+	c.serveDocument(doc("first", ""), 'a')
+	h := start(t, gateway.Config{Server: c.server(), Credentials: creds})
+	h.secrets = append(h.secrets, "fake-first-value-0001", "fake-second-value-0002")
+	a := h.open(server.LinkRunRequest{Wall: true})
+	runID, first := a.RunID, a.Digest
+	if a.DefaultModelProviderCredentialName != "first" {
+		t.Fatalf("the run's default model provider credential %q", a.DefaultModelProviderCredentialName)
+	}
+	if d := h.post(started(runID, nil), applied(runID, a.Applied)); !d.Accepted() {
+		t.Fatalf("the first batch: %+v", d)
+	}
+	for _, step := range []struct {
+		digest     byte
+		doc        string
+		fix, cause string
+	}{
+		{'b', doc("second", ""), "Start a new run to change the default model provider credential.",
+			`the run started with the default model provider credential "first", and this run configuration sets it to "second"; without default_model_provider_credential_name, the default model provider credential is the run's one model key; the policy in force stays`},
+		{'c', doc("first", "first"), "Start a new run to change default_model_provider_credential_name.",
+			`the run started with default_model_provider_credential_name unset, and this run configuration sets it to "first"; the policy in force stays`},
+	} {
+		c.serveDocument(step.doc, step.digest)
+		h.post(logged(runID))
+		line := reloadRefused(t, c, step.fix, step.cause)
+		eventually(t, "the failed reload's report "+line, func() bool {
+			h.post(heartbeat(runID))
+			return h.reportedWhole(line)
+		})
+		again, err := h.linkOf(runID).Reload(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID)
+		if err != nil || again.Digest != first {
+			t.Errorf("after the refused reload %c: %v %+v, want the digest %s", step.digest, err, again, first)
+		}
 	}
 	h.post(exited(runID))
 	h.close()

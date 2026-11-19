@@ -1036,15 +1036,23 @@ release may change what an existing document does, and says so under Upgrading.
   more model keys, the server's and the local ones together, needs it; with one, that
   one is the default model provider credential. A name of a host credential, of no model
   key of the run, and none beside two or more model keys are
-  `run_configuration_invalid`. A reload that changes the field fails, `Start a new run
-  to change default_model_provider_credential_name.` with a second line such as `The run
-  started with default_model_provider_credential_name unset, and this configuration sets
-  it to "first"` or `The run started with default_model_provider_credential_name
-  "first", and this configuration leaves it unset`, and the policy in force stays. A
-  reload whose default model provider credential differs from the run's fails too,
-  without `default_model_provider_credential_name`: `Start a new run to change the
-  default model provider credential`. `server.RunConfiguration` has
-  `DefaultModelProviderCredentialName`, and `server.CheckCredentials` takes it.
+  `run_configuration_invalid`. A reload that changes the field fails with the fix on the
+  first line, `Start a new run to change default_model_provider_credential_name.`, and a
+  second line such as `run configuration <url>: the run started with
+  default_model_provider_credential_name unset, and this run configuration sets it to
+  "first"; the policy in force stays` or `run configuration <url>: the run started with
+  default_model_provider_credential_name "first", and this run configuration leaves it
+  unset; the policy in force stays`. A reload whose default model provider credential
+  differs from the run's fails too, without `default_model_provider_credential_name`:
+  `Start a new run to change the default model provider credential.`, and a second line
+  such as `run configuration <url>: the run started with the default model provider
+  credential "first", and this run configuration sets it to "second"; without
+  default_model_provider_credential_name, the default model provider credential is the
+  run's one model key; the policy in force stays`. A reload whose credentials differ
+  fails with `Start a new run to use other credentials.` on the first line. The gateway
+  reports each of the three with `the reload failed: ` at the start of the second line.
+  `server.RunConfiguration` has `DefaultModelProviderCredentialName`, and
+  `server.CheckCredentials` takes it.
 - The gateway sets a run configuration's `credentials`, with or without a wall. When the run
   starts it sends a secrets request under the access key, for the digest it computes of
   the document's bytes, opens the answer with `sealed.Open`, and the proxy sets each value

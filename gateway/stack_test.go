@@ -656,7 +656,7 @@ func TestTheNodesPolicyDecidesEachStackHost(t *testing.T) {
 
 // TestAReloadKeepsTheStackHostsFixed pins that a run's stack_hosts are fixed when it
 // starts: a reload whose run configuration lists others fails, the user is told with
-// the fix first, and the policy in force stays.
+// the fix first, on the one line the report has, and the policy in force stays.
 func TestAReloadKeepsTheStackHostsFixed(t *testing.T) {
 	c, h := stackGateway(t, `{"version":1,"stack_hosts":["git.example"]}`, nil, nil)
 	a := h.open(server.LinkRunRequest{})
@@ -668,7 +668,7 @@ func TestAReloadKeepsTheStackHostsFixed(t *testing.T) {
 	line := "the reload failed: start another run to use other stack hosts: a run's stack_hosts are fixed when it starts"
 	eventually(t, "the failed reload's report", func() bool {
 		h.post(heartbeat(runID))
-		return h.reported(line)
+		return h.reportedWhole(line)
 	})
 	again, err := h.linkOf(runID).Reload(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID)
 	if err != nil || again.Digest != first {

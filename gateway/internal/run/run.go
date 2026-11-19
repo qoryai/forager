@@ -1005,6 +1005,21 @@ func Narrow(pol *policy.Loaded, n *Narrowing) *policy.Loaded {
 	return out
 }
 
+// FixFirstError is a refusal whose report starts with its fix: Fix is the first line,
+// and Cause, after the context the caller puts before it, the second. [Run.Reload]
+// returns one whose Cause starts with "run configuration" and the URL, and ends with
+// "the policy in force stays".
+type FixFirstError struct {
+	// Fix is a sentence the reader acts on, such as "Start a new run to use other
+	// credentials.".
+	Fix string
+	// Cause is why the reload is refused.
+	Cause string
+}
+
+// Error is Fix and Cause on two lines.
+func (e *FixFirstError) Error() string { return e.Fix + "\n" + e.Cause }
+
 // Settled reports whether a failed fetch of the run configuration is one the server
 // answered and Forager refused, which is not asked for again until the answered digest
 // changes: a document the client could not read, a policy the schema refuses, or a
@@ -1065,14 +1080,16 @@ func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error
 		return &Decision{Unchanged: true, Policy: next}, nil
 	}
 	if !sameCredentials(creds.creds, r.stored) {
-		return nil, fmt.Errorf("run configuration %s: start a new run to use other credentials; a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays", accesskey.ShownValue(next.URL, false))
+		return nil, &FixFirstError{
+			Fix:   "Start a new run to use other credentials.",
+			Cause: fmt.Sprintf("run configuration %s: a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays", accesskey.ShownValue(next.URL, false)),
+		}
 	}
 	if creds.defaultName != r.storedDefault {
-		sets := "leaves it unset"
-		if creds.defaultName != "" {
-			sets = "sets it to " + shownField(creds.defaultName)
+		return nil, &FixFirstError{
+			Fix:   "Start a new run to change default_model_provider_credential_name.",
+			Cause: fmt.Sprintf("run configuration %s: the run started with default_model_provider_credential_name %s, and this run configuration %s; the policy in force stays", accesskey.ShownValue(next.URL, false), shownField(r.storedDefault), setsTo(creds.defaultName)),
 		}
-		return nil, fmt.Errorf("run configuration %s: Start a new run to change default_model_provider_credential_name.\nThe run started with default_model_provider_credential_name %s, and this configuration %s; the policy in force stays", accesskey.ShownValue(next.URL, false), shownField(r.storedDefault), sets)
 	}
 	if !sameHosts(stack, r.stack) {
 		return nil, errors.New("start another run to use other stack hosts: a run's stack_hosts are fixed when it starts")
@@ -1080,6 +1097,10 @@ func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error
 	d, err := r.decide(ctx, next, named)
 	if d != nil {
 		d.Guard, d.computed = guard, computed
+	}
+	var fix *FixFirstError
+	if errors.As(err, &fix) {
+		return nil, &FixFirstError{Fix: fix.Fix, Cause: fmt.Sprintf("run configuration %s: %s; the policy in force stays", accesskey.ShownValue(next.URL, false), fix.Cause)}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("run configuration %s: %w; the policy in force stays", accesskey.ShownValue(next.URL, false), err)
@@ -1120,7 +1141,10 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded, named string) (*D
 	// provider credential is fixed as well.
 	if started := defaultOf(r.Held()); fresh.DefaultCredential != started {
 		fresh.Close()
-		return nil, fmt.Errorf("Start a new run to change the default model provider credential: the run started with %s, and this configuration selects %s", shownKey(started), shownKey(fresh.DefaultCredential))
+		return nil, &FixFirstError{
+			Fix:   "Start a new run to change the default model provider credential.",
+			Cause: fmt.Sprintf("the run started with the default model provider credential %s, and this run configuration %s; without default_model_provider_credential_name, the default model provider credential is the run's one model key", shownField(started), setsTo(fresh.DefaultCredential)),
+		}
 	}
 	if err := tool.Check(r.chosen, in.Policy.Egress.Mode, in.Policy.Egress.Listed(), claimedBy(fresh)); err != nil {
 		fresh.Close()
@@ -1464,20 +1488,21 @@ func defaultOf(held *credential.Held) string {
 	return held.DefaultCredential
 }
 
-// shownKey is a default model provider credential's name as a message shows it, or "no
-// model key".
-func shownKey(name string) string {
-	if name == "" {
-		return "no model key"
-	}
-	return accesskey.ShownName(name, true)
-}
-
-// shownField is a value of default_model_provider_credential_name as a message shows
-// it: the quoted name, or "unset" when the field is absent.
+// shownField is a value of default_model_provider_credential_name, or a default model
+// provider credential, as a message shows it: the quoted name, or "unset" when there is
+// none.
 func shownField(name string) string {
 	if name == "" {
 		return "unset"
 	}
 	return accesskey.ShownName(name, true)
+}
+
+// setsTo is what a reload's run configuration does to a value a message compares:
+// "sets it to" and the quoted name, or "leaves it unset" when there is none.
+func setsTo(name string) string {
+	if name == "" {
+		return "leaves it unset"
+	}
+	return "sets it to " + shownField(name)
 }
