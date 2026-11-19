@@ -2108,24 +2108,38 @@ outside gets none.
 
 The session reads `usage` from the rollouts below `resume.prefix`, which Codex writes
 one per thread, `rollout-<time>-<thread id>.jsonl`, once Codex exited. Each
-`token_count` line has the thread's total so far in `info.total_token_usage`. The
-launch's usage is the last total of the thread's rollout, the one file that
-`resume.path` matches for the thread id, less the last total in the bytes the session
-restored before a resumed launch, plus the last total of each rollout whose
-`session_meta` has a `parent_thread_id` of the thread or of one of its child agents, up
-to 16 levels down. `usage.input` is `input_tokens` less `cached_input_tokens` and
+`token_count` line has the thread's total so far in `info.total_token_usage`. A
+launch's usage is the launch's tokens: the tokens of its thread since the launch
+started, plus those of the thread's child agents. Right before the launch starts, after
+a restore, the session records the device, inode and length of every rollout below
+`resume.prefix`, and reads none of them. At the end, a file's baseline is the last total
+in its first bytes up to that length, if it has the same device and inode and is not
+shorter; a new file, a file replaced and a file shorter have the baseline 0, since Codex
+0.167.2 only appends to a rollout. Without a wall, the restored rollout's baseline is the
+restored length, since the session's script copies that file to its place only once
+the launch starts. The thread's rollout is the one file that `resume.path` matches for
+the thread id. Of every other file, the session reads at most the first 64 KiB, for the
+`id` and the `parent_thread_id` of its `session_meta`, and skips the file when it cannot
+read them that way or when either id is longer than 128 bytes: a symbolic link, a FIFO,
+a file whose first line is longer than 64 KiB. The child agents are the files whose
+`parent_thread_id` is the thread or one of its child agents, up to 16 levels down. The
+usage is the sum, over the thread and its child agents, of the last total less the
+baseline. `usage.input` is `input_tokens` less `cached_input_tokens` and
 `cache_write_input_tokens`, which Codex counts inside it; `cache_read` is
 `cached_input_tokens`; `cache_write` is `cache_write_input_tokens`; and `output` is
 `output_tokens`, reasoning included. Codex's `reasoning_output_tokens` and
-`total_tokens` have no member. Each total is mapped before the sum, and a count below 0
-is 0, with one `dev.qory.run.log` line. `turn.completed` on standard output has the
-thread's total since its first launch, which a resumed launch would count twice, so the
-session does not use it. The session reads the rollouts as it reads the transcript: no
-symbolic link, FIFO or file with a second hard link behind a wall, each file at most 64
-MiB, and also at most 256 files and 256 MiB together. After a file it does not read, or
-more files or bytes, and for a launch with no rollout, the result has no `usage`, and
-the session writes one `dev.qory.run.log` line that starts with the fix. A launch whose
-rollouts have no total since the restored bytes has no `usage`.
+`total_tokens` have no member. Each difference is mapped before the sum, and a count
+below 0 is 0, with one `dev.qory.run.log` line. `turn.completed` on standard output has
+the thread's total since its first launch, which a resumed launch would count twice, so
+the session does not use it. The session reads in full the thread's rollout and each
+child agent's that changed since the baseline, as it reads the transcript: no symbolic
+link, FIFO or file with a second hard link behind a wall, each file at most 64 MiB, and
+at most 256 files and 256 MiB together. After such a file that it does not read, more
+files or bytes, a count above 2^53 or below -2^53, a sum of a count above 2^53, a launch
+with no rollout, and a launch for which the session reads no transcript, the result has
+no `usage`, and the session writes one `dev.qory.run.log` line: the fix on its first
+line, the cause on the second. A launch whose rollouts have no total since the baseline
+has no `usage`.
 
 **A subagent's parent.** `dev.qory.runtime.subagent_started` contains `parent_agent_id`
 when another subagent started this one and the runtime reported it. Claude Code 2.1.292

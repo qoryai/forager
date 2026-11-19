@@ -2403,11 +2403,17 @@ release may change what an existing document does, and says so under Upgrading.
 - At the end of each launch of Codex the session reads the rollouts below the
   descriptor's `resume.prefix`: the launch's thread's, the one file `resume.path`
   matches, and every rollout of a child agent of it, found by `parent_thread_id` up to
-  16 levels down. The thread's total counts less what the bytes the session restored
-  before a resumed launch already had. The reads follow the transcript's rules, with at
-  most 256 files and 256 MiB together. After a file the session does not read, or more
-  files or bytes, the result has no `usage`, and the session writes one line on
-  `stderr` that starts with the fix.
+  16 levels down in the first 64 KiB of each other file. Right before the launch, after
+  a restore, the session records each rollout's device, inode and length, and each file
+  counts its last total less the last total in its bytes before the launch: a child
+  agent of an earlier launch adds nothing, and a `resume <id>` without a restore counts
+  only the new tokens. The session skips a file whose ids it cannot read, such as a
+  symbolic link, a FIFO or a file of another thread over 64 MiB. It reads the thread's
+  rollout and the child agents' that changed with the transcript's rules, with at most
+  256 files and 256 MiB together. After such a file that the session does not read,
+  more files or bytes, or a count or a sum above 2^53, the result has no `usage`, and
+  the session writes one line on `stderr`: the fix on its first line, the cause on the
+  second.
 - `runtimes.Configs`, `runtimes.ConfigArgs`, `runtimes.TOMLValue`: for a descriptor
   with `config`, the session puts `config.flag` and `key=value` for each key of
   `config.fixed`, and for an endpoint that is a setting, right after the command,

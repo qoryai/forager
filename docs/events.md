@@ -200,12 +200,15 @@ a launch that wrote `dev.qory.runtime.started`. `outcome` is `success` for a lau
 session ended `succeeded`, and `error_during_execution` otherwise; `is_error` is false for `success` and
 for a launch paused with `model_key_limit` or `model_key_switch`, and true otherwise.
 `usage` is the launch's tokens, read from the rollouts below `resume.prefix` once Codex
-exited: the total of the launch's thread less what the restored rollout already had,
-plus the total of each child agent's rollout, the children of children included.
-`input` is Codex's `input_tokens` less its cached and cache-write tokens. The rollouts
-are read with the same checks as the transcript, and at most 256 files and 256 MiB
-together; past them the result has no `usage`, and the session writes one line on
-`stderr` that starts with the fix. See the contract's §The events, Codex's result.
+exited: for the launch's thread and each child agent's rollout, the children of
+children included, the total less what the file had before the launch started.
+`input` is Codex's `input_tokens` less its cached and cache-write tokens. The session
+reads the first 64 KiB of every other rollout to find the child agents, and skips the
+files it cannot read so. It reads the thread's rollout and the child agents' that
+changed with the same checks as the transcript, and at most 256 files and 256 MiB
+together; past them, and for a count above 2^53, the result has no `usage`, and the
+session writes one line on `stderr` with the fix first. See the contract's §The
+events, Codex's result.
 
 Behind a wall, the `dev.qory.session.exited` of a runtime that exited also has the
 enclosure's peak memory and CPU time, as measured inside the enclosure, to size machine

@@ -1067,13 +1067,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			r.writeLog("stderr", n, 0, []byte(neutral(noResume(unbound.Fix, unbound.Cause))+"\n"))
 		}
 	}
-	// restoredID and restoredSize are the session id and the count of bytes of the
-	// transcript the session restored, empty and 0 for none.
-	var restoredID string
-	var restoredSize int64
 	if restore != nil {
 		resumedID.Store(restore.sessionID)
-		restoredID, restoredSize = restore.sessionID, restore.size
 	}
 	command, args := prepared.Command, prepared.Args
 	// What is started: the runtime itself, or under a wall the adapter's command that
@@ -1160,6 +1155,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		trDir = shown.Dir
 	}
 	tr = r.sessionTranscript(resume, n, spec.Wall != nil, transcriptAt, launch.Env, trDir, masker, hidden, restore)
+	// Codex's usage is each rollout's tokens since this point, before the launch
+	// starts and after a restore.
+	if tr != nil && rt.Name() == codex.Name {
+		tr.codexBaseline(restore)
+	}
 	// The transcript's reads end before the join returns, on every path: the end of
 	// the runtime below, and a panic in between.
 	endTranscript := func() {}
@@ -1249,12 +1249,12 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	codexThread, _ := launchThread.Load().(string)
 	writesResult := rt.Name() == codex.Name && codexThread != ""
 	var codexUsage map[string]any
-	if writesResult && tr != nil && !closed {
-		size := int64(0)
-		if codexThread == restoredID {
-			size = restoredSize
-		}
-		codexUsage = tr.codexUsage(codexThread, size)
+	switch {
+	case !writesResult || closed:
+	case tr == nil:
+		r.writeLog("stderr", n, 0, []byte(noTranscriptUsage+"\n"))
+	default:
+		codexUsage = tr.codexUsage(codexThread)
 	}
 	// A setup step still open when the launch ended has no exit status.
 	setupSteps.finish(closed || timedOut || cancelled)

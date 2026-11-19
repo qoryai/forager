@@ -177,7 +177,8 @@ func resumedArgs(base []string, n, at int, added []string) []string {
 // .claude/projects/<slug of the paused run>/<session id>.jsonl, or to / for an absolute
 // one, the file the resumed runtime appends to; args are the arguments a walled session added to the launch, and
 // after the count of the launch's arguments that follow them, 0 when args are last; size
-// is the count of bytes the session restored, the part of the file the paused run wrote.
+// is the count of bytes the session restored, the part of the file the paused run wrote,
+// which a run with no wall copies to its place only when the launch starts.
 type restored struct {
 	sessionID string
 	rel       string

@@ -45,10 +45,11 @@ func usageFile(t *testing.T, name string) []byte {
 	return b
 }
 
-// rollout parses testdata/usage/name with restored bytes restored.
-func rollout(t *testing.T, name string, restored int64) codex.Rollout {
+// rollout parses testdata/usage/name, of which the first before bytes are what the
+// file had before the launch.
+func rollout(t *testing.T, name string, before int64) codex.Rollout {
 	t.Helper()
-	r, err := codex.ParseRollout(usageFile(t, name), restored)
+	r, err := codex.ParseRollout(usageFile(t, name), before)
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
@@ -106,8 +107,8 @@ func TestCodexLaunchUsageOfTheFixture(t *testing.T) {
 	if parent1.ThreadID != thread || parent1.ParentID != "" || child.ThreadID != "01a1f100-885b-7140-a145-b604ffe0117a" || child.ParentID != thread {
 		t.Errorf("thread %q of %q, child %q of %q", parent1.ThreadID, parent1.ParentID, child.ThreadID, child.ParentID)
 	}
-	if want := (codex.Tokens{Input: 5055, CachedInput: 1011, CacheWriteInput: 2022, Output: 4044, ReasoningOutput: 3033, Total: 9099}); parent1.Last == nil || *parent1.Last != want || parent1.Restored != nil {
-		t.Errorf("launch 1's thread has the last total %+v and restored %+v; want %+v and none", parent1.Last, parent1.Restored, want)
+	if want := (codex.Tokens{Input: 5055, CachedInput: 1011, CacheWriteInput: 2022, Output: 4044, ReasoningOutput: 3033, Total: 9099}); parent1.Last == nil || *parent1.Last != want || parent1.Before != nil {
+		t.Errorf("launch 1's thread has the last total %+v and restored %+v; want %+v and none", parent1.Last, parent1.Before, want)
 	}
 	if got := launchUsage(t, parent1, child); got != launch1Usage {
 		t.Errorf("launch 1's usage is %+v; want %+v", got, launch1Usage)
@@ -115,8 +116,8 @@ func TestCodexLaunchUsageOfTheFixture(t *testing.T) {
 
 	restored := int64(len(usageFile(t, "launch1-parent-rollout.jsonl")))
 	parent2 := rollout(t, "launch2-parent-rollout.jsonl", restored)
-	if parent2.Restored == nil || *parent2.Restored != *parent1.Last {
-		t.Errorf("launch 2's restored total is %+v; want launch 1's last %+v", parent2.Restored, parent1.Last)
+	if parent2.Before == nil || *parent2.Before != *parent1.Last {
+		t.Errorf("launch 2's restored total is %+v; want launch 1's last %+v", parent2.Before, parent1.Last)
 	}
 	if got := launchUsage(t, parent2); got != launch2Usage {
 		t.Errorf("launch 2's usage is %+v; want %+v", got, launch2Usage)
@@ -167,10 +168,11 @@ func total(n int64) string {
 		n, n/5, 2*n/5, 4*n/5, 3*n/5, 9*n/5)
 }
 
-// parsed is [codex.ParseRollout] of lines, each followed by a newline.
-func parsed(t *testing.T, restored int64, lines ...string) codex.Rollout {
+// parsed is [codex.ParseRollout] of lines, each followed by a newline, with before
+// bytes before the launch.
+func parsed(t *testing.T, before int64, lines ...string) codex.Rollout {
 	t.Helper()
-	r, err := codex.ParseRollout([]byte(strings.Join(lines, "\n")+"\n"), restored)
+	r, err := codex.ParseRollout([]byte(strings.Join(lines, "\n")+"\n"), before)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +228,7 @@ func TestCodexLaunchUsageCases(t *testing.T) {
 			t.Error("a rollout with no session_meta parsed")
 		}
 		if _, err := codex.ParseRollout([]byte(meta("p", "")+"\n"), 100); err == nil {
-			t.Error("a rollout shorter than its restored bytes parsed")
+			t.Error("a rollout shorter than its bytes before the launch parsed")
 		}
 	})
 	t.Run("thread_spawn's parent", func(t *testing.T) {
@@ -262,4 +264,63 @@ func TestCodexLaunchUsageCases(t *testing.T) {
 			t.Errorf("usage %+v, clamped %v; want %+v, clamped", u, clamped, want)
 		}
 	})
+}
+
+// output is a token_count line with the output n and no other count.
+func output(n string) string {
+	return `{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"output_tokens":` + n + `}}}}`
+}
+
+// TestCodexLaunchUsageCountsEachFileSinceTheLaunch covers the baseline of each file: a
+// child agent the launch continued adds its total less the one before the launch, and
+// an earlier launch's child that did not change adds nothing.
+func TestCodexLaunchUsageCountsEachFileSinceTheLaunch(t *testing.T) {
+	u5 := func(n int64) codex.Usage {
+		return codex.Usage{Input: 2 * n, Output: 4 * n, CacheRead: n, CacheWrite: 2 * n}
+	}
+	parent := parsed(t, 0, meta("p", ""), total(5))
+	before := meta("c", "p") + "\n" + total(500) + "\n"
+	continued := parsed(t, int64(len(before)), meta("c", "p"), total(500), total(5000))
+	if got := launchUsage(t, parent, continued); got != u5(1+900) {
+		t.Errorf("a continued child: usage %+v; want %+v", got, u5(1+900))
+	}
+	earlier := parsed(t, int64(len(before)), meta("c", "p"), total(500))
+	if got := launchUsage(t, parent, earlier); got != u5(1) {
+		t.Errorf("an earlier launch's child: usage %+v; want the thread's %+v alone", got, u5(1))
+	}
+}
+
+// TestCodexLaunchUsageRefusesACountAbove2To53 pins [codex.ErrCount] for a count above
+// 2^53 or below -2^53, a count beyond int64, a count that is no integer, and a sum above
+// 2^53; a count of 2^53 and a sum of 2^53 pass.
+func TestCodexLaunchUsageRefusesACountAbove2To53(t *testing.T) {
+	for _, n := range []string{"9007199254740993", "-9007199254740993", "4611686018427387904", "100000000000000000000000000000", "1.5"} {
+		if _, err := codex.ParseRollout([]byte(meta("p", "")+"\n"+output(n)+"\n"), 0); !errors.Is(err, codex.ErrCount) {
+			t.Errorf("output_tokens %s: %v; want %v", n, err, codex.ErrCount)
+		}
+	}
+	if r := parsed(t, 0, meta("p", ""), output("9007199254740992")); r.Last == nil || r.Last.Output != codex.MaxCount {
+		t.Errorf("output_tokens 2^53: %+v; want the total", r.Last)
+	}
+	parent := parsed(t, 0, meta("p", ""))
+	half := parsed(t, 0, meta("c", "p"), output("4503599627370496"))
+	if u, _, _, err := codex.LaunchUsage(parent, []codex.Rollout{half, parsed(t, 0, meta("d", "p"), output("4503599627370496"))}); err != nil || u.Output != codex.MaxCount {
+		t.Errorf("a sum of 2^53: usage %+v, %v", u, err)
+	}
+	over := parsed(t, 0, meta("d", "p"), output("4503599627370497"))
+	if u, _, _, err := codex.LaunchUsage(parent, []codex.Rollout{half, over}); !errors.Is(err, codex.ErrCount) {
+		t.Errorf("a sum above 2^53: usage %+v, %v; want %v", u, err, codex.ErrCount)
+	}
+}
+
+// TestCodexParseMetaReadsTheFirstLine pins [codex.ParseMeta] of a file's first bytes
+// cut inside the second line, and of a first line cut before its end.
+func TestCodexParseMetaReadsTheFirstLine(t *testing.T) {
+	b := []byte(meta("c", "p") + "\n" + total(5))
+	if m, err := codex.ParseMeta(b[:len(b)-10]); err != nil || m != (codex.Meta{ThreadID: "c", ParentID: "p"}) {
+		t.Errorf("meta %+v, %v; want c of p", m, err)
+	}
+	if _, err := codex.ParseMeta(b[:20]); err == nil {
+		t.Error("a first line cut before its end parsed")
+	}
 }

@@ -98,6 +98,14 @@ type transcript struct {
 	sent    int64
 	seen    bool
 	ended   bool
+	// bases is the state of each rollout of Codex before the launch, by its path below
+	// resume.prefix, nil before [transcript.codexBaseline]; baseFailed is the line of a
+	// baseline whose search failed, empty otherwise. copied is the transcript a run
+	// with no wall restored, which the resume script copies to its place after the
+	// baseline, nil for none.
+	bases      map[string]rolloutState
+	baseFailed string
+	copied     *restored
 }
 
 // maxTranscriptLine is the longest line of a transcript the session sends, 8 MiB: the
@@ -488,28 +496,8 @@ var errLinked = errors.New("the transcript's path is a symbolic link or no regul
 // instead of waiting for a writer. The open file that is no regular file is
 // [errLinked], and one over [maxTranscript] bytes is [errTooLarge], as behind a wall.
 func readUnlinked(base, rel string, offset int64) ([]byte, int64, error) {
-	dirFD, err := openDirFollowing(base)
+	fd, err := openUnlinkedFile(base, rel)
 	if err != nil {
-		return nil, 0, err
-	}
-	names := strings.Split(rel, "/")
-	for _, name := range names[:len(names)-1] {
-		next, err := openDirAt(dirFD, name)
-		unix.Close(dirFD)
-		switch {
-		case errors.Is(err, unix.ELOOP), errors.Is(err, unix.ENOTDIR):
-			return nil, 0, errLinked
-		case err != nil:
-			return nil, 0, err
-		}
-		dirFD = next
-	}
-	fd, err := unix.Openat(dirFD, names[len(names)-1], unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
-	unix.Close(dirFD)
-	switch {
-	case errors.Is(err, unix.ELOOP):
-		return nil, 0, errLinked
-	case err != nil:
 		return nil, 0, err
 	}
 	f := os.NewFile(uintptr(fd), rel)
@@ -529,6 +517,38 @@ func readUnlinked(base, rel string, offset int64) ([]byte, int64, error) {
 	}
 	b, err := io.ReadAll(io.NewSectionReader(f, offset, fi.Size()-offset))
 	return b, fi.Size(), err
+}
+
+// openUnlinkedFile opens the file at rel below base for [readUnlinked], and returns
+// its descriptor: base through any symbolic link, each directory of rel with
+// [openDirAt], and the file with O_NOFOLLOW and O_NONBLOCK. A symbolic link among the
+// names below base is [errLinked].
+func openUnlinkedFile(base, rel string) (int, error) {
+	dirFD, err := openDirFollowing(base)
+	if err != nil {
+		return -1, err
+	}
+	names := strings.Split(rel, "/")
+	for _, name := range names[:len(names)-1] {
+		next, err := openDirAt(dirFD, name)
+		unix.Close(dirFD)
+		switch {
+		case errors.Is(err, unix.ELOOP), errors.Is(err, unix.ENOTDIR):
+			return -1, errLinked
+		case err != nil:
+			return -1, err
+		}
+		dirFD = next
+	}
+	fd, err := unix.Openat(dirFD, names[len(names)-1], unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
+	unix.Close(dirFD)
+	switch {
+	case errors.Is(err, unix.ELOOP):
+		return -1, errLinked
+	case err != nil:
+		return -1, err
+	}
+	return fd, nil
 }
 
 // sessionTranscript is the transcript of session n's runtime, whose resume is rs, nil
@@ -703,6 +723,13 @@ func findMatches(base, start string, p *pathPattern, limit int, follow bool) ([]
 // findUpTo is [findMatches] that ends the search once it found stop paths, 2 when
 // stop is 0.
 func findUpTo(base, start string, p *pathPattern, limit int, follow bool, stop int) ([]string, error) {
+	s := &search{pattern: p, limit: limit, stop: stop}
+	err := s.run(base, start, follow)
+	return s.found, err
+}
+
+// run is the search of [findMatches] below start, below base.
+func (s *search) run(base, start string, follow bool) error {
 	var fd int
 	var err error
 	if follow {
@@ -712,13 +739,11 @@ func findUpTo(base, start string, p *pathPattern, limit int, follow bool, stop i
 	}
 	switch {
 	case errors.Is(err, unix.ENOENT):
-		return nil, nil
+		return nil
 	case err != nil:
-		return nil, err
+		return err
 	}
-	s := &search{pattern: p, limit: limit, stop: stop}
-	err = s.below(fd, "", 0)
-	return s.found, err
+	return s.below(fd, "", 0)
 }
 
 // openUnlinked opens start below base, base's last name and each name of start with
@@ -785,6 +810,9 @@ type search struct {
 	limit   int
 	// stop is how many paths end the search, 2 when it is 0.
 	stop int
+	// states, when not nil, gets the [rolloutState] of each path found, by fstatat
+	// without following a symbolic link; a path whose fstatat fails has none.
+	states map[string]rolloutState
 	// beforeOpen, when not nil, gets the name of each directory below just before its
 	// open; a test changes the entry there. Nil outside tests.
 	beforeOpen func(dirFD int, name string)
@@ -810,6 +838,10 @@ func (s *search) below(fd int, rel string, i int) error {
 			at := path.Join(rel, e.Name())
 			if last {
 				s.found = append(s.found, at)
+				var st unix.Stat_t
+				if s.states != nil && unix.Fstatat(fd, e.Name(), &st, unix.AT_SYMLINK_NOFOLLOW) == nil {
+					s.states[at] = stateOf(&st)
+				}
 			} else if e.Type().IsDir() {
 				if s.beforeOpen != nil {
 					s.beforeOpen(fd, e.Name())
