@@ -699,8 +699,12 @@ func TestAReloadKeepsTheRunsImage(t *testing.T) {
 	if r.Image() != images[1] {
 		t.Errorf("the run started in %+v", r.Image())
 	}
-	if _, err := reload(t, r, served(fmt.Sprintf(withImage, "", "base"), digest('2'))); err == nil || !strings.Contains(err.Error(), "another image than the run started in") || !strings.HasSuffix(err.Error(), "the policy in force stays") {
-		t.Errorf("another image: %v", err)
+	// A refusal of decide keeps one line, the context first, as before the fix-first
+	// refusals.
+	_, err := reload(t, r, served(fmt.Sprintf(withImage, "", "base"), digest('2')))
+	var fix *run.FixFirstError
+	if want := "run configuration " + runURL + ": the run configuration selects another image than the run started in; a run's image is fixed when it starts; the policy in force stays"; err == nil || err.Error() != want || errors.As(err, &fix) {
+		t.Errorf("another image:\n got %v\nwant %s", err, want)
 	}
 	if _, err := reload(t, r, served(`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"image":"base","credentials":[{"name":"nobody-defined"}]}`, digest('2'))); err == nil || !strings.Contains(err.Error(), "another image than the run started in") {
 		t.Errorf("another image and a credential nobody defined: %v", err)

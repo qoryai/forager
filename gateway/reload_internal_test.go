@@ -38,9 +38,9 @@ func TestAReloadThatPanicsLetsTheNextAnswerReload(t *testing.T) {
 }
 
 // TestAFailedReloadReportsItsFixFirst pins the report of a failed reload. A
-// [run.FixFirstError] has its fix on the first line and "the reload failed: " before its
-// cause on the second, a cause with qak_ shown as the phrase; any other error is "the
-// reload failed: " and its text, as before the fix-first refusals.
+// [run.FixFirstError] has its fix on the first line and "the reload failed: " before
+// its cause on the second, a cause with qak_ shown as the phrase; any other error is
+// "the reload failed: " and its text, as before the fix-first refusals.
 func TestAFailedReloadReportsItsFixFirst(t *testing.T) {
 	var got []string
 	l := newLive(context.Background(), nil, &server.Configuration{}, "sha256=start", "run-a", func(line string) { got = append(got, line) })
