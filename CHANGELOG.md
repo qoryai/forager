@@ -10,6 +10,24 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Rename `model_credential`: in a run configuration and in the run answer it is
+  `default_model_provider_credential_name`, and in a join request and a join answer it
+  is `model_provider_credential_name`. The Go fields follow:
+  `server.RunConfiguration` and `server.LinkRunAnswer` have
+  `DefaultModelProviderCredentialName`, and `server.LinkJoinRequest`,
+  `server.LinkJoinAnswer` and `session.SessionSpec` have `ModelProviderCredentialName`.
+  The gateway's `joins.jsonl` writes `model_provider_credential_name`. The old name is
+  not read: a join request with `model_credential` is `invalid_request`, and a run
+  configuration with it has no default model provider credential, so one with two or
+  more model keys is `run_configuration_invalid`.
+- Remove `chosen` from a run configuration's API credentials: the schema refuses a key
+  with it, `run_configuration_invalid`, and `server.RunCredential` has no `Chosen`.
+  When the active key goes into cooldown, the gateway makes active a key with no known
+  reset first, then the key with the closest reset, and among equals the first by the
+  order.
+- Read "default model provider credential" where the docs and texts said "start key",
+  and "local model provider credential" where they said "a model key of the machine's",
+  a model key written in `forager.yaml`.
 - Read an agent place in `runtimes.json` as one of `frontmatter` and `toml`: a
   composer that reads `frontmatter` alone finds no agent place in Codex's entry,
   `{toml: model}` for an agent's model id and `{toml: model_reasoning_effort}` for an
@@ -18,8 +36,7 @@ release may change what an existing document does, and says so under Upgrading.
   the server sets it, such as `anthropic`: the schema refuses an API credential without
   it, and a host credential with it. The API credentials with one `group` value are one
   key group, and a run can have several. Give the keys of one group one `format`,
-  `endpoint` and `auth`, and `chosen` on one key of a group at most:
-  `server.CheckCredentials` refuses others with `run_configuration_invalid`, such as
+  `endpoint` and `auth`: `server.CheckCredentials` refuses others with `run_configuration_invalid`, such as
   `Give the keys of group "anthropic" one format, endpoint and auth.` with the cause on
   a second line. `server.KeyGroupDiffers` returns the member in which two keys differ.
   The run answer's `credential_hosts` entries of an API credential from the server have
@@ -114,11 +131,9 @@ release may change what an existing document does, and says so under Upgrading.
   to 99, or one of the two without the other, is `run_configuration_invalid` too. Send
   the windows of the provider's catalogue entry, and `cooldown_until`, the window's
   reset, for a key whose stored use is at or above its percentage at the claim.
-- Send the key group in the order that breaks ties: the key of the model choice first,
-  with `chosen: true`, when it is out of cooldown at the claim; then the provider's
-  default key; then the others by when they were added; then the keys in cooldown at the
-  claim, each with `cooldown_until`. A start key in cooldown and two keys with `chosen`
-  are each `run_configuration_invalid`.
+- Send the key group in the order that breaks ties: the provider's default key first;
+  then the others by when they were added; then the keys in cooldown at the claim, each
+  with `cooldown_until`. A default model provider credential in cooldown is `run_configuration_invalid`.
 - Read `paused`, a state of `dev.qory.run.exited` and `dev.qory.session.exited`, always
   with `model_key_limit`, as a pause of the run, not as a person's cancel: the run's work
   is kept, and a continuation of the run can resume its runtime session.
@@ -282,7 +297,7 @@ release may change what an existing document does, and says so under Upgrading.
   can read every credential the machine already holds; run a brokered run on a machine
   that holds none.
 - A run without a wall whose gateway holds credentials for it now gets the rules a
-  walled run gets: the start key's variable and endpoint, the endpoint rule and
+  walled run gets: the default model provider credential's variable and endpoint, the endpoint rule and
   `credential_variables` in `dev.qory.run.policy_applied`. A Claude Code run without a
   wall and without a model key starts, and Claude Code can use the machine's Claude
   login.
@@ -454,7 +469,7 @@ release may change what an existing document does, and says so under Upgrading.
   stopped with `SIGINT`, with the format `openai-responses` and a key in
   `OPENAI_API_KEY`, as a bearer or a subscription login's OAuth token. Its `config`
   passes `--config` pairs that send every request through the provider `qory`, with
-  the start key's endpoint as `model_providers.qory.base_url`, and turn off plugins,
+  the default model provider credential's endpoint as `model_providers.qory.base_url`, and turn off plugins,
   apps, analytics, feedback, the update check, metrics, telemetry export and web
   search. Its `denies` list the variables that move requests, give Codex another key,
   change its trust of TLS or move its home, and `denied-variables.json`'s `model_keys`
@@ -499,7 +514,7 @@ release may change what an existing document does, and says so under Upgrading.
   An `error` event of the type `rate_limit_error` in the streamed `200` of a `POST` to
   the model API's messages path, `/v1/messages` under the endpoint, puts the key in
   cooldown and switches the active key too. A group's active key stays across sessions,
-  and a join request without `model_credential` gets the active key of the start key's
+  and a join request without `model_provider_credential_name` gets the active key of the default model provider credential's
   group. The run configuration's API credential has `resets_at`, `schedule_resets_at` and
   `pause_for_s`. README §Credentials, Several model keys.
 - A key's Use up to percentage: the run configuration's API credential has
@@ -840,8 +855,8 @@ release may change what an existing document does, and says so under Upgrading.
   join and no reason, `failed` with `exit_code` `-1`.
 - The join request on the gateway's link, `POST <run.url>/<run_id>/sessions` on both
   transports, `link-join-request.schema.json`, with `version`, `passes`, `model_key`
-  and an optional `model_credential`, and its answer, `link-join-answer.schema.json`, with `version`,
-  `session` and `model_credential`. The gateway answers a join it does not accept with
+  and an optional `model_provider_credential_name`, and its answer, `link-join-answer.schema.json`, with `version`,
+  `session` and `model_provider_credential_name`. The gateway answers a join it does not accept with
   `400` `invalid_request`, a join while another join of the run is open among them,
   `403` `placeholder_conflict` or a `410` for a run that has ended, and with no new
   code.
@@ -877,13 +892,13 @@ release may change what an existing document does, and says so under Upgrading.
 - `auth.schema.json` has `oauth`, `true` and beside `bearer` alone: the value is an
   OAuth token, such as a Claude subscription login's. The proxy sets it as any bearer,
   and the session reads it to pick the runtime's variable.
-- The session gives the start key, the model key the runtime starts with, to the
-  runtime: of the descriptor's `model.keys`, the key whose format is the start key's
+- The session gives the default model provider credential, the model key the runtime starts with, to the
+  runtime: of the descriptor's `model.keys`, the key whose format is the default model provider credential's
   and whose auth has its scheme, its header's name, case ignored, and its `oauth`. The
-  key's variable is set to the start key's placeholder and joins the start key's
+  key's variable is set to the default model provider credential's placeholder and joins the default model provider credential's
   placeholders and the run's, so a value the run passes for it is
   `placeholder_conflict`. The session sets the runtime's model endpoint variable,
-  `ANTHROPIC_BASE_URL` for Claude Code, to the start key's endpoint, and leaves out
+  `ANTHROPIC_BASE_URL` for Claude Code, to the default model provider credential's endpoint, and leaves out
   every other value of it as `fixed`. The runtime's other model-key variables get no
   value in the runtime's process environment: one from any source, the inherited
   environment included, is left out as `fixed`, one the runtime's preparation sets is
@@ -894,15 +909,15 @@ release may change what an existing document does, and says so under Upgrading.
   variable of `model.keys` and the endpoint variable from the `env` object of the
   `--settings` file, which Claude Code applies, and the file's top-level `apiKeyHelper`,
   `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh` and `modelOverrides`, which
-  set a key, cloud credentials or model ids in place of the start key; a value in Claude
+  set a key, cloud credentials or model ids in place of the default model provider credential; a value in Claude
   Code's other settings files can still reach it. A descriptor without a `model`
   section, a format it lists no key for, and an auth no key of that format has are
-  `run_configuration_invalid`. A session whose spec has no runtime has no start key:
+  `run_configuration_invalid`. A session whose spec has no runtime has no default model provider credential:
   the session chooses none, and its program gets no model key's variable, placeholder
   or endpoint. Its join request has `model_key` false, and the gateway's proxy sets no
   model key from the join's `200` until the session's `dev.qory.session.exited`; the
-  join answer has no `model_credential`. `Join` and `AgentEnv` refuse such a spec with
-  a `ModelCredential` before any request.
+  join answer has no `model_provider_credential_name`. `Join` and `AgentEnv` refuse such a spec with
+  a `ModelProviderCredentialName` before any request.
 - A model key's placeholder contains its name: `qory-`, the name and
   `-sets-the-credential-outside-the-enclosure`, such as
   `qory-model-sets-the-credential-outside-the-enclosure`, `link.KeyPlaceholder` in Go.
@@ -916,10 +931,10 @@ release may change what an existing document does, and says so under Upgrading.
   or a model key from, or that the runtime declares or reserves and no credential has.
   A tool's placeholder, such as `GITHUB_TOKEN`, passes.
 - The link's run answer's `credential_hosts` has `auth` for a credential from the
-  server and for a model key of the machine's, and `format` and `endpoint` for a model
-  key from either. The run answer has `model_credential`, the start key's name.
+  server and for a local model provider credential, and `format` and `endpoint` for a model
+  key from either. The run answer has `default_model_provider_credential_name`, the default model provider credential's name.
   `server.LinkCredentialHosts` has `Auth`, `Format` and `Endpoint`, and
-  `server.LinkRunAnswer` has `ModelCredential`.
+  `server.LinkRunAnswer` has `DefaultModelProviderCredentialName`.
 - `dev.qory.run.policy_applied`: behind a wall `credential_variables` lists the
   variable each credential's placeholder is in, `{credential, name}`, with a name's
   phrase in place of a credential's name or a variable that contains `qak_` or `qrk_`.
@@ -1004,15 +1019,13 @@ release may change what an existing document does, and says so under Upgrading.
   characters of printable ASCII without a space. The gateway refuses a stored value
   that starts with none of them, `run_configuration_invalid`, without printing the
   value.
-- A run configuration's `model_credential`: the name of the start key, the model key
-  the runtime starts with, an API credential of `credentials` or a model key of the
-  machine's. A run with two or more model keys, the server's and the machine's
-  together, needs it; with one, that one is the start key. A name of a host
+- A run configuration's `default_model_provider_credential_name`: the name of the default model provider credential, the model key
+  the runtime starts with, an API credential of `credentials` or a local model provider credential. A run with two or more model keys, the server's and the machine's
+  together, needs it; with one, that one is the default model provider credential. A name of a host
   credential, of no model key of the run, and none beside two or more model keys are
   `run_configuration_invalid`. A reload that names another fails, and the policy in
-  force stays. A reload whose start key differs from the run's fails too, without
-  `model_credential`: `start a new run to change the model key it starts
-  with`. `server.RunConfiguration` has `ModelCredential`, and
+  force stays. A reload whose default model provider credential differs from the run's fails too, without
+  `default_model_provider_credential_name`: `Start a new run to change the default model provider credential`. `server.RunConfiguration` has `DefaultModelProviderCredentialName`, and
   `server.CheckCredentials` takes it.
 - The gateway sets a run configuration's `credentials`, with or without a wall. When the run
   starts it sends a secrets request under the access key, for the digest it computes of
@@ -1119,8 +1132,8 @@ release may change what an existing document does, and says so under Upgrading.
   `session`, or of the run's host work before the first join, between joins, or after
   the last join and before the close, which the caller writes with `stream: stderr`
   and no `session`.
-- The run answer's `model_credential` is the run's start key, the key a session starts
-  with when its join request contains none; the join answer's `model_credential` is the
+- The run answer's `default_model_provider_credential_name` is the run's default model provider credential, the key a session starts
+  with when its join request contains none; the join answer's `model_provider_credential_name` is the
   key each session starts with.
 - Several host credentials may claim one host when each has `paths` and no path of one
   overlaps a path of another: the proxy sets the credential whose paths match the
@@ -1153,8 +1166,8 @@ release may change what an existing document does, and says so under Upgrading.
   whatever its host, is left out too when uncovered. The value the run inherits is not
   checked. `dev.qory.run.policy_applied`'s `variables` records a kept value with
   `kept`, and a value left out as `endpoint_uncovered` or `endpoint_unreadable`.
-  Without a wall nothing changes. In a run with a start key, the session sets the
-  variable to the start key's endpoint instead, and the endpoint rule does not apply.
+  Without a wall nothing changes. In a run with a default model provider credential, the session sets the
+  variable to the default model provider credential's endpoint instead, and the endpoint rule does not apply.
 - A run configuration's digest, `X-Qory-Run-Configuration`, is `sha256=` and the
   lower-case hex SHA-256 of the exact bytes of the document as the server sends it; the
   contract called it opaque before.
@@ -1299,22 +1312,21 @@ release may change what an existing document does, and says so under Upgrading.
 
 - Expect one key group per `group` value of a run's API credentials, each with its
   rotation, cooldowns and stop apart from the others' (contract README §Credentials,
-  Several model keys). A join request with a key of a group in `model_credential` gets
-  that group's active key. For a group other than the start key's that no session used
+  Several model keys). A join request with a key of a group in `model_provider_credential_name` gets
+  that group's active key. For a group other than the default model provider credential's that no session used
   yet, it gets that key, or, when that key is in cooldown or out, the key a limit
-  refusal switches to: the key with `chosen`, then a key with no known reset by the
-  order, then the key whose reset is closest. With no key of the group usable, it gets
+  refusal switches to: a key with no known reset first, then the key whose reset is
+  closest, and among equals the first by the order. With no key of the group usable, it gets
   that key: the session's first request gets the gateway's `429` with no
   `Retry-After`, and the answer to its next batch has `stop`: `model_key_limit`, or
   `model_key_unauthorized` when a 401 took the group's last key out. A
-  join request with no `model_credential` gets the start key's group. The proxy sets the active key of the session's group alone, on a
+  join request with no `model_provider_credential_name` gets the default model provider credential's group. The proxy sets the active key of the session's group alone, on a
   request with that group's placeholder. With every key of the session's group in
   cooldown or used up, the session stops, and the run pauses at that session; with every
   key of the session's group out after a `401`, the session ends
   `model_key_unauthorized`, `failed`, with no continuation. A key of another group never
   takes the place of the session's group. The model keys reports list the keys of every
-  group. A model key of `forager.yaml` is in no group, as before. A run whose start key
-  is the machine's has key groups for its keys from the server, and sends model keys
+  group. A model key of `forager.yaml` is in no group, as before. A run whose default model provider credential is a local model provider credential has key groups for its keys from the server, and sends model keys
   reports for them.
 - Write each path of a machine credential's `paths` in `forager.yaml` without a `.` or
   `..` segment, an empty segment, a backslash, or an encoded slash, backslash, dot or
@@ -1450,7 +1462,7 @@ release may change what an existing document does, and says so under Upgrading.
   every request to the key's host. A key whose value has no such string when the run
   opens leaves the key group: the proxy never sets it, and the run's record has one
   line that starts with the fix and contains neither the value nor the claim. With no
-  key left in a key group of the run, the start key's group or another, the run is
+  key left in a key group of the run, the default model provider credential's group or another, the run is
   refused at its start, `run_configuration_invalid`. A renewed value without the
   string is a renewal refused for its form, and the run keeps the value it had.
 - The link's host calls, `POST <run.url>/<run_id>/next-session` and `POST
@@ -1639,7 +1651,7 @@ release may change what an existing document does, and says so under Upgrading.
   `Retry-After: 1`. Each run has counters of its own.
   Start refuses a field outside its range: `Set RunLimits.Connections to a number from
   1 to 65536, or 0 for the default of 256. It is -3.`
-- A model key of the machine's: a `gateway.Credential` with `Format`, `Endpoint`,
+- A local model provider credential: a `gateway.Credential` with `Format`, `Endpoint`,
   `OAuth` and `KeyPrefixes` in place of `Hosts`, `Paths` and `Placeholders`, in
   forager.yaml `{env|file|adapter, format, endpoint, auth: {scheme, header, username,
   oauth}, key_prefixes}`. The gateway sets it on every path and on any port of the endpoint's host.
@@ -1647,7 +1659,7 @@ release may change what an existing document does, and says so under Upgrading.
   that starts with none of `key_prefixes` stops the run, and a `file` token read again
   that starts with none of them is not taken. An adapter's answer for a model key sets
   it with the definition's scheme and lists no placeholders.
-- The gateway holds every model key of a run and its proxy sets only the start key,
+- The gateway holds every model key of a run and its proxy sets only the default model provider credential,
   on a request to the key's endpoint host that carries the key's placeholder in the
   key's header or scheme. Two model keys may claim one host. Under `enforce`, the
   run's allow list must cover a model key's endpoint host. Under `enforce`, a request
@@ -2381,7 +2393,7 @@ release may change what an existing document does, and says so under Upgrading.
 - Give the run a model key whose `endpoint` is the model endpoint, and do not set
   `ANTHROPIC_BASE_URL` in the `env` of the `--settings` file: the session drops the
   runtime's `denies` from that `env` in every run, and Claude Code's `denies` list
-  `ANTHROPIC_BASE_URL`. Before, a run without a start key kept a value of it there.
+  `ANTHROPIC_BASE_URL`. Before, a run without a default model provider credential kept a value of it there.
 - Give a walled run's `--mcp-config`, `--agents` and system-prompt files the mode its
   wall's user can read, if that user is not the node's: a copy in the session's
   directory has its file's permission bits within 0644, less the umask, so the copy of
@@ -2795,7 +2807,7 @@ release may change what an existing document does, and says so under Upgrading.
   `dev.qory.run.exited`. `(*session.Run).System` and `Repositories` are the server's
   `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` from the run answer.
 - `(*session.Run).Join` runs one session: the join request with the session's passes
-  and `SessionSpec.ModelCredential`, the session's number from the answer,
+  and `SessionSpec.ModelProviderCredentialName`, the session's number from the answer,
   `dev.qory.session.started` with the runtime members, `terminal` and `harness`, the
   session's `dev.qory.run.policy_applied`, and `dev.qory.session.exited`. It returns once
   the gateway accepted the batch with `dev.qory.session.exited`, so the next join's
@@ -2813,13 +2825,13 @@ release may change what an existing document does, and says so under Upgrading.
   `qory-proxy-password` in place of each forwarder password of the run.
 - `(*sink.Server).Flush`, which posts the events written so far and returns once the
   gateway accepted them, the deliveries stopped or the context ended.
-- `runtimes.Attach.ModelVariables`, which the session sets in a run with a start key:
+- `runtimes.Attach.ModelVariables`, which the session sets in a run with a default model provider credential:
   the variables of the runtime's `model.keys` and its model endpoint variable, from its
   descriptor. The `claude-settings` installer drops each of these names, matched
   exactly, from the `env` object of the `--settings` file when it copies the file into
   the run's `settings.json`, walled or not: Claude Code applies that object over its
-  environment, so a value there could replace the start key's variable or endpoint.
-  Without a start key `ModelVariables` is empty; the installer still drops the endpoint
+  environment, so a value there could replace the default model provider credential's variable or endpoint.
+  Without a default model provider credential `ModelVariables` is empty; the installer still drops the endpoint
   variable when the runtime's `denies` lists it, as Claude Code's does
   (`DeniedVariables`).
 - A run without a wall gets its credentials' placeholders, set after the environment it
@@ -2969,13 +2981,13 @@ release may change what an existing document does, and says so under Upgrading.
   environment, so a value there reached it. The session now passes these names from
   the descriptor as `runtimes.Attach.DeniedVariables`, and the installer drops each of
   them from the copy, matched regardless of case, walled or not and with or without a
-  start key.
+  default model provider credential.
 - The `claude-settings` installer copied the top-level `apiKeyHelper`,
   `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh` and `modelOverrides` of
-  the `--settings` file into the run's `settings.json`, so in a run with a start key
-  Claude Code could send another key or cloud credential than the start key: it ranks
-  `apiKeyHelper` above `CLAUDE_CODE_OAUTH_TOKEN`. In a run with a start key the copy
-  now leaves out these five members, walled or not. Without a start key it keeps them.
+  the `--settings` file into the run's `settings.json`, so in a run with a default model provider credential
+  Claude Code could send another key or cloud credential than the default model provider credential: it ranks
+  `apiKeyHelper` above `CLAUDE_CODE_OAUTH_TOKEN`. In a run with a default model provider credential the copy
+  now leaves out these five members, walled or not. Without a default model provider credential it keeps them.
 - The session wrote `preparation.sh`, and Claude Code's runtime `settings.json`,
   `approve-key.sh` and the copies of a walled launch's `--mcp-config`, `--agents` and
   system-prompt files, in place in the run directory, so a link at one of those paths
