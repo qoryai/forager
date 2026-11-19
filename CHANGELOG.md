@@ -16,7 +16,7 @@ release may change what an existing document does, and says so under Upgrading.
   `server.RunConfiguration` and `server.LinkRunAnswer` have
   `DefaultModelProviderCredentialName`, and `server.LinkJoinRequest`,
   `server.LinkJoinAnswer` and `session.SessionSpec` have `ModelProviderCredentialName`.
-  The gateway's `joins.jsonl` writes `model_provider_credential_name`. The old name is
+  The gateway writes `model_provider_credential_name` to `joins.jsonl`. The old name is
   not read: a join request with `model_credential` is `invalid_request`, and a run
   configuration with it has no default model provider credential, so one with two or
   more model keys is `run_configuration_invalid`.
