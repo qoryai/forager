@@ -815,9 +815,13 @@ type search struct {
 	stop int
 	// states, when not nil, gets the [rolloutState] of each path found, by fstatat
 	// without following a symbolic link; a path whose fstatat fails has none, and
-	// statErr gets the first such error.
+	// statErr gets the first such error other than ENOENT, the error of a file removed
+	// between the listing of its directory and the fstatat.
 	states  map[string]rolloutState
 	statErr error
+	// beforeStat, when not nil, gets each path found just before its fstatat; a test
+	// removes the file there. Nil outside tests.
+	beforeStat func(rel string)
 	// beforeOpen, when not nil, gets the name of each directory below just before its
 	// open; a test changes the entry there. Nil outside tests.
 	beforeOpen func(dirFD int, name string)
@@ -844,11 +848,15 @@ func (s *search) below(fd int, rel string, i int) error {
 			if last {
 				s.found = append(s.found, at)
 				if s.states != nil {
+					if s.beforeStat != nil {
+						s.beforeStat(at)
+					}
 					var st unix.Stat_t
-					if err := unix.Fstatat(fd, e.Name(), &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-						s.statErr = cmp.Or(s.statErr, err)
-					} else {
+					switch err := unix.Fstatat(fd, e.Name(), &st, unix.AT_SYMLINK_NOFOLLOW); {
+					case err == nil:
 						s.states[at] = stateOf(&st)
+					case !errors.Is(err, unix.ENOENT):
+						s.statErr = cmp.Or(s.statErr, err)
 					}
 				}
 			} else if e.Type().IsDir() {

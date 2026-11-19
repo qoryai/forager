@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -107,7 +108,7 @@ type Meta struct {
 // Rollout is what the session reads of one rollout: its [Meta], the last total in the
 // file, nil when the file has none, Before, the last total in the bytes the file had
 // before the launch, nil when they have none, and Spawned, the ids of the threads that
-// the file's spawn_agent calls started ([spawnedIDs]).
+// the file's spawns started ([spawnedIDs]).
 type Rollout struct {
 	Meta
 	Last, Before *Tokens
@@ -299,44 +300,136 @@ func ParseRollout(b []byte, before int64) (Rollout, error) {
 	return r, nil
 }
 
-// collabCallType is how the item of a line with an agent tool call starts; a line
-// without it is not decoded.
-var collabCallType = []byte(`"CollabAgentToolCall"`)
+// spawnTypes are the texts of which a line with the id of a spawned thread contains
+// one; a line without any is not decoded.
+var spawnTypes = [][]byte{[]byte(`"CollabAgentToolCall"`), []byte(`"SubAgentActivity"`), []byte(`"sub_agent_activity"`),
+	[]byte(`"function_call"`), []byte(`"function_call_output"`), []byte(`"FunctionCallOutput"`)}
 
-// collabCall is a line with an agent tool call that completed.
-type collabCall struct {
-	Type    string `json:"type"`
-	Payload struct {
-		Type string `json:"type"`
-		Item struct {
-			Type      string   `json:"type"`
-			Tool      string   `json:"tool"`
-			Receivers []string `json:"receiver_thread_ids"`
-		} `json:"item"`
-	} `json:"payload"`
+// spawnLine is what [spawnedIDs] reads of a line: its type and its payload.
+type spawnLine struct {
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload"`
 }
 
-// spawnedIDs is the ids of the threads that the spawn_agent calls in b started, in
-// the order of the lines: the receiver_thread_ids of each event_msg of type
-// item_completed whose item is a CollabAgentToolCall of the tool spawn_agent. Codex
-// 0.167.2 and 0.169.0 write that line in the rollout of a thread in the paginated
-// history mode, the mode in which codex exec starts a thread that is not ephemeral
-// (codex-rs rollout/src/policy.rs:253-284, exec/src/lib.rs:1475 in 0.167.2 and :1542
-// in 0.169.0), and a child agent takes its parent's mode
-// (core/src/agent/control/spawn.rs:85-90 in 0.169.0). A line of another shape counts
-// for nothing.
+// spawnPayload is what [spawnedIDs] reads of a payload: of an event_msg, its type,
+// item, kind and agent_thread_id; of a response_item, its type, name, call_id and
+// output.
+type spawnPayload struct {
+	Type          string          `json:"type"`
+	Item          json.RawMessage `json:"item"`
+	Kind          string          `json:"kind"`
+	AgentThreadID string          `json:"agent_thread_id"`
+	Name          string          `json:"name"`
+	CallID        string          `json:"call_id"`
+	Output        json.RawMessage `json:"output"`
+}
+
+// spawnItem is what [spawnedIDs] reads of the item of an item_completed: its type, and
+// of a CollabAgentToolCall its tool and receiver_thread_ids, of a SubAgentActivity its
+// kind and agent_thread_id, of a FunctionCallOutput its name and output.
+type spawnItem struct {
+	Type          string          `json:"type"`
+	Tool          string          `json:"tool"`
+	Receivers     []string        `json:"receiver_thread_ids"`
+	Kind          string          `json:"kind"`
+	AgentThreadID string          `json:"agent_thread_id"`
+	Name          string          `json:"name"`
+	Output        json.RawMessage `json:"output"`
+}
+
+// spawnAgent is the name of the tool that starts a child agent, and spawnStarted the
+// kind of a SubAgentActivity of a child agent it started.
+const (
+	spawnAgent   = "spawn_agent"
+	spawnStarted = "started"
+)
+
+// spawnOutputID is the agent_id of output, the output of a spawn_agent call with the
+// feature multi_agent: a JSON string whose text is an object with agent_id, such as
+// "{\"agent_id\":\"<id>\",\"nickname\":null}" (codex-rs
+// core/src/tools/handlers/multi_agents/spawn.rs:207-210 and :230-249,
+// multi_agents_common.rs:34-55 and tools/context.rs:599-624, in 0.167.2 and 0.169.0).
+// It is empty for an output of another shape.
+func spawnOutputID(output json.RawMessage) string {
+	var text string
+	var out struct {
+		AgentID string `json:"agent_id"`
+	}
+	if json.Unmarshal(output, &text) != nil || json.Unmarshal([]byte(text), &out) != nil {
+		return ""
+	}
+	return out.AgentID
+}
+
+// spawnedIDs is the ids of the threads that the spawns in b started, in the order of
+// the lines, each once. Codex 0.167.2 and 0.169.0 write these lines for a spawn, by
+// the history mode of the thread (codex-rs rollout/src/policy.rs:22-51, :128-163 and
+// :232-286 in both):
+//   - with the feature multi_agent in the paginated mode, the mode in which codex exec
+//     starts a thread that is not ephemeral (exec/src/lib.rs:1475 in 0.167.2 and
+//     :1542 in 0.169.0): an event_msg of type item_completed whose item is a
+//     CollabAgentToolCall of the tool spawn_agent, with the ids in receiver_thread_ids
+//     (core/src/tools/handlers/multi_agents/spawn.rs:181-198);
+//   - with the feature multi_agent_v2 in the paginated mode: an event_msg of type
+//     item_completed whose item is a SubAgentActivity of kind started, with the id in
+//     agent_thread_id (core/src/tools/handlers/multi_agents_v2/spawn.rs:162-174,
+//     multi_agents_v2.rs:44-52);
+//   - with multi_agent_v2 in the legacy mode: an event_msg of type sub_agent_activity
+//     of kind started, with the id in agent_thread_id (protocol/src/legacy_events.rs
+//     :438-449 and :642-644 in 0.167.2, :451-462 and :655-657 in 0.169.0);
+//   - with multi_agent in either mode: a response_item of type function_call_output
+//     whose call_id is that of an earlier response_item of type function_call named
+//     spawn_agent, in any namespace, with the id as agent_id in its output
+//     ([spawnOutputID]). The legacy mode keeps no CollabAgentToolCall.
+//
+// An event_msg of type item_completed whose item is a FunctionCallOutput named
+// spawn_agent, which the legacy mode keeps (policy.rs:238-252), has the id in its
+// output as a function_call_output does; Codex writes that item only for an output
+// that a client submits with no call_id (core/src/hook_runtime.rs:778-797 in 0.167.2,
+// :781-800 in 0.169.0). A child agent takes its parent's mode
+// (core/src/agent/control/spawn.rs:85-91 in 0.167.2, :86-92 in 0.169.0). A line of
+// another shape counts for nothing.
 func spawnedIDs(b []byte) []string {
 	var ids []string
+	seen, calls := map[string]bool{}, map[string]bool{}
+	add := func(id string) {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
 	for line := range bytes.SplitSeq(b, []byte("\n")) {
-		if !bytes.Contains(line, collabCallType) {
+		if !slices.ContainsFunc(spawnTypes, func(t []byte) bool { return bytes.Contains(line, t) }) {
 			continue
 		}
-		var c collabCall
-		if json.Unmarshal(line, &c) != nil || c.Type != "event_msg" || c.Payload.Type != "item_completed" ||
-			c.Payload.Item.Type != "CollabAgentToolCall" || c.Payload.Item.Tool != "spawn_agent" {
+		var l spawnLine
+		var p spawnPayload
+		if json.Unmarshal(line, &l) != nil || json.Unmarshal(l.Payload, &p) != nil {
 			continue
 		}
-		ids = append(ids, c.Payload.Item.Receivers...)
+		switch {
+		case l.Type == "response_item" && p.Type == "function_call" && p.Name == spawnAgent && p.CallID != "":
+			calls[p.CallID] = true
+		case l.Type == "response_item" && p.Type == "function_call_output" && calls[p.CallID]:
+			add(spawnOutputID(p.Output))
+		case l.Type == "event_msg" && p.Type == "sub_agent_activity" && p.Kind == spawnStarted:
+			add(p.AgentThreadID)
+		case l.Type == "event_msg" && p.Type == "item_completed":
+			var it spawnItem
+			if json.Unmarshal(p.Item, &it) != nil {
+				continue
+			}
+			switch {
+			case it.Type == "CollabAgentToolCall" && it.Tool == spawnAgent:
+				for _, id := range it.Receivers {
+					add(id)
+				}
+			case it.Type == "SubAgentActivity" && it.Kind == spawnStarted:
+				add(it.AgentThreadID)
+			case it.Type == "FunctionCallOutput" && it.Name == spawnAgent:
+				add(spawnOutputID(it.Output))
+			}
+		}
 	}
 	return ids
 }

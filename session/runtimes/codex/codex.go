@@ -207,7 +207,7 @@ func checkKey(flag, key string, keys []string) error {
 	}
 	for _, r := range skills {
 		if covers(r, key) {
-			return fmt.Errorf("remove the %s that sets %s from the launch's arguments: it changes the skills Codex loads, which the composer places below CODEX_HOME",
+			return fmt.Errorf("remove the %s that sets %s from the launch's arguments\nit changes the skills Codex loads, which the composer places below CODEX_HOME",
 				accesskey.ShownName(flag, false), accesskey.ShownName(r, false))
 		}
 	}
@@ -252,9 +252,10 @@ func part(p, k string) bool {
 	return len(k) > len(before)+len(after) && strings.HasPrefix(k, before) && strings.HasSuffix(k, after)
 }
 
-// keyRefused is the error for flag with a pair that sets k.
+// keyRefused is the error for flag with a pair that sets k: the fix on the first line,
+// the cause on the second.
 func keyRefused(flag, k string) error {
-	return fmt.Errorf("remove the %s that sets %s from the launch's arguments: the session sets that setting for Codex, or the setting changes where Codex sends its requests",
+	return fmt.Errorf("remove the %s that sets %s from the launch's arguments\nthe session sets that setting for Codex, or the setting changes where Codex sends its requests",
 		accesskey.ShownName(flag, false), accesskey.ShownName(k, false))
 }
 
@@ -267,20 +268,22 @@ func hookFeatureRefused(flag, r string) error {
 }
 
 // flagRefused is the error for a flag that changes the model provider, web search or
-// the settings as a whole.
+// the settings as a whole: the fix on the first line, the cause on the second.
 func flagRefused(flag string) error {
-	return fmt.Errorf("remove %s from the launch's arguments: it changes the model provider, web search or other settings the session sets for Codex",
+	return fmt.Errorf("remove %s from the launch's arguments\nit changes the model provider, web search or other settings the session sets for Codex",
 		accesskey.ShownName(flag, false))
 }
 
-// hookTrustRefused is the error for --dangerously-bypass-hook-trust.
+// hookTrustRefused is the error for --dangerously-bypass-hook-trust: the fix on the
+// first line, the cause on the second.
 func hookTrustRefused() error {
-	return fmt.Errorf("remove %s from the launch's arguments: it lets Codex run hooks that have no trust stored for them",
+	return fmt.Errorf("remove %s from the launch's arguments\nit lets Codex run hooks that have no trust stored for them",
 		flagHookTrust)
 }
 
-// remoteRefused is the error for --remote.
+// remoteRefused is the error for --remote: the fix on the first line, the cause on the
+// second.
 func remoteRefused() error {
-	return fmt.Errorf("remove %s from the launch's arguments: it connects Codex to a remote app server, so the work runs outside the session",
+	return fmt.Errorf("remove %s from the launch's arguments\nit connects Codex to a remote app server, so the work runs outside the session",
 		flagRemote)
 }

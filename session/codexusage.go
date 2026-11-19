@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"math"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -100,14 +102,18 @@ func (t *transcript) rolloutPatterns(id string) (thread, every *pathPattern) {
 // entries, and follows no symbolic link below the transcript directory. For a search
 // that fails, and for a search before the launch with an fstatat that fails, which
 // would leave a file with no baseline, it returns the line instead; when is "before"
-// or "after" the launch. After the launch, a file whose fstatat fails counts as one
-// that changed.
+// or "after" the launch. A file whose fstatat fails with ENOENT, one removed after the
+// listing of its directory, has no state and adds no line. After the launch, a file
+// with no state counts as one that changed.
 func (t *transcript) searchRollouts(every *pathPattern, when string) ([]string, map[string]rolloutState, string) {
 	base, start, limit, follow := t.home, t.prefix(), 0, true
 	if t.root != "" {
 		base, start, limit, follow = t.root, t.under, maxFindEntries, false
 	}
 	s := &search{pattern: every, limit: limit, stop: math.MaxInt, states: map[string]rolloutState{}}
+	if t.hooks != nil {
+		s.beforeStat = t.hooks.beforeStat
+	}
 	err := s.run(base, start, follow)
 	switch {
 	case errors.Is(err, errTooManyEntries):
@@ -205,10 +211,12 @@ func (t *transcript) openRollout(rel string) (*os.File, *unix.Stat_t, error) {
 }
 
 // rolloutHooks are the calls a test gets from the reads of rollouts: opened after each
-// open and fstat, head with the bytes of each read of a rollout's first bytes.
+// open and fstat, head with the bytes of each read of a rollout's first bytes, and
+// beforeStat with each path a search of rollouts finds, before its fstatat.
 type rolloutHooks struct {
-	opened func(rel string, f *os.File)
-	head   func(rel string, n int)
+	opened     func(rel string, f *os.File)
+	head       func(rel string, n int)
+	beforeStat func(rel string)
 }
 
 // pathless is err with the path of an [fs.PathError] in it taken out: the operation
@@ -315,34 +323,127 @@ type unreadRollout struct {
 }
 
 // unreadChild is the line of the first file of unread whose name resume.path matches
-// with the id of a thread that a spawn_agent call in rollouts started: a child agent
-// of the launch's thread or of one of its child agents that the session could not
-// read. It is empty when no file of unread is such a file: a file of another thread
-// counts for nothing. An id longer than [maxSessionID] bytes matches no file.
+// with the id of a thread that a spawn in rollouts started ([codex.Rollout]'s
+// Spawned): a child agent of the launch's thread or of one of its child agents that
+// the session could not read. It takes the ids in the order of rollouts and of their
+// lines, each once, and for one id the first file of unread. It is empty when no file
+// of unread is such a file: a file of another thread counts for nothing. An id longer
+// than [maxSessionID] bytes matches no file. Its work is linear in the count of ids
+// and of files ([transcript.unreadByID]).
 func (t *transcript) unreadChild(unread []unreadRollout, rollouts []codex.Rollout) string {
 	if len(unread) == 0 {
 		return ""
 	}
+	spawned := map[string]bool{}
+	var ids []string
 	for _, r := range rollouts {
 		for _, id := range r.Spawned {
-			if id == "" || len(id) > maxSessionID {
+			if id == "" || len(id) > maxSessionID || spawned[id] {
 				continue
 			}
-			var named *pathPattern
-			for _, u := range unread {
-				if !strings.Contains(path.Base(u.rel), id) {
-					continue
-				}
-				if named == nil {
-					named, _ = t.rolloutPatterns(id)
-				}
-				if named.matches(u.rel) {
-					return u.line
-				}
-			}
+			spawned[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return ""
+	}
+	byID := t.unreadByID(unread, spawned)
+	for _, id := range ids {
+		if files := byID[id]; len(files) > 0 {
+			return unread[files[0]].line
 		}
 	}
 	return ""
+}
+
+// unreadByID maps each id of ids to the indexes in unread, in order, of the files
+// whose name resume.path matches with that id. Each file of unread matches resume.path
+// with any id, so the one name to check is the name at the place of the first
+// {session_id} of resume.path: the id is a part of that name, after text that matches what resume.path has before
+// {session_id} in the name, and before text that matches what follows it. The parts it
+// looks up have the lengths of ids, and where that text is literal, such as .jsonl in
+// rollout-*-{session_id}.jsonl, a part starts or ends at one place. The work for one
+// file is so at most the count of lengths of ids when one side is literal, and that
+// times the length of the name otherwise. When resume.path has {session_id} more than
+// once, the pattern of the id checks each part that a lookup finds.
+func (t *transcript) unreadByID(unread []unreadRollout, ids map[string]bool) map[string][]int {
+	below := strings.TrimPrefix(t.resume.Path, t.resume.Prefix)
+	tmpl := strings.Split(below, "/")
+	at := slices.IndexFunc(tmpl, func(n string) bool { return strings.Contains(n, "{session_id}") })
+	if at < 0 {
+		return nil
+	}
+	once := strings.Count(below, "{session_id}") == 1
+	beforeTmpl, afterTmpl, _ := strings.Cut(tmpl[at], "{session_id}")
+	before, after := newPathPattern(beforeTmpl, "", t.slug, false).names[0], newPathPattern(afterTmpl, "", t.slug, false).names[0]
+	// literal is the text of part with {cwd_slug} replaced, and true, when part has no
+	// * and resume.path has one {session_id}.
+	literal := func(part string) (string, bool) {
+		return strings.ReplaceAll(part, "{cwd_slug}", t.slug), once && !strings.Contains(part, "*")
+	}
+	beforeLit, beforeIsLit := literal(beforeTmpl)
+	afterLit, afterIsLit := literal(afterTmpl)
+	lengths := map[int]bool{}
+	for id := range ids {
+		lengths[len(id)] = true
+	}
+	sorted := slices.Sorted(maps.Keys(lengths))
+	named := map[string]*pathPattern{}
+	byID := map[string][]int{}
+	for k, u := range unread {
+		names := strings.Split(u.rel, "/")
+		if len(names) != len(tmpl) {
+			continue
+		}
+		name := names[at]
+		// add adds file k to the id name[i:j] when the text around it matches.
+		add := func(i, j int) {
+			id := name[i:j]
+			if l := byID[id]; !ids[id] || (len(l) > 0 && l[len(l)-1] == k) {
+				return
+			}
+			if once && (!beforeIsLit && (before == nil || !before.MatchString(name[:i])) ||
+				!afterIsLit && (after == nil || !after.MatchString(name[j:]))) {
+				return
+			}
+			if !once {
+				if named[id] == nil {
+					named[id], _ = t.rolloutPatterns(id)
+				}
+				if !named[id].matches(u.rel) {
+					return
+				}
+			}
+			byID[id] = append(byID[id], k)
+		}
+		first, last := 0, len(name)
+		if beforeIsLit {
+			if !strings.HasPrefix(name, beforeLit) {
+				continue
+			}
+			first, last = len(beforeLit), len(beforeLit)
+		}
+		end := -1
+		if afterIsLit {
+			if !strings.HasSuffix(name, afterLit) {
+				continue
+			}
+			end = len(name) - len(afterLit)
+		}
+		for _, n := range sorted {
+			if end >= 0 {
+				if i := end - n; i >= first && i <= last {
+					add(i, end)
+				}
+				continue
+			}
+			for i := first; i <= last && i+n <= len(name); i++ {
+				add(i, i+n)
+			}
+		}
+	}
+	return byID
 }
 
 // codexUsage reads the rollouts of the Codex launch whose thread is id, after the
@@ -354,9 +455,12 @@ func (t *transcript) unreadChild(unread []unreadRollout, rollouts []codex.Rollou
 // with id. Of each other file that resume.path matches with any id and that changed
 // since the baseline, the session reads at most the first [maxRolloutHead] bytes, for
 // the thread and parent of its session_meta ([transcript.rolloutMeta]). A file it
-// does not read so is a child agent's when a spawn_agent call in the rollouts it reads
-// in full started the thread whose id its name has ([transcript.unreadChild]), and
-// counts for nothing otherwise. A file that did not change adds nothing, and the session
+// does not read so is a child agent's when a line of a spawn in the rollouts it reads
+// in full has the id that resume.path matches in its name ([codex.Rollout]'s Spawned,
+// [transcript.unreadChild]), and counts for nothing otherwise. The session takes no id
+// from a child agent's rollout that did not change, so it finds no such file of a
+// child agent whose parent is a child agent whose rollout did not change during the
+// launch. A file that did not change adds nothing, and the session
 // reads its first bytes only to link a file that changed to the thread: when no file
 // it read has the id of that file's parent, it reads each file that did not change and
 // that resume.path matches with that id ([transcript.linkRollouts]). The thread's

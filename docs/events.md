@@ -204,17 +204,24 @@ exited: for the launch's thread and each child agent's rollout, the children of
 children included, the total less what the file had before the launch started.
 `input` is Codex's `input_tokens` less its cached and cache-write tokens. The session
 reads the first 64 KiB of every other rollout that changed during the launch to find
-the child agents. A file it cannot read so, such as a symbolic link, a FIFO or a file
-with a broken first line, gives the result no `usage` when its name has the id of a
-thread that a `spawn_agent` call in the thread's rollout or a child agent's started,
-and counts for nothing otherwise. It reads the first 64 KiB of a
-rollout that did not change only to link a child agent that changed to the thread. It
-reads the thread's rollout and the child agents' that changed with the same checks as
-the transcript, and at most 256 files and 256 MiB together. Past them, for a first line
-with no ids in its first 64 KiB, for a child agent's file that changed between the
-session's reads, for a baseline with no state for a file, and for a count above 2^53,
-a count below -2^53, a count that is not an integer or a sum of a count above 2^53,
-the result has no
+the child agents. When a changed file that it cannot read so, such as a symbolic link,
+a FIFO or a file with a broken first line, has in its name the id of a thread that a
+spawn started, the result has no `usage`; any other such file counts for nothing. The
+ids of spawned threads are in these lines of the thread's rollout and of each child
+agent's that changed: the `receiver_thread_ids` of an `item_completed` of a
+`CollabAgentToolCall` of `spawn_agent`; the `agent_thread_id` of an `item_completed` of
+a `SubAgentActivity`, or of a `sub_agent_activity`, of kind `started`; and the
+`agent_id` in the output of a `spawn_agent` call, in its `function_call_output` or in
+an `item_completed` of a `FunctionCallOutput`. The session takes no id from a child
+agent's rollout that did not change: when an agent's parent is such a child agent, a
+file of that agent that the session cannot read counts for nothing. It reads the
+first 64 KiB of a rollout that did not change only to link a child agent that changed
+to the thread. It reads the thread's rollout and the child agents' that changed with
+the same checks as the transcript, and at most 256 files and 256 MiB together. Past
+them, for a first line with no ids in its first 64 KiB, for a child agent's file that
+changed between the session's reads, for a baseline whose `fstatat` of a file failed
+with an error other than `ENOENT`, and for a count above 2^53, a count below -2^53, a
+count that is not an integer or a sum of a count above 2^53, the result has no
 `usage`, and the session writes one line on `stderr` with the fix first. See the
 contract's §The events, Codex's result.
 

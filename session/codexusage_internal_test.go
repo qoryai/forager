@@ -980,3 +980,193 @@ func TestCodexUsageNeedsTheStateOfEachFileAtItsBaseline(t *testing.T) {
 		})
 	}
 }
+
+// TestCodexUsageSkipsAFileRemovedAtItsBaseline pins a rollout that the baseline's
+// search lists and that is gone by its fstatat, with a wall and without one: the
+// baseline has no state for it and no line, and the usage at the end is the launch's.
+// A file that is there again at the end is one that changed.
+func TestCodexUsageSkipsAFileRemovedAtItsBaseline(t *testing.T) {
+	for _, walled := range []bool{false, true} {
+		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+			tr, s, dir := codexUsageTranscript(t, walled)
+			appendTo(t, dir, rolloutAt(walledID), []byte(meta(walledID, "")+count(1)))
+			appendTo(t, dir, rolloutAt(childA), []byte(meta(childA, walledID)+count(10)))
+			removed := 0
+			tr.hooks = &rolloutHooks{beforeStat: func(rel string) {
+				if rel == rolloutAt(childA) {
+					if err := os.Remove(filepath.Join(dir, rel)); err != nil {
+						t.Error(err)
+					}
+					removed++
+				}
+			}}
+			tr.codexBaseline(nil)
+			tr.hooks = nil
+			if removed != 1 {
+				t.Fatalf("the hook removed %d files; want 1", removed)
+			}
+			appendTo(t, dir, rolloutAt(walledID), []byte(count(3)))
+			appendTo(t, dir, rolloutAt(childA), []byte(meta(childA, walledID)+count(100)))
+			if got := tr.codexUsage(walledID); !reflect.DeepEqual(got, usage(102)) || len(s.lines) != 0 {
+				t.Errorf("usage %v, lines %q; want %v and no line", got, s.lines, usage(102))
+			}
+		})
+	}
+}
+
+// spawnRecords are the lines of each kind that Codex 0.167.2 and 0.169.0 write in
+// parent's rollout for a spawn of the thread child, each with child's id
+// ([codex.Rollout]'s Spawned).
+var spawnRecords = map[string]func(parent, child string) string{
+	"a CollabAgentToolCall of spawn_agent": spawn,
+	"a SubAgentActivity of kind started": func(parent, child string) string {
+		return fmt.Sprintf(`{"type":"event_msg","payload":{"type":"item_completed","thread_id":%q,"item":{"type":"SubAgentActivity","id":"call_1","kind":"started","agent_thread_id":%q,"agent_path":"/root/worker"}}}`+"\n", parent, child)
+	},
+	"a sub_agent_activity of kind started": func(_, child string) string {
+		return fmt.Sprintf(`{"type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_1","agent_thread_id":%q,"agent_path":"/root/worker","kind":"started"}}`+"\n", child)
+	},
+	"the function_call_output of a spawn_agent call": func(_, child string) string {
+		return `{"type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"multi_agent_v1","arguments":"{}","call_id":"call_1"}}` + "\n" +
+			fmt.Sprintf(`{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":%q}}`, fmt.Sprintf(`{"agent_id":%q,"nickname":null}`, child)) + "\n"
+	},
+	"an item_completed of a FunctionCallOutput of spawn_agent": func(parent, child string) string {
+		return fmt.Sprintf(`{"type":"event_msg","payload":{"type":"item_completed","thread_id":%q,"item":{"type":"FunctionCallOutput","id":"call_1","name":"spawn_agent","output":%q}}}`, parent, fmt.Sprintf(`{"agent_id":%q}`, child)) + "\n"
+	},
+}
+
+// TestCodexUsageFindsAnUnreadChildByEachSpawnRecord pins each kind of line with the id
+// of a spawned child agent, alone in the thread's rollout, with a wall and without
+// one: for a child whose file changed and is a symbolic link, a FIFO or a file with a
+// broken first line, the usage is nil with one line.
+func TestCodexUsageFindsAnUnreadChildByEachSpawnRecord(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "outside.jsonl")
+	if err := os.WriteFile(outside, []byte(meta(childA, walledID)+count(1000)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mkdir := func(t *testing.T, dir, rel string) {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plants := map[string]struct {
+		plant func(t *testing.T, dir, rel string)
+		fix   string
+	}{
+		"a link": {plant: func(t *testing.T, dir, rel string) {
+			mkdir(t, dir, rel)
+			if err := os.Symlink(outside, filepath.Join(dir, rel)); err != nil {
+				t.Fatal(err)
+			}
+		}, fix: fixRolloutLinked},
+		"a FIFO": {plant: func(t *testing.T, dir, rel string) {
+			mkdir(t, dir, rel)
+			if err := unix.Mkfifo(filepath.Join(dir, rel), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, fix: fixRolloutLinked},
+		"a broken first line": {plant: func(t *testing.T, dir, rel string) {
+			appendTo(t, dir, rel, []byte("{\"type\":\"session_meta\",\"payload\":\n"+count(1000)))
+		}, fix: fixRolloutMeta},
+	}
+	for kind, record := range spawnRecords {
+		for name, c := range plants {
+			for _, walled := range []bool{false, true} {
+				t.Run(fmt.Sprint(kind, ", ", name, ", walled ", walled), func(t *testing.T) {
+					tr, s, dir := codexUsageTranscript(t, walled)
+					tr.codexBaseline(nil)
+					appendTo(t, dir, rolloutAt(walledID), []byte(meta(walledID, "")+record(walledID, childA)+count(1)))
+					c.plant(t, dir, rolloutAt(childA))
+					if got := usageWithin(t, tr, walledID); got != nil {
+						t.Errorf("usage %v; want none", got)
+					}
+					checkLines(t, s, c.fix)
+				})
+			}
+		}
+	}
+}
+
+// TestCodexUsageLooksUpEachIDOnce pins the lookup of the files that the session could
+// not read by the ids of spawned threads, with 4000 such files and 40000 ids, each
+// twice. Only the last id matches a file, the last one listed, and the line is that
+// file's; without that id there is no line. Of two files with one id, the line is the
+// first one's, and an id that is a part of a file's id matches no file.
+func TestCodexUsageLooksUpEachIDOnce(t *testing.T) {
+	const files, ids = 4000, 40000
+	id := func(prefix string, n int) string { return fmt.Sprintf("%s%07x-87f8-7123-a174-ba291730eec1", prefix, n) }
+	tr, _, _ := codexUsageTranscript(t, false)
+	var unread []unreadRollout
+	for n := range files {
+		unread = append(unread, unreadRollout{rel: rolloutAt(id("f", n)), line: fmt.Sprint("line ", n)})
+	}
+	var spawned []string
+	for n := range ids - 1 {
+		spawned = append(spawned, id("s", n), id("s", n))
+	}
+	spawned = append(spawned, id("f", files-1))
+	if got, want := tr.unreadChild(unread, []codex.Rollout{{Spawned: spawned}}), fmt.Sprint("line ", files-1); got != want {
+		t.Errorf("the line %q; want %q", got, want)
+	}
+	if got := tr.unreadChild(unread, []codex.Rollout{{Spawned: spawned[:len(spawned)-1]}}); got != "" {
+		t.Errorf("without the id of a file: the line %q; want none", got)
+	}
+	two := []unreadRollout{
+		{rel: "2026/11/18/rollout-2026-11-18T23-31-46-" + childA + ".jsonl", line: "first"},
+		{rel: "2026/11/19/rollout-2026-11-19T00-00-00-" + childA + ".jsonl", line: "second"},
+	}
+	if got := tr.unreadChild(two, []codex.Rollout{{Spawned: []string{childB, childA}}}); got != "first" {
+		t.Errorf("two files with one id: the line %q; want first", got)
+	}
+	if got := tr.unreadChild(two, []codex.Rollout{{Spawned: []string{childA[1:], childA[:len(childA)-1]}}}); got != "" {
+		t.Errorf("a part of an id: the line %q; want none", got)
+	}
+}
+
+// TestCodexUsageFindsOneUnreadChildAmongMany pins a launch with 4000 FIFOs that changed
+// below the prefix and a thread's rollout with the ids of 40000 spawned threads, each
+// twice, with a wall and without one. When only the last id has a FIFO, the usage is
+// nil with one line; without that id, the FIFOs are other threads' files and the
+// usage is the thread's, with no line.
+func TestCodexUsageFindsOneUnreadChildAmongMany(t *testing.T) {
+	const files, ids = 4000, 40000
+	id := func(prefix string, n int) string { return fmt.Sprintf("%s%07x-87f8-7123-a174-ba291730eec1", prefix, n) }
+	for _, last := range []bool{true, false} {
+		for _, walled := range []bool{false, true} {
+			t.Run(fmt.Sprint("the last id has a FIFO ", last, ", walled ", walled), func(t *testing.T) {
+				tr, s, dir := codexUsageTranscript(t, walled)
+				tr.codexBaseline(nil)
+				var b strings.Builder
+				b.WriteString(meta(walledID, ""))
+				for n := range ids - 1 {
+					b.WriteString(spawn(walledID, id("s", n)))
+					b.WriteString(spawn(walledID, id("s", n)))
+				}
+				if last {
+					b.WriteString(spawn(walledID, id("f", files-1)))
+				}
+				b.WriteString(count(1))
+				appendTo(t, dir, rolloutAt(walledID), []byte(b.String()))
+				for n := range files {
+					rel := filepath.Join(dir, "2026/11/19/rollout-2026-11-19T00-00-00-"+id("f", n)+".jsonl")
+					if err := os.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := unix.Mkfifo(rel, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				got := usageWithin(t, tr, walledID)
+				if last {
+					if got != nil {
+						t.Errorf("usage %v; want none", got)
+					}
+					checkLines(t, s, fixRolloutLinked)
+					return
+				}
+				if !reflect.DeepEqual(got, usage(1)) || len(s.lines) != 0 {
+					t.Errorf("usage %v, lines %q; want %v and no line", got, s.lines, usage(1))
+				}
+			})
+		}
+	}
+}

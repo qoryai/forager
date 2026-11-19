@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -394,9 +395,13 @@ func TestCodexParseMetaReadsTheFirstLine(t *testing.T) {
 }
 
 // TestCodexParseRolloutReadsTheSpawnedThreads pins Spawned: the fixture's launch 1
-// thread started its one child agent with spawn_agent, and the child started none. A
-// call of another tool, a line of another type, a call not completed and a line that
-// is no JSON object count for nothing.
+// thread started its one child agent with spawn_agent, whose id is in its
+// CollabAgentToolCall and in its function_call_output and once in Spawned, and the
+// child started none. For each other kind of line with the id of a spawned thread,
+// Spawned has the id. A call of another tool, a line of
+// another type, a call not completed, an activity of another kind, an output of
+// another shape or of no spawn_agent call, and a line that is no JSON object count for
+// nothing.
 func TestCodexParseRolloutReadsTheSpawnedThreads(t *testing.T) {
 	const child = "01a1f100-885b-7140-a145-b604ffe0117a"
 	if got := rollout(t, "launch1-parent-rollout.jsonl", 0).Spawned; len(got) != 1 || got[0] != child {
@@ -413,5 +418,38 @@ func TestCodexParseRolloutReadsTheSpawnedThreads(t *testing.T) {
 		`{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CollabAgentToolCall"`)
 	if want := "x-event_msg-item_completed-spawn_agent"; len(r.Spawned) != 1 || r.Spawned[0] != want {
 		t.Errorf("spawned %q; want [%s]", r.Spawned, want)
+	}
+	for name, c := range map[string]struct {
+		lines []string
+		want  []string
+	}{
+		"a SubAgentActivity of kind started": {lines: []string{
+			`{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"SubAgentActivity","id":"call_1","kind":"started","agent_thread_id":"a","agent_path":"/root/w"}}}`,
+			`{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"SubAgentActivity","kind":"completed","agent_thread_id":"x"}}}`,
+			`{"type":"event_msg","payload":{"type":"item_started","item":{"type":"SubAgentActivity","kind":"started","agent_thread_id":"x"}}}`,
+		}, want: []string{"a"}},
+		"a sub_agent_activity of kind started": {lines: []string{
+			`{"type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_1","agent_thread_id":"a","agent_path":"/root/w","kind":"started"}}`,
+			`{"type":"event_msg","payload":{"type":"sub_agent_activity","agent_thread_id":"x","kind":"interacted"}}`,
+			`{"type":"response_item","payload":{"type":"sub_agent_activity","agent_thread_id":"x","kind":"started"}}`,
+		}, want: []string{"a"}},
+		"the output of a function_call named spawn_agent": {lines: []string{
+			`{"type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"multi_agent_v1","arguments":"{}","call_id":"c1"}}`,
+			`{"type":"response_item","payload":{"type":"function_call","name":"wait_agent","arguments":"{}","call_id":"c2"}}`,
+			`{"type":"response_item","payload":{"type":"function_call_output","call_id":"c2","output":"{\"agent_id\":\"x\"}"}}`,
+			`{"type":"response_item","payload":{"type":"function_call_output","call_id":"c3","output":"{\"agent_id\":\"x\"}"}}`,
+			`{"type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":"{\"agent_id\":\"a\",\"nickname\":null}"}}`,
+			`{"type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{}","call_id":"c4"}}`,
+			`{"type":"response_item","payload":{"type":"function_call_output","call_id":"c4","output":[{"type":"input_text","text":"{\"agent_id\":\"x\"}"}]}}`,
+		}, want: []string{"a"}},
+		"an item_completed of a FunctionCallOutput named spawn_agent": {lines: []string{
+			`{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"FunctionCallOutput","id":"i1","name":"spawn_agent","namespace":"multi_agent_v1","output":"{\"agent_id\":\"a\"}"}}}`,
+			`{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"FunctionCallOutput","id":"i2","name":"wait_agent","output":"{\"agent_id\":\"x\"}"}}}`,
+		}, want: []string{"a"}},
+	} {
+		lines := append([]string{meta("t", "")}, c.lines...)
+		if r := parsed(t, 0, lines...); !slices.Equal(r.Spawned, c.want) {
+			t.Errorf("%s: spawned %q; want %q", name, r.Spawned, c.want)
+		}
 	}
 }

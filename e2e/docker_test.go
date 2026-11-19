@@ -783,8 +783,11 @@ func readOnlyTargetBelowSticky(t *testing.T) {
 // codexHooksFileStays binds a read-only file at /etc/codex/hooks.json in busybox, which
 // has no /etc/codex, as qory passes a Codex run's hooks file, and requires that the agent
 // reads it but cannot write, chmod, remove, rename or replace it, add a file or a link
-// beside it, or rename or replace /etc/codex, which the engine makes as root's with mode
-// 0755. The file on this machine has mode 0666, so the bind's mode alone stops a write.
+// beside it, or rename /etc/codex, which the engine makes as root's with mode 0755. The
+// file on this machine has mode 0666, so the bind's mode alone stops a write. No attempt
+// moves a directory over /etc/codex: rename(2) returns ENOTEMPTY for a destination
+// directory with an entry in it, /etc/codex always has hooks.json, and mv -T of busybox
+// removes no directory before its rename (it prints "Directory not empty").
 func codexHooksFileStays(t *testing.T) {
 	command, helper := relayEngine(t)
 	const content = "{\"hooks\":{\"Stop\":[]}}\n"
@@ -797,10 +800,9 @@ func codexHooksFileStays(t *testing.T) {
 	}
 	dir := t.TempDir()
 	// Each attempt prints a line with "did" only when it succeeds. The write into the
-	// workspace shows that the shell runs its commands. Each step that sets up an
-	// attempt prints a line with "set up" when it succeeds, so an attempt cannot fail
-	// for a step that did not run: the file to move over hooks.json, the directory to
-	// move over /etc/codex, and a mv -T of busybox that moves a directory over another.
+	// workspace shows that the shell runs its commands. The step that sets up an
+	// attempt prints a line with "set up" when it succeeds, so the attempt cannot fail
+	// for a step that did not run: the file to move over hooks.json.
 	script := `f=/etc/codex/hooks.json
 cat "$f"
 echo x > ` + dir + `/written && echo wrote the workspace
@@ -817,9 +819,6 @@ mv -f /tmp/other.json "$f" 2>/dev/null && echo did replace the file
 { echo x > /etc/codex/new.json; } 2>/dev/null && echo did create a file beside it
 ln -s /tmp/other.json /etc/codex/link.json 2>/dev/null && echo did link beside it
 mv /etc/codex /etc/codex-moved 2>/dev/null && echo did rename the directory
-mkdir /tmp/codex && echo x > /tmp/codex/hooks.json && echo set up /tmp/codex
-mkdir /tmp/mv-a /tmp/mv-b && mv -f -T /tmp/mv-a /tmp/mv-b && echo set up mv -T
-mv -f -T /tmp/codex /etc/codex 2>/dev/null && echo did replace the directory
 ls -A /etc/codex
 cat "$f"`
 	r := startEnclosureWith(t, command, helper, wall.Request{Image: busybox}, dir,
@@ -827,7 +826,7 @@ cat "$f"`
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	out := r.start(ctx, t)()
-	setUp := []string{"set up /tmp/other.json", "set up /tmp/codex", "set up mv -T"}
+	setUp := []string{"set up /tmp/other.json"}
 	for _, l := range setUp {
 		if !strings.Contains(out, l+"\n") {
 			t.Errorf("the agent printed %q; want the line %q: a step that sets up an attempt failed", out, l)
