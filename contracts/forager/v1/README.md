@@ -2122,12 +2122,12 @@ the thread id. Of every other file that changed since the baseline, the session 
 at most the first 64 KiB, for the `id`, the `parent_thread_id` and the `source` of its
 `session_meta`. Codex 0.167.2 writes them before the base instructions, so a first line
 longer than 64 KiB counts. The session skips the file when it cannot read them that way
-or when either id is longer than 128 bytes: a symbolic link, a FIFO, a file with a
-second hard link behind a wall, a first line of another shape. A file that did not
-change adds nothing, and the session reads its first 64 KiB only to link a file that
-changed to the thread: when no file it read has the id of that file's parent, it reads
-each file that did not change and that `resume.path` matches with that id, and links
-the file whose `session_meta` has that id. The child agents are the files whose
+or when either id is longer than 128 bytes: a symbolic link, a FIFO, a first line of
+another shape. A file that did not change adds nothing, and the session reads its first
+64 KiB only to link a file that changed to the thread: when no file it read has the id
+of that file's parent, it reads each file that did not change and that `resume.path`
+matches with that id, and links the file whose `session_meta` has that id. The child
+agents are the files whose
 `parent_thread_id` is the thread or one of its child agents, up to 16 levels down. The
 usage is the sum, over the thread and its child agents, of the last total less the
 baseline. `usage.input` is `input_tokens` less `cached_input_tokens` and

@@ -275,7 +275,7 @@ func usageWithin(t *testing.T, tr *transcript) map[string]any {
 // one: a symbolic link, a FIFO, which the session opens without blocking, the thread's
 // file with a second hard link behind a wall, and a file over 64 MiB. For each the
 // usage is nil, and the session writes one line that starts with the fix. A child's
-// file with a second hard link is in [TestCodexUsageSkipsAHardLinkBehindAWall].
+// file with a second hard link is in [TestCodexUsageRefusesAHardLinkedChildBehindAWall].
 func TestCodexUsageRefusesWhatTheAgentPlants(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "outside.jsonl")
 	if err := os.WriteFile(outside, fixture(t, "launch1-parent-rollout.jsonl"), 0o600); err != nil {
@@ -778,26 +778,60 @@ func TestCodexUsageReadErrorHasNoName(t *testing.T) {
 	}
 }
 
-// TestCodexUsageSkipsAHardLinkBehindAWall pins a child whose file has a second hard
-// link: behind a wall the session reads none of it, so the usage is the thread's with
-// no line; without a wall it reads the child.
-func TestCodexUsageSkipsAHardLinkBehindAWall(t *testing.T) {
-	for walled, want := range map[bool]map[string]any{true: usage(1), false: usage(11)} {
-		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+// TestCodexUsageRefusesAHardLinkedChildBehindAWall pins rollouts with a second hard
+// link. Behind a wall, a child that changed gives no usage and one line; without a
+// wall the session reads the child. A file of another thread that changed, and a child
+// that did not change, are not read in full, so the usage is the thread's with no
+// line.
+func TestCodexUsageRefusesAHardLinkedChildBehindAWall(t *testing.T) {
+	link := func(t *testing.T, dir, rel string) {
+		t.Helper()
+		if err := os.Link(filepath.Join(dir, rel), filepath.Join(dir, "2026", "11", "18", "other")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, walled := range []bool{false, true} {
+		t.Run(fmt.Sprint("a changed child, walled ", walled), func(t *testing.T) {
 			tr, s, dir := codexUsageTranscript(t, walled)
 			tr.codexBaseline(nil)
 			appendTo(t, dir, rolloutAt(walledID), []byte(meta(walledID, "")+count(1)))
 			appendTo(t, dir, rolloutAt(childA), []byte(meta(childA, walledID)+count(10)))
-			if err := os.Link(filepath.Join(dir, rolloutAt(childA)), filepath.Join(dir, "2026", "11", "18", "other")); err != nil {
-				t.Fatal(err)
+			link(t, dir, rolloutAt(childA))
+			got := tr.codexUsage(walledID)
+			if !walled {
+				if !reflect.DeepEqual(got, usage(11)) || len(s.lines) != 0 {
+					t.Errorf("usage %v, lines %q; want %v", got, s.lines, usage(11))
+				}
+				return
 			}
-			c := countReads(tr, nil)
-			if got := tr.codexUsage(walledID); !reflect.DeepEqual(got, want) || len(s.lines) != 0 {
-				t.Errorf("usage %v, lines %q; want %v", got, s.lines, want)
+			if got != nil {
+				t.Errorf("usage %v; want none", got)
 			}
-			if walled && c.opens[rolloutAt(childA)] != 1 {
-				t.Errorf("opens %v; want one of the child, for its fstat", c.opens)
-			}
+			checkLines(t, s, fixRolloutHardLinks)
 		})
 	}
+	t.Run("another thread's file, walled", func(t *testing.T) {
+		tr, s, dir := codexUsageTranscript(t, true)
+		tr.codexBaseline(nil)
+		appendTo(t, dir, rolloutAt(walledID), []byte(meta(walledID, "")+count(1)))
+		appendTo(t, dir, rolloutAt(childB), []byte(meta(childB, "")+count(10)))
+		link(t, dir, rolloutAt(childB))
+		if got := tr.codexUsage(walledID); !reflect.DeepEqual(got, usage(1)) || len(s.lines) != 0 {
+			t.Errorf("usage %v, lines %q; want %v", got, s.lines, usage(1))
+		}
+	})
+	t.Run("a child that did not change, walled", func(t *testing.T) {
+		tr, s, dir := codexUsageTranscript(t, true)
+		appendTo(t, dir, rolloutAt(childA), []byte(meta(childA, walledID)+count(10)))
+		link(t, dir, rolloutAt(childA))
+		tr.codexBaseline(nil)
+		appendTo(t, dir, rolloutAt(walledID), []byte(meta(walledID, "")+count(1)))
+		c := countReads(tr, nil)
+		if got := tr.codexUsage(walledID); !reflect.DeepEqual(got, usage(1)) || len(s.lines) != 0 {
+			t.Errorf("usage %v, lines %q; want %v", got, s.lines, usage(1))
+		}
+		if c.opens[rolloutAt(childA)] != 0 {
+			t.Errorf("opens %v; want none of the child", c.opens)
+		}
+	})
 }

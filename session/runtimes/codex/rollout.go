@@ -350,7 +350,7 @@ func lastTotal(b []byte) (*Tokens, error) {
 }
 
 // MaxDepth is the most levels of child agents below the launch's thread that
-// [LaunchUsage] counts, 16; Codex 0.167.2 allows 1 unless agents.max_depth sets more
+// [Descendants] finds, 16; Codex 0.167.2 allows 1 unless agents.max_depth sets more
 // (codex-rs core/src/config/mod.rs, DEFAULT_AGENT_MAX_DEPTH).
 const MaxDepth = 16
 
@@ -388,25 +388,6 @@ func Descendants(thread string, metas []Meta) ([]int, error) {
 		level = next
 	}
 	return out, nil
-}
-
-// LaunchUsage is the usage of a launch whose thread's rollout is parent, with others
-// the other rollouts the session read: [SumUsage] of the parent and of the thread's
-// [Descendants] among others.
-func LaunchUsage(parent Rollout, others []Rollout) (u Usage, counted, clamped bool, err error) {
-	metas := make([]Meta, len(others))
-	for i, r := range others {
-		metas[i] = r.Meta
-	}
-	below, err := Descendants(parent.ThreadID, metas)
-	if err != nil {
-		return Usage{}, false, false, err
-	}
-	rollouts := []Rollout{parent}
-	for _, i := range below {
-		rollouts = append(rollouts, others[i])
-	}
-	return SumUsage(rollouts)
 }
 
 // SumUsage is the usage of a launch whose thread's rollout and child agents' are

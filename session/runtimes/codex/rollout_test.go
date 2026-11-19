@@ -56,10 +56,29 @@ func rollout(t *testing.T, name string, before int64) codex.Rollout {
 	return r
 }
 
-// launchUsage is [codex.LaunchUsage] that fails the test on an error or no count.
+// familyUsage is the usage of a launch whose thread's rollout is parent, as the
+// session counts it from others, the other rollouts it read: [codex.SumUsage] of the
+// parent and of the thread's [codex.Descendants] among others.
+func familyUsage(parent codex.Rollout, others []codex.Rollout) (codex.Usage, bool, bool, error) {
+	metas := make([]codex.Meta, len(others))
+	for i, r := range others {
+		metas[i] = r.Meta
+	}
+	below, err := codex.Descendants(parent.ThreadID, metas)
+	if err != nil {
+		return codex.Usage{}, false, false, err
+	}
+	rollouts := []codex.Rollout{parent}
+	for _, i := range below {
+		rollouts = append(rollouts, others[i])
+	}
+	return codex.SumUsage(rollouts)
+}
+
+// launchUsage is [familyUsage] that fails the test on an error or no count.
 func launchUsage(t *testing.T, parent codex.Rollout, others ...codex.Rollout) codex.Usage {
 	t.Helper()
-	u, counted, clamped, err := codex.LaunchUsage(parent, others)
+	u, counted, clamped, err := familyUsage(parent, others)
 	if err != nil || !counted || clamped {
 		t.Fatalf("usage %+v, counted %v, clamped %v, %v", u, counted, clamped, err)
 	}
@@ -201,7 +220,7 @@ func TestCodexLaunchUsageCases(t *testing.T) {
 		}
 	})
 	t.Run("thread with no token_count", func(t *testing.T) {
-		u, counted, _, err := codex.LaunchUsage(parsed(t, 0, meta("p", "")), nil)
+		u, counted, _, err := familyUsage(parsed(t, 0, meta("p", "")), nil)
 		if err != nil || counted {
 			t.Errorf("usage %+v, counted %v, %v; want none counted", u, counted, err)
 		}
@@ -213,7 +232,7 @@ func TestCodexLaunchUsageCases(t *testing.T) {
 	t.Run("restored with nothing new", func(t *testing.T) {
 		b := meta("p", "") + "\n" + total(5) + "\n"
 		r := parsed(t, int64(len(b)), meta("p", ""), total(5))
-		if u, counted, _, err := codex.LaunchUsage(r, nil); err != nil || counted {
+		if u, counted, _, err := familyUsage(r, nil); err != nil || counted {
 			t.Errorf("usage %+v, counted %v, %v; want none counted", u, counted, err)
 		}
 	})
@@ -251,10 +270,10 @@ func TestCodexLaunchUsageCases(t *testing.T) {
 			others = append(others, parsed(t, 0, meta(id, up), total(5)))
 			up = id
 		}
-		if _, _, _, err := codex.LaunchUsage(parent, others[:codex.MaxDepth]); err != nil {
+		if _, _, _, err := familyUsage(parent, others[:codex.MaxDepth]); err != nil {
 			t.Errorf("%d levels: %v", codex.MaxDepth, err)
 		}
-		if _, _, _, err := codex.LaunchUsage(parent, others); !errors.Is(err, codex.ErrTooDeep) {
+		if _, _, _, err := familyUsage(parent, others); !errors.Is(err, codex.ErrTooDeep) {
 			t.Errorf("%d levels: %v; want %v", codex.MaxDepth+1, err, codex.ErrTooDeep)
 		}
 	})
@@ -314,11 +333,11 @@ func TestCodexLaunchUsageRefusesACountAbove2To53(t *testing.T) {
 	}
 	parent := parsed(t, 0, meta("p", ""))
 	half := parsed(t, 0, meta("c", "p"), output("4503599627370496"))
-	if u, _, _, err := codex.LaunchUsage(parent, []codex.Rollout{half, parsed(t, 0, meta("d", "p"), output("4503599627370496"))}); err != nil || u.Output != codex.MaxCount {
+	if u, _, _, err := familyUsage(parent, []codex.Rollout{half, parsed(t, 0, meta("d", "p"), output("4503599627370496"))}); err != nil || u.Output != codex.MaxCount {
 		t.Errorf("a sum of 2^53: usage %+v, %v", u, err)
 	}
 	over := parsed(t, 0, meta("d", "p"), output("4503599627370497"))
-	if u, _, _, err := codex.LaunchUsage(parent, []codex.Rollout{half, over}); err != codex.ErrSumAbove || !errors.Is(err, codex.ErrCount) {
+	if u, _, _, err := familyUsage(parent, []codex.Rollout{half, over}); err != codex.ErrSumAbove || !errors.Is(err, codex.ErrCount) {
 		t.Errorf("a sum above 2^53: usage %+v, %v; want %v", u, err, codex.ErrSumAbove)
 	}
 	for _, err := range []error{codex.ErrCountAbove, codex.ErrCountBelow, codex.ErrCountNotInteger, codex.ErrSumAbove} {

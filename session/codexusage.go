@@ -217,9 +217,11 @@ func pathless(err error) error {
 // rolloutMeta is the [codex.Meta] of the rollout at rel below resume.prefix, from at
 // most its first [maxRolloutHead] bytes, as its fstat has them, and false for a file
 // the session does not read that way: one gone, one with a symbolic link on its path,
-// no regular file, one with a second hard link behind a wall, as [transcript.readCheck]
-// refuses, or one whose first line is no session_meta with ids of at most
-// [maxSessionID] bytes. For a file whose first line is longer than those bytes and
+// no regular file, or one whose first line is no session_meta with ids of at most
+// [maxSessionID] bytes. It reads a file with a second hard link too, to learn its
+// ids: behind a wall, a child agent's that changed then gets the line of
+// [transcript.readCheck] and no usage, and the session reads no other such file in
+// full. For a file whose first line is longer than those bytes and
 // has no id and source in them ([codex.ErrMetaCut]), it returns the line instead;
 // shown is the file's place in it.
 func (t *transcript) rolloutMeta(rel, shown string) (codex.Meta, bool, string) {
@@ -228,7 +230,7 @@ func (t *transcript) rolloutMeta(rel, shown string) (codex.Meta, bool, string) {
 		return codex.Meta{}, false, ""
 	}
 	defer f.Close()
-	if st.Mode&unix.S_IFMT != unix.S_IFREG || (t.root != "" && st.Nlink > 1) {
+	if st.Mode&unix.S_IFMT != unix.S_IFREG {
 		return codex.Meta{}, false, ""
 	}
 	head, err := io.ReadAll(io.NewSectionReader(f, 0, min(st.Size, maxRolloutHead)))
