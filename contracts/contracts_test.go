@@ -149,8 +149,8 @@ func TestCredentialCountBounds(t *testing.T) {
 		b, _ := json.Marshal(items)
 		return string(b)
 	}
-	// runConfiguration has api API credentials, the first the start key, and then hosts
-	// host credentials, each on the host <name>.git.example.
+	// runConfiguration has api API credentials, the first the default model provider
+	// credential, and then hosts host credentials, each on the host <name>.git.example.
 	runConfiguration := func(api, hosts int) string {
 		var items []string
 		for i, n := range names(api + hosts) {

@@ -577,9 +577,10 @@ func TestAClaimOutsideTheWindowsIsLeftOut(t *testing.T) {
 	}
 }
 
-// TestTheStartKeyIsActiveFirst pins a start key that is not first in the order: with the
-// credentials model-a and model and the start key model, model is active at the start.
-func TestTheStartKeyIsActiveFirst(t *testing.T) {
+// TestTheDefaultCredentialIsActiveFirst pins a default model provider credential that
+// is not first in the order: with the credentials model-a and model and the default
+// model provider credential model, model is active at the start.
+func TestTheDefaultCredentialIsActiveFirst(t *testing.T) {
 	c := &clock{now: start}
 	g := modelkey.New([]modelkey.Key{{Name: "model-a", PauseFor: time.Hour}, {Name: "model", PauseFor: time.Hour}}, "model", c.Now)
 	if got, ok := g.Pick(); got != "model" || !ok {

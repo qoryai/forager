@@ -95,8 +95,8 @@ func TestTheKeyGroupSharesItsFirstKeysPlaceholder(t *testing.T) {
 // with three group values, whose keys differ in auth or endpoint between groups: the
 // groups follow the group member alone, in the order of their first key, and each key
 // is set with the placeholder of its group's first key, so two groups never share one.
-// A run whose start key is in one group has key groups of the others too, each with its
-// format and stream path.
+// A run whose default model provider credential is in one group has key groups of the
+// others too, each with its format and stream path.
 func TestEachGroupHasThePlaceholderOfItsFirstKey(t *testing.T) {
 	doc := `{"version":1,"default_model_provider_credential_name":"model","credentials":[` +
 		`{"name":"model","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer","oauth":true},"pause_for_s":60},` +
@@ -205,9 +205,10 @@ func TestAPauseForBelowOneIsRefused(t *testing.T) {
 }
 
 // TestAKeyGroupInCooldownAtTheClaim pins the fixture of a key group with a key in
-// cooldown at the claim: the keys have resets_at and cooldown_until; a start key in
-// cooldown is refused, and so are two keys of one group with two endpoints, each run_configuration_invalid with the key's
-// name and before any secrets request.
+// cooldown at the claim: the keys have resets_at and cooldown_until; a default model
+// provider credential in cooldown is refused, and so are two keys of one group with two
+// endpoints, each run_configuration_invalid with the key's name and before any secrets
+// request.
 func TestAKeyGroupInCooldownAtTheClaim(t *testing.T) {
 	doc := fixture(t, "fixtures/run-configuration/model-keys-cooling.json")
 	r, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')),
@@ -280,9 +281,9 @@ func TestAKeyGroupWithUseUpTo(t *testing.T) {
 }
 
 // TestTheCheckAndTheProxyShareTheGroup pins one decision of the key group: a key whose
-// header differs from the start key's in case alone, and whose start answer sets it on
-// two apply items, is in the group the proxy sets, and the check of pause_for_s covers
-// it too.
+// header differs from the default model provider credential's in case alone, and whose
+// start answer sets it on two apply items, is in the group the proxy sets, and the
+// check of pause_for_s covers it too.
 func TestTheCheckAndTheProxyShareTheGroup(t *testing.T) {
 	entry := func(name, header, pause string) string {
 		return `{"name":"` + name + `","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"` + header + `"}` + pause + `}`

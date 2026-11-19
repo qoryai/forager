@@ -677,9 +677,10 @@ func (r *Run) AgentEnv(spec SessionSpec) ([]string, error) {
 	}
 	// As in Join: without a wall the variables the machine's credentials are read from
 	// are left out of what the session inherits. The session starts with
-	// spec.ModelProviderCredentialName, or with the run's start key when spec has none:
-	// the join answer's model_provider_credential_name is one of the two, by
-	// link-join-answer.schema.json. A spec with no runtime starts with no key.
+	// spec.ModelProviderCredentialName, or with the run's default model provider
+	// credential when spec has none: the join answer's model_provider_credential_name
+	// is one of the two, by link-join-answer.schema.json. A spec with no runtime starts
+	// with no key.
 	if s.Wall == nil {
 		s.Env = withoutNames(s.Env, r.reserved)
 	}

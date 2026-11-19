@@ -219,7 +219,8 @@ func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) 
 	}
 	rt := spec.Runtime
 	if rt == nil {
-		// A session with no runtime has no start key, so it names none.
+		// A session with no runtime has no default model provider credential, so it
+		// names none.
 		if spec.ModelProviderCredentialName != "" {
 			return runSpec{}, nil, fmt.Errorf("Set SessionSpec.Runtime, or leave SessionSpec.ModelProviderCredentialName empty.\nA session with no runtime starts with no model key, and the spec names the model key %s",
 				accesskey.ShownName(spec.ModelProviderCredentialName, true))
@@ -255,10 +256,11 @@ func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) 
 // session's number. Behind a separate gateway a try with no answer, or a 503 with no
 // code, is sent again, [Run.tryJoin]. A failure ends step, the join step: failed with
 // -1, or cancelled with -1 when the run ended. A 403 with a code, numbered by the
-// gateway as the next join, writes the refused join's dev.qory.session.exited after
-// it. A 410 ends the run. A failure that leaves unknown whether the gateway numbered
-// the join keeps the close from writing no_session. The request asks the gateway to
-// set no model key for a session with no runtime, which has no start key.
+// gateway as the next join, writes the refused join's dev.qory.session.exited after it.
+// A 410 ends the run. A failure that leaves unknown whether the gateway numbered the
+// join keeps the close from writing no_session. The request asks the gateway to set no
+// model key for a session with no runtime, which has no default model provider
+// credential.
 func (r *Run) joinRequest(ctx context.Context, s runSpec, step *Step) (*server.LinkJoinAnswer, int, error) {
 	answer, unanswered, err := r.tryJoin(ctx, server.LinkJoinRequest{Passes: passes(s), ModelKey: s.Runtime != nil, ModelProviderCredentialName: s.ModelProviderCredentialName})
 	if err == nil {
@@ -600,10 +602,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if spec.Wall == nil {
 		spec.Env = withoutNames(spec.Env, r.reserved)
 	}
-	// The runtime chooses the variable of the start key, the API credential the session
-	// starts with, the join answer's: from here on it is one of the credential's
-	// placeholders and of the run's, and key sets it and the runtime's endpoint variable.
-	// A session whose spec has no runtime has no start key.
+	// The runtime chooses the variable of the default model provider credential, the
+	// API credential the session starts with, the join answer's: from here on it is one
+	// of the credential's placeholders and of the run's, and key sets it and the
+	// runtime's endpoint variable. A session whose spec has no runtime has no default
+	// model provider credential.
 	model := answer.ModelProviderCredentialName
 	if model == "" {
 		model = r.answer.DefaultModelProviderCredentialName
@@ -688,9 +691,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		return fail(fmt.Errorf("runtime %s: %w", accesskey.ShownName(rt.Name(), false), accesskey.ShownError(err)))
 	}
 	// A runtime that reads its settings as TOML gets its descriptor's config.fixed and,
-	// for an endpoint that is a setting, the start key's endpoint, before the launch's
-	// arguments. A later argument that sets one of them would win, so such a launch
-	// fails first.
+	// for an endpoint that is a setting, the default model provider credential's
+	// endpoint, before the launch's arguments. A later argument that sets one of them
+	// would win, so such a launch fails first.
 	if c, ok := rt.(runtimes.ArgsChecker); ok {
 		if err := c.CheckArgs(prepared.Args); err != nil {
 			return fail(err)
@@ -716,8 +719,8 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		return fail(err)
 	}
 	// The runtime's other model-key variables do not reach it from the environment the
-	// session inherits either, walled or not: it would send their values to the start
-	// key's endpoint.
+	// session inherits either, walled or not: it would send their values to the default
+	// model provider credential's endpoint.
 	spec.Env = withoutNames(spec.Env, key.Others)
 	// A session without a wall may inherit QORY_RUN_API from another run: this run's value
 	// replaces it, and a run with no control plane has none. Behind a wall the value is
@@ -1544,8 +1547,8 @@ func (r *Run) launchLine(spec runSpec, n int, prepared runtimes.Launch) string {
 // is in the run configuration, and one for the node's sources, whose fix is in
 // forager.yaml; each line has its sources in the record's order, the highest source
 // first, then the env of --settings. A placeholder of the run, and a model key's
-// variable the session sets or leaves out for the start key, model, have no line: the
-// gateway already has the credential.
+// variable the session sets or leaves out for the default model provider credential,
+// model, have no line: the gateway already has the credential.
 func leftOutCredentials(entries []variables.Entry, settings, placeholderNames, model []string) []string {
 	builtin, err := variables.Builtin()
 	if err != nil {

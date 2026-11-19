@@ -915,10 +915,11 @@ func (lr *linkRun) joined(ev event.Event) {
 		// The session's join ended: a stop after a limit refusal ends with it, in every
 		// group.
 		lr.keys.Resume()
-		if held := lr.r.Held(); j.accepted && (j.model != "" || j.noKey) && held != nil && held.Start != "" {
-			// The session ended: the proxy sets the start key again, after a session's
-			// model key or after none; of a key group, the group's active key.
-			lr.px.SetModelKey(held.Start)
+		if held := lr.r.Held(); j.accepted && (j.model != "" || j.noKey) && held != nil && held.DefaultCredential != "" {
+			// The session ended: the proxy sets the default model provider credential
+			// again, after a session's model key or after none; of a key group, the
+			// group's active key.
+			lr.px.SetModelKey(held.DefaultCredential)
 		}
 		return
 	}

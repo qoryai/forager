@@ -186,13 +186,13 @@ const (
 	RetryWait = 30 * time.Second
 )
 
-// Held are a run's credentials, resolved. Start is the name of the model key the
-// runtime starts with, which the proxy sets before the first session and between
-// sessions; empty when the run has none.
+// Held are a run's credentials, resolved. DefaultCredential is the name of the model
+// key the runtime starts with, which the proxy sets before the first session and
+// between sessions; empty when the run has none.
 type Held struct {
-	Uses         []*Use
-	Placeholders []string
-	Start        string
+	Uses              []*Use
+	Placeholders      []string
+	DefaultCredential string
 	// Groups are the key groups of the run configuration's API credentials, one per
 	// group value, in the order of each group's first key, [KeyGroups]. Empty when the
 	// run has no API credential from the server. A model key of the machine's is in
@@ -294,10 +294,10 @@ func Resolve(ctx context.Context, defs []Definition, selected []policy.Selected,
 // is dropped, with no renewal; the adapter has run all the same. A credential of the
 // machine's that it replaces may have its name. A credential from the server with the
 // name of a credential of the machine's that stays is refused, so the record lists each
-// once. The checks of Resolve then cover all of them. start is the run configuration's
-// default_model_provider_credential_name, the name of the model key the runtime starts
-// with, empty when it names none ([Held.startKey]).
-func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selected, stored []Stored, start string, mode policy.Mode, allow []string, report func(string)) (*Held, error) {
+// once. The checks of Resolve then cover all of them. defaultName is the run
+// configuration's default_model_provider_credential_name, the name of the model key the
+// runtime starts with, empty when it names none ([Held.setDefaultCredential]).
+func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selected, stored []Stored, defaultName string, mode policy.Mode, allow []string, report func(string)) (*Held, error) {
 	out := &Held{}
 	replaced := func(hosts []string) bool {
 		for _, s := range stored {
@@ -390,7 +390,7 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 		out.Close()
 		return nil, err
 	}
-	if err := out.startKey(start); err != nil {
+	if err := out.setDefaultCredential(defaultName); err != nil {
 		out.Close()
 		return nil, err
 	}
@@ -402,10 +402,11 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 	return out, nil
 }
 
-// startKey sets Start: start when it names a model key of the run, or the run's one
-// model key when start is empty. It refuses a start that names no model key of the
-// run, and an empty one beside two or more model keys, each run_configuration_invalid.
-func (h *Held) startKey(start string) error {
+// setDefaultCredential sets DefaultCredential: defaultName when it names a model key of
+// the run, or the run's one model key when defaultName is empty. It refuses a
+// defaultName that names no model key of the run, and an empty one beside two or more
+// model keys, each run_configuration_invalid.
+func (h *Held) setDefaultCredential(defaultName string) error {
 	var keys []string
 	for _, c := range h.Credentials() {
 		if c.Format != "" {
@@ -417,20 +418,20 @@ func (h *Held) startKey(start string) error {
 		shown[i] = accesskey.ShownName(k, false)
 	}
 	switch {
-	case start == "" && len(keys) == 0:
-	case start == "" && len(keys) == 1:
-		h.Start = keys[0]
-	case start == "" && len(keys) > 1:
+	case defaultName == "" && len(keys) == 0:
+	case defaultName == "" && len(keys) == 1:
+		h.DefaultCredential = keys[0]
+	case defaultName == "" && len(keys) > 1:
 		return refusal.New(refusal.RunConfigurationInvalid, nil,
 			"Set default_model_provider_credential_name, or give the run one model key.\nThe run has the model keys %s", strings.Join(shown, ", "))
-	case slices.Contains(keys, start):
-		h.Start = start
+	case slices.Contains(keys, defaultName):
+		h.DefaultCredential = defaultName
 	case len(keys) == 0:
-		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(start),
-			"Remove default_model_provider_credential_name, or give the run a model key %s.\nThe run has no model key", accesskey.ShownName(start, true))
+		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(defaultName),
+			"Remove default_model_provider_credential_name, or give the run a model key %s.\nThe run has no model key", accesskey.ShownName(defaultName, true))
 	default:
-		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(start),
-			"Set default_model_provider_credential_name to one of the run's model keys.\nThe run has the model keys %s, and no model key %s", strings.Join(shown, ", "), accesskey.ShownName(start, true))
+		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(defaultName),
+			"Set default_model_provider_credential_name to one of the run's model keys.\nThe run has the model keys %s, and no model key %s", strings.Join(shown, ", "), accesskey.ShownName(defaultName, true))
 	}
 	return nil
 }

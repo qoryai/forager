@@ -163,8 +163,9 @@ func (o *openaiRemote) joinNaming(t *testing.T, name string) (int, string) {
 	return a.status, joined.ModelProviderCredentialName
 }
 
-// send sends a Responses request with the start key's placeholder, and returns its
-// status and the keys the provider got since the last send.
+// send sends a Responses request with the default model provider credential's
+// placeholder, and returns its status and the keys the provider got since the last
+// send.
 func (o *openaiRemote) send(t *testing.T) (int, []string) {
 	t.Helper()
 	return o.sendAs(t, "model")
@@ -426,14 +427,15 @@ func keyOut(t *testing.T, o *openaiRemote) {
 }
 
 // TestARestartGivesTheStopToTheSessionsGroup pins a restart in a run of two key groups,
-// openai with the start key model, and other. Session 1 joins with other, which no
-// session used, and gets it; the provider's 401 for other reaches the session, and the
-// answer to its next batch has stop, model_key_switch, as other-2 of the session's group
-// is usable. After the restart, the answer to the next batch has the same stop, for the
-// open session's group, and the reopen requests no value of other. Once session 1
-// ended, a join with no key gets model, of the start key's group, with no stop in its
-// batches; a join with other gets other-2, which the proxy sets on a request with
-// other's placeholder, the placeholder of the group's first key, out of the run.
+// openai with the default model provider credential model, and other. Session 1 joins
+// with other, which no session used, and gets it; the provider's 401 for other reaches
+// the session, and the answer to its next batch has stop, model_key_switch, as other-2
+// of the session's group is usable. After the restart, the answer to the next batch has
+// the same stop, for the open session's group, and the reopen requests no value of
+// other. Once session 1 ended, a join with no key gets model, of the default model
+// provider credential's group, with no stop in its batches; a join with other gets
+// other-2, which the proxy sets on a request with other's placeholder, the placeholder
+// of the group's first key, out of the run.
 func TestARestartGivesTheStopToTheSessionsGroup(t *testing.T) {
 	o := startOpenAIRemoteOf(t, true)
 	o.mu.Lock()
@@ -612,10 +614,11 @@ func (o *openaiRemote) stream(t *testing.T, name string) <-chan streamAnswer {
 
 // TestALateRefusalLeavesASessionWithNoKeyAlone pins a limit refusal of the group openai
 // that reaches the proxy after a session with no model key joined. Session 1 joins with
-// model, the start key, and its Responses stream starts; session 1 ends and session 2
-// joins with no model key. Only then does the stream end with a limit, so the proxy
-// passes it for the group openai. The record's mark has the group openai, and session
-// 2's batches have no stop, before and after a restart: its key is in no group.
+// model, the default model provider credential, and its Responses stream starts;
+// session 1 ends and session 2 joins with no model key. Only then does the stream end
+// with a limit, so the proxy passes it for the group openai. The record's mark has the
+// group openai, and session 2's batches have no stop, before and after a restart: its
+// key is in no group.
 func TestALateRefusalLeavesASessionWithNoKeyAlone(t *testing.T) {
 	o := startOpenAIRemote(t)
 	release := make(chan struct{})

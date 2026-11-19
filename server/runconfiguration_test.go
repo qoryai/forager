@@ -177,8 +177,8 @@ func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
 	api := func(extra string) string {
 		return `{"version":1,"credentials":[{"name":"model","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer"}` + extra + `}]}`
 	}
-	// counted has api API credentials, the first the start key, and then hosts host
-	// credentials, each on the host <name>.git.example.
+	// counted has api API credentials, the first the default model provider credential,
+	// and then hosts host credentials, each on the host <name>.git.example.
 	counted := func(api, hosts int) string {
 		var items []string
 		for i := range api + hosts {

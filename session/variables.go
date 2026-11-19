@@ -98,23 +98,23 @@ func passes(spec runSpec) []string {
 	return slices.Sorted(maps.Keys(seen))
 }
 
-// resolve resolves the run's variables, from the fixed names to what the run
-// inherits, after refusing what the run passes into the enclosure: placeholders are the
-// variables the agent sees in place of what the gateway holds, and reserved the names
-// the gateway sets for the run, what a value of the machine's is read from. Behind a
-// wall, and without one for a run whose answer has credential_hosts, the endpoint rule
-// checks each value of the runtime's model endpoint variable against credentials, the
-// run answer's credential_hosts after [chosen]. It returns the resolution
-// and, for a walled run, the names to unset inside, which [Exec] takes out of the
-// launch's environment: the runtime's declared and reserved variables and the names
-// the runtime denies, lists in its model overrides or as its model endpoint, or the
-// node's deny list removes, that nothing sets. Forager, the wall and the preparation
-// set names too, [wall.Nest] among them for a run with nested Docker, docker, so none of theirs is
-// ever unset; the wall's names for a run with an authority count as set only when the
-// run has one, authority. Without a wall, bundle are the variables Forager sets to the
-// run's bundle, Forager's own names. When the run has a start key, key, its endpoint
-// variable is one of the run's fixed names: every other value of it is left out, the
-// harness's computed ones included, and the endpoint rule does not apply.
+// resolve resolves the run's variables, from the fixed names to what the run inherits,
+// after refusing what the run passes into the enclosure: placeholders are the variables
+// the agent sees in place of what the gateway holds, and reserved the names the gateway
+// sets for the run, what a value of the machine's is read from. Behind a wall, and
+// without one for a run whose answer has credential_hosts, the endpoint rule checks
+// each value of the runtime's model endpoint variable against credentials, the run
+// answer's credential_hosts after [chosen]. It returns the resolution and, for a walled
+// run, the names to unset inside, which [Exec] takes out of the launch's environment:
+// the runtime's declared and reserved variables and the names the runtime denies, lists
+// in its model overrides or as its model endpoint, or the node's deny list removes,
+// that nothing sets. Forager, the wall and the preparation set names too, [wall.Nest]
+// among them for a run with nested Docker, docker, so none of theirs is ever unset; the
+// wall's names for a run with an authority count as set only when the run has one,
+// authority. Without a wall, bundle are the variables Forager sets to the run's bundle,
+// Forager's own names. When the run has a default model provider credential, key, its
+// endpoint variable is one of the run's fixed names: every other value of it is left
+// out, the harness's computed ones included, and the endpoint rule does not apply.
 func resolve(spec runSpec, rt runtimes.Runtime, served map[string]string, credentials []server.LinkCredentialHosts, prepared runtimes.Launch, placeholderNames, reserved []string, docker, authority bool, bundle []string, key keyed) (variables.Resolved, []string, error) {
 	var decl runtimes.Declarations
 	if s, ok := rt.(runtimes.Secrets); ok {
@@ -218,13 +218,13 @@ func resolve(spec runSpec, rt runtimes.Runtime, served map[string]string, creden
 	return vars, unset, nil
 }
 
-// foragerNames are the names Forager and the runtime's preparation set for a session
-// of spec, which win over every source of a variable: QORY_RUN_ID, QORY_RUN_SOCKET,
+// foragerNames are the names Forager and the runtime's preparation set for a session of
+// spec, which win over every source of a variable: QORY_RUN_ID, QORY_RUN_SOCKET,
 // QORY_RUN_API, set for a run with a control plane and left out of every other,
 // QORY_HOST_URL, set for a run with a route and left out of every other,
 // QORY_HARNESS_HOME when spec has a harness home, the proxy's variables, the names of
-// prepared.Env, bundle and the start key's endpoint variable. The wall's names are not
-// among them.
+// prepared.Env, bundle and the default model provider credential's endpoint variable.
+// The wall's names are not among them.
 func foragerNames(spec runSpec, prepared runtimes.Launch, bundle []string, key keyed) []string {
 	own := []string{EnvRunID, EnvSocket, EnvRunAPI, EnvQoryHost}
 	if spec.HarnessHome != "" {
@@ -267,15 +267,15 @@ func shownNames(names []string) []string {
 	return out
 }
 
-// keyed is what the run's start key sets in the runtime's environment, NAME=value
-// each: Variable, the variable the runtime reads the key from, set to the placeholder
-// of the key's group, [link.GroupPlaceholder]; and Endpoint, the runtime's endpoint
-// variable set to the key's endpoint. Others is the names of the runtime's other model-key
-// variables, which no value reaches: the runtime would send such a value to the start
-// key's endpoint. For a runtime whose endpoint is a setting, Endpoint is empty, and
-// Setting is the setting's dotted key and URL the key's endpoint, which the launch
-// passes as a pair of the descriptor's config ([configArgs]). Zero when the run has no
-// API credential.
+// keyed is what the run's default model provider credential sets in the runtime's
+// environment, NAME=value each: Variable, the variable the runtime reads the key from,
+// set to the placeholder of the key's group, [link.GroupPlaceholder]; and Endpoint, the
+// runtime's endpoint variable set to the key's endpoint. Others is the names of the
+// runtime's other model-key variables, which no value reaches: the runtime would send
+// such a value to the default model provider credential's endpoint. For a runtime whose
+// endpoint is a setting, Endpoint is empty, and Setting is the setting's dotted key and
+// URL the key's endpoint, which the launch passes as a pair of the descriptor's config
+// ([configArgs]). Zero when the run has no API credential.
 type keyed struct {
 	Variable, Endpoint string
 	Others             []string
@@ -289,7 +289,7 @@ func (k keyed) endpointName() string {
 }
 
 // modelVariables is the name of Variable, Others and the name Endpoint sets, each
-// once; empty when the run has no start key.
+// once; empty when the run has no default model provider credential.
 func (k keyed) modelVariables() []string {
 	if k.Variable == "" {
 		return nil
@@ -302,50 +302,52 @@ func (k keyed) modelVariables() []string {
 	return out
 }
 
-// startKey is the index in credentials of the API credential the runtime starts with,
-// or -1 when credentials have none: the one named model, the run answer's
+// defaultCredential is the index in credentials of the API credential the runtime
+// starts with, or -1 when credentials have none: the one named model, the run answer's
 // default_model_provider_credential_name, or the one API credential when model is
 // empty. An empty model beside two or more API credentials, and a model that names none
 // of them, are [refusal.RunConfigurationInvalid]: the gateway refuses both first.
 // [chosen] does not call it for a session whose spec has no runtime, which starts with
 // no key.
-func startKey(credentials []server.LinkCredentialHosts, model string) (int, error) {
+func defaultCredential(credentials []server.LinkCredentialHosts, model string) (int, error) {
 	var keys []string
-	start := -1
+	defaultIndex := -1
 	for i, c := range credentials {
 		if c.Format == "" {
 			continue
 		}
 		keys = append(keys, accesskey.ShownName(c.Name, false))
-		if c.Name == model || (model == "" && start < 0) {
-			start = i
+		if c.Name == model || (model == "" && defaultIndex < 0) {
+			defaultIndex = i
 		}
 	}
 	switch {
 	case model == "" && len(keys) > 1:
 		return -1, refusal.New(refusal.RunConfigurationInvalid, nil,
 			"Set default_model_provider_credential_name, or give the run one model key.\nThe run has the model keys %s", strings.Join(keys, ", "))
-	case model != "" && (start < 0 || credentials[start].Name != model):
+	case model != "" && (defaultIndex < 0 || credentials[defaultIndex].Name != model):
 		return -1, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(model),
 			"Set default_model_provider_credential_name to one of the run's model keys.\nThe run has the model keys %s, and no model key %s", strings.Join(keys, ", "), accesskey.ShownName(model, true))
 	}
-	return start, nil
+	return defaultIndex, nil
 }
 
 // chosen is the run answer's credentials and placeholders after the runtime's choice,
-// and what the start key sets. When bare, the session's spec has no runtime and the
-// session has no start key: no runtime lists a variable for a model key, so [startKey]
-// does not run, every API credential stays as the answer has it, with no placeholder,
-// and nothing sets a model key's variable or an endpoint. Otherwise, of the API
-// credentials, the start key alone, by [startKey], gets the variable of rt's model key
-// whose format is the credential's and whose auth has its scheme, its header's name,
-// compared without case, and its oauth: the variable joins the credential's placeholders and the run's, and the start key
-// sets it and the runtime's endpoint variable, or for an endpoint that is a setting,
-// that setting. The other API credentials stay as the
-// answer has them, with no placeholder. A start key of a format rt lists no key for,
-// or of an auth none of them has, is [refusal.RunConfigurationInvalid] with the
-// credential's name, and so is a placeholder [checkPlaceholders] refuses. Every other
-// credential is as the answer has it.
+// and what the default model provider credential sets. When bare, the session's spec
+// has no runtime and the session has no default model provider credential: no runtime
+// lists a variable for a model key, so [defaultCredential] does not run, every API
+// credential stays as the answer has it, with no placeholder, and nothing sets a model
+// key's variable or an endpoint. Otherwise, of the API credentials, the default model
+// provider credential alone, by [defaultCredential], gets the variable of rt's model
+// key whose format is the credential's and whose auth has its scheme, its header's
+// name, compared without case, and its oauth: the variable joins the credential's
+// placeholders and the run's, and the default model provider credential sets it and the
+// runtime's endpoint variable, or for an endpoint that is a setting, that setting. The
+// other API credentials stay as the answer has them, with no placeholder. A default
+// model provider credential of a format rt lists no key for, or of an auth none of them
+// has, is [refusal.RunConfigurationInvalid] with the credential's name, and so is a
+// placeholder [checkPlaceholders] refuses. Every other credential is as the answer has
+// it.
 func chosen(rt runtimes.Runtime, bare bool, credentials []server.LinkCredentialHosts, placeholders []string, model string) ([]server.LinkCredentialHosts, []string, keyed, error) {
 	names := slices.Clone(placeholders)
 	out := make([]server.LinkCredentialHosts, len(credentials))
@@ -353,16 +355,16 @@ func chosen(rt runtimes.Runtime, bare bool, credentials []server.LinkCredentialH
 		c.Placeholders = slices.Clone(c.Placeholders)
 		out[i] = c
 	}
-	start := -1
+	defaultIndex := -1
 	if !bare {
 		var err error
-		if start, err = startKey(out, model); err != nil {
+		if defaultIndex, err = defaultCredential(out, model); err != nil {
 			return nil, nil, keyed{}, err
 		}
 	}
 	var key keyed
-	if start >= 0 {
-		c := &out[start]
+	if defaultIndex >= 0 {
+		c := &out[defaultIndex]
 		shown, runtime, format := accesskey.ShownName(c.Name, true), accesskey.ShownName(rt.Name(), false), accesskey.ShownName(c.Format, false)
 		var auth server.Auth
 		if c.Auth != nil {
@@ -509,16 +511,17 @@ func keyAuthWords(a server.Auth) string {
 
 // checkPlaceholders refuses a placeholder that goes into a variable for no credential,
 // each [refusal.RunConfigurationInvalid]. The variable of a model key of rt gets a
-// placeholder only from the start key, which [chosen] gives it: a host credential, from
-// the server or the machine's, whose placeholders list one is refused with the
-// credential's name, and so is one of names, the run answer's placeholders, with the
-// placeholder's name. A placeholder of a host credential from the server, one with
-// auth, may not be a variable rt denies, lists among its model overrides or in its
-// reserves, or reads its model endpoint from; its name is the refusal's. Of names, a
-// placeholder may not be one of those rt denies, overrides or reads its endpoint from,
-// nor one rt declares or reserves that no credential has among its placeholders; the
-// placeholder's name is the refusal's. A placeholder rt does not declare, such as a
-// tool's GITHUB_TOKEN, passes, and so does a declared one of a credential.
+// placeholder only from the default model provider credential, which [chosen] gives it:
+// a host credential, from the server or the machine's, whose placeholders list one is
+// refused with the credential's name, and so is one of names, the run answer's
+// placeholders, with the placeholder's name. A placeholder of a host credential from
+// the server, one with auth, may not be a variable rt denies, lists among its model
+// overrides or in its reserves, or reads its model endpoint from; its name is the
+// refusal's. Of names, a placeholder may not be one of those rt denies, overrides or
+// reads its endpoint from, nor one rt declares or reserves that no credential has among
+// its placeholders; the placeholder's name is the refusal's. A placeholder rt does not
+// declare, such as a tool's GITHUB_TOKEN, passes, and so does a declared one of a
+// credential.
 func checkPlaceholders(rt runtimes.Runtime, credentials []server.LinkCredentialHosts, names []string) error {
 	decl := secretsOf(rt)
 	places, _ := modelOf(rt)
@@ -619,8 +622,9 @@ func credentialVariables(credentials []server.LinkCredentialHosts) []map[string]
 // harness or the runtime's preparation. A run whose answer has no credential_hosts is
 // not checked: its key may come from what the session does not see, such as a login of
 // the developer's, a mount or an image. [checkPlaceholders] has refused every model
-// key's placeholder but the start key's, so a run without a wall and without an API
-// credential is not refused: its runtime may use the developer's login. The refusal is [refusal.ModelKeyMissing] with the model keys'
+// key's placeholder but the default model provider credential's, so a run without a
+// wall and without an API credential is not refused: its runtime may use the
+// developer's login. The refusal is [refusal.ModelKeyMissing] with the model keys'
 // variables. Without a wall, an inherited value of one of placeholderNames reaches
 // nothing: the placeholder is set over it.
 func checkModelKey(spec runSpec, rt runtimes.Runtime, credentials []server.LinkCredentialHosts, vars variables.Resolved, prepared runtimes.Launch, placeholderNames []string) error {

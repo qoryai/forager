@@ -137,7 +137,8 @@ type LinkJoinRequest struct {
 	// session's dev.qory.session.exited, and ModelProviderCredentialName must be empty.
 	ModelKey bool `json:"model_key"`
 	// ModelProviderCredentialName is the name of the model key the session starts with,
-	// one the gateway holds for the run; empty for the run's start key.
+	// one the gateway holds for the run; empty for the run's default model provider
+	// credential.
 	ModelProviderCredentialName string `json:"model_provider_credential_name,omitempty"`
 }
 

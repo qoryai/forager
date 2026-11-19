@@ -29,24 +29,25 @@ const maxSettings = 1 << 20
 // Claude Code reads. It reads the file the arguments name after --settings, or the
 // document they hold there, or starts from an empty one when they name none, adds a
 // hook group per event under "hooks", writes the result as settings.json in the
-// session's directory, and names that file instead. The file the launch passed is not modified.
-// A file is read only when its path has no ".." name, [runtimes.Attach.Readable] passes
-// it, its last part is no link, it is a regular file, it is the file Readable judged
-// and it holds at most 1 MiB. Of its "env" object, the copy keeps no member whose
-// name is in [runtimes.Attach.ModelVariables], nor one whose name is in
-// [runtimes.Attach.DeniedVariables] or [runtimes.Attach.Fixed], regardless of case.
-// The copy's "env" then sets each variable of Fixed, with or without a file; an "env"
-// that is no object is replaced. Claude Code applies the env of --settings over the
-// env of its user, project and local settings, so a workspace's .claude/settings.json
-// cannot change a fixed variable. In a run with a start key,
-// the copy keeps no top-level member whose name is in [credentialSettings]. In a
-// launch whose last argument is a bare --settings, that flag is given the path of the
-// run's settings. A launch whose arguments pass --settings more than once is refused
-// before anything is read, walled or not: Claude Code reads only the last one, so the
-// run would start without Forager's hooks, with a file that was not checked and with
-// an env that was not filtered. A walled launch that passes --project-config-root,
-// counted the same way, is refused too: Claude Code reads project settings, .mcp.json
-// and the .claude trees from that directory. A walled launch's
+// session's directory, and names that file instead. The file the launch passed is not
+// modified. A file is read only when its path has no ".." name,
+// [runtimes.Attach.Readable] passes it, its last part is no link, it is a regular file,
+// it is the file Readable judged and it holds at most 1 MiB. Of its "env" object, the
+// copy keeps no member whose name is in [runtimes.Attach.ModelVariables], nor one whose
+// name is in [runtimes.Attach.DeniedVariables] or [runtimes.Attach.Fixed], regardless
+// of case. The copy's "env" then sets each variable of Fixed, with or without a file;
+// an "env" that is no object is replaced. Claude Code applies the env of --settings
+// over the env of its user, project and local settings, so a workspace's
+// .claude/settings.json cannot change a fixed variable. In a run with a default model
+// provider credential, the copy keeps no top-level member whose name is in
+// [credentialSettings]. In a launch whose last argument is a bare --settings, that flag
+// is given the path of the run's settings. A launch whose arguments pass --settings
+// more than once is refused before anything is read, walled or not: Claude Code reads
+// only the last one, so the run would start without Forager's hooks, with a file that
+// was not checked and with an env that was not filtered. A walled launch that passes
+// --project-config-root, counted the same way, is refused too: Claude Code reads
+// project settings, .mcp.json and the .claude trees from that directory. A walled
+// launch's
 // --mcp-config, --agents, --plugin-dir, --plugin-dir-no-mcp, --add-dir and
 // system-prompt file values are then checked as [walledPaths] checks them, before the
 // settings are read.
@@ -80,8 +81,9 @@ func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 var errSettingsMoreThanOnce = errors.New("Pass one --settings file. This launch passes --settings more than once, " +
 	"and Claude Code reads only the last one, so the run does not start.")
 
-// credentialSettings can replace the start key: apiKeyHelper outranks an OAuth one, and the
-// others set cloud credentials or model ids for a provider switch.
+// credentialSettings can replace the default model provider credential: apiKeyHelper
+// outranks an OAuth one, and the others set cloud credentials or model ids for a
+// provider switch.
 var credentialSettings = []string{"apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "gcpAuthRefresh", "modelOverrides"}
 
 // settingsFlag is the flag whose file or document Claude Code reads its settings from.
@@ -171,8 +173,9 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 		if inside != nil {
 			settings = insideValues(settings, inside).(map[string]any)
 		}
-		// Claude Code applies the env object to its environment, over the start key's
-		// variable and endpoint the session sets and over the names it leaves out.
+		// Claude Code applies the env object to its environment, over the default model
+		// provider credential's variable and endpoint the session sets and over the
+		// names it leaves out.
 		if env, ok := settings["env"].(map[string]any); ok {
 			for name := range env {
 				if slices.Contains(model, name) || slices.ContainsFunc(slices.Concat(denied, names(fixed)), func(d string) bool { return strings.EqualFold(d, name) }) {
@@ -181,7 +184,7 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 				}
 			}
 		}
-		// model is empty without a start key.
+		// model is empty without a default model provider credential.
 		if len(model) > 0 {
 			for _, name := range credentialSettings {
 				delete(settings, name)

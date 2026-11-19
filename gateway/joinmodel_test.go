@@ -18,11 +18,11 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// modelKeyRun opens a walled run with the model keys first, its start key, and second,
-// both on the endpoint's host of an origin that records the x-api-key it receives, and
-// posts the run's first batch. send sends a request with the placeholder of the model
-// key name through the run's proxy and returns the key the origin received; count is
-// the number of requests the origin received.
+// modelKeyRun opens a walled run with the model keys first, its default model provider
+// credential, and second, both on the endpoint's host of an origin that records the
+// x-api-key it receives, and posts the run's first batch. send sends a request with the
+// placeholder of the model key name through the run's proxy and returns the key the
+// origin received; count is the number of requests the origin received.
 func modelKeyRun(t *testing.T) (h *harness, runID string, send func(name string) string, count func() int) {
 	t.Setenv("GATEWAY_TEST_FIRST_KEY", "fake-first-value-0001")
 	t.Setenv("GATEWAY_TEST_SECOND_KEY", "fake-second-value-0002")
@@ -61,7 +61,7 @@ func modelKeyRun(t *testing.T) (h *harness, runID string, send func(name string)
 	a := h.open(server.LinkRunRequest{Wall: true})
 	runID = a.RunID
 	if a.DefaultModelProviderCredentialName != "first" {
-		t.Fatalf("the run's start key %q", a.DefaultModelProviderCredentialName)
+		t.Fatalf("the run's default model provider credential %q", a.DefaultModelProviderCredentialName)
 	}
 	if d := h.post(started(runID, nil), applied(runID, a.Applied)); !d.Accepted() {
 		t.Fatalf("the first batch: %+v", d)
@@ -93,12 +93,12 @@ func modelKeyRun(t *testing.T) (h *harness, runID string, send func(name string)
 }
 
 // TestAJoinSetsItsModelKey pins the model key the proxy sets for each session: a run
-// with the model keys first, its start key, and second, both on the endpoint's host.
-// Session 1 joins with none named and gets first; a join naming second while session 1
-// runs is a 400, and the proxy sets first until session 1's session.exited. Session 2
-// then joins naming second, and while it runs the proxy sets second alone, so a request
-// with first's placeholder gets no key; once session 2 exited the proxy sets first
-// again.
+// with the model keys first, its default model provider credential, and second, both on
+// the endpoint's host. Session 1 joins with none named and gets first; a join naming
+// second while session 1 runs is a 400, and the proxy sets first until session 1's
+// session.exited. Session 2 then joins naming second, and while it runs the proxy sets
+// second alone, so a request with first's placeholder gets no key; once session 2
+// exited the proxy sets first again.
 func TestAJoinSetsItsModelKey(t *testing.T) {
 	h, runID, send, count := modelKeyRun(t)
 
@@ -147,10 +147,10 @@ func TestAJoinSetsItsModelKey(t *testing.T) {
 }
 
 // TestAJoinWithNoModelKeySetsNone pins a join whose model_key is false in a run with
-// the model keys first, its start key, and second: its answer has no
-// model_provider_credential_name, and from its 200 until its session.exited the proxy
-// sets no model key, so a request with first's or second's placeholder reaches the
-// origin with the placeholder unchanged. A join with model_key false and a
+// the model keys first, its default model provider credential, and second: its answer
+// has no model_provider_credential_name, and from its 200 until its session.exited the
+// proxy sets no model key, so a request with first's or second's placeholder reaches
+// the origin with the placeholder unchanged. A join with model_key false and a
 // model_provider_credential_name is a 400 invalid_request that numbers no session. Once
 // the session exited the proxy sets first again, and the next join, with a model key,
 // gets first.

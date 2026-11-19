@@ -10,11 +10,11 @@ import (
 	"github.com/qoryai/forager/session/runtimes/codex"
 )
 
-// TestAnEndpointSettingSetsNoVariable pins that the start key of a runtime whose
-// descriptor has its model endpoint in a setting sets no endpoint variable: the key's
-// variable gets its placeholder, keyed.Endpoint stays empty, and keyed.Setting and
-// keyed.URL are the setting and the key's endpoint, where a runtime whose endpoint is
-// a variable gets VARIABLE=<endpoint> and no setting.
+// TestAnEndpointSettingSetsNoVariable pins that the default model provider credential
+// of a runtime whose descriptor has its model endpoint in a setting sets no endpoint
+// variable: the key's variable gets its placeholder, keyed.Endpoint stays empty, and
+// keyed.Setting and keyed.URL are the setting and the key's endpoint, where a runtime
+// whose endpoint is a variable gets VARIABLE=<endpoint> and no setting.
 func TestAnEndpointSettingSetsNoVariable(t *testing.T) {
 	described := func(endpoint string) runtimes.Runtime {
 		t.Helper()
@@ -46,9 +46,10 @@ func TestAnEndpointSettingSetsNoVariable(t *testing.T) {
 }
 
 // TestConfigPairsGoBeforeTheLaunchsArguments pins configArgs: Codex gets its fixed
-// settings and the start key's endpoint as --config pairs right after the command,
-// before the subcommand, and its fixed settings alone in a run without a start key;
-// a runtime without config, Claude Code, gets its arguments as they are.
+// settings and the default model provider credential's endpoint as --config pairs right
+// after the command, before the subcommand, and its fixed settings alone in a run
+// without a default model provider credential; a runtime without config, Claude Code,
+// gets its arguments as they are.
 func TestConfigPairsGoBeforeTheLaunchsArguments(t *testing.T) {
 	cx, err := codex.New()
 	if err != nil {
@@ -74,7 +75,7 @@ func TestConfigPairsGoBeforeTheLaunchsArguments(t *testing.T) {
 	}
 	got, err = configArgs(cx, keyed{}, launch)
 	if err != nil || len(got) != 26+len(launch) || slices.ContainsFunc(got, func(a string) bool { return a == `model_providers.qory.base_url="https://api.model.example/v1"` }) {
-		t.Errorf("without a start key: %q, %v; want the 13 fixed pairs alone", got, err)
+		t.Errorf("without a default model provider credential: %q, %v; want the 13 fixed pairs alone", got, err)
 	}
 	cl, err := claude.New()
 	if err != nil {

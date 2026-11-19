@@ -84,7 +84,8 @@ func limited(w http.ResponseWriter) {
 }
 
 // keyFixture is a proxy that terminates keyHost with the three keys of a group, each
-// with the start key's placeholder, a client through it, and the fake provider.
+// with the default model provider credential's placeholder, a client through it, and
+// the fake provider.
 type keyFixture struct {
 	p      *Proxy
 	g      *modelkey.Group
@@ -190,10 +191,10 @@ func keysOf(calls []upstreamCall) []string {
 }
 
 // TestALimitRefusalIsSentAgainWithTheNextKey pins steps 1 to 3: the refusal of the
-// active key never reaches the session, the same body goes again with the next key,
-// and the session gets that answer, with the value replaced by the start key's
-// placeholder. The next request goes with the next key, the record has it, and the log
-// of limit responses has names alone.
+// active key never reaches the session, the same body goes again with the next key, and
+// the session gets that answer, with the value replaced by the default model provider
+// credential's placeholder. The next request goes with the next key, the record has it,
+// and the log of limit responses has names alone.
 func TestALimitRefusalIsSentAgainWithTheNextKey(t *testing.T) {
 	f := newKeyFixture(t)
 	f.up.answers["model"] = limited

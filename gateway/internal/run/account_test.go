@@ -141,7 +141,7 @@ func TestAValueWithoutItsClaimLeavesTheGroup(t *testing.T) {
 			if strings.Contains(lines[0], c.value) || strings.Contains(lines[0], "acct-fake") || strings.Contains(lines[0], "org-fake") {
 				t.Errorf("the line contains the token or a claim: %s", lines[0])
 			}
-			g := modelkey.New(modelKeys(r), r.Held().Start, nil)
+			g := modelkey.New(modelKeys(r), r.Held().DefaultCredential, nil)
 			for _, name := range r.KeysOut() {
 				g.Out(name)
 			}
@@ -165,13 +165,14 @@ func TestAValueWithoutItsClaimLeavesTheGroup(t *testing.T) {
 	})
 }
 
-// TestAnotherGroupWithoutTheClaimIsRefused pins a key group other than the start
-// key's: with no key of it left, the run is refused at the start,
-// run_configuration_invalid, with the group's first key, as the start key's group is.
-// With one key of it left, the run opens, and KeysOut has the other key.
+// TestAnotherGroupWithoutTheClaimIsRefused pins a key group other than the default
+// model provider credential's: with no key of it left, the run is refused at the start,
+// run_configuration_invalid, with the group's first key, as the default model provider
+// credential's group is. With one key of it left, the run opens, and KeysOut has the
+// other key.
 func TestAnotherGroupWithoutTheClaimIsRefused(t *testing.T) {
-	// The start key is api-key, of the group openai-api; the two subscriptions are the
-	// group openai.
+	// The default model provider credential is api-key, of the group openai-api; the
+	// two subscriptions are the group openai.
 	doc := strings.Replace(accountDoc, `"default_model_provider_credential_name":"subscription"`, `"default_model_provider_credential_name":"api-key"`, 1)
 	none := fakeToken(`{"sub":"fake"}`)
 	t.Run("no key left", func(t *testing.T) {
@@ -224,10 +225,10 @@ func TestARenewalWithoutTheClaimKeepsTheValue(t *testing.T) {
 	}
 }
 
-// TestAGroupWithoutTheClaimIsRefusedBesideAMachineKey pins a run whose start key is a
-// model key of the machine's, in no key group, beside the key groups of accountDoc:
-// with no key of the group openai left, the run is refused at the start,
-// run_configuration_invalid, with the group's first key in the refusal's names.
+// TestAGroupWithoutTheClaimIsRefusedBesideAMachineKey pins a run whose default model
+// provider credential is a model key of the machine's, in no key group, beside the key
+// groups of accountDoc: with no key of the group openai left, the run is refused at the
+// start, run_configuration_invalid, with the group's first key in the refusal's names.
 func TestAGroupWithoutTheClaimIsRefusedBesideAMachineKey(t *testing.T) {
 	t.Setenv("QORY_TEST_MACHINE_KEY", "fake-machine-value")
 	doc := strings.Replace(accountDoc, `"default_model_provider_credential_name":"subscription"`, `"default_model_provider_credential_name":"machine"`, 1)
@@ -247,12 +248,12 @@ func TestAGroupWithoutTheClaimIsRefusedBesideAMachineKey(t *testing.T) {
 	}
 }
 
-// TestAGroupAfterA401IsNotRefusedForTheClaim pins a reopened run whose start key is
-// api-key, of the group openai-api, and in which a 401 took out subscription, of the
-// group openai. subscription-2, the other key of that group, has no string at its
-// account_claim. The run opens with no refusal: checkClaims skips the group, and
-// KeysOut has subscription-2. Built as the gateway builds it, the group openai has
-// no key left, and its stop's reason is model_key_unauthorized.
+// TestAGroupAfterA401IsNotRefusedForTheClaim pins a reopened run whose default model
+// provider credential is api-key, of the group openai-api, and in which a 401 took out
+// subscription, of the group openai. subscription-2, the other key of that group, has
+// no string at its account_claim. The run opens with no refusal: checkClaims skips the
+// group, and KeysOut has subscription-2. Built as the gateway builds it, the group
+// openai has no key left, and its stop's reason is model_key_unauthorized.
 func TestAGroupAfterA401IsNotRefusedForTheClaim(t *testing.T) {
 	doc := strings.Replace(accountDoc, `"default_model_provider_credential_name":"subscription"`, `"default_model_provider_credential_name":"api-key"`, 1)
 	none := fakeToken(`{"sub":"fake"}`)
@@ -263,7 +264,7 @@ func TestAGroupAfterA401IsNotRefusedForTheClaim(t *testing.T) {
 	}
 	var groups []*modelkey.Group
 	for _, kg := range r.KeyGroups() {
-		g := modelkey.New(kg.Keys, r.Held().Start, nil)
+		g := modelkey.New(kg.Keys, r.Held().DefaultCredential, nil)
 		g.SetFormat(kg.Format)
 		groups = append(groups, g)
 	}

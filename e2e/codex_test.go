@@ -488,9 +488,9 @@ func codexCredential(name, endpoint string, login bool) map[string]any {
 		"paths": []string{codexPath}, "pause_for_s": 3600}
 }
 
-// run runs Codex once with the keys, each a name and a value, the first the start key,
-// as subscription logins' tokens or as API keys, and returns the outcome and the
-// requests the stub got during the run.
+// run runs Codex once with the keys, each a name and a value, the first the default
+// model provider credential, as subscription logins' tokens or as API keys, and returns
+// the outcome and the requests the stub got during the run.
 func (k codexWall) run(t *testing.T, login bool, keys ...[2]string) (keysOutcome, []codexEntry, keysSession) {
 	t.Helper()
 	return k.runOn(t, startKeysControl(t), event.NewRunID(), "Say hi in one word.", nil, login, keys...)

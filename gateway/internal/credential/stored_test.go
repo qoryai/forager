@@ -13,8 +13,8 @@ import (
 	"github.com/qoryai/forager/policy"
 )
 
-// storedModel is a credential from the server for api.model.example.
-func storedModel(value string) Stored {
+// storedDefault is a credential from the server for api.model.example.
+func storedDefault(value string) Stored {
 	return Stored{Name: "server-model", Apply: []StoredApply{{Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key"}}, Placeholders: []string{"MODEL_API_KEY"},
 		Value: func() []byte { return []byte(value) }}
 }
@@ -36,7 +36,7 @@ func TestACredentialFromTheServerReplacesTheMachinesOnItsHost(t *testing.T) {
 				{Name: "model", Env: "MODEL_TOKEN", Hosts: hosts, Scheme: "bearer", Placeholders: []string{"MACHINE_KEY"}},
 				{Name: "plain", Env: "MODEL_TOKEN", Hosts: []string{"plain.example"}, Scheme: "bearer"},
 			}
-			held, err := ResolveWith(context.Background(), defs, []policy.Selected{{Name: "model"}, {Name: "plain"}}, []Stored{storedModel("server-value")}, "", policy.Observe, nil, func(l string) { t.Log(l) })
+			held, err := ResolveWith(context.Background(), defs, []policy.Selected{{Name: "model"}, {Name: "plain"}}, []Stored{storedDefault("server-value")}, "", policy.Observe, nil, func(l string) { t.Log(l) })
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -67,7 +67,7 @@ func TestACredentialFromTheServerReplacesTheMachinesOnItsHost(t *testing.T) {
 	}
 	t.Run("an adapter", func(t *testing.T) {
 		defs := []Definition{{Name: "product", Adapter: []string{adapter(t, `echo '{"version":1,"token":"t","apply":[{"hosts":["api.model.example"],"scheme":"bearer"}]}'`+"\n")}}}
-		held, err := ResolveWith(context.Background(), defs, []policy.Selected{{Name: "product"}}, []Stored{storedModel("server-value")}, "", policy.Observe, nil, func(l string) { t.Log(l) })
+		held, err := ResolveWith(context.Background(), defs, []policy.Selected{{Name: "product"}}, []Stored{storedDefault("server-value")}, "", policy.Observe, nil, func(l string) { t.Log(l) })
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -104,7 +104,7 @@ func TestACredentialFromTheServerOfTheSameNameReplacesTheMachines(t *testing.T) 
 // of two credentials from the server whose names contain qak_: the phrase in place of
 // each name.
 func TestTwoCredentialsFromTheServerOnOneHostShowNoSecretInAName(t *testing.T) {
-	a, b := storedModel("server-value"), storedModel("server-value")
+	a, b := storedDefault("server-value"), storedDefault("server-value")
 	a.Name, b.Name = "x-qak_not-a-real-secret", "y-qak_not-a-real-secret"
 	_, err := ResolveWith(context.Background(), nil, nil, []Stored{a, b}, "", policy.Observe, nil, func(l string) { t.Log(l) })
 	if err == nil || strings.Contains(strings.ToLower(err.Error()), "qak_") || !strings.HasPrefix(err.Error(), "claim api.model.example in only one of the credentials") {
@@ -133,7 +133,7 @@ func TestNoCredentialFromTheServerIsResolveUnchanged(t *testing.T) {
 // message.
 func TestACredentialFromTheServerIsCheckedAsTheMachines(t *testing.T) {
 	t.Setenv("MODEL_TOKEN", "a-token")
-	other := storedModel("server-value")
+	other := storedDefault("server-value")
 	other.Name = "server-other"
 	for name, c := range map[string]struct {
 		defs   []Definition
@@ -143,10 +143,10 @@ func TestACredentialFromTheServerIsCheckedAsTheMachines(t *testing.T) {
 		want   string
 	}{
 		"a name the machine's has": {[]Definition{{Name: "server-model", Env: "MODEL_TOKEN", Hosts: []string{"plain.example"}, Scheme: "bearer"}}, []policy.Selected{{Name: "server-model"}},
-			[]Stored{storedModel("server-value")}, []string{"plain.example", "api.model.example"},
+			[]Stored{storedDefault("server-value")}, []string{"plain.example", "api.model.example"},
 			`rename the run configuration's credential "server-model" or this machine's credential of that name; the machine's is for other hosts, so it stays, and the record lists each credential once`},
-		"two on one host": {nil, nil, []Stored{storedModel("server-value"), other}, []string{"api.model.example"}, "claim api.model.example in only one of the credentials"},
-		"a host the run does not reach": {nil, nil, []Stored{storedModel("server-value")}, []string{"plain.example"},
+		"two on one host": {nil, nil, []Stored{storedDefault("server-value"), other}, []string{"api.model.example"}, "claim api.model.example in only one of the credentials"},
+		"a host the run does not reach": {nil, nil, []Stored{storedDefault("server-value")}, []string{"plain.example"},
 			"add api.model.example to the run's egress allow list, or remove the credential server-model: the credential server-model is for api.model.example, which no allow entry covers"},
 	} {
 		held, err := ResolveWith(context.Background(), c.defs, c.sel, c.stored, "", policy.Enforce, c.allow, func(l string) { t.Log(l) })
@@ -171,14 +171,14 @@ func startRefusal(err error) (code string, names []string, text string) {
 	return r.Code, r.Names, err.Error()
 }
 
-// TestAModelKeyStartsTheRunAsModelCredentialSays pins Held.Start: the model key that
+// TestTheDefaultCredentialIsTheNamedModelKey pins Held.Start: the model key that
 // start names, the run's one model key when start is empty, and none when the run has
 // no model key and start is empty. It pins each refusal, run_configuration_invalid
 // with its text word for word: an empty start beside two model keys, with no name; a
 // start beside no model key; and a start that names no model key of the run, a host
 // credential included, each with the start as its name. A model key from the server
 // counts as the machine's does.
-func TestAModelKeyStartsTheRunAsModelCredentialSays(t *testing.T) {
+func TestTheDefaultCredentialIsTheNamedModelKey(t *testing.T) {
 	t.Setenv("MODEL_TOKEN", "sk-ant-fake-value")
 	first, second := modelKey("first"), modelKey("second")
 	second.Endpoint = "https://api.other-model.example/v1"
@@ -210,8 +210,8 @@ func TestAModelKeyStartsTheRunAsModelCredentialSays(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 			continue
 		}
-		if held.Start != c.want {
-			t.Errorf("%s: the start %q, want %q", name, held.Start, c.want)
+		if held.DefaultCredential != c.want {
+			t.Errorf("%s: the start %q, want %q", name, held.DefaultCredential, c.want)
 		}
 		held.Close()
 	}
@@ -254,10 +254,10 @@ func TestAModelKeyStartsTheRunAsModelCredentialSays(t *testing.T) {
 }
 
 // TestTwoModelKeysMayShareAHost pins the host check beside model keys: two model keys
-// on one host resolve, both held, since the proxy sets the start key alone; a model key
-// and a host credential on one host are refused as two host credentials are, whichever
-// comes first, and so are a model key and a host credential, both from the server, on
-// one host.
+// on one host resolve, both held, since the proxy sets the default model provider
+// credential alone; a model key and a host credential on one host are refused as two
+// host credentials are, whichever comes first, and so are a model key and a host
+// credential, both from the server, on one host.
 func TestTwoModelKeysMayShareAHost(t *testing.T) {
 	t.Setenv("MODEL_TOKEN", "sk-ant-fake-value")
 	first, second := modelKey("first"), modelKey("second")
@@ -265,8 +265,8 @@ func TestTwoModelKeysMayShareAHost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("two model keys on one host: %v", err)
 	}
-	if len(held.Uses) != 2 || held.Uses[0].Name != "first" || held.Uses[1].Name != "second" || held.Start != "second" {
-		t.Errorf("uses %+v, start %q", held.Uses, held.Start)
+	if len(held.Uses) != 2 || held.Uses[0].Name != "first" || held.Uses[1].Name != "second" || held.DefaultCredential != "second" {
+		t.Errorf("uses %+v, start %q", held.Uses, held.DefaultCredential)
 	}
 	held.Close()
 	host := Definition{Name: "plain", Env: "MODEL_TOKEN", Hosts: []string{"api.model.example"}, Scheme: "bearer"}
@@ -290,7 +290,7 @@ func TestTwoModelKeysMayShareAHost(t *testing.T) {
 	}
 	stored := Stored{Name: "server-key", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Apply: []StoredApply{{Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key"}},
 		Value: func() []byte { return []byte("sk-ant-fake-server-value") }}
-	held, err = ResolveWith(context.Background(), []Definition{first}, []policy.Selected{{Name: "first"}}, []Stored{stored, storedModel("server-value")}, "server-key", policy.Observe, nil, func(l string) { t.Log(l) })
+	held, err = ResolveWith(context.Background(), []Definition{first}, []policy.Selected{{Name: "first"}}, []Stored{stored, storedDefault("server-value")}, "server-key", policy.Observe, nil, func(l string) { t.Log(l) })
 	if err == nil {
 		held.Close()
 		t.Error("a model key and a host credential from the server on one host resolved")
@@ -308,7 +308,7 @@ func TestAValueThatExpiresIsRenewedOnA401(t *testing.T) {
 		{Hosts: []string{"git.example"}, Scheme: "basic", Username: "x-access-token", Paths: []string{"/example-org/app.git/*"}},
 		{Hosts: []string{"api.git.example"}, Scheme: "bearer"},
 	}, Value: func() []byte { return []byte("forge-value") }, Rejected: func() { calls++ }}
-	model := storedModel("model-value")
+	model := storedDefault("model-value")
 	held, err := ResolveWith(context.Background(), nil, nil, []Stored{forge, model}, "", policy.Observe, nil, func(l string) { t.Log(l) })
 	if err != nil {
 		t.Fatal(err)

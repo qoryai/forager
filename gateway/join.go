@@ -264,19 +264,20 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	switch held := lr.r.Held(); {
-	case j.noKey && held != nil && held.Start != "":
-		// From the join's 200 until its session.exited the proxy sets no model key,
-		// the start key neither. A run with no model key has none to leave out.
+	case j.noKey && held != nil && held.DefaultCredential != "":
+		// From the join's 200 until its session.exited the proxy sets no model key, the
+		// default model provider credential neither. A run with no model key has none
+		// to leave out.
 		lr.px.SetNoModelKey()
 	case model != "":
 		// From the join's 200 until its session.exited the proxy sets the session's
-		// model key in place of the start key.
+		// model key in place of the default model provider credential.
 		lr.px.SetModelKey(model)
 	}
 	// A new join starts with no stop, in every group: the proxy sets the active key
 	// again. Resume clears every group: a stream of any earlier session can pass its
-	// group after that session ends, and sessionKeys returns the start key's group
-	// when no session is open.
+	// group after that session ends, and sessionKeys returns the default model provider
+	// credential's group when no session is open.
 	lr.keys.Resume()
 	if reporter != nil {
 		reporter.opened(j.session)
@@ -284,23 +285,25 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 	lr.joinAnswer(s, w, r, digest, j.session, model)
 }
 
-// usedKeys reports whether a session used the key group g: g is the start key's group,
-// whose active key the proxy sets before the first session and between sessions, or a
-// join the gateway accepted has a key of g. Called with lr.mu held.
+// usedKeys reports whether a session used the key group g: g is the default model
+// provider credential's group, whose active key the proxy sets before the first session
+// and between sessions, or a join the gateway accepted has a key of g. Called with
+// lr.mu held.
 func (lr *linkRun) usedKeys(g *modelkey.Group) bool {
-	return g == lr.startKeys || slices.ContainsFunc(lr.joins, func(j *join) bool { return j.accepted && g.Has(j.model) })
+	return g == lr.defaultKeys || slices.ContainsFunc(lr.joins, func(j *join) bool { return j.accepted && g.Has(j.model) })
 }
 
 // sessionKeys is the key group of the open session, the group of the key it joined
-// with: nil when that key is in no group, the machine's key or no key, and the start
-// key's group when no session is open. Nil when the run has no key group.
+// with: nil when that key is in no group, the machine's key or no key, and the default
+// model provider credential's group when no session is open. Nil when the run has no
+// key group.
 func (lr *linkRun) sessionKeys() *modelkey.Group {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
 	if j := lr.openJoin(); j != nil {
 		return lr.keyGroupOf(j.model)
 	}
-	return lr.startKeys
+	return lr.defaultKeys
 }
 
 // joinAnswer answers a join 200 with the session's number and its model key.
@@ -317,18 +320,18 @@ func (lr *linkRun) joinAnswer(s *side, w http.ResponseWriter, r *http.Request, d
 const joinWhileOpen = "a join while another join of the run is open"
 
 // modelKey is the model key a join's session starts with: name, when it is one of the
-// model keys the gateway holds for the run, else the run's start key when name is
-// empty; empty when the run has no model key. When that key is in one of the run's key
-// groups, grouped is true: the caller takes that group's key for the join,
-// [modelkey.Group.JoinChoice], once it accepts the join. ok is false for a name of no
-// model key of the run's.
+// model keys the gateway holds for the run, else the run's default model provider
+// credential when name is empty; empty when the run has no model key. When that key is
+// in one of the run's key groups, grouped is true: the caller takes that group's key
+// for the join, [modelkey.Group.JoinChoice], once it accepts the join. ok is false for
+// a name of no model key of the run's.
 func (lr *linkRun) modelKey(name string) (key string, grouped, ok bool) {
 	held := lr.r.Held()
 	if held == nil {
 		return "", false, name == ""
 	}
 	if name == "" {
-		name = held.Start
+		name = held.DefaultCredential
 		if name == "" {
 			return "", false, true
 		}

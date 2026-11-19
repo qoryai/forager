@@ -76,7 +76,7 @@ func TestARunConfigurationsCredentialsAreRefused(t *testing.T) {
 			"Give the credential \"model\" an endpoint whose host is a DNS name or an IP address, port 1 to 65535.\nForager reads no host from its endpoint"},
 		"an endpoint's port": {`{"version":1,"credentials":[{"name":"model","group":"openai-chat","format":"openai-chat","endpoint":"https://api.model.example:99999","auth":{"scheme":"bearer"}}]}`,
 			"Give the credential \"model\" an endpoint whose host is a DNS name or an IP address, port 1 to 65535.\n"},
-		"a host credential as the start key": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `],"default_model_provider_credential_name":"model"}`,
+		"a host credential as the default model provider credential": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `],"default_model_provider_credential_name":"model"}`,
 			"Set default_model_provider_credential_name to a credential that has a format.\nThe credential \"model\" has no format, so it is not a model key"},
 	}
 	for _, h := range []string{"Host", "content-length", "Transfer-Encoding", "Connection", "TE", "Trailer", "Upgrade", "Keep-Alive", "Cookie", "Proxy-Authorization", "proxy_authorization", "X-Qory-Credential-Set", "x_qory_credential_set", "Qory-Anything"} {

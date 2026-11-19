@@ -189,7 +189,7 @@ func openGroupRun(t *testing.T, format string, forge bool) *groupRun {
 	a := g.h.open(server.LinkRunRequest{Wall: true})
 	g.runID = a.RunID
 	if a.DefaultModelProviderCredentialName != "model" {
-		t.Fatalf("the run's start key %q", a.DefaultModelProviderCredentialName)
+		t.Fatalf("the run's default model provider credential %q", a.DefaultModelProviderCredentialName)
 	}
 	if d := g.h.post(started(g.runID, nil), applied(g.runID, a.Applied)); !d.Accepted() {
 		t.Fatalf("the first batch: %+v", d)
@@ -201,8 +201,8 @@ func openGroupRun(t *testing.T, format string, forge bool) *groupRun {
 	return g
 }
 
-// send sends a model request with the start key's placeholder and returns its status
-// and the keys the provider received since the last send.
+// send sends a model request with the default model provider credential's placeholder
+// and returns its status and the keys the provider received since the last send.
 func (g *groupRun) send(t *testing.T) (int, []string) {
 	t.Helper()
 	return g.sendTo(t, "/messages")

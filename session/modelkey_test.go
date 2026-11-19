@@ -144,16 +144,16 @@ func refusedWith(t *testing.T, err error, code string, names []string, detail st
 	}
 }
 
-// TestTheStartKeyChoosesTheVariable pins the variable an API credential gets for Claude
-// Code, by its descriptor's model.keys: an Anthropic Messages key in the header
-// x-api-key, compared without case, goes into ANTHROPIC_API_KEY, a bearer into
+// TestTheDefaultCredentialChoosesTheVariable pins the variable an API credential gets
+// for Claude Code, by its descriptor's model.keys: an Anthropic Messages key in the
+// header x-api-key, compared without case, goes into ANTHROPIC_API_KEY, a bearer into
 // ANTHROPIC_AUTH_TOKEN, and a bearer with oauth into CLAUDE_CODE_OAUTH_TOKEN. The
 // chosen variable reaches the agent as the key's placeholder, which contains the key's
 // name, and the other two do not. ANTHROPIC_BASE_URL reaches the agent as the key's
-// endpoint, and the run's value of it is left out as fixed: the record's entry has
-// from fixed, for the key's endpoint, and the run's value lost. The record has the
+// endpoint, and the run's value of it is left out as fixed: the record's entry has from
+// fixed, for the key's endpoint, and the run's value lost. The record has the
 // credential's variable in credential_variables. A run without a wall is the same.
-func TestTheStartKeyChoosesTheVariable(t *testing.T) {
+func TestTheDefaultCredentialChoosesTheVariable(t *testing.T) {
 	for _, tc := range []struct {
 		auth, want string
 		walled     bool
@@ -246,14 +246,14 @@ func TestTheKeysEndpointTakesThePlaceOfEveryOther(t *testing.T) {
 	}
 }
 
-// TestAStartKeyTheRuntimeDoesNotReadIsRefused pins an API credential for which the
-// runtime's descriptor lists no key: a runtime with no model section, here the bare
+// TestADefaultCredentialTheRuntimeDoesNotReadIsRefused pins an API credential for which
+// the runtime's descriptor lists no key: a runtime with no model section, here the bare
 // runtime set by name in the spec, unlike a spec with no runtime, a format the
-// descriptor lists no key for, and an auth no key of the format has, by its scheme,
-// its header's name or its oauth, a header's name that contains qak_ being the value's
+// descriptor lists no key for, and an auth no key of the format has, by its scheme, its
+// header's name or its oauth, a header's name that contains qak_ being the value's
 // phrase. Each is run_configuration_invalid with the credential's name, before the
 // runtime starts.
-func TestAStartKeyTheRuntimeDoesNotReadIsRefused(t *testing.T) {
+func TestADefaultCredentialTheRuntimeDoesNotReadIsRefused(t *testing.T) {
 	const ways = "it reads anthropic-messages keys as the header x-api-key, a bearer or a bearer with oauth"
 	for _, tc := range []struct {
 		what, format, auth string
@@ -285,16 +285,16 @@ func TestAStartKeyTheRuntimeDoesNotReadIsRefused(t *testing.T) {
 	}
 }
 
-// TestEachJoinChecksItsStartKeyAgainstItsRuntime pins the check of a start key at each
-// join, against the joining session's runtime alone. The run has two API credentials:
-// model, of anthropic-messages, the run's start key, and codex-key, of
-// openai-responses, for which Claude Code lists no key. The run opens, and session 1,
-// of Claude Code with model, starts. Session 2, of Codex, joins with codex-key and
-// starts. Session 3, of Claude Code, joins with codex-key: the join is refused,
-// run_configuration_invalid with codex-key's name, and its dev.qory.session.exited is
-// failed with exit code -1 and that reason. Session 4, of Claude Code with model,
-// joins and starts after it.
-func TestEachJoinChecksItsStartKeyAgainstItsRuntime(t *testing.T) {
+// TestEachJoinChecksItsDefaultCredentialAgainstItsRuntime pins the check of a default
+// model provider credential at each join, against the joining session's runtime alone.
+// The run has two API credentials: model, of anthropic-messages, the run's default
+// model provider credential, and codex-key, of openai-responses, for which Claude Code
+// lists no key. The run opens, and session 1, of Claude Code with model, starts.
+// Session 2, of Codex, joins with codex-key and starts. Session 3, of Claude Code,
+// joins with codex-key: the join is refused, run_configuration_invalid with codex-key's
+// name, and its dev.qory.session.exited is failed with exit code -1 and that reason.
+// Session 4, of Claude Code with model, joins and starts after it.
+func TestEachJoinChecksItsDefaultCredentialAgainstItsRuntime(t *testing.T) {
 	sp, g := specGateway(t)
 	answeringStart(g, []map[string]any{model(), apiKey("codex-key", "openai-responses", "https://api.openai.example/v1", "bearer")}, nil, "model")
 	ctx := context.Background()
@@ -338,12 +338,12 @@ func TestEachJoinChecksItsStartKeyAgainstItsRuntime(t *testing.T) {
 	}
 }
 
-// TestASessionWithNoRuntimeHasNoStartKey pins a session whose spec has no runtime in a
-// run with model keys: one key, behind a wall and without one, and two keys and a
-// default_model_provider_credential_name. AgentEnv and the
-// join pass, the program's environment has no model key's variable, no endpoint
-// variable and no key's placeholder, and the record has no credential_variables.
-func TestASessionWithNoRuntimeHasNoStartKey(t *testing.T) {
+// TestASessionWithNoRuntimeHasNoDefaultCredential pins a session whose spec has no
+// runtime in a run with model keys: one key, behind a wall and without one, and two
+// keys and a default_model_provider_credential_name. AgentEnv and the join pass, the
+// program's environment has no model key's variable, no endpoint variable and no key's
+// placeholder, and the record has no credential_variables.
+func TestASessionWithNoRuntimeHasNoDefaultCredential(t *testing.T) {
 	keys := []map[string]any{model(), apiKey("backup", "anthropic-messages", "https://backup.model.example", "bearer")}
 	for _, tc := range []struct {
 		what   string
@@ -467,12 +467,13 @@ func TestASessionWithNoRuntimeNamesNoModelKey(t *testing.T) {
 	r.Close(ctx, outcomeOf(res, err))
 }
 
-// TestModelCredentialChoosesTheStartKey pins a run with two API credentials: the one
-// default_model_provider_credential_name names is the start key, whose variable gets
-// its placeholder and whose endpoint the runtime gets; the other gets no variable. Each
-// key's placeholder differs. An answer without default_model_provider_credential_name,
-// or with one that names no API credential of the run, is run_configuration_invalid.
-func TestModelCredentialChoosesTheStartKey(t *testing.T) {
+// TestTheNameChoosesTheDefaultCredential pins a run with two API credentials: the one
+// default_model_provider_credential_name names is the default model provider
+// credential, whose variable gets its placeholder and whose endpoint the runtime gets;
+// the other gets no variable. Each key's placeholder differs. An answer without
+// default_model_provider_credential_name, or with one that names no API credential of
+// the run, is run_configuration_invalid.
+func TestTheNameChoosesTheDefaultCredential(t *testing.T) {
 	keys := []map[string]any{model(), apiKey("backup", "anthropic-messages", "https://backup.model.example", "bearer")}
 	if link.KeyPlaceholder("model") == link.KeyPlaceholder("backup") {
 		t.Fatal("two model keys have one placeholder")
@@ -529,7 +530,7 @@ func TestModelCredentialChoosesTheStartKey(t *testing.T) {
 // model key's variable among its placeholders is too, with forager.yaml's fix. One of
 // the run's placeholders that Claude Code denies, or that is a model key's variable, is
 // run_configuration_invalid with the placeholder's name. A tool's placeholder,
-// GITHUB_TOKEN, passes beside the start key.
+// GITHUB_TOKEN, passes beside the default model provider credential.
 func TestAPlaceholderGoesOnlyIntoACredentialsVariable(t *testing.T) {
 	machine := func(name string, placeholders ...string) map[string]any {
 		return map[string]any{"name": name, "hosts": []string{"llm.example"}, "placeholders": placeholders}
@@ -781,10 +782,11 @@ func TestTheRecordOfCredentialVariablesHoldsNoSecret(t *testing.T) {
 	}
 }
 
-// TestAnInheritedKeyAndEndpointGiveWayToTheStartKey pins that, without a wall, values
-// the run inherits of the start key's variable and of ANTHROPIC_BASE_URL do not reach
-// the agent: the key's placeholder and its endpoint are set over them.
-func TestAnInheritedKeyAndEndpointGiveWayToTheStartKey(t *testing.T) {
+// TestAnInheritedKeyAndEndpointGiveWayToTheDefaultCredential pins that, without a wall,
+// values the run inherits of the default model provider credential's variable and of
+// ANTHROPIC_BASE_URL do not reach the agent: the key's placeholder and its endpoint are
+// set over them.
+func TestAnInheritedKeyAndEndpointGiveWayToTheDefaultCredential(t *testing.T) {
 	sp, g := specGateway(t, "FAKE_EXIT=0", apiKeyVariable+"=sk-fake-inherited", endpointVariable+"=https://other.example")
 	out := dumpsEnv(t, &sp)
 	answeringWith(g, []map[string]any{model(), sealed("forge", "api.github.com", "GITHUB_TOKEN")}, []string{"GITHUB_TOKEN"})
@@ -814,13 +816,14 @@ func variableEntry(t *testing.T, res *session.Result, name string) map[string]an
 	return nil
 }
 
-// TestOtherKeyVariablesDoNotReachTheRuntime pins that, beside a start key, a value of
-// each other model-key variable of Claude Code reaches the agent from no source: the
-// server, the run, the machine, the harness's defaults and its computed values, the
-// inherited environment and, behind a wall, the image. Behind a wall each name is unset
-// inside. The record has each value lost as fixed, with no from. It runs once for a
-// start key in ANTHROPIC_API_KEY, and once for a bearer start key in
-// ANTHROPIC_AUTH_TOKEN, whose others include ANTHROPIC_API_KEY.
+// TestOtherKeyVariablesDoNotReachTheRuntime pins that, beside a default model provider
+// credential, a value of each other model-key variable of Claude Code reaches the agent
+// from no source: the server, the run, the machine, the harness's defaults and its
+// computed values, the inherited environment and, behind a wall, the image. Behind a
+// wall each name is unset inside. The record has each value lost as fixed, with no
+// from. It runs once for a default model provider credential in ANTHROPIC_API_KEY, and
+// once for a bearer default model provider credential in ANTHROPIC_AUTH_TOKEN, whose
+// others include ANTHROPIC_API_KEY.
 func TestOtherKeyVariablesDoNotReachTheRuntime(t *testing.T) {
 	const value = "sk-fake-dev-token"
 	for _, start := range []struct{ auth, variable string }{{"header", apiKeyVariable}, {"bearer", authTokenVariable}} {
@@ -879,7 +882,7 @@ func TestOtherKeyVariablesDoNotReachTheRuntime(t *testing.T) {
 					}
 					got := envOf(t, out)
 					if got[start.variable] != link.KeyPlaceholder("model") {
-						t.Errorf("%s=%q; want the start key's placeholder", start.variable, got[start.variable])
+						t.Errorf("%s=%q; want the default model provider credential's placeholder", start.variable, got[start.variable])
 					}
 					var names []string
 					if walled {
@@ -906,10 +909,10 @@ func TestOtherKeyVariablesDoNotReachTheRuntime(t *testing.T) {
 	}
 }
 
-// TestAPreparationsOtherKeyVariablesDoNotReachTheRuntime pins that, beside a start key
-// in ANTHROPIC_API_KEY, a value the runtime's preparation sets for ANTHROPIC_AUTH_TOKEN
-// or CLAUDE_CODE_OAUTH_TOKEN does not reach the agent, with or without a wall. Behind a
-// wall each name is unset inside and not set.
+// TestAPreparationsOtherKeyVariablesDoNotReachTheRuntime pins that, beside a default
+// model provider credential in ANTHROPIC_API_KEY, a value the runtime's preparation
+// sets for ANTHROPIC_AUTH_TOKEN or CLAUDE_CODE_OAUTH_TOKEN does not reach the agent,
+// with or without a wall. Behind a wall each name is unset inside and not set.
 func TestAPreparationsOtherKeyVariablesDoNotReachTheRuntime(t *testing.T) {
 	others := []string{authTokenVariable, oauthVariable}
 	for _, walled := range []bool{true, false} {
@@ -927,7 +930,7 @@ func TestAPreparationsOtherKeyVariablesDoNotReachTheRuntime(t *testing.T) {
 			}
 			got := envOf(t, out)
 			if got[apiKeyVariable] != link.KeyPlaceholder("model") {
-				t.Errorf("%s=%q; want the start key's placeholder", apiKeyVariable, got[apiKeyVariable])
+				t.Errorf("%s=%q; want the default model provider credential's placeholder", apiKeyVariable, got[apiKeyVariable])
 			}
 			var names []string
 			if walled {
@@ -972,9 +975,9 @@ func (p *preparesKeys) Model() (runtimes.ModelPlaces, bool) {
 // value of a Claude Code model-key variable, of a forge token's variable or of
 // ANTHROPIC_BASE_URL from the env object of the --settings file, which Claude Code
 // applies over its environment, and keeps the other members and the hooks, with or
-// without a start key, and that the env sets the descriptor's fixed variable. The run
-// reports a line for each forge token's or model key's name it
-// leaves out, apart from the start key's variables.
+// without a default model provider credential, and that the env sets the descriptor's
+// fixed variable. The run reports a line for each forge token's or model key's name it
+// leaves out, apart from the default model provider credential's variables.
 func TestTheSettingsEnvSetsNoModelKeyVariable(t *testing.T) {
 	env := map[string]any{
 		authTokenVariable:    "sk-fake-auth-token",
@@ -992,8 +995,8 @@ func TestTheSettingsEnvSetsNoModelKeyVariable(t *testing.T) {
 		hosts []map[string]any
 		lines []string
 	}{
-		{"start key", []map[string]any{model()}, []string{line("GH_TOKEN", "forge token")}},
-		{"no start key", nil, []string{line(apiKeyVariable, "model key"), line(authTokenVariable, "model key"),
+		{"default model provider credential", []map[string]any{model()}, []string{line("GH_TOKEN", "forge token")}},
+		{"no default model provider credential", nil, []string{line(apiKeyVariable, "model key"), line(authTokenVariable, "model key"),
 			line(oauthVariable, "model key"), line("GH_TOKEN", "forge token")}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -1037,11 +1040,12 @@ func TestTheSettingsEnvSetsNoModelKeyVariable(t *testing.T) {
 	}
 }
 
-// TestTheSettingsCopyKeepsNoCredentialHelper pins that, beside an OAuth start key, the
-// run's settings.json keeps none of apiKeyHelper, awsAuthRefresh, awsCredentialExport,
-// gcpAuthRefresh and modelOverrides from the --settings file: Claude Code ranks the
-// key helper's output above CLAUDE_CODE_OAUTH_TOKEN, and the others set cloud
-// credentials or model ids. Without a start key the copy keeps them.
+// TestTheSettingsCopyKeepsNoCredentialHelper pins that, beside an OAuth default model
+// provider credential, the run's settings.json keeps none of apiKeyHelper,
+// awsAuthRefresh, awsCredentialExport, gcpAuthRefresh and modelOverrides from the
+// --settings file: Claude Code ranks the key helper's output above
+// CLAUDE_CODE_OAUTH_TOKEN, and the others set cloud credentials or model ids. Without a
+// default model provider credential the copy keeps them.
 func TestTheSettingsCopyKeepsNoCredentialHelper(t *testing.T) {
 	helpers := map[string]any{
 		"apiKeyHelper":        "/bin/echo sk-fake-helper-key",
@@ -1055,8 +1059,8 @@ func TestTheSettingsCopyKeepsNoCredentialHelper(t *testing.T) {
 		hosts []map[string]any
 		kept  bool
 	}{
-		{"oauth start key", []map[string]any{apiKey("model", "anthropic-messages", modelEndpoint, "oauth")}, false},
-		{"no start key", nil, true},
+		{"oauth default model provider credential", []map[string]any{apiKey("model", "anthropic-messages", modelEndpoint, "oauth")}, false},
+		{"no default model provider credential", nil, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			sp, g := specGateway(t)

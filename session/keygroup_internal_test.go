@@ -8,12 +8,13 @@ import (
 	"github.com/qoryai/forager/session/runtimes/claude"
 )
 
-// TestTheStartKeySetsItsGroupsPlaceholder pins the placeholder the session gives the
-// runtime for the start key, from a run answer's credential_hosts of a model key of the
-// machine's, in no group, and two key groups whose keys alternate: a with a-1 and a-2,
-// b with b-1 and b-2. A key of a group sets the placeholder of the group's first key in
-// that list, which is the one the proxy reads, and the machine's key sets its name's.
-func TestTheStartKeySetsItsGroupsPlaceholder(t *testing.T) {
+// TestTheDefaultCredentialSetsItsGroupsPlaceholder pins the placeholder the session
+// gives the runtime for the default model provider credential, from a run answer's
+// credential_hosts of a model key of the machine's, in no group, and two key groups
+// whose keys alternate: a with a-1 and a-2, b with b-1 and b-2. A key of a group sets
+// the placeholder of the group's first key in that list, which is the one the proxy
+// reads, and the machine's key sets its name's.
+func TestTheDefaultCredentialSetsItsGroupsPlaceholder(t *testing.T) {
 	rt, err := claude.New()
 	if err != nil {
 		t.Fatal(err)
@@ -29,7 +30,7 @@ func TestTheStartKeySetsItsGroupsPlaceholder(t *testing.T) {
 			t.Fatalf("%s: %v", model, err)
 		}
 		if want := "ANTHROPIC_API_KEY=" + link.KeyPlaceholder(first); k.Variable != want {
-			t.Errorf("start key %s: the variable %q; want %q", model, k.Variable, want)
+			t.Errorf("default model provider credential %s: the variable %q; want %q", model, k.Variable, want)
 		}
 	}
 }
