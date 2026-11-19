@@ -398,6 +398,15 @@ release may change what an existing document does, and says so under Upgrading.
   sums `modelUsage` over the models; a line with no `modelUsage` has no `usage`. Fixture:
   `runtimes/claude/fixtures/background-result/`, three result lines of one launch with
   a subagent in the background.
+- A launch of Codex has a `dev.qory.runtime.result`, which the session writes right
+  before `dev.qory.session.exited`, since Codex 0.167.2 prints no result line:
+  `success` with `is_error` false for a session that ended `succeeded`,
+  `error_during_execution` with `is_error` false for a pause with `model_key_limit` or
+  `model_key_switch`, and `error_during_execution` with `is_error` true for any other
+  end. Its `usage` is the launch's tokens from Codex's rollouts, its child agents
+  included, with `input` less the cached and cache-write tokens; it has no `line`,
+  `turns`, `duration_ms`, `cost_usd` or `result`. A launch with no `dev.qory.runtime.started` has none. See the
+  contract's README, §The events, Codex's result.
 - A descriptor rule can have `sum`: more fields of the event's data, each the sum of a
   named number over the members of one object of the record, `over`. A field of `data`
   or `sum` with dots, such as `usage.input`, is a member of a nested object. The
@@ -2388,6 +2397,14 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- At the end of each launch of Codex the session reads the rollouts below the
+  descriptor's `resume.prefix`: the launch's thread's, the one file `resume.path`
+  matches, and every rollout of a child agent of it, found by `parent_thread_id` up to
+  16 levels down. The thread's total counts less what the bytes the session restored
+  before a resumed launch already had. The reads follow the transcript's rules, with at
+  most 256 files and 256 MiB together. After a file the session does not read, or more
+  files or bytes, the result has no `usage`, and the session writes one line on
+  `stderr` that starts with the fix.
 - `runtimes.Configs`, `runtimes.ConfigArgs`, `runtimes.TOMLValue`: for a descriptor
   with `config`, the session puts `config.flag` and `key=value` for each key of
   `config.fixed`, and for an endpoint that is a setting, right after the command,

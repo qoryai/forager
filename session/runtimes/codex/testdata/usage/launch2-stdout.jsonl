@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"01a1f100-87f8-7123-a174-ba291730eec1"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `gpt-e2e` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"second done"}}
+{"type":"turn.completed","usage":{"input_tokens":55055,"cached_input_tokens":11011,"cache_write_input_tokens":22022,"output_tokens":44044,"reasoning_output_tokens":33033}}

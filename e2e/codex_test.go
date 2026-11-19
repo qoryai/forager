@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -32,7 +33,9 @@ import (
 // proxy on the paths of its credential alone. The stub reads the key's mark in the
 // value, -SERV-, -LIMT- or -UNAU-, and serves each POST to /v1/responses by it: a
 // streamed answer with a text, a 429 with the x-codex-* headers and the body of a
-// usage limit, or a 401. It returns 404 for every other request.
+// usage limit, or a 401. It returns 404 for every other request. With the mark -SPWN-
+// it serves a turn that starts one child agent, with known token counts
+// ([codexSpawnAnswer]).
 
 // The stub's mode, the file it logs each request to inside its container, and the
 // marks that choose what it serves.
@@ -43,6 +46,7 @@ const (
 	codexServe        = "SERV"
 	codexLimit        = "LIMT"
 	codexUnauthorized = "UNAU"
+	codexSpawn        = "SPWN"
 )
 
 // codexPath is the path Codex sends a request of the Responses format to: the
@@ -128,7 +132,7 @@ func cut(s string, n int) string { return s[:min(len(s), n)] }
 // codexMark is the mark of the key in a request's Authorization header.
 func codexMark(h http.Header) string {
 	v := h.Get("Authorization")
-	for _, m := range []string{codexServe, codexLimit, codexUnauthorized} {
+	for _, m := range []string{codexServe, codexLimit, codexUnauthorized, codexSpawn} {
 		if strings.Contains(v, "-"+m+"-") {
 			return m
 		}
@@ -144,6 +148,8 @@ type codexStub struct {
 	log string
 	mu  sync.Mutex
 	n   int
+	// spawned is the count of requests with the key of the mark -SPWN-.
+	spawned int
 }
 
 func (s *codexStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -151,6 +157,10 @@ func (s *codexStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.n++
 	e := codexEntry{N: s.n, Method: r.Method, Path: r.URL.Path, Key: codexMark(r.Header), Account: r.Header.Get(codexAccountHeader)}
+	if e.Key == codexSpawn && r.Method == http.MethodPost && r.URL.Path == codexPath {
+		s.spawned++
+	}
+	spawned := s.spawned
 	s.mu.Unlock()
 	var req codexRequest
 	if json.Unmarshal(body, &req) == nil {
@@ -171,6 +181,9 @@ func (s *codexStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"error":{"message":"stub: not found","type":"invalid_request_error"}}`)
 	case e.Key == codexLimit:
 		e.Status = codexUsageLimit(w)
+	case e.Key == codexSpawn:
+		e.Status = http.StatusOK
+		codexSpawnAnswer(w, body, spawned)
 	case e.Key == codexUnauthorized:
 		e.Status = http.StatusUnauthorized
 		w.WriteHeader(e.Status)
@@ -221,6 +234,98 @@ func codexAnswer(w http.ResponseWriter, n int) {
 			"content": []any{map[string]any{"type": "output_text", "text": "Hi"}}}},
 		{"type": "response.completed", "response": map[string]any{"id": id,
 			"usage": map[string]any{"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}},
+	} {
+		b, _ := json.Marshal(e)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e["type"], b)
+	}
+}
+
+// The texts of [codexSpawnAnswer]: the child agent's task, which the child's request
+// contains, and the mark of a resumed launch's prompt; and the ids of its calls.
+const (
+	codexChildTask  = "E2E-CHILD-TASK"
+	codexSecondTurn = "E2E-SECOND-TURN"
+	codexSpawnCall  = "call_e2e_spawn"
+	codexWaitCall   = "call_e2e_wait"
+)
+
+// codexAgentID is the child's id in the output of spawn_agent.
+var codexAgentID = regexp.MustCompile(`agent_id\\?"\s*:\s*\\?"([^"\\]+)`)
+
+// codexSpawnRequest is what [codexSpawnAnswer] reads of a request.
+type codexSpawnRequest struct {
+	Input []struct {
+		Type    string          `json:"type"`
+		Role    string          `json:"role"`
+		CallID  string          `json:"call_id"`
+		Output  json.RawMessage `json:"output"`
+		Content json.RawMessage `json:"content"`
+	} `json:"input"`
+}
+
+// codexSpawnAnswer streams the answer to request n of the mark -SPWN-, whose body is
+// body. Its usage has each count as one digit times 10^(n-1): input 5, cached 1, cache
+// write 2, output 4, reasoning 3, total 9. With no tool output in the input, the answer
+// is a call of spawn_agent with [codexChildTask]; after spawn_agent's output, a call of
+// wait_agent for the child; after wait_agent's output, a message. The child's request,
+// with the task, and a resumed launch's, with [codexSecondTurn], get a message.
+func codexSpawnAnswer(w http.ResponseWriter, body []byte, n int) {
+	var req codexSpawnRequest
+	_ = json.Unmarshal(body, &req)
+	var spawnOut string
+	var spawned, waited, child, second bool
+	for _, m := range req.Input {
+		switch {
+		case m.Type == "function_call_output" && m.CallID == codexSpawnCall:
+			spawned, spawnOut = true, string(m.Output)
+		case m.Type == "function_call_output" && m.CallID == codexWaitCall:
+			waited = true
+		}
+		var parts []struct {
+			Text string `json:"text"`
+		}
+		if m.Role == "user" && json.Unmarshal(m.Content, &parts) == nil {
+			for _, c := range parts {
+				child = child || strings.Contains(c.Text, codexChildTask)
+				second = second || strings.Contains(c.Text, codexSecondTurn)
+			}
+		}
+	}
+	message := func(text string) map[string]any {
+		return map[string]any{"type": "message", "role": "assistant", "id": fmt.Sprintf("msg_e2e_%d", n),
+			"content": []any{map[string]any{"type": "output_text", "text": text}}}
+	}
+	call := func(id, name string, args any) map[string]any {
+		b, _ := json.Marshal(args)
+		return map[string]any{"type": "function_call", "id": fmt.Sprintf("fc_e2e_%d", n), "call_id": id, "name": name, "namespace": "multi_agent_v1", "arguments": string(b)}
+	}
+	var item map[string]any
+	switch {
+	case second, child, waited:
+		item = message("done")
+	case spawned:
+		id := ""
+		if m := codexAgentID.FindStringSubmatch(spawnOut); m != nil {
+			id = m[1]
+		}
+		item = call(codexWaitCall, "wait_agent", map[string]any{"targets": []string{id}, "timeout_ms": 120000})
+	default:
+		item = call(codexSpawnCall, "spawn_agent", map[string]any{"message": codexChildTask + ": reply with the word done."})
+	}
+	p := int64(1)
+	for range n - 1 {
+		p *= 10
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	id := fmt.Sprintf("resp_e2e_%d", n)
+	for _, e := range []map[string]any{
+		{"type": "response.created", "response": map[string]any{"id": id}},
+		{"type": "response.output_item.done", "item": item},
+		{"type": "response.completed", "response": map[string]any{"id": id, "usage": map[string]any{
+			"input_tokens": 5 * p, "input_tokens_details": map[string]any{"cached_tokens": p, "cache_write_tokens": 2 * p},
+			"output_tokens": 4 * p, "output_tokens_details": map[string]any{"reasoning_tokens": 3 * p}, "total_tokens": 9 * p,
+		}}},
 	} {
 		b, _ := json.Marshal(e)
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e["type"], b)
@@ -549,6 +654,9 @@ func TestDockerCodexThroughTheWall(t *testing.T) {
 			if hosts := otherHosts(o, k.host); len(hosts) > 0 {
 				t.Errorf("the run reached hosts other than the stub: %q", hosts)
 			}
+			// The stub's answer has input 1 and output 1, with no cache.
+			n := float64(len(log))
+			codexResult(t, o, "success", false, map[string]any{"input": n, "output": n, "cache_read": 0.0, "cache_write": 0.0})
 			codexNoKeyValue(t, o, []string{c.key}, s.dir)
 		})
 	}
@@ -569,6 +677,8 @@ func TestDockerCodexPausesOnAUsageLimit(t *testing.T) {
 	}
 	codexExited(t, o, event.StatePaused, event.ReasonModelKeyLimit)
 	codexTurnFailed(t, o)
+	// No response completed, so the rollout has no total.
+	codexResult(t, o, "error_during_execution", false, nil)
 	if len(log) == 0 || log[0].Key != codexLimit || log[0].Status != http.StatusTooManyRequests {
 		t.Errorf("the stub got:%s\nwant a 429 with the key first", codexEntries(log))
 	}
@@ -770,4 +880,67 @@ func TestDockerCodexResumesAPausedRunUnderAnotherKey(t *testing.T) {
 	continued(t, ctl, run2, transcript, threadID, tpath)
 	codexNoKeyValue(t, o1, []string{codexKey(codexServe)}, s1.dir)
 	codexNoKeyValue(t, o2, []string{key2}, s2.dir)
+}
+
+// codexResult checks that the run's events contain one dev.qory.runtime.result, with
+// the session id of the one dev.qory.runtime.started, outcome, isError and usage, nil
+// for none, and no line or turns, and returns it.
+func codexResult(t *testing.T, o keysOutcome, outcome string, isError bool, usage map[string]any) map[string]any {
+	t.Helper()
+	started, results := o.of("dev.qory.runtime.started"), o.of("dev.qory.runtime.result")
+	if len(started) != 1 || len(results) != 1 {
+		t.Fatalf("dev.qory.runtime.result is %v after the start %v; want one", results, started)
+	}
+	r := results[0]
+	t.Logf("dev.qory.runtime.result: %v", r)
+	if r["session_id"] != started[0]["session_id"] || r["outcome"] != outcome || r["is_error"] != isError || r["line"] != nil || r["turns"] != nil {
+		t.Errorf("dev.qory.runtime.result is %v; want %s, is_error %v, the start's session_id, and no line or turns", r, outcome, isError)
+	}
+	if got, _ := r["usage"].(map[string]any); usage == nil && r["usage"] != nil || usage != nil && !reflect.DeepEqual(got, usage) {
+		t.Errorf("the result's usage is %v; want %v", r["usage"], usage)
+	}
+	return r
+}
+
+// TestDockerCodexCountsItsChildAgentsInTheResult runs Codex 0.167.2 twice behind the
+// wall on the stub's turn with a child agent (the mark -SPWN-), whose request n has each
+// count as one digit times 10^(n-1). Launch 1 sends requests 1 to 4: the thread's 1, 2
+// and 4, and the child's 3. Its dev.qory.runtime.result is success with the usage of
+// all four, each input less the cached and cache-write tokens: 1111 of each digit, so
+// input 2222, output 4444, cache_read 1111 and cache_write 2222. Launch 2 resumes the
+// thread from launch 1's restored rollout and sends request 5: its usage is 10000 of
+// each digit, so input 20000, output 40000, cache_read 10000 and cache_write 20000,
+// with none of launch 1's tokens.
+func TestDockerCodexCountsItsChildAgentsInTheResult(t *testing.T) {
+	k := newCodexWall(t)
+	k.launch = codexResumable
+	ctl := startKeysControl(t)
+	key := codexKey(codexSpawn)
+	run1 := event.NewRunID()
+	o1, log1, s1 := k.runOn(t, ctl, run1, "Start one helper agent, wait for it, then reply.", nil, false, [2]string{"model", key})
+	if o1.res.State != event.StateSucceeded {
+		t.Fatalf("launch 1 ended %s, exit %d; want succeeded\nstderr:\n%s\nstdout:\n%s", o1.res.State, o1.res.ExitCode, tail(o1.errs, 4000), tail(o1.out, 4000))
+	}
+	if len(log1) != 4 {
+		t.Fatalf("the stub got:%s\nwant 4 requests: the spawn, the wait, the child's and the reply", codexEntries(log1))
+	}
+	codexResult(t, o1, "success", false, map[string]any{"input": 2222.0, "output": 4444.0, "cache_read": 1111.0, "cache_write": 2222.0})
+
+	transcript, threadID, tpath := storedTranscript(t, ctl, run1)
+	run2 := event.NewRunID()
+	ctl.mu.Lock()
+	ctl.transcripts[run2] = transcript
+	ctl.mu.Unlock()
+	o2, log2, s2 := k.runOn(t, ctl, run2, codexSecondTurn+": reply again.", map[string]any{"run_id": run1, "session_id": threadID, "path": tpath}, false, [2]string{"model", key})
+	if o2.res.State != event.StateSucceeded {
+		t.Fatalf("launch 2 ended %s, exit %d; want succeeded\nstderr:\n%s\nstdout:\n%s", o2.res.State, o2.res.ExitCode, tail(o2.errs, 4000), tail(o2.out, 4000))
+	}
+	if len(log2) != 1 {
+		t.Fatalf("the stub got:%s\nwant 1 request", codexEntries(log2))
+	}
+	if r := codexResult(t, o2, "success", false, map[string]any{"input": 20000.0, "output": 40000.0, "cache_read": 10000.0, "cache_write": 20000.0}); r["session_id"] != threadID {
+		t.Errorf("launch 2's result has the thread %v; want %s", r["session_id"], threadID)
+	}
+	codexNoKeyValue(t, o1, []string{key}, s1.dir)
+	codexNoKeyValue(t, o2, []string{key}, s2.dir)
 }

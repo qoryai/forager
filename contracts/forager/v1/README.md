@@ -2041,7 +2041,7 @@ The runtime's, produced by a descriptor from what the runtime reports:
 | `dev.qory.runtime.text` | the runtime printed a text or thinking block, of the main conversation or of a subagent, on its standard output | `session_id`, `text`, `kind`, `role`, `agent_id`, `agent_type`, `message_id`, `truncated` |
 | `dev.qory.runtime.notification` | the runtime notified its user: waiting for a permission, idle | `session_id`, `kind`, `message`, `title` |
 | `dev.qory.runtime.ended` | the runtime closed its session | `session_id`, `reason` |
-| `dev.qory.runtime.result` | a non-interactive session printed its result | `session_id`, `outcome`, `is_error`, `turns`, `duration_ms`, `cost_usd`, `result`, `usage` |
+| `dev.qory.runtime.result` | a non-interactive session printed its result, or a launch of Codex ended | `session_id`, `outcome`, `is_error`, `turns`, `duration_ms`, `cost_usd`, `result`, `usage` |
 
 **Work in the background.** A runtime that starts a command or a subagent in the
 background reports it where it reports everything else: the start is a tool call,
@@ -2092,6 +2092,40 @@ is the line's `modelUsage` summed over the models (`inputTokens`, `outputTokens`
 total too. The line's `usage` counts neither the subagents nor the lines before, and
 `turns` counts the turns since the line before. A line with no `modelUsage` gives no
 `usage`.
+
+**Codex's result.** Codex 0.167.2 prints no result line, so the session writes one
+`dev.qory.runtime.result` at the end of each launch of Codex, right before
+`dev.qory.session.exited`, with `session_id`, the launch's thread id from its
+`dev.qory.runtime.started`, and no `line`, `turns`, `duration_ms`, `cost_usd` or
+`result`. A launch with no `dev.qory.runtime.started` gets none, and a run closed from
+outside gets none.
+
+| The launch | `outcome` | `is_error` |
+|---|---|---|
+| ended `succeeded` | `success` | false |
+| paused, with `model_key_limit` or `model_key_switch` | `error_during_execution` | false |
+| any other end: `failed`, or `cancelled` by a timeout or an interrupt | `error_during_execution` | true |
+
+The session reads `usage` from the rollouts below `resume.prefix`, which Codex writes
+one per thread, `rollout-<time>-<thread id>.jsonl`, once Codex exited. Each
+`token_count` line has the thread's total so far in `info.total_token_usage`. The
+launch's usage is the last total of the thread's rollout, the one file that
+`resume.path` matches for the thread id, less the last total in the bytes the session
+restored before a resumed launch, plus the last total of each rollout whose
+`session_meta` has a `parent_thread_id` of the thread or of one of its child agents, up
+to 16 levels down. `usage.input` is `input_tokens` less `cached_input_tokens` and
+`cache_write_input_tokens`, which Codex counts inside it; `cache_read` is
+`cached_input_tokens`; `cache_write` is `cache_write_input_tokens`; and `output` is
+`output_tokens`, reasoning included. Codex's `reasoning_output_tokens` and
+`total_tokens` have no member. Each total is mapped before the sum, and a count below 0
+is 0, with one `dev.qory.run.log` line. `turn.completed` on standard output has the
+thread's total since its first launch, which a resumed launch would count twice, so the
+session does not use it. The session reads the rollouts as it reads the transcript: no
+symbolic link, FIFO or file with a second hard link behind a wall, each file at most 64
+MiB, and also at most 256 files and 256 MiB together. After a file it does not read, or
+more files or bytes, and for a launch with no rollout, the result has no `usage`, and
+the session writes one `dev.qory.run.log` line that starts with the fix. A launch whose
+rollouts have no total since the restored bytes has no `usage`.
 
 **A subagent's parent.** `dev.qory.runtime.subagent_started` contains `parent_agent_id`
 when another subagent started this one and the runtime reported it. Claude Code 2.1.292

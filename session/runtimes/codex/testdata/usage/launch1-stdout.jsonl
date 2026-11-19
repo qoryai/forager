@@ -1,0 +1,9 @@
+{"type":"thread.started","thread_id":"01a1f100-87f8-7123-a174-ba291730eec1"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `gpt-e2e` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_1","type":"collab_tool_call","tool":"spawn_agent","sender_thread_id":"01a1f100-87f8-7123-a174-ba291730eec1","receiver_thread_ids":[],"prompt":"PROBE-CHILD-TASK: reply with the word done.","agents_states":{},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"collab_tool_call","tool":"spawn_agent","sender_thread_id":"01a1f100-87f8-7123-a174-ba291730eec1","receiver_thread_ids":["01a1f100-885b-7140-a145-b604ffe0117a"],"prompt":"PROBE-CHILD-TASK: reply with the word done.","agents_states":{"01a1f100-885b-7140-a145-b604ffe0117a":{"status":"pending_init","message":null}},"status":"completed"}}
+{"type":"item.started","item":{"id":"item_2","type":"collab_tool_call","tool":"wait","sender_thread_id":"01a1f100-87f8-7123-a174-ba291730eec1","receiver_thread_ids":["01a1f100-885b-7140-a145-b604ffe0117a"],"prompt":null,"agents_states":{},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"collab_tool_call","tool":"wait","sender_thread_id":"01a1f100-87f8-7123-a174-ba291730eec1","receiver_thread_ids":["01a1f100-885b-7140-a145-b604ffe0117a"],"prompt":null,"agents_states":{"01a1f100-885b-7140-a145-b604ffe0117a":{"status":"completed","message":"child done"}},"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"parent done"}}
+{"type":"turn.completed","usage":{"input_tokens":5055,"cached_input_tokens":1011,"cache_write_input_tokens":2022,"output_tokens":4044,"reasoning_output_tokens":3033}}
