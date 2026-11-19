@@ -1140,8 +1140,9 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded, named string) (*D
 	// credential is the run configuration's one model key, or unset when it has none,
 	// and a reload may select another: the runtime started with the first one's
 	// variable and endpoint, so the default model provider credential is fixed as well.
-	// The refusal shows the model key the run started with, or no model key, and the
-	// run configuration's one model key, or no model key.
+	// Only a run configuration without default_model_provider_credential_name reaches
+	// this check: Reload refuses a changed field, and with the field set on both sides
+	// hold gives the field's key.
 	if started := defaultOf(r.Held()); fresh.DefaultCredential != started {
 		fresh.Close()
 		was := "the run started with no model key"
