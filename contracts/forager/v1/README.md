@@ -962,7 +962,7 @@ refusal's `names`.
 
 `default_model_provider_credential_name` is the name of the default model provider
 credential, the model key the runtime starts with: an API credential of `credentials`,
-or a model key that the machine defines and the run's policy selects. A run with two or
+or a local model provider credential that the run's policy selects. A run with two or
 more model keys, the server's and the machine's together, needs it; in a run with one,
 that one is the default model provider credential, and
 `default_model_provider_credential_name` may name it. Each of these is
@@ -1079,8 +1079,8 @@ credential with one. The order of a group's entries in `credentials` is the orde
 which the proxy sets them, the default model provider credential's place included. The
 default model provider credential's group starts on the default model provider
 credential, wherever its place in the order, and every other group on its first key. A
-run configuration has at most 6 API credentials, across every key group. A model key of
-the machine's, from `forager.yaml`, has no `group` and is never in a key group: a
+run configuration has at most 6 API credentials, across every key group. A local model
+provider credential, from `forager.yaml`, has no `group` and is never in a key group: a
 session on it gets that key alone, with no rotation, cooldown, model keys report entry
 or renewal after a `401`. Each key of a group may have `pause_for_s`, `resets_at`,
 `schedule_resets_at`, `cooldown_until`, and `use_up_to_percent` with `use_up_to_windows`
@@ -3974,7 +3974,7 @@ empty is the clock's now; a refusal reads `outcome <run.url>/<run_id>: <code> (s
 Several model keys) with a signed `POST <run.url>/<run_id>/model-keys`, `Content-Type:
 application/json`, signed by its access key under `qory-request-ed25519-v1`. A run whose
 run configuration has an API credential sends reports, also when its default model
-provider credential is a model key of the machine's, which no report lists. Only the
+provider credential is a local model provider credential, which no report lists. Only the
 gateway that holds the run sends a report: the instance of the gateway node that
 attached the run (After the attach, above). The server accepts it from that instance's
 active keys alone, and answers `404` to a report from any other sender, the node or node
@@ -4935,7 +4935,7 @@ document:
   them, which are the hosts `applied.credentials` lists for it, in its order; and
   `placeholders`, the variables the session sets to a placeholder for this credential,
   each also in `placeholders` and each once, empty when it sets none. A credential from
-  the server also has `auth`, and so does a model key of the machine's, its
+  the server also has `auth`, and so does a local model provider credential, its
   definition's. A host credential from the server has one entry per `apply` item, the
   answer's items when its value has `apply`, in their order: each with the item's hosts
   and its `scheme`, `username` and `header` as `auth`, and the credential's
@@ -5115,8 +5115,9 @@ document:
   cooldown or out, the key a limit refusal switches to. When no key of that group is
   usable, it means the named key: the session's first request with the group's
   placeholder gets the gateway's `429` with no `Retry-After`, and the answer to its next
-  batch has `stop` (§Credentials, Several model keys). The name of a model key of the
-  machine's means that key alone. A request with `model_key` `false` may not contain it.
+  batch has `stop` (§Credentials, Several model keys). The name of a local model
+  provider credential means that key alone. A request with `model_key` `false` may not
+  contain it.
 
 The answer is a `200`, `application/json`, whose body is a
 `link-join-answer.schema.json` document:

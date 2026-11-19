@@ -195,7 +195,7 @@ type Held struct {
 	DefaultCredential string
 	// Groups are the key groups of the run configuration's API credentials, one per
 	// group value, in the order of each group's first key, [KeyGroups]. Empty when the
-	// run has no API credential from the server. A model key of the machine's is in
+	// run has no API credential from the server. A local model provider credential is in
 	// none.
 	Groups []KeyGroup
 	all    []*held

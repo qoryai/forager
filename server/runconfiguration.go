@@ -106,10 +106,11 @@ const maxAPICredentials = 6
 // reports or that is Authorization. Of model, the document's
 // default_model_provider_credential_name, it refuses a name of a host credential, and
 // an empty one beside two or more API credentials; a name of none of creds may be a
-// model key of the machine's, which the gateway checks. Of the key groups it refuses
-// what [checkKeyGroups] refuses, and more than [maxAPICredentials] API credentials
-// across every group, as the schema does for a document read from bytes. The reader of
-// a document calls it, and so does whoever holds a document not read from bytes.
+// local model provider credential, which the gateway checks. Of the key groups it
+// refuses what [checkKeyGroups] refuses, and more than [maxAPICredentials] API
+// credentials across every group, as the schema does for a document read from bytes.
+// The reader of a document calls it, and so does whoever holds a document not read from
+// bytes.
 func CheckCredentials(creds []RunCredential, model string) error {
 	api := 0
 	for _, c := range creds {

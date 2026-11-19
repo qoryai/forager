@@ -313,7 +313,7 @@ type RunConfiguration struct {
 	// gateway fetches their values with the secrets request.
 	Credentials []RunCredential `json:"credentials,omitzero"`
 	// DefaultModelProviderCredentialName is the name of the model key the runtime
-	// starts with, an API credential of Credentials or a model key of the machine's;
+	// starts with, an API credential of Credentials or a local model provider credential;
 	// empty when the document names none, which a run with one model key may.
 	DefaultModelProviderCredentialName string `json:"default_model_provider_credential_name,omitzero"`
 	// StackHosts are the hosts the run's stack proxy allows beside the gateway's

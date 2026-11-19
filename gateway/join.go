@@ -294,9 +294,9 @@ func (lr *linkRun) usedKeys(g *modelkey.Group) bool {
 }
 
 // sessionKeys is the key group of the open session, the group of the key it joined
-// with: nil when that key is in no group, the machine's key or no key, and the default
-// model provider credential's group when no session is open. Nil when the run has no
-// key group.
+// with: nil when that key is in no group, the local model provider credential or no
+// key, and the default model provider credential's group when no session is open. Nil
+// when the run has no key group.
 func (lr *linkRun) sessionKeys() *modelkey.Group {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()

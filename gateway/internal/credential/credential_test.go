@@ -1008,7 +1008,7 @@ func TestAModelKeysFileReadAgainKeepsAMatchingToken(t *testing.T) {
 	}
 }
 
-// TestAModelKeyIsHeldOnItsEndpointsHost pins a model key of the machine's resolved:
+// TestAModelKeyIsHeldOnItsEndpointsHost pins a local model provider credential resolved:
 // one use on the endpoint's host, on every path, with the definition's scheme, format,
 // endpoint and oauth, and a credential with no placeholder.
 func TestAModelKeyIsHeldOnItsEndpointsHost(t *testing.T) {

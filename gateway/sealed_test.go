@@ -39,8 +39,8 @@ const (
 	machineValue = "machine-value-of-the-test"
 )
 
-// machineModel is the machine's credential, forager.yaml's key, for the same host.
-var machineModel = gateway.Credential{Name: "machine-model", Env: "GATEWAY_TEST_MODEL_KEY", Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key", Placeholders: []string{"MACHINE_KEY"}}
+// machineModel is the local model provider credential, for the same host.
+var machineModel = gateway.Credential{Name: "machine-model", Env: "GATEWAY_TEST_MODEL_KEY", Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key", Placeholders: []string{"LOCAL_MODEL_PROVIDER_CREDENTIAL"}}
 
 // sealedGateway is a gateway on the local link whose control serves doc and seals the
 // values, values nil leaving the secrets endpoint out of discovery.
@@ -79,14 +79,15 @@ func (c *control) requests(t *testing.T) []server.SecretsRequest {
 	return out
 }
 
-// TestASealedCredentialTakesThePlaceOfTheMachinesKey pins the start of a walled run
-// whose run configuration has credentials: the gateway sends one secrets request, for
-// the run, the digest it computed of the document's bytes, not the header's, and the
-// credentials' names; the proxy sets the opened value in place of forager.yaml's key,
-// whose credential claims the same host; and the run answer has model's endpoint host,
-// no placeholder, its format, endpoint and auth, default_model_provider_credential_name
-// model, and applied.credentials its host and scheme.
-func TestASealedCredentialTakesThePlaceOfTheMachinesKey(t *testing.T) {
+// TestASealedCredentialTakesThePlaceOfTheLocalModelProviderCredential pins the start of
+// a walled run whose run configuration has credentials: the gateway sends one secrets
+// request, for the run, the digest it computed of the document's bytes, not the
+// header's, and the credentials' names; the proxy sets the opened value in place of
+// forager.yaml's key, whose credential claims the same host; and the run answer has
+// model's endpoint host, no placeholder, its format, endpoint and auth,
+// default_model_provider_credential_name model, and applied.credentials its host and
+// scheme.
+func TestASealedCredentialTakesThePlaceOfTheLocalModelProviderCredential(t *testing.T) {
 	c, h := sealedGateway(t, sealedDoc, map[string]string{"model": sealedValue})
 	a := h.open(server.LinkRunRequest{Wall: true})
 	if got, want := gateway.Tokens(h.g, a.RunID), map[string]string{"model": sealedValue}; !reflect.DeepEqual(got, want) {

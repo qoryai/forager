@@ -27,23 +27,22 @@ import (
 )
 
 // TestDockerClaudeCodeThroughTheWall runs Claude Code itself behind the Docker adapter
-// against a recorder that answers as the Messages API, the endpoint of a model key of
-// the machine's, which the session sets in ANTHROPIC_BASE_URL: with an API key and
-// with an OAuth credential, each a fake key the proxy sets outside, headless and
-// interactive. The variables Claude Code reads a
-// model credential from that the run does not set a stand-in in are set empty, so each
-// run also checks that Claude Code reads an empty one as unset and uses the stand-in.
-// The launch's environment does not set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: the
-// descriptor's fixed sets it, so a headless run reaches no host but the recorder, also
-// when the workspace's .claude/settings.json sets it empty.
-// Claude Code answers with the recorder's text; every request the recorder gets
-// carries the key in the credential's header, no stand-in and not the other
-// credential's header; the record lists one request through the proxy for each the
-// recorder received, each to the recorder with the credential; and the run's
-// directory, the agent's home and the output contain no key. With the descriptor's
-// fixed variables, an interactive run of 2.1.316, like a headless one, tries no host
-// but the recorder. The test logs a request of an interactive run to another host that
-// the policy refused, and does not count it.
+// against a recorder that answers as the Messages API, the endpoint of a local model
+// provider credential, which the session sets in ANTHROPIC_BASE_URL: with an API key
+// and with an OAuth credential, each a fake key the proxy sets outside, headless and
+// interactive. The variables Claude Code reads a model credential from that the run
+// does not set a stand-in in are set empty, so each run also checks that Claude Code
+// reads an empty one as unset and uses the stand-in. The launch's environment does not
+// set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: the descriptor's fixed sets it, so a
+// headless run reaches no host but the recorder, also when the workspace's
+// .claude/settings.json sets it empty. Claude Code answers with the recorder's text;
+// every request the recorder gets carries the key in the credential's header, no
+// stand-in and not the other credential's header; the record lists one request through
+// the proxy for each the recorder received, each to the recorder with the credential;
+// and the run's directory, the agent's home and the output contain no key. With the
+// descriptor's fixed variables, an interactive run of 2.1.316, like a headless one,
+// tries no host but the recorder. The test logs a request of an interactive run to
+// another host that the policy refused, and does not count it.
 //
 // An interactive run starts on a pseudo-terminal with HOME set to a temporary
 // directory that the test makes for that run and mounts into the container. The
@@ -146,7 +145,8 @@ type claudeRun struct {
 	install                                *session.RuntimeInstall
 }
 
-// modelKey is the machine's model key of c, model, whose endpoint is the recorder.
+// modelKey is the local model provider credential of c, model, whose endpoint is the
+// recorder.
 func (r claudeRun) modelKey(c claudeCredential) gateway.Credential {
 	k := gateway.Credential{Name: "model", Env: apiKeyVar, Format: "anthropic-messages", Endpoint: "https://" + r.host + ":" + recorderTLS, Scheme: c.scheme, OAuth: c.oauth}
 	if c.scheme == "header" {

@@ -459,8 +459,8 @@ func TestAReloadBehindAWallBringsCredentialsAndPaths(t *testing.T) {
 	}
 }
 
-// modelKeysDoc is a run configuration whose policy selects the machine's model keys
-// first and second and its host credential git, with
+// modelKeysDoc is a run configuration whose policy selects the local model provider
+// credentials first and second and its host credential git, with
 // default_model_provider_credential_name set to start.
 func modelKeysDoc(start, allow string) string {
 	return `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","api.other-model.example","git.example"` + allow + `]},` +
@@ -1115,10 +1115,10 @@ func TestAReloadKeepsAnImageByReference(t *testing.T) {
 }
 
 // TestAReloadKeepsTheDefaultCredential pins that, without
-// default_model_provider_credential_name, a reload that selects another model key of
-// the machine's than the run started with, or none, is refused, one that selects the
-// same key is accepted, and one that selects a model key for a run that started with
-// none is refused.
+// default_model_provider_credential_name, a reload that selects another local model
+// provider credential than the run started with, or none, is refused, one that selects
+// the same key is accepted, and one that selects a model key for a run that started
+// with none is refused.
 func TestAReloadKeepsTheDefaultCredential(t *testing.T) {
 	t.Setenv("QORY_TEST_MODEL_TOKEN", "sk-ant-fake-value")
 	doc := func(key string) string {

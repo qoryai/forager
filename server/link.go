@@ -187,15 +187,15 @@ type LinkImage struct {
 	Reference bool   `json:"reference,omitempty"`
 }
 
-// LinkCredentialHosts is one credential the gateway holds for a run, as the run answer's
-// credential_hosts has it: its name, its hosts as the proxy matches them, which are the
-// hosts applied.credentials lists for it, and the variables the session sets to a
-// placeholder for it. Auth is how the proxy sets its value, for a credential from the
-// server and for a model key of the machine's; nil for every other. Format and Endpoint
-// are an API credential's, a model key's, whose Hosts are the endpoint's host alone:
-// the session gives the key to the variable the session's runtime lists for Format and
-// Auth, and sets the runtime's endpoint variable to Endpoint. Names and hosts alone,
-// never a secret.
+// LinkCredentialHosts is one credential the gateway holds for a run, as the run
+// answer's credential_hosts has it: its name, its hosts as the proxy matches them,
+// which are the hosts applied.credentials lists for it, and the variables the session
+// sets to a placeholder for it. Auth is how the proxy sets its value, for a credential
+// from the server and for a local model provider credential; nil for every other.
+// Format and Endpoint are an API credential's, a model key's, whose Hosts are the
+// endpoint's host alone: the session gives the key to the variable the session's
+// runtime lists for Format and Auth, and sets the runtime's endpoint variable to
+// Endpoint. Names and hosts alone, never a secret.
 type LinkCredentialHosts struct {
 	Name         string   `json:"name"`
 	Hosts        []string `json:"hosts"`

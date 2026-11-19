@@ -33,7 +33,7 @@ func TestACredentialFromTheServerReplacesTheMachinesOnItsHost(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			defs := []Definition{
-				{Name: "model", Env: "MODEL_TOKEN", Hosts: hosts, Scheme: "bearer", Placeholders: []string{"MACHINE_KEY"}},
+				{Name: "model", Env: "MODEL_TOKEN", Hosts: hosts, Scheme: "bearer", Placeholders: []string{"LOCAL_MODEL_PROVIDER_CREDENTIAL"}},
 				{Name: "plain", Env: "MODEL_TOKEN", Hosts: []string{"plain.example"}, Scheme: "bearer"},
 			}
 			held, err := ResolveWith(context.Background(), defs, []policy.Selected{{Name: "model"}, {Name: "plain"}}, []Stored{storedDefault("server-value")}, "", policy.Observe, nil, func(l string) { t.Log(l) })
@@ -113,7 +113,7 @@ func TestTwoCredentialsFromTheServerOnOneHostShowNoSecretInAName(t *testing.T) {
 }
 
 // TestNoCredentialFromTheServerIsResolveUnchanged pins ResolveWith with no credential
-// from the server: what Resolve gives, the machine's key.
+// from the server: what Resolve gives, the local model provider credential.
 func TestNoCredentialFromTheServerIsResolveUnchanged(t *testing.T) {
 	t.Setenv("MODEL_TOKEN", "a-token")
 	defs := []Definition{envDefinition("model")}

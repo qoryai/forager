@@ -23,24 +23,25 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// mixedValues are the fake values of the model keys of mixedRun, by name: the
-// machine's key machine, and the server's keys a-1 and a-2 of group a and b-1 and b-2
-// of group b.
+// mixedValues are the fake values of the model keys of mixedRun, by name: the local
+// model provider credential machine, and the server's keys a-1 and a-2 of group a and
+// b-1 and b-2 of group b.
 var mixedValues = map[string]string{"machine": "fake-machine-value-0001", "a-1": "fake-a-value-0001", "a-2": "fake-a-value-0002", "b-1": "fake-b-value-0001", "b-2": "fake-b-value-0002"}
 
-// mixedRun is a walled run whose default model provider credential is the machine's
-// model key machine, and whose run configuration has two key groups of the server's, a
-// with a-1 and a-2 and b with b-1 and b-2, all of the format anthropic-messages on one
-// fake provider. The machine's key reaches the provider at 127.0.0.1 and the server's
-// keys at localhost: a credential from the server replaces a machine's credential of
-// its host. The provider returns a limit refusal for each key in limited, and a 401 for
-// each key in unauthorized. A request with the key held waits at the provider until
-// release is closed, then gets the answer of that moment.
+// mixedRun is a walled run whose default model provider credential is the local model
+// provider credential machine, and whose run configuration has two key groups of the
+// server's, a with a-1 and a-2 and b with b-1 and b-2, all of the format
+// anthropic-messages on one fake provider. The local model provider credential reaches
+// the provider at 127.0.0.1 and the server's keys at localhost: a credential from the
+// server replaces a machine's credential of its host. The provider returns a limit
+// refusal for each key in limited, and a 401 for each key in unauthorized. A request
+// with the key held waits at the provider until release is closed, then gets the answer
+// of that moment.
 type mixedRun struct {
 	h     *harness
 	runID string
 	url   string
-	// machineURL is the endpoint of the machine's key.
+	// machineURL is the endpoint of the local model provider credential.
 	machineURL string
 	agent      *http.Client
 	// hosts are the run answer's credential_hosts, from which a session computes its
@@ -62,12 +63,12 @@ func startMixedRun(t *testing.T) *mixedRun {
 }
 
 // startKeyGroupsRun opens the run of mixedRun with the default model provider
-// credential defaultCredential; with machine false, the run has no key of the
-// machine's.
+// credential defaultCredential; with machine false, the run has no local model provider
+// credential.
 func startKeyGroupsRun(t *testing.T, machine bool, defaultCredential string) *mixedRun {
 	t.Helper()
 	m := &mixedRun{limited: map[string]bool{}, unauthorized: map[string]bool{}}
-	t.Setenv("GATEWAY_TEST_MACHINE_KEY", mixedValues["machine"])
+	t.Setenv("GATEWAY_TEST_LOCAL_MODEL_PROVIDER_CREDENTIAL", mixedValues["machine"])
 	certFile, keyFile, roots := testCertificate(t, t.TempDir())
 	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
@@ -141,7 +142,7 @@ func startKeyGroupsRun(t *testing.T, machine bool, defaultCredential string) *mi
 	c.intercept.Store(&intercept)
 	var creds []gateway.Credential
 	if machine {
-		creds = []gateway.Credential{{Name: "machine", Env: "GATEWAY_TEST_MACHINE_KEY", Format: "anthropic-messages", Endpoint: m.machineURL, Scheme: "header", Header: "x-api-key"}}
+		creds = []gateway.Credential{{Name: "machine", Env: "GATEWAY_TEST_LOCAL_MODEL_PROVIDER_CREDENTIAL", Format: "anthropic-messages", Endpoint: m.machineURL, Scheme: "header", Header: "x-api-key"}}
 	}
 	node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost", "127.0.0.1"}}}
 	cfg := gateway.Config{Server: c.server(), Credentials: creds, Policy: node}
@@ -157,7 +158,7 @@ func startKeyGroupsRun(t *testing.T, machine bool, defaultCredential string) *mi
 	}
 	for _, c := range a.CredentialHosts {
 		if c.Name == "machine" && c.Group != "" {
-			t.Errorf("the machine's key has the group %q in the run answer", c.Group)
+			t.Errorf("the local model provider credential has the group %q in the run answer", c.Group)
 		}
 	}
 	if d := m.h.post(started(m.runID, nil), applied(m.runID, a.Applied)); !d.Accepted() {
@@ -255,15 +256,16 @@ func (m *mixedRun) join(t *testing.T, name string) string {
 	return a.ModelProviderCredentialName
 }
 
-// TestAMachineKeyIsInNoKeyGroup pins a run whose default model provider credential is
-// the machine's model key, beside two key groups of the server's, a and b. Session 1
-// joins with no key in its request and gets the machine's key alone: a request with the
-// placeholder of group a gets no key. Session 2 joins with a-2, of group a, which no
-// session used: it gets a-2, a limit refusal of a-2 goes again with a-1, and the
-// machine's key and group b get no key. Session 3 joins with no key in its request and
-// gets the machine's key again, with no rotation and no stop after group a's refusal.
-// The model keys reports list the keys of both groups and never the machine's.
-func TestAMachineKeyIsInNoKeyGroup(t *testing.T) {
+// TestALocalModelProviderCredentialIsInNoKeyGroup pins a run whose default model
+// provider credential is the local model provider credential, beside two key groups of
+// the server's, a and b. Session 1 joins with no key in its request and gets the local
+// model provider credential alone: a request with the placeholder of group a gets no
+// key. Session 2 joins with a-2, of group a, which no session used: it gets a-2, a
+// limit refusal of a-2 goes again with a-1, and the local model provider credential and
+// group b get no key. Session 3 joins with no key in its request and gets the local
+// model provider credential again, with no rotation and no stop after group a's
+// refusal. The model keys reports list the keys of both groups and never the machine's.
+func TestALocalModelProviderCredentialIsInNoKeyGroup(t *testing.T) {
 	m := startMixedRun(t)
 	if key := m.join(t, ""); key != "machine" {
 		t.Fatalf("join 1: %q; want machine", key)
@@ -322,7 +324,7 @@ func TestAMachineKeyIsInNoKeyGroup(t *testing.T) {
 	defer m.mu.Unlock()
 	for _, r := range m.reports {
 		if strings.Contains(r, `"machine"`) {
-			t.Errorf("a report lists the machine's key: %s", r)
+			t.Errorf("a report lists the local model provider credential: %s", r)
 		}
 	}
 }
@@ -422,14 +424,15 @@ func TestAGroupWithEveryKeyOutStopsItsSessionAlone(t *testing.T) {
 	}
 }
 
-// TestALateRefusalLeavesASessionOnTheMachinesKeyAlone pins a limit refusal of group a
-// that reaches the proxy after a session on the machine's model key joined. The run's
-// default model provider credential is a-1, of group a, beside the machine's key.
-// Session 1 joins with no key in its request and gets a-1, and its request waits at the
-// provider. Session 1 ends, and session 2 joins with the machine's key. Only then does
-// the provider refuse a-1 and a-2 at their limit, so the proxy passes the refusal for
-// group a. Session 2's batches have no stop: its key is in no group.
-func TestALateRefusalLeavesASessionOnTheMachinesKeyAlone(t *testing.T) {
+// TestALateRefusalLeavesASessionOnTheLocalModelProviderCredentialAlone pins a limit
+// refusal of group a that reaches the proxy after a session on the local model provider
+// credential joined. The run's default model provider credential is a-1, of group a,
+// beside the local model provider credential. Session 1 joins with no key in its
+// request and gets a-1, and its request waits at the provider. Session 1 ends, and
+// session 2 joins with the local model provider credential. Only then does the provider
+// refuse a-1 and a-2 at their limit, so the proxy passes the refusal for group a.
+// Session 2's batches have no stop: its key is in no group.
+func TestALateRefusalLeavesASessionOnTheLocalModelProviderCredentialAlone(t *testing.T) {
 	m := startKeyGroupsRun(t, true, "a-1")
 	release := make(chan struct{})
 	var once sync.Once

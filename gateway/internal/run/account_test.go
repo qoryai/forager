@@ -225,18 +225,19 @@ func TestARenewalWithoutTheClaimKeepsTheValue(t *testing.T) {
 	}
 }
 
-// TestAGroupWithoutTheClaimIsRefusedBesideAMachineKey pins a run whose default model
-// provider credential is a model key of the machine's, in no key group, beside the key
-// groups of accountDoc: with no key of the group openai left, the run is refused at the
-// start, run_configuration_invalid, with the group's first key in the refusal's names.
-func TestAGroupWithoutTheClaimIsRefusedBesideAMachineKey(t *testing.T) {
-	t.Setenv("QORY_TEST_MACHINE_KEY", "fake-machine-value")
+// TestAGroupWithoutTheClaimIsRefusedBesideALocalModelProviderCredential pins a run
+// whose default model provider credential is a local model provider credential, in no
+// key group, beside the key groups of accountDoc: with no key of the group openai left,
+// the run is refused at the start, run_configuration_invalid, with the group's first
+// key in the refusal's names.
+func TestAGroupWithoutTheClaimIsRefusedBesideALocalModelProviderCredential(t *testing.T) {
+	t.Setenv("QORY_TEST_LOCAL_MODEL_PROVIDER_CREDENTIAL", "fake-machine-value")
 	doc := strings.Replace(accountDoc, `"default_model_provider_credential_name":"subscription"`, `"default_model_provider_credential_name":"machine"`, 1)
 	doc = strings.Replace(doc, `"allow":["chat.model.example","api.model.example"]}}`,
 		`"allow":["chat.model.example","api.model.example","api.machine.example"]},"credentials":[{"name":"machine"}]}`, 1)
 	none := fakeToken(`{"sub":"fake"}`)
 	r, err := run.Open(t.Context(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')),
-		Credentials: []run.Credential{{Name: "machine", Env: "QORY_TEST_MACHINE_KEY", Format: "anthropic-messages", Endpoint: "https://api.machine.example/v1", Scheme: "header", Header: "x-api-key"}},
+		Credentials: []run.Credential{{Name: "machine", Env: "QORY_TEST_LOCAL_MODEL_PROVIDER_CREDENTIAL", Format: "anthropic-messages", Endpoint: "https://api.machine.example/v1", Scheme: "header", Header: "x-api-key"}},
 		Secrets:     (&controlPlane{answer: accountValues(map[string]string{"subscription": none, "subscription-2": none})}).fetch})
 	if err == nil {
 		r.Close()

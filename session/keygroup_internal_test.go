@@ -10,10 +10,10 @@ import (
 
 // TestTheDefaultCredentialSetsItsGroupsPlaceholder pins the placeholder the session
 // gives the runtime for the default model provider credential, from a run answer's
-// credential_hosts of a model key of the machine's, in no group, and two key groups
+// credential_hosts of a local model provider credential, in no group, and two key groups
 // whose keys alternate: a with a-1 and a-2, b with b-1 and b-2. A key of a group sets
 // the placeholder of the group's first key in that list, which is the one the proxy
-// reads, and the machine's key sets its name's.
+// reads, and the local model provider credential sets its name's.
 func TestTheDefaultCredentialSetsItsGroupsPlaceholder(t *testing.T) {
 	rt, err := claude.New()
 	if err != nil {

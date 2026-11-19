@@ -37,8 +37,8 @@ func storedGroups(creds []server.RunCredential) [][]server.RunCredential {
 // configuration's work credentials whose default_model_provider_credential_name is
 // model, of [storedGroups]: the group of model when it is the name of an API credential
 // of creds, or, with model empty, the group of the one API credential of creds; with
-// neither, nil. With model empty and a model key of the machine's beside the one, the
-// run is refused later, when its default model provider credential is decided.
+// neither, nil. With model empty and a local model provider credential beside the one,
+// the run is refused later, when its default model provider credential is decided.
 func defaultGroup(creds []server.RunCredential, model string) []server.RunCredential {
 	work := slices.DeleteFunc(slices.Clone(creds), server.RunCredential.Harness)
 	if model == "" {

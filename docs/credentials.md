@@ -402,7 +402,7 @@ values. An entry is one of two kinds:
   machine's credentials and tools. A tool's variable, such as `GITHUB_TOKEN`, is fine.
 - The credentials and `default_model_provider_credential_name` are fixed for the run: a
   renewal changes only a value. A reload that changes them fails, and the run keeps its
-  policy. So does a reload that selects another model key of this machine's as the
+  policy. So does a reload that selects another local model provider credential as the
   default model provider credential, with or without
   `default_model_provider_credential_name`.
 - Without `credentials`, the run gets the machine's credentials as before.

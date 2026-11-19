@@ -1342,11 +1342,11 @@ func sameSelection(a, b []policy.Selected) bool {
 
 // ProxyUses are held credentials as the proxy sets them, every model key among them
 // with its placeholder's value, [link.GroupPlaceholder]: the keys of one key group,
-// [credential.Held.Groups], share the placeholder of the group's first key, and a model
-// key of the machine's has the placeholder of its name. The proxy sets one model key at
-// a time, the one the gateway sets with [proxy.Proxy.SetModelKey]: the default model
-// provider credential, [credential.Held.DefaultCredential], or the key a session joined
-// with; for a key of a group, the group's active key.
+// [credential.Held.Groups], share the placeholder of the group's first key, and a local
+// model provider credential has the placeholder of its name. The proxy sets one model
+// key at a time, the one the gateway sets with [proxy.Proxy.SetModelKey]: the default
+// model provider credential, [credential.Held.DefaultCredential], or the key a session
+// joined with; for a key of a group, the group's active key.
 func ProxyUses(held *credential.Held) []proxy.Credential {
 	if held == nil {
 		return nil
