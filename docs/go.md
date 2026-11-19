@@ -1380,9 +1380,11 @@ Two packages add to the contract's runtimes what a descriptor cannot contain:
   and `-c` with a pair that sets one of the session's settings, a setting at, under or above `model_providers`,
   `profile`, `profiles`, `projects`, `responses_api_metadata`, `skills` or
   `cloud.skills`, or one of `openai_base_url`, `chatgpt_base_url` and
-  `experimental_realtime_*_base_url`; on `--enable` and `--disable` only of a
-  feature that `config.fixed` sets, such as `plugins` or `apps` (`connectors` counts
-  as `apps`); and on `--oss`, `--local-provider`,
+  `experimental_realtime_*_base_url`, or at, under or above one of the hook features
+  `features.unified_exec_tty`, `features.hooks` and `features.codex_hooks`; on
+  `--enable` and `--disable` of a feature that `config.fixed` sets, such as `plugins`
+  or `apps` (`connectors` counts as `apps`), or of a hook feature; and on `--oss`,
+  `--local-provider`,
   `--profile`, `-p`, `--search`, `--ignore-user-config`, `--dangerously-bypass-hook-trust` and `--remote`. The
   contract's README, §The descriptor, Config, lists every form. Build Codex with
   `codex.New`, `codex.Described` or `catalog.Lookup`; `runtimes.Described` adds no

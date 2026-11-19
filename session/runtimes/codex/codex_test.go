@@ -320,6 +320,7 @@ func TestCodexRefusesArgumentsThatChangeItsSettings(t *testing.T) {
 	ordinary := []string{"exec", "--json", "--skip-git-repo-check", "--sandbox", "danger-full-access", "--model", "gpt-x",
 		"--config", "model_reasoning_effort=\"high\"", "-c", "model=\"gpt-x\"", "--enable", "undo", "-c", "model_provider_note=x",
 		"--config", "experimental_realtime_base_url=x", "-c", "features.connectors_extra=true", "-c", "cloud.other=1", "-c", "skills_extra=1",
+		"-c", "features.unified_exec=false", "-c", "features.unified_exec_tty_extra=true", "--enable", "unified_exec", "-c", "features.hooks_extra=1",
 		"--remote-auth-token-env", "X", "--", "--oss", "-p", "x", "--remote", "ws://x:1", "--dangerously-bypass-hook-trust"}
 	if err := c.CheckArgs(ordinary); err != nil {
 		t.Errorf("%q: %v; want no refusal", ordinary, err)
@@ -330,5 +331,74 @@ func TestCodexRefusesArgumentsThatChangeItsSettings(t *testing.T) {
 	}
 	if err := cl.(runtimes.ArgsChecker).CheckArgs([]string{"-p", "Say hi", "--config", "model_provider=x", "--profile", "x"}); err != nil {
 		t.Errorf("Claude Code: %v; want no refusal", err)
+	}
+}
+
+// TestCodexRefusesTheFeaturesOfItsHooks pins the features that decide whether Codex
+// runs the run's hooks before each tool call: unified_exec_tty, hooks and codex_hooks,
+// the legacy name of hooks. With the contract's descriptor and with a descriptor
+// without config, the join fails on each form of --config and -c that sets one, with
+// spaces around the key and as the table form features.<name>.enabled, and on
+// --enable and --disable of one, with the fix on the first line, at most 100
+// characters, and the cause on the second. Without config, a pair that sets the table features fails too. Other
+// features, a key that only starts with a name, the effort pair a composer passes, and
+// a flag after -- pass.
+func TestCodexRefusesTheFeaturesOfItsHooks(t *testing.T) {
+	contract, err := codex.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare, err := codex.Described("codex.yaml", []byte("version: 1\nruntime: codex\nsources: {output: {format: jsonl}}\n"+
+		"rules: [{source: output, match: {type: thread.started}, type: dev.qory.runtime.started, data: {session_id: thread_id}, set: {source: startup}}]\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := bare.(runtimes.Configs).Config(); ok {
+		t.Fatal("the bare descriptor has config")
+	}
+	const cause = "the setting can turn off the hooks Codex runs before each tool call, or let commands sent to a terminal skip them"
+	for name, rt := range map[string]runtimes.Runtime{"the contract's descriptor": contract, "a descriptor without config": bare} {
+		c := rt.(runtimes.ArgsChecker)
+		for _, feature := range []string{"unified_exec_tty", "hooks", "codex_hooks"} {
+			key := "features." + feature
+			for _, r := range []struct {
+				flag string
+				args []string
+			}{
+				{"--config", []string{"--config", key + "=true"}},
+				{"--config", []string{"--config=" + key + "=false"}},
+				{"-c", []string{"-c", key + "=true"}},
+				{"-c", []string{"-c" + key + "=true"}},
+				{"-c", []string{"-c=" + key + "=true"}},
+				{"-c", []string{"-c", " " + key + " = true"}},
+				{"-c", []string{"-c", key + ".enabled=true"}},
+				{"--config", []string{"--config", key + "={enabled=true}"}},
+				{"--enable", []string{"--enable", feature}},
+				{"--enable", []string{"--enable=" + feature}},
+				{"--disable", []string{"--disable", feature}},
+				{"--disable", []string{"--disable=" + feature}},
+			} {
+				args := slices.Concat([]string{"exec", "--json"}, r.args, []string{"Say hi"})
+				want := "remove the " + r.flag + " that sets " + key + " from the launch's arguments\n" + cause
+				err := c.CheckArgs(args)
+				if err == nil || err.Error() != want {
+					t.Errorf("%s, %q: %v; want %s", name, args, err, want)
+					continue
+				}
+				if first, _, _ := strings.Cut(err.Error(), "\n"); len(first) > 100 {
+					t.Errorf("%s, %q: the first line has %d characters; want 100 at most", name, args, len(first))
+				}
+			}
+		}
+		ordinary := []string{"exec", "--json", "--enable", "undo", "--disable", "undo", "--enable=unified_exec",
+			"--config", "model_reasoning_effort=\"high\"", "-c", "features.unified_exec=false", "-c", "features.unified_exec_tty_extra=true",
+			"-c", "features.hooks_extra=1", "-c", "hooks_note=x", "--", "--enable", "hooks", "-c", "features.hooks=false", "Say hi"}
+		if err := c.CheckArgs(ordinary); err != nil {
+			t.Errorf("%s, %q: %v; want no refusal", name, ordinary, err)
+		}
+	}
+	err = bare.(runtimes.ArgsChecker).CheckArgs([]string{"exec", "-c", "features={hooks=false}", "Say hi"})
+	if want := "remove the -c that sets features.unified_exec_tty from the launch's arguments\n" + cause; err == nil || err.Error() != want {
+		t.Errorf("the table features without config: %v; want %s", err, want)
 	}
 }

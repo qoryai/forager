@@ -6264,7 +6264,8 @@ and `--config=k=v`. For Codex 0.167.2, it fails on these too:
   `-ck=v` and `-c=k=v`. `features.connectors`, the legacy name of `features.apps`,
   which Codex applies after `apps`, counts as `features.apps`;
 - `--enable` and `--disable` of a feature whose `features.<name>` is a key of `fixed`,
-  `plugins` or `apps`, or `connectors`, as `--enable x` and `--enable=x`;
+  `plugins` or `apps`, or `connectors`, or one of the hook features below, as
+  `--enable x` and `--enable=x`;
 - `--oss` and `--local-provider`, which select a local model provider;
 - `--profile` and `-p`, which layer `$CODEX_HOME/<name>.config.toml` over the
   settings, as `--profile x`, `--profile=x`, `-p x`, `-px` and `-p=x`;
@@ -6278,7 +6279,14 @@ and `--config=k=v`. For Codex 0.167.2, it fails on these too:
   the session, as `--remote x` and `--remote=x`;
 - `--config` and `-c` with a pair that sets a key at, under or above `skills` or
   `cloud.skills`, which change the skills Codex loads, in the forms of `--config`
-  above: `cloud.skills.x` and `cloud` both set `cloud.skills`.
+  above: `cloud.skills.x` and `cloud` both set `cloud.skills`;
+- `--config` and `-c` with a pair that sets a key at, under or above one of the hook
+  features, `features.unified_exec_tty`, `features.hooks` and `features.codex_hooks`,
+  the legacy name of `hooks`, in the forms of `--config` above, such as
+  `features.hooks.enabled`. `hooks` turns off the hooks Codex runs before each tool
+  call, and with `unified_exec_tty` on, a command sent to a shell with a terminal runs
+  no hook. qory turns `unified_exec_tty` off in the `config.toml` it writes for the
+  run. The error has the fix on its first line and the cause on its second.
 
 **Fixed**, optional: variables the session sets for the runtime in every launch, by
 name, walled or not, `{CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"}`: 1 to 64 names,
