@@ -268,6 +268,8 @@ func Main() {
 		os.Exit(reach(os.Args[2:]))
 	case modeAfterJoin:
 		os.Exit(afterJoin())
+	case modeSessionNumber:
+		os.Exit(sessionNumber())
 	case modeLeaveJob:
 		os.Exit(leaveJob())
 	case modeBlock:
@@ -710,6 +712,7 @@ func Run(t *testing.T, o Options) {
 	setupRemoved(t, o, origin, outside)
 	setupRemovedAfterSession(t, o, origin, outside)
 	afterJoinFreshHome(t, o, origin, outside)
+	sessionNumbers(t, o, origin, outside)
 	afterStep(t, o, origin, outside)
 	runAPIThroughTheWall(t, o, origin, outside)
 	qoryHostThroughTheWall(t, o, origin, outside)

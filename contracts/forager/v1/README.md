@@ -207,7 +207,9 @@ One run, on a developer machine, with a server configured:
    answers. Without a wall the proxy URL carries a password of the run's forwarder
    alone, which the forwarder checks (§The gateway's link, Agent traffic). It opens the
    local socket and sets `QORY_RUN_SOCKET` to its path, `QORY_RUN_ID` to the run id,
-   `QORY_RUN_API` to the run API's base URL for a run with a control plane (§The run API),
+   `QORY_SESSION` to the session's number in the run from the join answer's `session`,
+   1 for the run's first session, `QORY_RUN_API` to the run API's base URL for a run
+   with a control plane (§The run API),
    `QORY_HOST_URL` to `http://host.qory.invalid` for a run with a route to its caller
    (§The route to the caller), and `QORY_HARNESS_HOME` to the harness's home when the
    launch spec has one. Nothing else
@@ -1723,7 +1725,7 @@ of the highest source that sets it:
 
 | Source, highest first | What it is | In the launch spec, Go |
 |---|---|---|
-| `fixed` | Forager's names, `QORY_RUN_ID`, `QORY_RUN_SOCKET`, `QORY_RUN_API`, `QORY_HOST_URL` and `QORY_HARNESS_HOME`; the proxy's (§Sequence step 5); the names the wall sets (§The wall); the runtime's preparation (§The runtime), a descriptor's `fixed` among them (§The descriptor); the placeholders (§Credentials, §Tools); the default model provider credential's endpoint in the runtime's model endpoint variable (§Credentials, The variable of a model key); and the values the harness computes itself | `SessionSpec.HarnessHome`, `SessionSpec.LaunchFixed` |
+| `fixed` | Forager's names, `QORY_RUN_ID`, `QORY_SESSION`, `QORY_RUN_SOCKET`, `QORY_RUN_API`, `QORY_HOST_URL` and `QORY_HARNESS_HOME`; the proxy's (§Sequence step 5); the names the wall sets (§The wall); the runtime's preparation (§The runtime), a descriptor's `fixed` among them (§The descriptor); the placeholders (§Credentials, §Tools); the default model provider credential's endpoint in the runtime's model endpoint variable (§Credentials, The variable of a model key); and the values the harness computes itself | `SessionSpec.HarnessHome`, `SessionSpec.LaunchFixed` |
 | `apiary` | the server's: the run configuration's `variables` | |
 | `run` | the run's variables, `qory run --env` | `SessionSpec.Variables.Run` |
 | `machine` | the machine's variables, the `wall.env` of `forager.yaml` | `SessionSpec.Variables.Machine` |
@@ -1745,8 +1747,8 @@ passes: what the run inherits, the harness's computed values and defaults, and t
 and the machine's variables. They keep the node's secrets and the stand-ins out of the
 enclosure. A walled run that passes a `QORY_` variable, or a variable a value of the
 machine's is read from, into the enclosure is no run, `variable_reserved`; `QORY_RUN_ID`
-and `QORY_RUN_SOCKET` are exempt. So `--env QORY_X` or `wall.env: [QORY_X]` behind a wall
-stops the run. A session that passes a value for a placeholder does not start, with or
+and `QORY_RUN_SOCKET` are exempt, and `QORY_SESSION` is refused like any other `QORY_`
+name. So `--env QORY_X` or `wall.env: [QORY_X]` behind a wall stops the run. A session that passes a value for a placeholder does not start, with or
 without a wall: its join fails, `placeholder_conflict`, and the run stays open. Without
 a wall, a value of a placeholder the run inherits is not passed: the placeholder wins
 over it. Without a wall, the variables the machine's credentials are read from, the run

@@ -33,11 +33,13 @@ import (
 // and never a value. errors.As finds one in what [Open] or [Run.Join] returns.
 type Refusal = accesskey.Refusal
 
-// The environment variables the session gets from Forager. EnvHarnessHome is set
-// when the spec has a HarnessHome, EnvRunAPI when the run has a control plane, and
-// EnvQoryHost when the run has OpenSpec.QoryRoute.
+// The environment variables the session gets from Forager. EnvSession is the
+// session's number in the run, from the gateway's join answer: 1 for the run's first
+// session. EnvHarnessHome is set when the spec has a HarnessHome, EnvRunAPI when the
+// run has a control plane, and EnvQoryHost when the run has OpenSpec.QoryRoute.
 const (
 	EnvRunID       = "QORY_RUN_ID"
+	EnvSession     = "QORY_SESSION"
 	EnvSocket      = link.EnvRunSocket
 	EnvHarnessHome = "QORY_HARNESS_HOME"
 	EnvRunAPI      = link.EnvRunAPI

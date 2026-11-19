@@ -337,6 +337,105 @@ func TestTheHarnessHome(t *testing.T) {
 	}
 }
 
+// TestTheSessionNumber pins QORY_SESSION: each session of a run gets the number the
+// gateway's join answer gives it, 1 for the run's first, with or without a wall.
+// Without a wall Forager's value wins over one the run inherits, a value of the run's
+// is denied as any QORY_ name, and the record lists the name, fixed, as it lists
+// QORY_RUN_ID. Behind a wall a value the run passes, inherits or gets from the machine
+// is variable_reserved, at the join and from AgentEnv, while QORY_RUN_ID is exempt.
+func TestTheSessionNumber(t *testing.T) {
+	ctx := context.Background()
+	for _, walled := range []bool{true, false} {
+		t.Run(fmt.Sprint("three sessions, walled ", walled), func(t *testing.T) {
+			sp := spec(t)
+			dumpsEnv(t, &sp)
+			if walled {
+				sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+			}
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+			for want := 1; want <= 3; want++ {
+				out := filepath.Join(t.TempDir(), "env")
+				sp.Args = []string{"-c", `env > "$0"`, out}
+				res, err := r.Join(ctx, sp.SessionSpec)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if res.ExitCode != 0 || res.Session != want {
+					t.Fatalf("join %d: exit %d, session %d", want, res.ExitCode, res.Session)
+				}
+				if got := envOf(t, out)[session.EnvSession]; got != fmt.Sprint(res.Session) {
+					t.Errorf("join %d: %s=%q, want %d", want, session.EnvSession, got, res.Session)
+				}
+			}
+		})
+	}
+	t.Run("without a wall Forager's value wins", func(t *testing.T) {
+		sp := spec(t, session.EnvSession+"=99", session.EnvRunID+"=inherited")
+		sp.Variables.Run = []string{session.EnvSession + "=98", session.EnvRunID + "=from-the-run"}
+		out := dumpsEnv(t, &sp)
+		res, err := run(ctx, sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := envOf(t, out)
+		if env[session.EnvSession] != "1" || env[session.EnvRunID] != res.RunID {
+			t.Errorf("%s=%q %s=%q, want 1 and %s", session.EnvSession, env[session.EnvSession], session.EnvRunID, env[session.EnvRunID], res.RunID)
+		}
+		want := []string{"QORY_RUN_ID<-fixed run:denied shell:fixed", "QORY_SESSION<-fixed run:denied shell:fixed"}
+		if got := variablesApplied(t, res); !slices.Equal(got, want) {
+			t.Errorf("the record %q, want %q", got, want)
+		}
+	})
+	const forged = session.EnvSession + "=7"
+	for what, set := range map[string]func(*runSpec){
+		"--env":                 func(sp *runSpec) { sp.Variables.Run = []string{forged} },
+		"wall.env":              func(sp *runSpec) { sp.Variables.Machine = []string{forged} },
+		"what the run inherits": func(sp *runSpec) { sp.Env = append(sp.Env, forged) },
+	} {
+		t.Run("behind a wall from "+what, func(t *testing.T) {
+			sp := spec(t)
+			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+			set(&sp)
+			_, err := run(ctx, sp)
+			var ref *session.Refusal
+			if !errors.As(err, &ref) || ref.Code != "variable_reserved" || !slices.Equal(ref.Names, []string{session.EnvSession}) {
+				t.Errorf("%v, want variable_reserved %s", err, session.EnvSession)
+			}
+		})
+	}
+	t.Run("behind a wall from AgentEnv", func(t *testing.T) {
+		sp := spec(t)
+		sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+		sp.Variables.Run = []string{forged}
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+		_, err = r.AgentEnv(sp.SessionSpec)
+		var ref *session.Refusal
+		if !errors.As(err, &ref) || ref.Code != "variable_reserved" || !slices.Equal(ref.Names, []string{session.EnvSession}) {
+			t.Errorf("AgentEnv: %v, want variable_reserved %s", err, session.EnvSession)
+		}
+	})
+	t.Run("behind a wall QORY_RUN_ID is exempt", func(t *testing.T) {
+		sp := spec(t, session.EnvRunID+"=inherited")
+		sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+		out := dumpsEnv(t, &sp)
+		res, err := run(ctx, sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := envOf(t, out)[session.EnvRunID]; got != res.RunID {
+			t.Errorf("%s=%q, want %s", session.EnvRunID, got, res.RunID)
+		}
+	})
+}
+
 // TestAWalledRunLeavesOutTheRuntimesKeyFromTheMachine pins the walled run that passes
 // the runtime's credential as the machine's variable, as wall.env does: the deny list's
 // model_keys leave the value out, the record has it as denied, and the runtime's
@@ -1100,7 +1199,7 @@ func TestAgentEnvIsWhatTheAgentGets(t *testing.T) {
 			// Forager's and the proxy's names, the placeholder, the preparation's names,
 			// PATH, the one inherited name of the built-in deny list, and the variables
 			// the shell that dumps the environment sets.
-			left := slices.Concat(prepared, []string{"TOOL_TOKEN", "QORY_RUN_ID", "QORY_RUN_SOCKET", "PATH", "PWD", "SHLVL", "_", "OLDPWD"})
+			left := slices.Concat(prepared, []string{"TOOL_TOKEN", "QORY_RUN_ID", "QORY_SESSION", "QORY_RUN_SOCKET", "PATH", "PWD", "SHLVL", "_", "OLDPWD"})
 			for _, kv := range link.ProxyEnv("") {
 				name, _, _ := strings.Cut(kv, "=")
 				left = append(left, name)

@@ -358,6 +358,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `QORY_SESSION`, `session.EnvSession`, in each session's environment: the session's
+  number from the join answer, 1 for the run's first; a walled run that passes it is
+  `variable_reserved`.
 - The agent places of an agent file of TOML, and Codex's: a descriptor's agent place,
   `model.effort.agent`, takes `toml`, a key at the top of the agent's file, in place of
   `frontmatter`, exactly one of the two; and `model.agent`, optional, is where an

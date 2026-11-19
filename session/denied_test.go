@@ -125,7 +125,7 @@ func TestADeniedNameIsUnsetBehindAWall(t *testing.T) {
 	sp, g := specGateway(t, "INHERITED_DENIED=from-the-shell")
 	hasRunAPI(g)
 	sp.Wall, sp.Image = w, "example.com/agent:1"
-	sp.Variables.Deny = []string{"APP_SECRET", "APP_*", "INHERITED_DENIED", "HTTPS_PROXY", session.EnvRunID, session.EnvRunAPI}
+	sp.Variables.Deny = []string{"APP_SECRET", "APP_*", "INHERITED_DENIED", "HTTPS_PROXY", session.EnvRunID, session.EnvSession, session.EnvRunAPI}
 	sp.Variables.Machine = []string{"APP_SECRET=the-machines"}
 	if _, err := run(context.Background(), sp); err != nil {
 		t.Fatal(err)
@@ -137,7 +137,7 @@ func TestADeniedNameIsUnsetBehindAWall(t *testing.T) {
 			t.Errorf("%s: unset %q, the wall's environment %q; want it unset alone", name, names, entriesOf(w.got.Env, name))
 		}
 	}
-	for _, name := range []string{"APP_*", "INHERITED_DENIED", "HTTPS_PROXY", session.EnvRunID, session.EnvRunAPI} {
+	for _, name := range []string{"APP_*", "INHERITED_DENIED", "HTTPS_PROXY", session.EnvRunID, session.EnvSession, session.EnvRunAPI} {
 		if slices.Contains(names, name) {
 			t.Errorf("%s is unset: %q", name, names)
 		}
@@ -145,7 +145,7 @@ func TestADeniedNameIsUnsetBehindAWall(t *testing.T) {
 	if got := entriesOf(w.got.Env, "INHERITED_DENIED"); !slices.Equal(got, []string{"INHERITED_DENIED=from-the-shell"}) {
 		t.Errorf("the wall's environment has %q for INHERITED_DENIED, want the inherited value once", got)
 	}
-	for _, name := range []string{session.EnvRunID, session.EnvRunAPI} {
+	for _, name := range []string{session.EnvRunID, session.EnvSession, session.EnvRunAPI} {
 		if got := entriesOf(w.got.Env, name); len(got) != 1 || strings.HasSuffix(got[0], "=") {
 			t.Errorf("the wall's environment has %q for %s, want the session's value once", got, name)
 		}
