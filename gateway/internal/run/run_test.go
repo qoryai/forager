@@ -523,7 +523,7 @@ func TestEveryModelKeyReachesTheProxy(t *testing.T) {
 	unset := strings.Replace(modelKeysDoc("second", ""), `,"default_model_provider_credential_name":"second"`, "", 1)
 	_, err = reload(t, r, document(t, unset, digest('4')))
 	if want := "run configuration " + runURL + ": Start a new run to change default_model_provider_credential_name.\n" +
-		"The run started with default_model_provider_credential_name \"second\", and this configuration leaves it unset; the policy in force stays"; err == nil || err.Error() != want {
+		`The run started with default_model_provider_credential_name "second", and this configuration leaves it unset; the policy in force stays`; err == nil || err.Error() != want {
 		t.Errorf("a reload without default_model_provider_credential_name:\n got %v\nwant %s", err, want)
 	}
 	if r.RunConfiguration() != digest('2') || r.Held().DefaultCredential != "second" {

@@ -439,44 +439,44 @@ const beyondLinkSchema = "-beyond-schema-"
 // a link refusal without from, with a control character other than tab and newline in
 // its message, C0, DEL or C1, or with a state other than the three, paused among them,
 // a run outcome and a batch answer's end paused, and an API format outside the list, in
-// upper case or as an object; and, for
-// several model keys and a resume, a run configuration whose API credential has a
-// pause_for_s of 0 or over a week or a resets_at that is no time, with seven API
-// credentials, a host credential with pause_for_s or with use_up_to_percent and
-// use_up_to_windows, an API credential with a use_up_to_percent of 0 or 100, without
-// use_up_to_windows, or with use_up_to_windows alone, empty, of 12 windows, with a
-// window twice or a window in upper case, or a resume without its session id, with a
-// run id in upper case, or with runs empty, with a run twice, with 257 runs or with a
-// run in upper case, a model keys report whose entry has a utilization over 100, a
-// status, a source or a window outside the grammar, rejected without cooldown_until or
-// cooldown_until with another status, or no observed_at, or whose time has a fraction
-// or whose session is 0, a model keys answer without version, a link batch answer whose
-// stop has no reason or another one, a session.exited or a session's run.exited failed
-// or cancelled with model_key_limit, a session.exited paused with no reason or with
-// stopped and exit code -1, a session's run.exited paused with no reason, a
-// session.transcript numbered 0, with a negative offset, without its session id or over
-// 32 KiB, a descriptor whose resume has no args, a prefix outside the home or a path
-// without {session_id}, a descriptor rule whose set sets session or a field to an
-// object, whose from_started lists agent_id or is on a hook rule or a rule of
-// runtime.started, or with none of data, set and from_started, and a run.target_write
-// with a state outside the four, without its path, with an empty system, with a ref or
-// with a request id in upper case. For model keys of another format: a run
-// configuration whose API credential has account_header or account_claim alone, both
-// without oauth, with oauth false or beside a header scheme, an account_claim that is
-// no JSON pointer, / alone, with a control character or with an escape other than ~0
-// and ~1, an account_header with a space or that is a reserved header, Authorization,
-// Host, Content-Length with _, Cookie, a Proxy-, X-Qory- or Qory- header, or paths that
-// are empty, 33, twice, with an inner *, with a { or } outside a {} segment or
-// relative; a secrets request whose unauthorized is empty, of 7, twice or not a name; a
-// model keys report whose unauthorized is empty, of 7, a list of names, or has an entry
-// without at or credential, with an at that is no time or with a member it does not
-// define; a link batch, a session.exited or a run.exited with model_key_switch and a
-// state other than paused, or with model_key_unauthorized and a state other than
-// failed; and a descriptor whose endpoint is a flag or two places, whose config has no
-// flag, a short flag, a member it does not define, an empty fixed or one of 65 keys, a
-// fixed value that is a fraction, a table, an integer over 2^53-1, or a string with a
-// line feed or over 4096 characters, or a key with a space, whose model key or declared
-// secret has an account_header, or whose resume has a prefix with * or an empty after.
+// upper case or as an object; and, for several model keys and a resume, a run
+// configuration whose API credential has a pause_for_s of 0 or over a week or a
+// resets_at that is no time, with seven API credentials, a host credential with
+// pause_for_s or with use_up_to_percent and use_up_to_windows, an API credential with a
+// use_up_to_percent of 0 or 100, without use_up_to_windows, or with use_up_to_windows
+// alone, empty, of 12 windows, with a window twice or a window in upper case, or a
+// resume without its session id, with a run id in upper case, or with runs empty, with
+// a run twice, with 257 runs or with a run in upper case, a model keys report whose
+// entry has a utilization over 100, a status, a source or a window outside the grammar,
+// rejected without cooldown_until or cooldown_until with another status, or no
+// observed_at, or whose time has a fraction or whose session is 0, a model keys answer
+// without version, a link batch answer whose stop has no reason or another one, a
+// session.exited or a session's run.exited failed or cancelled with model_key_limit, a
+// session.exited paused with no reason or with stopped and exit code -1, a session's
+// run.exited paused with no reason, a session.transcript numbered 0, with a negative
+// offset, without its session id or over 32 KiB, a descriptor whose resume has no args,
+// a prefix outside the home or a path without {session_id}, a descriptor rule whose set
+// sets session or a field to an object, whose from_started lists agent_id or is on a
+// hook rule or a rule of runtime.started, or with none of data, set and from_started,
+// and a run.target_write with a state outside the four, without its path, with an empty
+// system, with a ref or with a request id in upper case. For model keys of another
+// format: a run configuration whose API credential has account_header or account_claim
+// alone, both without oauth, with oauth false or beside a header scheme, an
+// account_claim that is no JSON pointer, / alone, with a control character or with an
+// escape other than ~0 and ~1, an account_header with a space or that is a reserved
+// header, Authorization, Host, Content-Length with _, Cookie, a Proxy-, X-Qory- or
+// Qory- header, or paths that are empty, 33, twice, with an inner *, with a { or }
+// outside a {} segment or relative; a secrets request whose unauthorized is empty, of
+// 7, twice or not a name; a model keys report whose unauthorized is empty, of 7, a list
+// of names, or has an entry without at or credential, with an at that is no time or
+// with a member it does not define; a link batch, a session.exited or a run.exited with
+// model_key_switch and a state other than paused, or with model_key_unauthorized and a
+// state other than failed; and a descriptor whose endpoint is a flag or two places,
+// whose config has no flag, a short flag, a member it does not define, an empty fixed
+// or one of 65 keys, a fixed value that is a fraction, a table, an integer over 2^53-1,
+// or a string with a line feed or over 4096 characters, or a key with a space, whose
+// model key or declared secret has an account_header, or whose resume has a prefix
+// with * or an empty after.
 // A fixture whose name contains -beyond-schema- breaks a rule only the gateway checks,
 // or for a descriptor the session, and passes its schema. The longest schema name the
 // file name starts with is the schema, so run-configuration-variable-value-not-string

@@ -742,13 +742,13 @@ credentials claim, unless both are model keys or both have `paths` and no path o
 overlaps a path of the other, a claim above the definition's, and under `enforce` a
 credential's host that no entry of the run's allow list covers: `add api.model.example
 to the run's egress allow list, or remove the credential model: the credential model is
-for api.model.example, which no allow entry covers`. The host of a model key, a
-credential stored in the control plane or a local model provider credential, is its
-endpoint's host. The gateway runs an adapter again five minutes before `expires_at`, and
-when a host returns 401 to a request it set the secret on, at most once every thirty
-seconds. The new answer changes the secret and nothing else: one that lists other hosts,
-schemes or paths is refused and reported, and the old secret stays, because what a run
-reaches is fixed when it starts.
+for api.model.example, which no allow entry covers`. The host of a model key, whether
+stored in the control plane or a local model provider credential, is its endpoint's
+host. The gateway runs an adapter again five minutes before `expires_at`, and when a
+host returns 401 to a request it set the secret on, at most once every thirty seconds.
+The new answer changes the secret and nothing else: one that lists other hosts, schemes
+or paths is refused and reported, and the old secret stays, because what a run reaches
+is fixed when it starts.
 
 **Placeholders.** A program often needs a credential set to start. A definition, or an
 adapter's answer, lists variables the agent's environment gets with the value
@@ -1133,22 +1133,21 @@ of a-z, 0-9 and underscore, starting with a letter, such as five_hour: window 1 
 
 The server sends each group's keys in the order that breaks ties: the provider's default
 key in Qory Apiary first, then the other keys by when they were added, then the keys in
-cooldown at the claim, each with `cooldown_until`. The provider's default key and the
-run configuration's default model provider credential,
-`default_model_provider_credential_name`, are separate settings. When the active key
-goes into cooldown, the gateway makes active a key out of cooldown: a key with no known
-reset first, ties broken by the order the server sent; then the key with the closest
-reset; among equals, the first by that order (step 2 below). When the run's API
-credentials, across every group, would pass 6, the keys out of cooldown come first, then
-the keys in cooldown by the earliest `cooldown_until`. The gateway starts a key with
-`cooldown_until` in cooldown until that time, or until a later state of the key allows
-it: a `2xx` response of the provider to the key, or an entry of the key in a model keys
-report's answer that is not `rejected` and whose `observed_at` is after the run's start.
-The default model provider credential is never in cooldown: a default model provider
-credential whose `cooldown_until` is after the gateway's clock is
-`run_configuration_invalid`, `Set default_model_provider_credential_name to a model key
-out of cooldown.` with `The default model provider credential "model" is in cooldown
-until <time>` on a second line.
+cooldown at the claim, each with `cooldown_until`. The run starts on the key in
+`default_model_provider_credential_name`, which can be another key than the provider's
+default key in Qory Apiary. When the active key goes into cooldown, the gateway makes
+active a key out of cooldown: a key with no known reset first, ties broken by the order
+the server sent; then the key with the closest reset; among equals, the first by that
+order (step 2 below). When the run's API credentials, across every group, would pass 6,
+the keys out of cooldown come first, then the keys in cooldown by the earliest
+`cooldown_until`. The gateway starts a key with `cooldown_until` in cooldown until that
+time, or until a later state of the key allows it: a `2xx` response of the provider to
+the key, or an entry of the key in a model keys report's answer that is not `rejected`
+and whose `observed_at` is after the run's start. The default model provider credential
+is never in cooldown: a default model provider credential whose `cooldown_until` is
+after the gateway's clock is `run_configuration_invalid`, `Set
+default_model_provider_credential_name to a model key out of cooldown.` with `The
+default model provider credential "model" is in cooldown until <time>` on a second line.
 
 The keys of a group share one placeholder, the placeholder of the group's first key in
 `credentials`, such as `qory-model-sets-the-credential-outside-the-enclosure` for a
@@ -1456,21 +1455,27 @@ host credential gets the variables its `placeholders` list, such as a tool's
 `GITHUB_TOKEN`.
 
 The credentials and `default_model_provider_credential_name` are fixed when the run
-starts: a reload whose `credentials` differ, or whose
-`default_model_provider_credential_name` names another key, fails, and the policy in
-force stays. So does a reload whose default model provider credential differs from the
-run's, without `default_model_provider_credential_name`: `run configuration <url>: Start
-a new run to change the default model provider credential: the run started with "first",
-and this configuration selects "second"; the policy in force stays`, with `no model key`
-in place of a quoted name when there is none. The active key changes during the run, and
-a reload is compared with the default model provider credential, never with the active
-key. A private host gets a value only through an exact entry, as a credential of the
-machine's does, and the proxy verifies the host's certificate against the gateway
-machine's trust store. A host on the gateway machine gets a value only when the node's
-policy names it, as for every name on the machine. On a host that gets a credential,
-from the server or the machine, a `TRACE` or `TRACK` through `CONNECT` is denied with
-the rule `wall:echo-method` (§Credentials, The answer). The values stay bytes until the
-proxy sets the header, and are overwritten when the run ends.
+starts. A reload whose `credentials` differ fails, and the policy in force stays. A
+reload that sets, changes or removes `default_model_provider_credential_name` fails too,
+even when the value is the key the run uses: `run configuration <url>: Start a new run
+to change default_model_provider_credential_name.`, with `The run started with
+default_model_provider_credential_name unset, and this configuration sets it to "first";
+the policy in force stays` on a second line, or `The run started with
+default_model_provider_credential_name "first", and this configuration leaves it unset;
+the policy in force stays` when the reload removes the field. So does a reload whose
+default model provider credential differs from the run's, without
+`default_model_provider_credential_name`: `run configuration <url>: Start a new run to
+change the default model provider credential: the run started with "first", and this
+configuration selects "second"; the policy in force stays`, with `no model key` in place
+of a quoted name when there is none. The active key changes during the run, and a reload
+is compared with the default model provider credential, never with the active key. A
+private host gets a value only through an exact entry, as a credential of the machine's
+does, and the proxy verifies the host's certificate against the gateway machine's trust
+store. A host on the gateway machine gets a value only when the node's policy names it,
+as for every name on the machine. On a host that gets a credential, from the server or
+the machine, a `TRACE` or `TRACK` through `CONNECT` is denied with the rule
+`wall:echo-method` (§Credentials, The answer). The values stay bytes until the proxy
+sets the header, and are overwritten when the run ends.
 
 **Stack hosts from the server.** A run configuration may have `stack_hosts`, the
 hosts the run's stack proxy allows beside `gateway.stack_hosts` (§The gateway's link,

@@ -133,11 +133,12 @@ release may change what an existing document does, and says so under Upgrading.
   reset, for a key whose stored use is at or above its percentage at the claim.
 - Send the key group in the order that breaks ties: the provider's default key in Qory
   Apiary first, then the other keys by when they were added, then the keys in cooldown
-  at the claim, each with `cooldown_until`. The provider's default key and the run
-  configuration's `default_model_provider_credential_name` are separate settings. When
-  the active key goes into cooldown, the gateway makes active a key with no known reset
-  first, ties broken by the order the server sent, then the key with the closest reset.
-  A default model provider credential in cooldown is `run_configuration_invalid`.
+  at the claim, each with `cooldown_until`. The run starts on the key in
+  `default_model_provider_credential_name`, which can be another key than the provider's
+  default key in Qory Apiary. When the active key goes into cooldown, the gateway makes
+  active a key with no known reset first, ties broken by the order the server sent, then
+  the key with the closest reset. A default model provider credential in cooldown is
+  `run_configuration_invalid`.
 - Read `paused`, a state of `dev.qory.run.exited` and `dev.qory.session.exited`, always
   with `model_key_limit`, as a pause of the run, not as a person's cancel: the run's work
   is kept, and a continuation of the run can resume its runtime session.
@@ -1036,14 +1037,14 @@ release may change what an existing document does, and says so under Upgrading.
   one is the default model provider credential. A name of a host credential, of no model
   key of the run, and none beside two or more model keys are
   `run_configuration_invalid`. A reload that changes the field fails, `Start a new run
-  to change default_model_provider_credential_name.` with `The run started with
-  default_model_provider_credential_name unset, and this configuration sets it to
-  "first"` on a second line, or with `leaves it unset` in place of `sets it to "first"`,
-  and the policy in force stays. A reload whose default model provider credential
-  differs from the run's fails too, without `default_model_provider_credential_name`:
-  `Start a new run to change the default model provider credential`.
-  `server.RunConfiguration` has `DefaultModelProviderCredentialName`, and
-  `server.CheckCredentials` takes it.
+  to change default_model_provider_credential_name.` with a second line such as `The run
+  started with default_model_provider_credential_name unset, and this configuration sets
+  it to "first"` or `The run started with default_model_provider_credential_name
+  "first", and this configuration leaves it unset`, and the policy in force stays. A
+  reload whose default model provider credential differs from the run's fails too,
+  without `default_model_provider_credential_name`: `Start a new run to change the
+  default model provider credential`. `server.RunConfiguration` has
+  `DefaultModelProviderCredentialName`, and `server.CheckCredentials` takes it.
 - The gateway sets a run configuration's `credentials`, with or without a wall. When the run
   starts it sends a secrets request under the access key, for the digest it computes of
   the document's bytes, opens the answer with `sealed.Open`, and the proxy sets each value
