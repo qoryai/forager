@@ -148,8 +148,9 @@ func TestAJoinSetsItsModelKey(t *testing.T) {
 
 // TestAJoinWithTheOldModelCredentialIsRefused pins that a join request with
 // model_credential, the member's name before model_provider_credential_name, is a 400
-// invalid_request from the gateway that numbers no session, though it names second, a
-// model key of the run. The next join, with no name, is session 1 and gets first.
+// invalid_request from the gateway that numbers no session, though the member's value,
+// second, is a model key of the run. The next join, with no name, is session 1 and gets
+// first.
 func TestAJoinWithTheOldModelCredentialIsRefused(t *testing.T) {
 	h, runID, _, _ := modelKeyRun(t)
 	c := raw(t, h.g.LocalLink())
