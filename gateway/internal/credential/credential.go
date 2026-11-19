@@ -102,11 +102,11 @@ type Use struct {
 	// Renewed is true when the server's value is fetched again before it expires and
 	// after a host refuses it: a value the run renews, whose rejected requests it again.
 	Renewed bool
-	// Format, Endpoint and OAuth are a model key's, from the server or the machine;
-	// empty for every other credential. AccountHeader and AccountClaim, of a model key
-	// from the server alone, are the header the proxy sets beside the value and the
-	// JSON pointer of its value in the value's JWT payload ([AccountClaim]); empty for
-	// none.
+	// Format, Endpoint and OAuth are a model key's, a credential stored in the control
+	// plane or a local model provider credential; empty for every other credential.
+	// AccountHeader and AccountClaim, of a model key from the server alone, are the header
+	// the proxy sets beside the value and the JSON pointer of its value in the value's JWT
+	// payload ([AccountClaim]); empty for none.
 	Format, Endpoint            string
 	OAuth                       bool
 	AccountHeader, AccountClaim string
@@ -218,13 +218,13 @@ func (h *Held) reportPanic(line string) {
 }
 
 // Credential is one credential a run holds: its name, the hosts of its uses in their
-// order, as the proxy matches them, and the variables the enclosure gets a placeholder in
-// for it, each once. Of a credential from the server, Stored is true. Of a model key,
-// from the server or the machine, Format, Endpoint and OAuth are set; of a model key
-// from the server, Group, its key group. Of both, Scheme,
-// Username and Header are how its value is set on its first use's hosts. Items, of a
-// credential from the server, are its uses in order: each one's hosts with how the value
-// is set there.
+// order, as the proxy matches them, and the variables the enclosure gets a placeholder
+// in for it, each once. Of a credential from the server, Stored is true. Of a model
+// key, a credential stored in the control plane or a local model provider credential,
+// Format, Endpoint and OAuth are set; of a model key from the server, Group, its key
+// group. Of both, Scheme, Username and Header are how its value is set on its first
+// use's hosts. Items, of a credential from the server, are its uses in order: each
+// one's hosts with how the value is set there.
 type Credential struct {
 	Name                     string
 	Hosts                    []string

@@ -736,18 +736,19 @@ ends in `.local`, `.internal` or `.home.arpa`. A credential whose `hosts` are
 credential's key is sent only over TLS whose certificate the gateway machine's system
 trust store verifies.
 
-Before the run starts every selected credential is resolved, and any of these is
-no run: a name the machine does not define, an argument it does not provide for, a host
-two credentials claim, unless both are model keys or both have `paths` and no path of
-one overlaps a path of the other, a claim above the definition's, and
-under `enforce` a credential's host that no entry of the run's allow list covers: `add
-api.model.example to the run's egress allow list, or remove the credential model: the
-credential model is for api.model.example, which no allow entry covers`. A model key's
-host, from the server or the machine, is its endpoint's host. The gateway runs an adapter again five minutes before
-`expires_at`, and when a host returns 401 to a request it set the secret on, at most
-once every thirty seconds. The new answer changes the secret and nothing else: one
-that lists other hosts, schemes or paths is refused and reported, and the old secret
-stays, because what a run reaches is fixed when it starts.
+Before the run starts every selected credential is resolved, and any of these is no run:
+a name the machine does not define, an argument it does not provide for, a host two
+credentials claim, unless both are model keys or both have `paths` and no path of one
+overlaps a path of the other, a claim above the definition's, and under `enforce` a
+credential's host that no entry of the run's allow list covers: `add api.model.example
+to the run's egress allow list, or remove the credential model: the credential model is
+for api.model.example, which no allow entry covers`. The host of a model key, a
+credential stored in the control plane or a local model provider credential, is its
+endpoint's host. The gateway runs an adapter again five minutes before `expires_at`, and
+when a host returns 401 to a request it set the secret on, at most once every thirty
+seconds. The new answer changes the secret and nothing else: one that lists other hosts,
+schemes or paths is refused and reported, and the old secret stays, because what a run
+reaches is fixed when it starts.
 
 **Placeholders.** A program often needs a credential set to start. A definition, or an
 adapter's answer, lists variables the agent's environment gets with the value
@@ -1867,8 +1868,8 @@ a model key's variable among its `placeholders`. After the variables are resolve
 session refuses the run, `model_key_missing` with the model keys' variables, unless one
 of these holds:
 
-- `credential_hosts` has a model key, an entry with `format`, from the server or the
-  machine.
+- `credential_hosts` has a model key, an entry with `format`: a credential stored in the
+  control plane, or a local model provider credential.
 - A value of a model key's variable reaches the runtime: the run's, the machine's, the
   harness's, the runtime's preparation's or one the run inherits, unless it is a
   placeholder.
@@ -5109,19 +5110,19 @@ document:
   `dev.qory.session.exited`, and then sets the active key again; the answer has no
   `model_provider_credential_name`.
 - `model_provider_credential_name`: the name of the model key the session starts with,
-  one of the model keys the gateway holds for the run, from the server or the machine.
-  Absent, it means the default model provider credential, or, when the default model
-  provider credential is in a key group, that group's active key. The name of a key of a
-  key group means that group's active key: the key the proxy switched to after a limit
-  refusal. The name of a key of the default model provider credential's group that is
-  not active means the active key too. For a group other than the default model provider
-  credential's that no session used yet, it means the named key, or, when it is in
-  cooldown or out, the key a limit refusal switches to. When no key of that group is
-  usable, it means the named key: the session's first request with the group's
-  placeholder gets the gateway's `429` with no `Retry-After`, and the answer to its next
-  batch has `stop` (§Credentials, Several model keys). The name of a local model
-  provider credential means that key alone. A request with `model_key` `false` may not
-  contain it.
+  one of the model keys the gateway holds for the run: a credential stored in the
+  control plane, or a local model provider credential. Absent, it means the default
+  model provider credential, or, when the default model provider credential is in a key
+  group, that group's active key. The name of a key of a key group means that group's
+  active key: the key the proxy switched to after a limit refusal. The name of a key of
+  the default model provider credential's group that is not active means the active key
+  too. For a group other than the default model provider credential's that no session
+  used yet, it means the named key, or, when it is in cooldown or out, the key a limit
+  refusal switches to. When no key of that group is usable, it means the named key: the
+  session's first request with the group's placeholder gets the gateway's `429` with no
+  `Retry-After`, and the answer to its next batch has `stop` (§Credentials, Several
+  model keys). The name of a local model provider credential means that key alone. A
+  request with `model_key` `false` may not contain it.
 
 The answer is a `200`, `application/json`, whose body is a
 `link-join-answer.schema.json` document:
