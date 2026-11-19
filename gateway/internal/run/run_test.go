@@ -1134,7 +1134,6 @@ func TestAReloadKeepsAnImageByReference(t *testing.T) {
 // none is refused.
 func TestAReloadKeepsTheDefaultCredential(t *testing.T) {
 	t.Setenv("QORY_TEST_MODEL_TOKEN", "sk-ant-fake-value")
-	const oneModelKey = "without default_model_provider_credential_name, the default model provider credential is the run configuration's one model key, or unset when it has none; the policy in force stays"
 	doc := func(key string) string {
 		return `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","api.other-model.example"]},` +
 			`"credentials":[{"name":"` + key + `"}]}}`
@@ -1153,7 +1152,7 @@ func TestAReloadKeepsTheDefaultCredential(t *testing.T) {
 	}
 	_, err := reload(t, r, document(t, doc("second"), digest('2')))
 	if want := "Start a new run to change the default model provider credential.\n" +
-		"run configuration " + runURL + `: the run started with the default model provider credential "first", and this run configuration sets it to "second"; ` + oneModelKey; err == nil || err.Error() != want {
+		"run configuration " + runURL + `: the run started with the model key "first"; this run configuration has one model key, "second", and no default_model_provider_credential_name; the policy in force stays`; err == nil || err.Error() != want {
 		t.Errorf("a reload with another model key:\n got %v\nwant %s", err, want)
 	}
 	if r.RunConfiguration() != digest('1') || r.Held().DefaultCredential != "first" {
@@ -1162,7 +1161,7 @@ func TestAReloadKeepsTheDefaultCredential(t *testing.T) {
 	none := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}}}`
 	_, err = reload(t, r, document(t, none, digest('3')))
 	if want := "Start a new run to change the default model provider credential.\n" +
-		"run configuration " + runURL + `: the run started with the default model provider credential "first", and this run configuration leaves it unset; ` + oneModelKey; err == nil || err.Error() != want {
+		"run configuration " + runURL + `: the run started with the model key "first"; this run configuration has no model key; the policy in force stays`; err == nil || err.Error() != want {
 		t.Errorf("a reload with no model key:\n got %v\nwant %s", err, want)
 	}
 	if _, err := reload(t, r, document(t, doc("first"), digest('4'))); err != nil {
@@ -1185,7 +1184,7 @@ func TestAReloadKeepsTheDefaultCredential(t *testing.T) {
 	}
 	_, err = reload(t, r, document(t, doc("first"), digest('6')))
 	if want := "Start a new run to change the default model provider credential.\n" +
-		"run configuration " + runURL + `: the run started with the default model provider credential unset, and this run configuration sets it to "first"; ` + oneModelKey; err == nil || err.Error() != want {
+		"run configuration " + runURL + `: the run started with no model key; this run configuration has one model key, "first", and no default_model_provider_credential_name; the policy in force stays`; err == nil || err.Error() != want {
 		t.Errorf("a reload that adds a model key:\n got %v\nwant %s", err, want)
 	}
 }

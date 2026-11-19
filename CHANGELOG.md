@@ -1045,14 +1045,13 @@ release may change what an existing document does, and says so under Upgrading.
   unset; the policy in force stays`. A reload whose default model provider credential
   differs from the run's fails too, without `default_model_provider_credential_name`:
   `Start a new run to change the default model provider credential.`, and a second line
-  such as `run configuration <url>: the run started with the default model provider
-  credential "first", and this run configuration sets it to "second"; without
-  default_model_provider_credential_name, the default model provider credential is the
-  run configuration's one model key, or unset when it has none; the policy in force
-  stays`. A reload whose credentials differ fails with `Start a new run to use other
-  credentials.` on the first line. The gateway reports each of the three with `the
-  reload failed: ` at the start of the second line. `server.RunConfiguration` has
-  `DefaultModelProviderCredentialName`, and `server.CheckCredentials` takes it.
+  such as `run configuration <url>: the run started with the model key "first"; this run
+  configuration has one model key, "second", and no
+  default_model_provider_credential_name; the policy in force stays`. A reload whose
+  credentials differ fails with `Start a new run to use other credentials.` on the first
+  line. The gateway reports each of the three with `the reload failed: ` at the start of
+  the second line. `server.RunConfiguration` has `DefaultModelProviderCredentialName`,
+  and `server.CheckCredentials` takes it.
 - The gateway sets a run configuration's `credentials`, with or without a wall. When the run
   starts it sends a secrets request under the access key, for the digest it computes of
   the document's bytes, opens the answer with `sealed.Open`, and the proxy sets each value

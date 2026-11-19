@@ -1140,11 +1140,21 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded, named string) (*D
 	// credential is the run configuration's one model key, or unset when it has none,
 	// and a reload may select another: the runtime started with the first one's
 	// variable and endpoint, so the default model provider credential is fixed as well.
+	// The refusal shows the model key the run started with, or no model key, and the
+	// run configuration's one model key, or no model key.
 	if started := defaultOf(r.Held()); fresh.DefaultCredential != started {
 		fresh.Close()
+		was := "the run started with no model key"
+		if started != "" {
+			was = "the run started with the model key " + accesskey.ShownName(started, true)
+		}
+		is := "this run configuration has no model key"
+		if fresh.DefaultCredential != "" {
+			is = "this run configuration has one model key, " + accesskey.ShownName(fresh.DefaultCredential, true) + ", and no default_model_provider_credential_name"
+		}
 		return nil, &FixFirstError{
 			Fix:   "Start a new run to change the default model provider credential.",
-			Cause: fmt.Sprintf("the run started with the default model provider credential %s, and this run configuration %s; without default_model_provider_credential_name, the default model provider credential is the run configuration's one model key, or unset when it has none", shownField(started), setsTo(fresh.DefaultCredential)),
+			Cause: was + "; " + is,
 		}
 	}
 	if err := tool.Check(r.chosen, in.Policy.Egress.Mode, in.Policy.Egress.Listed(), claimedBy(fresh)); err != nil {
@@ -1489,9 +1499,8 @@ func defaultOf(held *credential.Held) string {
 	return held.DefaultCredential
 }
 
-// shownField is a value of default_model_provider_credential_name, or a default model
-// provider credential, as a message shows it: the quoted name, or "unset" when there is
-// none.
+// shownField is a value of default_model_provider_credential_name as a message shows
+// it: the quoted name, or "unset" when there is none.
 func shownField(name string) string {
 	if name == "" {
 		return "unset"

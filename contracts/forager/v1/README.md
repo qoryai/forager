@@ -1472,20 +1472,22 @@ configuration leaves it unset; the policy in force stays` when the reload remove
 field. So does a reload whose default model provider credential differs from the run's,
 without `default_model_provider_credential_name`: `Start a new run to change the default
 model provider credential.`, with `run configuration <url>: the run started with the
-default model provider credential "first", and this run configuration sets it to
-"second"; without default_model_provider_credential_name, the default model provider
-credential is the run configuration's one model key, or unset when it has none; the
-policy in force stays` on a second line. `unset` takes the place of a quoted name for a
-run that started with no model key, and `leaves it unset` the place of `sets it to` and
-a name for a reload with none. The active key changes during the run, and a reload is
-compared with the default model provider credential, never with the active key. A
-private host gets a value only through an exact entry, as a credential of the machine's
-does, and the proxy verifies the host's certificate against the gateway machine's trust
-store. A host on the gateway machine gets a value only when the node's policy names it,
-as for every name on the machine. On a host that gets a credential, from the server or
-the machine, a `TRACE` or `TRACK` through `CONNECT` is denied with the rule
-`wall:echo-method` (§Credentials, The answer). The values stay bytes until the proxy
-sets the header, and are overwritten when the run ends.
+model key "first"; this run configuration has one model key, "second", and no
+default_model_provider_credential_name; the policy in force stays` on a second line. For
+a reload with no model key the second line is `run configuration <url>: the run started
+with the model key "first"; this run configuration has no model key; the policy in force
+stays`, and for a run that started with no model key it is `run configuration <url>: the
+run started with no model key; this run configuration has one model key, "first", and no
+default_model_provider_credential_name; the policy in force stays`. The active key
+changes during the run, and a reload is compared with the default model provider
+credential, never with the active key. A private host gets a value only through an exact
+entry, as a credential of the machine's does, and the proxy verifies the host's
+certificate against the gateway machine's trust store. A host on the gateway machine
+gets a value only when the node's policy names it, as for every name on the machine. On
+a host that gets a credential, from the server or the machine, a `TRACE` or `TRACK`
+through `CONNECT` is denied with the rule `wall:echo-method` (§Credentials, The answer).
+The values stay bytes until the proxy sets the header, and are overwritten when the run
+ends.
 
 **Stack hosts from the server.** A run configuration may have `stack_hosts`, the
 hosts the run's stack proxy allows beside `gateway.stack_hosts` (§The gateway's link,
