@@ -1068,7 +1068,11 @@ func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error
 		return nil, fmt.Errorf("run configuration %s: start a new run to use other credentials; a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays", accesskey.ShownValue(next.URL, false))
 	}
 	if creds.defaultName != r.storedDefault {
-		return nil, fmt.Errorf("run configuration %s: Start a new run to change default_model_provider_credential_name: the run started with %s, and this configuration selects %s; the policy in force stays", accesskey.ShownValue(next.URL, false), shownKey(defaultOf(r.Held())), shownKey(creds.defaultName))
+		sets := "leaves it unset"
+		if creds.defaultName != "" {
+			sets = "sets it to " + shownField(creds.defaultName)
+		}
+		return nil, fmt.Errorf("run configuration %s: Start a new run to change default_model_provider_credential_name.\nThe run started with default_model_provider_credential_name %s, and this configuration %s; the policy in force stays", accesskey.ShownValue(next.URL, false), shownField(r.storedDefault), sets)
 	}
 	if !sameHosts(stack, r.stack) {
 		return nil, errors.New("start another run to use other stack hosts: a run's stack_hosts are fixed when it starts")
@@ -1465,6 +1469,15 @@ func defaultOf(held *credential.Held) string {
 func shownKey(name string) string {
 	if name == "" {
 		return "no model key"
+	}
+	return accesskey.ShownName(name, true)
+}
+
+// shownField is a value of default_model_provider_credential_name as a message shows
+// it: the quoted name, or "unset" when the field is absent.
+func shownField(name string) string {
+	if name == "" {
+		return "unset"
 	}
 	return accesskey.ShownName(name, true)
 }
