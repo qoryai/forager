@@ -884,8 +884,8 @@ node. The read-only bind is enough for two reasons:
   root's with mode `0755`, so the agent, which is not root and has no capability,
   cannot add a file or a link beside `hooks.json`. The
   [image rename check](#no-bind-from-a-place-an-agent-can-change) fails the session
-  when the agent can rename names in `/etc`, so the agent cannot rename or replace
-  `/etc/codex` either.
+  when the agent can rename names in `/etc`. With `/etc` root's at mode `0755`, a
+  rename of `/etc/codex` by the agent fails with `Permission denied`.
 
 If your image has `/etc/codex`, give it to root with no write for the group or others.
 The rename check does not read that folder, the parent of the mount, and an agent that
