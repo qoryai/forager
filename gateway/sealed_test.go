@@ -84,8 +84,8 @@ func (c *control) requests(t *testing.T) []server.SecretsRequest {
 // the run, the digest it computed of the document's bytes, not the header's, and the
 // credentials' names; the proxy sets the opened value in place of forager.yaml's key,
 // whose credential claims the same host; and the run answer has model's endpoint host,
-// no placeholder, its format, endpoint and auth, model_credential model, and
-// applied.credentials its host and scheme.
+// no placeholder, its format, endpoint and auth, default_model_provider_credential_name
+// model, and applied.credentials its host and scheme.
 func TestASealedCredentialTakesThePlaceOfTheMachinesKey(t *testing.T) {
 	c, h := sealedGateway(t, sealedDoc, map[string]string{"model": sealedValue})
 	a := h.open(server.LinkRunRequest{Wall: true})
@@ -105,8 +105,8 @@ func TestASealedCredentialTakesThePlaceOfTheMachinesKey(t *testing.T) {
 	}
 	want := []server.LinkCredentialHosts{{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{},
 		Group: "anthropic", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: &server.Auth{Scheme: "header", Header: "x-api-key"}}}
-	if !reflect.DeepEqual(a.CredentialHosts, want) || len(a.Placeholders) != 0 || a.ModelCredential != "model" {
-		t.Errorf("credential hosts %+v, placeholders %v, model_credential %q; want %+v and model", a.CredentialHosts, a.Placeholders, a.ModelCredential, want)
+	if !reflect.DeepEqual(a.CredentialHosts, want) || len(a.Placeholders) != 0 || a.DefaultModelProviderCredentialName != "model" {
+		t.Errorf("credential hosts %+v, placeholders %v, default_model_provider_credential_name %q; want %+v and model", a.CredentialHosts, a.Placeholders, a.DefaultModelProviderCredentialName, want)
 	}
 	if got := members(a.Applied)["credentials"]; !reflect.DeepEqual(got, []any{map[string]any{"name": "model", "hosts": []any{"api.model.example"}, "scheme": "header"}}) {
 		t.Errorf("applied credentials %v", got)
@@ -150,7 +150,8 @@ func TestARunConfigurationWithoutCredentialsIsUnchanged(t *testing.T) {
 // TestAnUnwalledRunGetsTheServersCredentials pins an unwalled run whose run
 // configuration has credentials: it starts, brokered as a walled run is. The gateway
 // sends one secrets request, the proxy sets the opened value, and the run answer has
-// the run's authority and the model key as its model_credential, and no image.
+// the run's authority and the model key as its default_model_provider_credential_name,
+// and no image.
 func TestAnUnwalledRunGetsTheServersCredentials(t *testing.T) {
 	c, h := sealedGateway(t, sealedDoc, map[string]string{"model": sealedValue})
 	a := h.open(server.LinkRunRequest{})
@@ -160,7 +161,7 @@ func TestAnUnwalledRunGetsTheServersCredentials(t *testing.T) {
 	if reqs := c.requests(t); len(reqs) != 1 || reqs[0].RunID != a.RunID || !slices.Equal(reqs[0].Credentials, []string{"model"}) {
 		t.Errorf("the secrets requests %+v; want one for the run and model", reqs)
 	}
-	if !strings.HasPrefix(a.CertificateAuthority, "-----BEGIN CERTIFICATE-----") || len(a.Placeholders) != 0 || a.ModelCredential != "model" || a.Image != nil {
+	if !strings.HasPrefix(a.CertificateAuthority, "-----BEGIN CERTIFICATE-----") || len(a.Placeholders) != 0 || a.DefaultModelProviderCredentialName != "model" || a.Image != nil {
 		t.Errorf("the answer: authority %q, placeholders %v, image %+v", a.CertificateAuthority, a.Placeholders, a.Image)
 	}
 	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID))

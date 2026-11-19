@@ -169,13 +169,14 @@ type Run struct {
 	// each run configuration Read read that a reload has not decided yet.
 	computed     string
 	computedRead map[*policy.Loaded]string
-	// creds are the credentials and the model_credential of each run configuration Read
-	// read that a reload has not decided yet.
+	// creds are the credentials and the default_model_provider_credential_name of each
+	// run configuration Read read that a reload has not decided yet.
 	creds map[*policy.Loaded]storedSet
 
 	// stored are the credentials of the run configuration the run started with, and
 	// values their values, as they opened or as a renewal replaced them, cleared by
-	// Close. storedModel is its model_credential, empty when it names none.
+	// Close. storedModel is its default_model_provider_credential_name, empty when it
+	// names none.
 	stored      []server.RunCredential
 	storedModel string
 	values      sealed.Values
@@ -205,7 +206,7 @@ type Run struct {
 }
 
 // storedSet is what a run configuration says of the run's credentials: its credentials
-// and its model_credential.
+// and its default_model_provider_credential_name.
 type storedSet struct {
 	creds []server.RunCredential
 	model string
@@ -777,7 +778,7 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		fetched.Source = "fetched"
 	}
 	if f.Document != nil {
-		if err := server.CheckCredentials(f.Document.Credentials, f.Document.ModelCredential); err != nil {
+		if err := server.CheckCredentials(f.Document.Credentials, f.Document.DefaultModelProviderCredentialName); err != nil {
 			return nil, fmt.Errorf("run configuration %s: %w", accesskey.ShownValue(f.URL, false), err)
 		}
 	}
@@ -799,11 +800,11 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		r.read = map[*policy.Loaded][]string{}
 	}
 	r.read[out] = GuardNames(r.node, pol, r.cfg.Narrowing)
-	if f.Document != nil && (len(f.Document.Credentials) > 0 || f.Document.ModelCredential != "") {
+	if f.Document != nil && (len(f.Document.Credentials) > 0 || f.Document.DefaultModelProviderCredentialName != "") {
 		if r.creds == nil {
 			r.creds = map[*policy.Loaded]storedSet{}
 		}
-		r.creds[out] = storedSet{f.Document.Credentials, f.Document.ModelCredential}
+		r.creds[out] = storedSet{f.Document.Credentials, f.Document.DefaultModelProviderCredentialName}
 	}
 	if f.Document != nil && f.Document.Computed != "" {
 		if r.computedRead == nil {
@@ -895,8 +896,9 @@ func (r *Run) takeGuard(p *policy.Loaded) []string {
 	return names
 }
 
-// takeCreds is the credentials and the model_credential of the run configuration of a
-// policy [Run.Read] made, empty when it has neither, and forgets them.
+// takeCreds is the credentials and the default_model_provider_credential_name of the
+// run configuration of a policy [Run.Read] made, empty when it has neither, and forgets
+// them.
 func (r *Run) takeCreds(p *policy.Loaded) storedSet {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1064,7 +1066,7 @@ func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error
 		return nil, fmt.Errorf("run configuration %s: start a new run to use other credentials; a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays", accesskey.ShownValue(next.URL, false))
 	}
 	if creds.model != r.storedModel {
-		return nil, fmt.Errorf("run configuration %s: start a new run to start with another model key; a run's model_credential is fixed when it starts, and this run configuration names another; the policy in force stays", accesskey.ShownValue(next.URL, false))
+		return nil, fmt.Errorf("run configuration %s: start a new run to start with another model key; a run's default_model_provider_credential_name is fixed when it starts, and this run configuration names another; the policy in force stays", accesskey.ShownValue(next.URL, false))
 	}
 	if !sameHosts(stack, r.stack) {
 		return nil, errors.New("start another run to use other stack hosts: a run's stack_hosts are fixed when it starts")
@@ -1106,12 +1108,12 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded, named string) (*D
 	if err != nil {
 		return nil, err
 	}
-	// Without model_credential the start key is the run's one model key, and a reload
-	// may select another: the runtime started with the first one's variable and
-	// endpoint, so the start key is fixed as well.
+	// Without default_model_provider_credential_name the start key is the run's one
+	// model key, and a reload may select another: the runtime started with the first
+	// one's variable and endpoint, so the start key is fixed as well.
 	if started := startOf(r.Held()); fresh.Start != started {
 		fresh.Close()
-		return nil, fmt.Errorf("start a new run to change the model key it starts with: the run started with %s, and this run configuration selects %s", shownKey(started), shownKey(fresh.Start))
+		return nil, fmt.Errorf("Start a new run to change the default model provider credential: the run started with %s, and this configuration selects %s", shownKey(started), shownKey(fresh.Start))
 	}
 	if err := tool.Check(r.chosen, in.Policy.Egress.Mode, in.Policy.Egress.Listed(), claimedBy(fresh)); err != nil {
 		fresh.Close()

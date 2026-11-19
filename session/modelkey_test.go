@@ -77,8 +77,8 @@ func answeringWith(g *linktest.Fake, hosts []map[string]any, placeholders []stri
 	answeringStart(g, hosts, placeholders, "")
 }
 
-// answeringStart is answeringWith with model_credential set to start, when start is not
-// empty.
+// answeringStart is answeringWith with default_model_provider_credential_name set to
+// start, when start is not empty.
 func answeringStart(g *linktest.Fake, hosts []map[string]any, placeholders []string, start string) {
 	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
 		a := linktest.RunAnswer(req)
@@ -87,7 +87,7 @@ func answeringStart(g *linktest.Fake, hosts []map[string]any, placeholders []str
 			a["placeholders"] = placeholders
 		}
 		if start != "" {
-			a["model_credential"] = start
+			a["default_model_provider_credential_name"] = start
 		}
 		return linktest.Reply{Status: 200, Body: a}
 	})
@@ -304,11 +304,11 @@ func TestEachJoinChecksItsStartKeyAgainstItsRuntime(t *testing.T) {
 	}
 	claude := func(key string) session.SessionSpec {
 		s := sp.SessionSpec
-		s.ModelCredential = key
+		s.ModelProviderCredentialName = key
 		return s
 	}
 	codexSession := codexSpec(t, false, filepath.Join(t.TempDir(), "codex-home"), "").SessionSpec
-	codexSession.ModelCredential = "codex-key"
+	codexSession.ModelProviderCredentialName = "codex-key"
 	for i, s := range []session.SessionSpec{claude(""), codexSession} {
 		res, err := r.Join(ctx, s)
 		if err != nil || res.State != event.StateSucceeded {
@@ -340,7 +340,7 @@ func TestEachJoinChecksItsStartKeyAgainstItsRuntime(t *testing.T) {
 
 // TestASessionWithNoRuntimeHasNoStartKey pins a session whose spec has no runtime in a
 // run with model keys: one key, behind a wall and without one, and two keys and a
-// model_credential. AgentEnv and the
+// default_model_provider_credential_name. AgentEnv and the
 // join pass, the program's environment has no model key's variable, no endpoint
 // variable and no key's placeholder, and the record has no credential_variables.
 func TestASessionWithNoRuntimeHasNoStartKey(t *testing.T) {
@@ -353,7 +353,7 @@ func TestASessionWithNoRuntimeHasNoStartKey(t *testing.T) {
 	}{
 		{"one key, walled", keys[:1], "", true},
 		{"one key, unwalled", keys[:1], "", false},
-		{"two keys and a model_credential", keys, "backup", true},
+		{"two keys and a default_model_provider_credential_name", keys, "backup", true},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			ctx := context.Background()
@@ -432,20 +432,20 @@ func TestTheJoinRequestAsksForAModelKeyWithARuntime(t *testing.T) {
 }
 
 // TestASessionWithNoRuntimeNamesNoModelKey pins a spec with no runtime and a
-// ModelCredential: AgentEnv and Join each refuse it with the fix first, the name
-// through accesskey.ShownName, and no join request is sent. The fake gateway answers
-// such a join request 400 invalid_request, as the gateway does.
+// ModelProviderCredentialName: AgentEnv and Join each refuse it with the fix first, the
+// name through accesskey.ShownName, and no join request is sent. The fake gateway
+// answers such a join request 400 invalid_request, as the gateway does.
 func TestASessionWithNoRuntimeNamesNoModelKey(t *testing.T) {
 	ctx := context.Background()
 	sp, g := specGateway(t)
 	dumpsEnv(t, &sp)
-	sp.Runtime, sp.ModelCredential = nil, "backup"
+	sp.Runtime, sp.ModelProviderCredentialName = nil, "backup"
 	answeringStart(g, []map[string]any{model(), apiKey("backup", "anthropic-messages", "https://backup.model.example", "bearer")}, nil, "model")
 	r, err := session.Open(ctx, opened(sp))
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = `set SessionSpec.Runtime, or leave SessionSpec.ModelCredential empty: a session with no runtime starts with no model key, and the spec names the model key "backup"`
+	const want = "Set SessionSpec.Runtime, or leave SessionSpec.ModelProviderCredentialName empty.\nA session with no runtime starts with no model key, and the spec names the model key \"backup\""
 	if _, err := r.AgentEnv(sp.SessionSpec); err == nil || err.Error() != want {
 		t.Errorf("AgentEnv: %v\nwant %s", err, want)
 	}
@@ -461,17 +461,17 @@ func TestASessionWithNoRuntimeNamesNoModelKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	var ref *accesskey.Refusal
-	if _, err := k.Join(ctx, server.LocalOrigin+"/v1/run-configuration", r.ID(), server.LinkJoinRequest{Passes: []string{}, ModelCredential: "backup"}); !errors.As(err, &ref) || ref.Status != 400 || ref.Code != "invalid_request" {
-		t.Errorf("the fake's answer to model_key false and a model_credential: %v", err)
+	if _, err := k.Join(ctx, server.LocalOrigin+"/v1/run-configuration", r.ID(), server.LinkJoinRequest{Passes: []string{}, ModelProviderCredentialName: "backup"}); !errors.As(err, &ref) || ref.Status != 400 || ref.Code != "invalid_request" {
+		t.Errorf("the fake's answer to model_key false and a model_provider_credential_name: %v", err)
 	}
 	r.Close(ctx, outcomeOf(res, err))
 }
 
 // TestModelCredentialChoosesTheStartKey pins a run with two API credentials: the one
-// model_credential names is the start key, whose variable gets its placeholder and
-// whose endpoint the runtime gets; the other gets no variable. Each key's placeholder
-// differs. An answer without model_credential, or with one that names no API
-// credential of the run, is run_configuration_invalid.
+// default_model_provider_credential_name names is the start key, whose variable gets
+// its placeholder and whose endpoint the runtime gets; the other gets no variable. Each
+// key's placeholder differs. An answer without default_model_provider_credential_name,
+// or with one that names no API credential of the run, is run_configuration_invalid.
 func TestModelCredentialChoosesTheStartKey(t *testing.T) {
 	keys := []map[string]any{model(), apiKey("backup", "anthropic-messages", "https://backup.model.example", "bearer")}
 	if link.KeyPlaceholder("model") == link.KeyPlaceholder("backup") {
@@ -506,10 +506,10 @@ func TestModelCredentialChoosesTheStartKey(t *testing.T) {
 		names       []string
 		detail      string
 	}{
-		{"no model_credential", "", nil,
-			`set model_credential in the run configuration, or give the run one model key: the run has the model keys model, backup`},
+		{"no default_model_provider_credential_name", "", nil,
+			"Set default_model_provider_credential_name, or give the run one model key.\nThe run has the model keys model, backup"},
 		{"a name of no model key", "forge", []string{"forge"},
-			`set model_credential in the run configuration to one of the run's model keys, model, backup: the run has no model key "forge"`},
+			"Set default_model_provider_credential_name to one of the run's model keys.\nThe run has the model keys model, backup, and no model key \"forge\""},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			sp, g := specGateway(t)

@@ -200,7 +200,7 @@ func TestAKeyThatExpiresWaitingForItsRenewalGoesOut(t *testing.T) {
 }
 
 // twoKeysDoc is renewDoc with a second model key, model-2, in model's key group.
-const twoKeysDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","git.example","api.git.example"]}},"model_credential":"model","credentials":[` +
+const twoKeysDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","git.example","api.git.example"]}},"default_model_provider_credential_name":"model","credentials":[` +
 	`{"name":"model","group":"anthropic","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
 	`{"name":"model-2","group":"anthropic","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
 	`{"name":"forge","apply":[{"hosts":["git.example","api.git.example"],"scheme":"basic","username":"x-access-token"}]}]}`
@@ -346,7 +346,7 @@ func TestAPendingKeyIsRenewedAloneAfterTheReopen(t *testing.T) {
 }
 
 // keysOnlyDoc is twoKeysDoc with no credential outside model's key group.
-const keysOnlyDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}},"model_credential":"model","credentials":[` +
+const keysOnlyDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}},"default_model_provider_credential_name":"model","credentials":[` +
 	`{"name":"model","group":"anthropic","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
 	`{"name":"model-2","group":"anthropic","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}]}`
 

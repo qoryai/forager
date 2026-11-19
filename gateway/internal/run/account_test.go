@@ -29,7 +29,7 @@ func accountOf(id string) string {
 // subscription keys of one group on chat.model.example with paths and an account
 // header, a host credential, files, on other paths of that host, and an API key on
 // another host, under a policy that allows both hosts.
-const accountDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["chat.model.example","api.model.example"]}},"model_credential":"subscription","credentials":[` +
+const accountDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["chat.model.example","api.model.example"]}},"default_model_provider_credential_name":"subscription","credentials":[` +
 	`{"name":"subscription","group":"openai","format":"openai-responses","endpoint":"https://chat.model.example/backend-api/codex","auth":{"scheme":"bearer","oauth":true,"account_header":"chatgpt-account-id","account_claim":"/https:~1~1auth.model.example~1auth/account_id"},"paths":["/backend-api/codex/*"],"pause_for_s":18000},` +
 	`{"name":"subscription-2","group":"openai","format":"openai-responses","endpoint":"https://chat.model.example/backend-api/codex","auth":{"scheme":"bearer","oauth":true,"account_header":"chatgpt-account-id","account_claim":"/https:~1~1auth.model.example~1auth/account_id"},"paths":["/backend-api/codex/*"],"pause_for_s":18000},` +
 	`{"name":"api-key","group":"openai-api","format":"openai-responses","endpoint":"https://api.model.example/v1","auth":{"scheme":"bearer"},"paths":["/v1/responses","/v1/responses/*"]},` +
@@ -172,7 +172,7 @@ func TestAValueWithoutItsClaimLeavesTheGroup(t *testing.T) {
 func TestAnotherGroupWithoutTheClaimIsRefused(t *testing.T) {
 	// The start key is api-key, of the group openai-api; the two subscriptions are the
 	// group openai.
-	doc := strings.Replace(accountDoc, `"model_credential":"subscription"`, `"model_credential":"api-key"`, 1)
+	doc := strings.Replace(accountDoc, `"default_model_provider_credential_name":"subscription"`, `"default_model_provider_credential_name":"api-key"`, 1)
 	none := fakeToken(`{"sub":"fake"}`)
 	t.Run("no key left", func(t *testing.T) {
 		r, err := run.Open(t.Context(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')),
@@ -230,7 +230,7 @@ func TestARenewalWithoutTheClaimKeepsTheValue(t *testing.T) {
 // run_configuration_invalid, with the group's first key in the refusal's names.
 func TestAGroupWithoutTheClaimIsRefusedBesideAMachineKey(t *testing.T) {
 	t.Setenv("QORY_TEST_MACHINE_KEY", "fake-machine-value")
-	doc := strings.Replace(accountDoc, `"model_credential":"subscription"`, `"model_credential":"machine"`, 1)
+	doc := strings.Replace(accountDoc, `"default_model_provider_credential_name":"subscription"`, `"default_model_provider_credential_name":"machine"`, 1)
 	doc = strings.Replace(doc, `"allow":["chat.model.example","api.model.example"]}}`,
 		`"allow":["chat.model.example","api.model.example","api.machine.example"]},"credentials":[{"name":"machine"}]}`, 1)
 	none := fakeToken(`{"sub":"fake"}`)
@@ -254,7 +254,7 @@ func TestAGroupWithoutTheClaimIsRefusedBesideAMachineKey(t *testing.T) {
 // KeysOut has subscription-2. Built as the gateway builds it, the group openai has
 // no key left, and its stop's reason is model_key_unauthorized.
 func TestAGroupAfterA401IsNotRefusedForTheClaim(t *testing.T) {
-	doc := strings.Replace(accountDoc, `"model_credential":"subscription"`, `"model_credential":"api-key"`, 1)
+	doc := strings.Replace(accountDoc, `"default_model_provider_credential_name":"subscription"`, `"default_model_provider_credential_name":"api-key"`, 1)
 	none := fakeToken(`{"sub":"fake"}`)
 	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')), Revoked: []string{"subscription"},
 		Secrets: (&controlPlane{answer: accountValues(map[string]string{"subscription-2": none})}).fetch})

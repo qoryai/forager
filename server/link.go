@@ -134,11 +134,11 @@ type LinkJoinRequest struct {
 	Passes []string `json:"passes"`
 	// ModelKey is whether the gateway sets a model key for this session's requests.
 	// When it is false, the gateway's proxy sets none from the join's 200 until the
-	// session's dev.qory.session.exited, and ModelCredential must be empty.
+	// session's dev.qory.session.exited, and ModelProviderCredentialName must be empty.
 	ModelKey bool `json:"model_key"`
-	// ModelCredential is the name of the model key the session starts with, one the
-	// gateway holds for the run; empty for the run's start key.
-	ModelCredential string `json:"model_credential,omitempty"`
+	// ModelProviderCredentialName is the name of the model key the session starts with,
+	// one the gateway holds for the run; empty for the run's start key.
+	ModelProviderCredentialName string `json:"model_provider_credential_name,omitempty"`
 }
 
 // LinkJoinAnswer is what the gateway answers a join request it accepts,
@@ -146,9 +146,9 @@ type LinkJoinRequest struct {
 // from 1, and the model key the session starts with, empty when the gateway holds no
 // model key for the run. A member Forager does not know is ignored.
 type LinkJoinAnswer struct {
-	Version         int    `json:"version"`
-	Session         int    `json:"session"`
-	ModelCredential string `json:"model_credential,omitempty"`
+	Version                     int    `json:"version"`
+	Session                     int    `json:"session"`
+	ModelProviderCredentialName string `json:"model_provider_credential_name,omitempty"`
 }
 
 // LinkNarrowing is a session's narrowing of the policy the gateway holds for its run.
@@ -250,9 +250,10 @@ type LinkRunAnswer struct {
 	// holds for the run, so the session can tell which hosts the run's credentials
 	// cover. Empty when the gateway holds none, or sends no credential_hosts.
 	CredentialHosts []LinkCredentialHosts `json:"credential_hosts,omitempty"`
-	// ModelCredential is the name of the model key the runtime starts with, an entry of
-	// CredentialHosts with Format; empty when the gateway holds no model key for the run.
-	ModelCredential string `json:"model_credential,omitempty"`
+	// DefaultModelProviderCredentialName is the name of the model key the runtime
+	// starts with, an entry of CredentialHosts with Format; empty when the gateway
+	// holds no model key for the run.
+	DefaultModelProviderCredentialName string `json:"default_model_provider_credential_name,omitempty"`
 	// Image is the image the run gets, when it has a wall.
 	Image *LinkImage `json:"image,omitempty"`
 	// RelayImage is the reference of the machine's default image, which the wall starts
@@ -322,7 +323,7 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 	}
 	s.Policy, s.Applied = shownDocument(a.Policy), shownDocument(a.Applied)
 	s.Placeholders, s.Reserved = accesskey.ShownNames(a.Placeholders), accesskey.ShownNames(a.Reserved)
-	s.ModelCredential = accesskey.ShownName(a.ModelCredential, false)
+	s.DefaultModelProviderCredentialName = accesskey.ShownName(a.DefaultModelProviderCredentialName, false)
 	if a.CredentialHosts != nil {
 		s.CredentialHosts = make([]LinkCredentialHosts, len(a.CredentialHosts))
 		for i, c := range a.CredentialHosts {

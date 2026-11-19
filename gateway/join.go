@@ -40,7 +40,7 @@ type join struct {
 	// model_key is false: the proxy sets no model key while the join is open.
 	model string
 	noKey bool
-	// credential is the join request's model_credential, empty for none.
+	// credential is the join request's model_provider_credential_name, empty for none.
 	credential string
 	// reason is the reason of the session's dev.qory.session.exited, empty for none.
 	reason string
@@ -55,12 +55,12 @@ type join struct {
 // dev.qory.session.exited not numbered.
 func (j *join) open() bool { return j.accepted && !j.exited }
 
-// replays reports whether req is the join request of j sent again, whose 200 or 403
-// its session may not have had: neither j's session.started nor its session.exited is
-// numbered, and req has its passes, model_key and model_credential. The session
-// writes the session.exited of a join answered 403 once it has the 403.
+// replays reports whether req is the join request of j sent again, whose 200 or 403 its
+// session may not have had: neither j's session.started nor its session.exited is
+// numbered, and req has its passes, model_key and model_provider_credential_name. The
+// session writes the session.exited of a join answered 403 once it has the 403.
 func (j *join) replays(req *server.LinkJoinRequest) bool {
-	return !j.started && !j.exited && slices.Equal(j.passes, req.Passes) && j.noKey == !req.ModelKey && j.credential == req.ModelCredential
+	return !j.started && !j.exited && slices.Equal(j.passes, req.Passes) && j.noKey == !req.ModelKey && j.credential == req.ModelProviderCredentialName
 }
 
 // passing reports whether an open join of the run passes a value for the variable:
@@ -115,16 +115,16 @@ func readJoinRequest(body []byte) (*server.LinkJoinRequest, bool) {
 }
 
 // joinSession answers a join request of the run runID: 200 with the session's number,
-// in the order the run's joins arrive; on the one address, for the run's last join
-// sent again ([join.replays]), the same answer, which numbers nothing: 200 with the
-// same number and model key, or the 403 of the passes' conflict; 403
-// placeholder_conflict, numbered too, for
-// passes that contain a placeholder of a credential or a tool the gateway holds for
-// the run, which leaves the run open; 410 for a run that ended at the gateway; and 400
-// invalid_request for a body the schema refuses, model_credential beside a model_key
-// of false among them, for a model_credential of no model key of the run, for a join while another join of the run is open, and on the local
-// link for a run id of no run here. On the one
-// address the run id is the run key's, any other 400 run_key_invalid, and a run the
+// in the order the run's joins arrive; on the one address, for the run's last join sent
+// again ([join.replays]), the same answer, which numbers nothing: 200 with the same
+// number and model key, or the 403 of the passes' conflict; 403 placeholder_conflict,
+// numbered too, for passes that contain a placeholder of a credential or a tool the
+// gateway holds for the run, which leaves the run open; 410 for a run that ended at the
+// gateway; and 400 invalid_request for a body the schema refuses,
+// model_provider_credential_name beside a model_key of false among them, for a
+// model_provider_credential_name of no model key of the run, for a join while another
+// join of the run is open, and on the local link for a run id of no run here. On the
+// one address the run id is the run key's, any other 400 run_key_invalid, and a run the
 // gateway does not hold is reopened, or answered a 503 or a 410 ([Gateway.heldRun]).
 func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, runID string) {
 	var lr *linkRun
@@ -182,7 +182,7 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 	// key for the join is taken once the join is accepted.
 	var grouped bool
 	if req.ModelKey {
-		if model, grouped, ok = lr.modelKey(req.ModelCredential); !ok {
+		if model, grouped, ok = lr.modelKey(req.ModelProviderCredentialName); !ok {
 			invalid(w)
 			return
 		}
@@ -235,7 +235,7 @@ func (g *Gateway) joinSession(s *side, w http.ResponseWriter, r *http.Request, r
 			model = group.Active()
 		}
 	}
-	j := &join{session: len(lr.joins) + 1, accepted: conflict == nil, passes: slices.Clone(req.Passes), model: model, noKey: !req.ModelKey, credential: req.ModelCredential}
+	j := &join{session: len(lr.joins) + 1, accepted: conflict == nil, passes: slices.Clone(req.Passes), model: model, noKey: !req.ModelKey, credential: req.ModelProviderCredentialName}
 	lr.mu.Unlock()
 	if lr.remote {
 		// The decision is in the record before its answer goes, for a gateway that
@@ -308,7 +308,7 @@ func (lr *linkRun) joinAnswer(s *side, w http.ResponseWriter, r *http.Request, d
 	lr.g.answerHeaders(s, w, r, digest)
 	w.Header().Set("Content-Type", server.LinkContentType)
 	w.WriteHeader(http.StatusOK)
-	b, _ := json.Marshal(server.LinkJoinAnswer{Version: 1, Session: session, ModelCredential: model})
+	b, _ := json.Marshal(server.LinkJoinAnswer{Version: 1, Session: session, ModelProviderCredentialName: model})
 	w.Write(b)
 }
 

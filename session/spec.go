@@ -363,11 +363,12 @@ type SessionSpec struct {
 	// Harness are the harness sources the session's compose used, each with the commit
 	// compose used, reported in dev.qory.session.started as harness; nil reports none.
 	Harness []HarnessSource
-	// ModelCredential is the name of the model key the session starts with, one of the
-	// model keys the gateway holds for the run; empty means the run's start key. The join
-	// request contains it. A session with no Runtime starts with no model key: Join and
-	// AgentEnv refuse ModelCredential beside a nil Runtime before any request.
-	ModelCredential string
+	// ModelProviderCredentialName is the name of the model key the session starts with,
+	// one of the model keys the gateway holds for the run; empty means the run's start
+	// key. The join request contains it. A session with no Runtime starts with no model
+	// key: Join and AgentEnv refuse ModelProviderCredentialName beside a nil Runtime
+	// before any request.
+	ModelProviderCredentialName string
 	// OnVariables, when not nil, is called once the session's variables are resolved,
 	// before the wall and the agent start, with each name, its source and the values
 	// that lost, as dev.qory.run.policy_applied records them: qory prints a line for an

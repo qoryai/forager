@@ -304,10 +304,11 @@ func (k keyed) modelVariables() []string {
 
 // startKey is the index in credentials of the API credential the runtime starts with,
 // or -1 when credentials have none: the one named model, the run answer's
-// model_credential, or the one API credential when model is empty. An empty model
-// beside two or more API credentials, and a model that names none of them, are
-// [refusal.RunConfigurationInvalid]: the gateway refuses both first. [chosen] does not
-// call it for a session whose spec has no runtime, which starts with no key.
+// default_model_provider_credential_name, or the one API credential when model is
+// empty. An empty model beside two or more API credentials, and a model that names none
+// of them, are [refusal.RunConfigurationInvalid]: the gateway refuses both first.
+// [chosen] does not call it for a session whose spec has no runtime, which starts with
+// no key.
 func startKey(credentials []server.LinkCredentialHosts, model string) (int, error) {
 	var keys []string
 	start := -1
@@ -323,10 +324,10 @@ func startKey(credentials []server.LinkCredentialHosts, model string) (int, erro
 	switch {
 	case model == "" && len(keys) > 1:
 		return -1, refusal.New(refusal.RunConfigurationInvalid, nil,
-			"set model_credential in the run configuration, or give the run one model key: the run has the model keys %s", strings.Join(keys, ", "))
+			"Set default_model_provider_credential_name, or give the run one model key.\nThe run has the model keys %s", strings.Join(keys, ", "))
 	case model != "" && (start < 0 || credentials[start].Name != model):
 		return -1, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(model),
-			"set model_credential in the run configuration to one of the run's model keys, %s: the run has no model key %s", strings.Join(keys, ", "), accesskey.ShownName(model, true))
+			"Set default_model_provider_credential_name to one of the run's model keys.\nThe run has the model keys %s, and no model key %s", strings.Join(keys, ", "), accesskey.ShownName(model, true))
 	}
 	return start, nil
 }

@@ -220,9 +220,9 @@ func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) 
 	rt := spec.Runtime
 	if rt == nil {
 		// A session with no runtime has no start key, so it names none.
-		if spec.ModelCredential != "" {
-			return runSpec{}, nil, fmt.Errorf("set SessionSpec.Runtime, or leave SessionSpec.ModelCredential empty: a session with no runtime starts with no model key, and the spec names the model key %s",
-				accesskey.ShownName(spec.ModelCredential, true))
+		if spec.ModelProviderCredentialName != "" {
+			return runSpec{}, nil, fmt.Errorf("Set SessionSpec.Runtime, or leave SessionSpec.ModelProviderCredentialName empty.\nA session with no runtime starts with no model key, and the spec names the model key %s",
+				accesskey.ShownName(spec.ModelProviderCredentialName, true))
 		}
 		rt = runtimes.Bare(filepath.Base(spec.Command))
 	}
@@ -260,7 +260,7 @@ func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) 
 // the join keeps the close from writing no_session. The request asks the gateway to
 // set no model key for a session with no runtime, which has no start key.
 func (r *Run) joinRequest(ctx context.Context, s runSpec, step *Step) (*server.LinkJoinAnswer, int, error) {
-	answer, unanswered, err := r.tryJoin(ctx, server.LinkJoinRequest{Passes: passes(s), ModelKey: s.Runtime != nil, ModelCredential: s.ModelCredential})
+	answer, unanswered, err := r.tryJoin(ctx, server.LinkJoinRequest{Passes: passes(s), ModelKey: s.Runtime != nil, ModelProviderCredentialName: s.ModelProviderCredentialName})
 	if err == nil {
 		r.numbered = answer.Session
 		return answer, answer.Session, nil
@@ -604,9 +604,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// starts with, the join answer's: from here on it is one of the credential's
 	// placeholders and of the run's, and key sets it and the runtime's endpoint variable.
 	// A session whose spec has no runtime has no start key.
-	model := answer.ModelCredential
+	model := answer.ModelProviderCredentialName
 	if model == "" {
-		model = r.answer.ModelCredential
+		model = r.answer.DefaultModelProviderCredentialName
 	}
 	credentialHosts, placeholderNames, key, err := chosen(rt, spec.Runtime == nil, r.answer.CredentialHosts, r.answer.Placeholders, model)
 	if err != nil {

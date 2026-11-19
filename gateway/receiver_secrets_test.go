@@ -244,9 +244,9 @@ func noValueIn(t *testing.T, ref *reference, answer any, dirs ...string) {
 func placeholdersOnly(t *testing.T, a *server.LinkRunAnswer, o *origin) {
 	t.Helper()
 	host, _, _ := net.SplitHostPort(o.host)
-	if len(a.Placeholders) != 0 || a.ModelCredential != "model" || len(a.CredentialHosts) != 1 || a.CredentialHosts[0].Name != "model" ||
+	if len(a.Placeholders) != 0 || a.DefaultModelProviderCredentialName != "model" || len(a.CredentialHosts) != 1 || a.CredentialHosts[0].Name != "model" ||
 		!slices.Equal(a.CredentialHosts[0].Hosts, []string{host}) || a.CredentialHosts[0].Format != "anthropic-messages" {
-		t.Errorf("the run answer's placeholders %v, model_credential %q and credential hosts %+v; want none, model, and model on %s", a.Placeholders, a.ModelCredential, a.CredentialHosts, host)
+		t.Errorf("the run answer's placeholders %v, default_model_provider_credential_name %q and credential hosts %+v; want none, model, and model on %s", a.Placeholders, a.DefaultModelProviderCredentialName, a.CredentialHosts, host)
 	}
 }
 
@@ -254,14 +254,14 @@ func placeholdersOnly(t *testing.T, a *server.LinkRunAnswer, o *origin) {
 // request end to end against the reference receiver, without Docker: a walled run's
 // gateway fetches the run configuration, sends the secrets request, opens the sealed
 // answer with the pin of its server document, and the run's proxy sets the value on a
-// request to an HTTPS origin on this machine, in place of the session's placeholder.
-// As the run starts, a gateway on its local link registers the run directly; behind a
+// request to an HTTPS origin on this machine, in place of the session's placeholder. As
+// the run starts, a gateway on its local link registers the run directly; behind a
 // separate gateway, a node pool registers the run and the gateway attaches it with the
 // run key, then reloads it for the digest of the document's bytes. In each case the
 // receiver is asked for the credential model once; the origin gets the value in
-// x-api-key in place of the model key's placeholder; the run answer has no
-// placeholder variable, model as its model_credential and no value; and
-// no record, report, stored event or log line of the receiver contains the value. A run
+// x-api-key in place of the model key's placeholder; the run answer has no placeholder
+// variable, model as its default_model_provider_credential_name and no value; and no
+// record, report, stored event or log line of the receiver contains the value. A run
 // without a wall is brokered the same way, and a request it sends around the proxy
 // reaches the origin with the placeholder alone.
 func TestASealedCredentialFromTheReferenceReceiverReachesTheOrigin(t *testing.T) {

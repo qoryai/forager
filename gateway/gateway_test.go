@@ -774,12 +774,12 @@ func TestTheRunAnswerHasTheHostsOfEachCredential(t *testing.T) {
 	h.close()
 }
 
-// TestAModelKeyOfTheMachineReachesTheRunAnswer pins a model key of forager.yaml's,
-// one with format and endpoint, through the gateway: the run answer, read through the
+// TestAModelKeyOfTheMachineReachesTheRunAnswer pins a model key of forager.yaml's, one
+// with format and endpoint, through the gateway: the run answer, read through the
 // session's link client, which holds it to the schema, has its credential_hosts entry
 // with the endpoint's host, no placeholder, its format, endpoint and auth, and its name
-// as model_credential; the run has no placeholder variable, and the proxy sets the key.
-// applied.credentials lists the key on the endpoint's host.
+// as default_model_provider_credential_name; the run has no placeholder variable, and
+// the proxy sets the key. applied.credentials lists the key on the endpoint's host.
 func TestAModelKeyOfTheMachineReachesTheRunAnswer(t *testing.T) {
 	const key = "sk-ant-fake-value-of-the-test"
 	t.Setenv("GATEWAY_TEST_SECRET", key)
@@ -794,8 +794,8 @@ func TestAModelKeyOfTheMachineReachesTheRunAnswer(t *testing.T) {
 	a := h.open(server.LinkRunRequest{Wall: true, Images: images})
 	want := []server.LinkCredentialHosts{{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{},
 		Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: &server.Auth{Scheme: "header", Header: "x-api-key"}}}
-	if !reflect.DeepEqual(a.CredentialHosts, want) || a.ModelCredential != "model" || len(a.Placeholders) != 0 {
-		t.Errorf("credential hosts %+v, model_credential %q, placeholders %v; want %+v and model", a.CredentialHosts, a.ModelCredential, a.Placeholders, want)
+	if !reflect.DeepEqual(a.CredentialHosts, want) || a.DefaultModelProviderCredentialName != "model" || len(a.Placeholders) != 0 {
+		t.Errorf("credential hosts %+v, default_model_provider_credential_name %q, placeholders %v; want %+v and model", a.CredentialHosts, a.DefaultModelProviderCredentialName, a.Placeholders, want)
 	}
 	if got, want := gateway.Tokens(h.g, a.RunID), map[string]string{"model": key}; !reflect.DeepEqual(got, want) {
 		t.Errorf("the proxy sets %v, want %v", got, want)

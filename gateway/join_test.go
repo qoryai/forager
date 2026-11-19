@@ -37,7 +37,7 @@ func TestJoinsAreNumberedInTheOrderTheyArrive(t *testing.T) {
 	}
 	validDocument(t, "link-join-answer.schema.json", []byte(got))
 	var first server.LinkJoinAnswer
-	if err := json.Unmarshal([]byte(got), &first); err != nil || first.Version != 1 || first.Session != 1 || first.ModelCredential != "" {
+	if err := json.Unmarshal([]byte(got), &first); err != nil || first.Version != 1 || first.Session != 1 || first.ModelProviderCredentialName != "" {
 		t.Errorf("the first join's answer %s", got)
 	}
 	if d := h.post(sessionStarted(runID, 1), logged(runID), sessionExited(runID, 1)); !d.Accepted() {
@@ -63,8 +63,9 @@ func TestJoinsAreNumberedInTheOrderTheyArrive(t *testing.T) {
 
 // TestAJoinTheGatewayDoesNotAccept pins the join refusals that number no session: 400
 // invalid_request for a body the schema refuses, a member it does not define among
-// them, for another content type, for a model_credential of no model key of the run,
-// and for a run id of no run here; the run stays open, and the next join is session 1.
+// them, for another content type, for a model_provider_credential_name of no model key
+// of the run, and for a run id of no run here; the run stays open, and the next join is
+// session 1.
 func TestAJoinTheGatewayDoesNotAccept(t *testing.T) {
 	h := start(t, gateway.Config{})
 	a := h.open(server.LinkRunRequest{})
@@ -74,7 +75,7 @@ func TestAJoinTheGatewayDoesNotAccept(t *testing.T) {
 		"a member undefined":    {joinPath(a.RunID), server.LinkContentType, `{"version":1,"passes":[],"model_key":true,"wall":true}`},
 		"a value in passes":     {joinPath(a.RunID), server.LinkContentType, `{"version":1,"passes":["HOME=/root"],"model_key":true}`},
 		"another content type":  {joinPath(a.RunID), "text/plain", `{"version":1,"passes":[],"model_key":true}`},
-		"no model key":          {joinPath(a.RunID), server.LinkContentType, `{"version":1,"passes":[],"model_key":true,"model_credential":"backup"}`},
+		"no model key":          {joinPath(a.RunID), server.LinkContentType, `{"version":1,"passes":[],"model_key":true,"model_provider_credential_name":"backup"}`},
 		"a run of no run here":  {joinPath(event.NewRunID()), server.LinkContentType, `{"version":1,"passes":[],"model_key":true}`},
 		"a member name twice":   {joinPath(a.RunID), server.LinkContentType, `{"version":1,"passes":[],"passes":["HOME"],"model_key":true}`},
 		"a run id of no format": {"/v1/run-configuration/x/sessions", server.LinkContentType, `{"version":1,"passes":[],"model_key":true}`},

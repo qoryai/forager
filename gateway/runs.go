@@ -1356,25 +1356,25 @@ func ended(e ending, session int, from time.Time) map[string]any {
 // contracts/forager/v1/link-run-answer.schema.json: on the one address without the
 // labels, the proxy secret, the stack proxy secret and the push proxy secret.
 type runAnswerDoc struct {
-	Version              int                          `json:"version"`
-	RunID                string                       `json:"run_id"`
-	Labels               map[string]string            `json:"labels,omitzero"`
-	Policy               json.RawMessage              `json:"policy,omitempty"`
-	Digest               string                       `json:"digest,omitempty"`
-	Variables            map[string]server.Variable   `json:"variables,omitempty"`
-	ProxySecret          string                       `json:"proxy_secret,omitempty"`
-	StackProxySecret     string                       `json:"stack_proxy_secret,omitempty"`
-	PushProxySecret      string                       `json:"push_proxy_secret,omitempty"`
-	CertificateAuthority string                       `json:"certificate_authority,omitempty"`
-	Placeholders         []string                     `json:"placeholders,omitempty"`
-	Reserved             []string                     `json:"reserved,omitempty"`
-	CredentialHosts      []server.LinkCredentialHosts `json:"credential_hosts,omitempty"`
-	ModelCredential      string                       `json:"model_credential,omitempty"`
-	Image                *server.LinkImage            `json:"image,omitempty"`
-	RelayImage           string                       `json:"relay_image,omitempty"`
-	RunAPI               string                       `json:"run_api,omitempty"`
-	Resume               *server.LinkResume           `json:"resume,omitempty"`
-	Applied              map[string]any               `json:"applied"`
+	Version                            int                          `json:"version"`
+	RunID                              string                       `json:"run_id"`
+	Labels                             map[string]string            `json:"labels,omitzero"`
+	Policy                             json.RawMessage              `json:"policy,omitempty"`
+	Digest                             string                       `json:"digest,omitempty"`
+	Variables                          map[string]server.Variable   `json:"variables,omitempty"`
+	ProxySecret                        string                       `json:"proxy_secret,omitempty"`
+	StackProxySecret                   string                       `json:"stack_proxy_secret,omitempty"`
+	PushProxySecret                    string                       `json:"push_proxy_secret,omitempty"`
+	CertificateAuthority               string                       `json:"certificate_authority,omitempty"`
+	Placeholders                       []string                     `json:"placeholders,omitempty"`
+	Reserved                           []string                     `json:"reserved,omitempty"`
+	CredentialHosts                    []server.LinkCredentialHosts `json:"credential_hosts,omitempty"`
+	DefaultModelProviderCredentialName string                       `json:"default_model_provider_credential_name,omitempty"`
+	Image                              *server.LinkImage            `json:"image,omitempty"`
+	RelayImage                         string                       `json:"relay_image,omitempty"`
+	RunAPI                             string                       `json:"run_api,omitempty"`
+	Resume                             *server.LinkResume           `json:"resume,omitempty"`
+	Applied                            map[string]any               `json:"applied"`
 }
 
 // reloadAnswerDoc is the reload answer as the gateway writes it,
@@ -1493,7 +1493,7 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 		CredentialHosts: credentialHosts(lr.r.Held()), Image: lr.image(), Applied: lr.given[len(lr.given)-1],
 	}
 	if held := lr.r.Held(); held != nil {
-		a.ModelCredential = held.Start
+		a.DefaultModelProviderCredentialName = held.Start
 	}
 	if lr.wall {
 		a.RelayImage = lr.r.RelayImage()

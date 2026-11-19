@@ -191,7 +191,7 @@ func TestARunConfigurationsCredentialsAreChecked(t *testing.T) {
 		}
 		start := ""
 		if api > 0 {
-			start = `"model_credential":"cred-00",`
+			start = `"default_model_provider_credential_name":"cred-00",`
 		}
 		return `{"version":1,` + start + `"credentials":[` + strings.Join(items, ",") + `]}`
 	}

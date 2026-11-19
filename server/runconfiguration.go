@@ -78,7 +78,7 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 			return nil, refusal.New(refusal.RunConfigurationInvalid, []string{accesskey.ShownName(name, false)}, "the document is refused: the variable %s holds more than %d bytes", accesskey.ShownName(name, false), MaxVariableValue)
 		}
 	}
-	if err := CheckCredentials(rc.Credentials, rc.ModelCredential); err != nil {
+	if err := CheckCredentials(rc.Credentials, rc.DefaultModelProviderCredentialName); err != nil {
 		return nil, err
 	}
 	if r := rc.Resume; r != nil && len(r.Runs) > 0 && r.Runs[len(r.Runs)-1] != r.RunID {
@@ -100,16 +100,16 @@ const maxAPICredentials = 6
 // [ReservedHeader] reports, a placeholder [DeniedPlaceholder] reports, an API
 // credential's endpoint from which [policy.EndpointHost] reads no host, an API
 // credential's path or a host credential's apply path whose fixed part
-// [policy.CleanPath] refuses ([policy.UnclearPath]), and,
-// as the schema does for a document read from bytes, an API credential's
-// account_header without account_claim, the reverse, either without oauth, and an
-// account_header that [ReservedHeader] reports or that is Authorization. Of model, the
-// document's model_credential, it refuses a name of a host credential, and an empty
-// one beside two or more API credentials; a name of none of creds may be a model key
-// of the machine's, which the gateway checks. Of the key groups it refuses what
-// [checkKeyGroups] refuses, and more than [maxAPICredentials] API credentials across
-// every group, as the schema does for a document read from bytes. The reader of a
-// document calls it, and so does whoever holds a document not read from bytes.
+// [policy.CleanPath] refuses ([policy.UnclearPath]), and, as the schema does for a
+// document read from bytes, an API credential's account_header without account_claim,
+// the reverse, either without oauth, and an account_header that [ReservedHeader]
+// reports or that is Authorization. Of model, the document's
+// default_model_provider_credential_name, it refuses a name of a host credential, and
+// an empty one beside two or more API credentials; a name of none of creds may be a
+// model key of the machine's, which the gateway checks. Of the key groups it refuses
+// what [checkKeyGroups] refuses, and more than [maxAPICredentials] API credentials
+// across every group, as the schema does for a document read from bytes. The reader of
+// a document calls it, and so does whoever holds a document not read from bytes.
 func CheckCredentials(creds []RunCredential, model string) error {
 	api := 0
 	for _, c := range creds {
@@ -173,10 +173,10 @@ func CheckCredentials(creds []RunCredential, model string) error {
 	switch i := slices.IndexFunc(creds, func(c RunCredential) bool { return c.Name == model }); {
 	case model == "" && len(keys) > 1:
 		return refusal.New(refusal.RunConfigurationInvalid, nil,
-			"Set model_credential to the model key the runtime starts with.\nThe document lists the model keys %s", strings.Join(keys, ", "))
+			"Set default_model_provider_credential_name to the model provider credential the first session uses: the document lists %s.", strings.Join(keys, ", "))
 	case i >= 0 && creds[i].Format == "":
 		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(model),
-			"Set model_credential to a credential that has a format.\nThe credential %s has no format, so it is not a model key", accesskey.ShownName(model, true))
+			"Set default_model_provider_credential_name to a credential that has a format.\nThe credential %s has no format, so it is not a model key", accesskey.ShownName(model, true))
 	}
 	return nil
 }

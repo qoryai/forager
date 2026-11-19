@@ -293,10 +293,10 @@ func Resolve(ctx context.Context, defs []Definition, selected []policy.Selected,
 // whose env or file use claims one is not read, and an adapter's answer that claims one
 // is dropped, with no renewal; the adapter has run all the same. A credential of the
 // machine's that it replaces may have its name. A credential from the server with the
-// name of a credential of the machine's that stays is refused, so the record lists
-// each once. The checks of Resolve then cover all of them. start is the run
-// configuration's model_credential, the name of the model key the runtime starts with,
-// empty when it names none ([Held.startKey]).
+// name of a credential of the machine's that stays is refused, so the record lists each
+// once. The checks of Resolve then cover all of them. start is the run configuration's
+// default_model_provider_credential_name, the name of the model key the runtime starts
+// with, empty when it names none ([Held.startKey]).
 func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selected, stored []Stored, start string, mode policy.Mode, allow []string, report func(string)) (*Held, error) {
 	out := &Held{}
 	replaced := func(hosts []string) bool {
@@ -422,15 +422,15 @@ func (h *Held) startKey(start string) error {
 		h.Start = keys[0]
 	case start == "" && len(keys) > 1:
 		return refusal.New(refusal.RunConfigurationInvalid, nil,
-			"set model_credential in the run configuration, or give the run one model key: the run has the model keys %s", strings.Join(shown, ", "))
+			"Set default_model_provider_credential_name, or give the run one model key.\nThe run has the model keys %s", strings.Join(shown, ", "))
 	case slices.Contains(keys, start):
 		h.Start = start
 	case len(keys) == 0:
 		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(start),
-			"remove model_credential from the run configuration, or give the run a model key %s: the run has no model key", accesskey.ShownName(start, true))
+			"Remove default_model_provider_credential_name, or give the run a model key %s.\nThe run has no model key", accesskey.ShownName(start, true))
 	default:
 		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(start),
-			"set model_credential in the run configuration to one of the run's model keys, %s: the run has no model key %s", strings.Join(shown, ", "), accesskey.ShownName(start, true))
+			"Set default_model_provider_credential_name to one of the run's model keys.\nThe run has the model keys %s, and no model key %s", strings.Join(shown, ", "), accesskey.ShownName(start, true))
 	}
 	return nil
 }

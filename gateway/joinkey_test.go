@@ -124,7 +124,7 @@ func startOpenAIRemoteOf(t *testing.T, other bool) *openaiRemote {
 	}
 	c := gatewayControl(t)
 	o.c = c
-	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"model_credential":"model","credentials":[`+entries+`]}`, 'a')
+	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"default_model_provider_credential_name":"model","credentials":[`+entries+`]}`, 'a')
 	c.mu.Lock()
 	c.secrets = values
 	c.mu.Unlock()
@@ -150,17 +150,17 @@ func (o *openaiRemote) join(t *testing.T) (int, string) {
 	return o.joinNaming(t, "")
 }
 
-// joinNaming is join with model_credential name, none for "".
+// joinNaming is join with model_provider_credential_name name, none for "".
 func (o *openaiRemote) joinNaming(t *testing.T, name string) (int, string) {
 	t.Helper()
 	body := `{"version":1,"passes":[],"model_key":true}`
 	if name != "" {
-		body = `{"version":1,"passes":[],"model_key":true,"model_credential":"` + name + `"}`
+		body = `{"version":1,"passes":[],"model_key":true,"model_provider_credential_name":"` + name + `"}`
 	}
 	a := o.r.do(t, o.key, http.MethodPost, "/qory-link/run-configuration/"+o.runID()+"/sessions", []byte(body))
 	var joined server.LinkJoinAnswer
 	json.Unmarshal(a.body, &joined)
-	return a.status, joined.ModelCredential
+	return a.status, joined.ModelProviderCredentialName
 }
 
 // send sends a Responses request with the start key's placeholder, and returns its

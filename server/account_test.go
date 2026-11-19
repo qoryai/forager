@@ -41,7 +41,7 @@ func TestTheOpenAIFixtureDecodesPathsAndTheAccountHeader(t *testing.T) {
 	if a := sub.Applies(); len(a) != 1 || !slices.Equal(a[0].Paths, []string{"/backend-api/codex/*"}) || a[0].Hosts[0] != "chatgpt.example" {
 		t.Errorf("Applies %+v", a)
 	}
-	if err := server.CheckCredentials(rc.Credentials, rc.ModelCredential); err != nil {
+	if err := server.CheckCredentials(rc.Credentials, rc.DefaultModelProviderCredentialName); err != nil {
 		t.Error(err)
 	}
 }
@@ -124,7 +124,7 @@ func TestAnUnclearModelKeyPathIsRefused(t *testing.T) {
 	if err := jsonv2.Unmarshal(b, &rc); err != nil {
 		t.Fatal(err)
 	}
-	if err := server.CheckCredentials(rc.Credentials, rc.ModelCredential); err != nil {
+	if err := server.CheckCredentials(rc.Credentials, rc.DefaultModelProviderCredentialName); err != nil {
 		t.Errorf("model-keys-openai-paths-segment.json: %v", err)
 	}
 }

@@ -34,11 +34,11 @@ func storedGroups(creds []server.RunCredential) [][]server.RunCredential {
 }
 
 // startGroup is the key group of the start key of a run configuration's work
-// credentials whose model_credential is model, of [storedGroups]: the group of model
-// when it is the name of an API credential of creds, or, with model empty, the group
-// of the one API credential of creds; with neither, nil. With model empty and a model
-// key of the machine's beside the one, the run is refused later, when its start key is
-// decided.
+// credentials whose default_model_provider_credential_name is model, of [storedGroups]:
+// the group of model when it is the name of an API credential of creds, or, with model
+// empty, the group of the one API credential of creds; with neither, nil. With model
+// empty and a model key of the machine's beside the one, the run is refused later, when
+// its start key is decided.
 func startGroup(creds []server.RunCredential, model string) []server.RunCredential {
 	work := slices.DeleteFunc(slices.Clone(creds), server.RunCredential.Harness)
 	if model == "" {
@@ -82,7 +82,7 @@ func (r *Run) checkKeyGroup(now time.Time) error {
 			// The schema has refused a cooldown_until that is no RFC 3339 time.
 			if until, err := time.Parse(time.RFC3339, c.CooldownUntil); err == nil && until.After(now) && c.Name == start {
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-					"set model_credential to a model key out of cooldown: the start key %s is in cooldown until %s", accesskey.ShownName(c.Name, true), c.CooldownUntil)
+					"Set default_model_provider_credential_name to a model key out of cooldown.\nThe default model provider credential %s is in cooldown until %s", accesskey.ShownName(c.Name, true), c.CooldownUntil)
 			}
 		}
 	}
@@ -130,7 +130,8 @@ func checkUseUpTo(c server.RunCredential) error {
 }
 
 // startName is the name of the start key of group, the key group whose
-// model_credential is model: model, or with model empty the group's one key.
+// default_model_provider_credential_name is model: model, or with model empty the
+// group's one key.
 func startName(group []server.RunCredential, model string) string {
 	if model == "" && len(group) > 0 {
 		return group[0].Name

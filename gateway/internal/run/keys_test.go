@@ -98,7 +98,7 @@ func TestTheKeyGroupSharesItsFirstKeysPlaceholder(t *testing.T) {
 // A run whose start key is in one group has key groups of the others too, each with its
 // format and stream path.
 func TestEachGroupHasThePlaceholderOfItsFirstKey(t *testing.T) {
-	doc := `{"version":1,"model_credential":"model","credentials":[` +
+	doc := `{"version":1,"default_model_provider_credential_name":"model","credentials":[` +
 		`{"name":"model","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer","oauth":true},"pause_for_s":60},` +
 		`{"name":"api-key","group":"anthropic-api","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
 		`{"name":"other","group":"other","format":"openai-responses","endpoint":"https://api.other.example/v1","auth":{"scheme":"bearer"}},` +
@@ -174,7 +174,7 @@ func TestAKeyWithoutPauseForHasTheDefaultCooldown(t *testing.T) {
 	entry := func(name string) string {
 		return `{"name":"` + name + `","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`
 	}
-	api := keys(`{"version":1,"model_credential":"model","credentials":[` + entry("model") + `,` + entry("model-2") + `]}`)
+	api := keys(`{"version":1,"default_model_provider_credential_name":"model","credentials":[` + entry("model") + `,` + entry("model-2") + `]}`)
 	if len(api) != 2 || api[0].PauseFor != time.Minute || api[1].PauseFor != time.Minute {
 		t.Errorf("the keys %+v; want 1 minute on both API keys", api)
 	}
@@ -222,7 +222,7 @@ func TestAKeyGroupInCooldownAtTheClaim(t *testing.T) {
 		t.Errorf("the keys %+v", keys)
 	}
 	for _, c := range []struct{ fixture, name, line string }{
-		{"run-configuration-beyond-schema-model-keys-start-cooling.json", "model", `set model_credential to a model key out of cooldown: the start key "model" is in cooldown until 2099-01-01T00:00:00Z`},
+		{"run-configuration-beyond-schema-model-keys-start-cooling.json", "model", "Set default_model_provider_credential_name to a model key out of cooldown.\nThe default model provider credential \"model\" is in cooldown until 2099-01-01T00:00:00Z"},
 		{"run-configuration-beyond-schema-model-keys-group-mixed.json", "model-2", "run configuration https://apiary.example/v1/run-configuration: Give the keys of group \"anthropic\" one format, endpoint and auth.\nThe credentials \"model\" and \"model-2\" differ in endpoint"},
 	} {
 		s := &controlPlane{answer: harnessValue}
@@ -287,12 +287,12 @@ func TestTheCheckAndTheProxyShareTheGroup(t *testing.T) {
 	entry := func(name, header, pause string) string {
 		return `{"name":"` + name + `","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"` + header + `"}` + pause + `}`
 	}
-	doc := `{"version":1,"model_credential":"model","credentials":[` + entry("model", "x-api-key", `,"pause_for_s":60`) + `,` + entry("model-2", "X-Api-Key", `,"pause_for_s":0`) + `]}`
+	doc := `{"version":1,"default_model_provider_credential_name":"model","credentials":[` + entry("model", "x-api-key", `,"pause_for_s":60`) + `,` + entry("model-2", "X-Api-Key", `,"pause_for_s":0`) + `]}`
 	_, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')), Secrets: (&controlPlane{answer: harnessValue}).fetch})
 	if code, names := refusalOf(err); code != refusal.RunConfigurationInvalid || !slices.Equal(names, []string{"model-2"}) {
 		t.Errorf("Open with model-2's pause_for_s 0: %v; want model-2 refused", err)
 	}
-	doc = `{"version":1,"model_credential":"model","credentials":[` + entry("model", "x-api-key", `,"pause_for_s":60`) + `,` + entry("model-2", "X-Api-Key", `,"pause_for_s":60`) + `]}`
+	doc = `{"version":1,"default_model_provider_credential_name":"model","credentials":[` + entry("model", "x-api-key", `,"pause_for_s":60`) + `,` + entry("model-2", "X-Api-Key", `,"pause_for_s":60`) + `]}`
 	// The start's answer sets model-2 on two items of narrower paths: the group stays
 	// the entries'.
 	two := func(name string, call int) (answer, error) {

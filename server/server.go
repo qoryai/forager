@@ -312,10 +312,10 @@ type RunConfiguration struct {
 	// the document's order, each name once; nil when the document has none. The
 	// gateway fetches their values with the secrets request.
 	Credentials []RunCredential `json:"credentials,omitzero"`
-	// ModelCredential is the name of the model key the runtime starts with, an API
-	// credential of Credentials or a model key of the machine's; empty when the document
-	// names none, which a run with one model key may.
-	ModelCredential string `json:"model_credential,omitzero"`
+	// DefaultModelProviderCredentialName is the name of the model key the runtime
+	// starts with, an API credential of Credentials or a model key of the machine's;
+	// empty when the document names none, which a run with one model key may.
+	DefaultModelProviderCredentialName string `json:"default_model_provider_credential_name,omitzero"`
 	// StackHosts are the hosts the run's stack proxy allows beside the gateway's
 	// gateway.stack_hosts, each a lower-case host name, an IPv4 address or a *. suffix,
 	// in the document's order; nil when the document has none.

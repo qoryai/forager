@@ -1243,7 +1243,7 @@ func serveToolAndKeys(c *control) {
 		return `{"name":"` + name + `","group":"anthropic","format":"anthropic-messages","endpoint":"https://localhost:9/v1","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
 	}
 	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost","svc.example"]},"tools":[{"name":"svc"}]},`+
-		`"model_credential":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
+		`"default_model_provider_credential_name":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
 	c.mu.Lock()
 	c.secrets = map[string]string{"model": "fake-group-value-0001", "model-2": "fake-group-value-0002"}
 	c.mu.Unlock()
@@ -2302,7 +2302,7 @@ func serveKeyGroup(c *control) {
 	entry := func(name string) string {
 		return `{"name":"` + name + `","group":"anthropic","format":"anthropic-messages","endpoint":"https://localhost:9/v1","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
 	}
-	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"model_credential":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
+	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"default_model_provider_credential_name":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
 	c.mu.Lock()
 	c.secrets = map[string]string{"model": "fake-group-value-0001", "model-2": "fake-group-value-0002"}
 	c.mu.Unlock()

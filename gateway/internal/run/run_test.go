@@ -460,18 +460,19 @@ func TestAReloadBehindAWallBringsCredentialsAndPaths(t *testing.T) {
 }
 
 // modelKeysDoc is a run configuration whose policy selects the machine's model keys
-// first and second and its host credential git, with model_credential set to start.
+// first and second and its host credential git, with
+// default_model_provider_credential_name set to start.
 func modelKeysDoc(start, allow string) string {
 	return `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","api.other-model.example","git.example"` + allow + `]},` +
-		`"credentials":[{"name":"first"},{"name":"second"},{"name":"git"}]},"model_credential":"` + start + `"}`
+		`"credentials":[{"name":"first"},{"name":"second"},{"name":"git"}]},"default_model_provider_credential_name":"` + start + `"}`
 }
 
 // TestEveryModelKeyReachesTheProxy pins ProxyUses for a run with two model keys of the
 // machine's and a host credential: the proxy gets both model keys, each with its
 // placeholder's value, link.KeyPlaceholder of its name, and the host credential with
 // none; the gateway names the one the proxy sets (proxy.Proxy.SetModelKey). A reload
-// with the same model_credential is put in force, and one that names the other model
-// key is refused with the policy in force staying.
+// with the same default_model_provider_credential_name is put in force, and one that
+// names the other model key is refused with the policy in force staying.
 func TestEveryModelKeyReachesTheProxy(t *testing.T) {
 	t.Setenv("QORY_TEST_MODEL_TOKEN", "sk-ant-fake-value")
 	cfg := run.Config{
@@ -507,15 +508,15 @@ func TestEveryModelKeyReachesTheProxy(t *testing.T) {
 	}
 	d, err := reload(t, r, document(t, modelKeysDoc("second", `,"b.example"`), digest('2')))
 	if err != nil {
-		t.Fatalf("a reload with the same model_credential: %v", err)
+		t.Fatalf("a reload with the same default_model_provider_credential_name: %v", err)
 	}
 	r.Commit(d)
 	if got := shown(d.Uses); !slices.Equal(got, want) {
 		t.Errorf("the reload's uses %+v, want %+v", got, want)
 	}
 	_, err = reload(t, r, document(t, modelKeysDoc("first", ""), digest('3')))
-	if want := "run configuration " + runURL + ": start a new run to start with another model key; a run's model_credential is fixed when it starts, and this run configuration names another; the policy in force stays"; err == nil || err.Error() != want {
-		t.Errorf("a reload with another model_credential:\n got %v\nwant %s", err, want)
+	if want := "run configuration " + runURL + ": start a new run to start with another model key; a run's default_model_provider_credential_name is fixed when it starts, and this run configuration names another; the policy in force stays"; err == nil || err.Error() != want {
+		t.Errorf("a reload with another default_model_provider_credential_name:\n got %v\nwant %s", err, want)
 	}
 	if r.RunConfiguration() != digest('2') || r.Held().Start != "second" {
 		t.Errorf("after a refused reload: %q, start %q", r.RunConfiguration(), r.Held().Start)
@@ -1113,10 +1114,11 @@ func TestAReloadKeepsAnImageByReference(t *testing.T) {
 	}
 }
 
-// TestAReloadKeepsTheStartKey pins that, without model_credential, a reload that
-// selects another model key of the machine's than the run started with, or none, is
-// refused, one that selects the same key is accepted, and one that selects a model key
-// for a run that started with none is refused.
+// TestAReloadKeepsTheStartKey pins that, without
+// default_model_provider_credential_name, a reload that selects another model key of
+// the machine's than the run started with, or none, is refused, one that selects the
+// same key is accepted, and one that selects a model key for a run that started with
+// none is refused.
 func TestAReloadKeepsTheStartKey(t *testing.T) {
 	t.Setenv("QORY_TEST_MODEL_TOKEN", "sk-ant-fake-value")
 	doc := func(key string) string {
@@ -1136,7 +1138,7 @@ func TestAReloadKeepsTheStartKey(t *testing.T) {
 		t.Fatalf("start %q", r.Held().Start)
 	}
 	_, err := reload(t, r, document(t, doc("second"), digest('2')))
-	if want := "run configuration " + runURL + `: start a new run to change the model key it starts with: the run started with "first", and this run configuration selects "second"; the policy in force stays`; err == nil || err.Error() != want {
+	if want := "run configuration " + runURL + `: Start a new run to change the default model provider credential: the run started with "first", and this configuration selects "second"; the policy in force stays`; err == nil || err.Error() != want {
 		t.Errorf("a reload with another model key:\n got %v\nwant %s", err, want)
 	}
 	if r.RunConfiguration() != digest('1') || r.Held().Start != "first" {
@@ -1144,7 +1146,7 @@ func TestAReloadKeepsTheStartKey(t *testing.T) {
 	}
 	none := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}}}`
 	_, err = reload(t, r, document(t, none, digest('3')))
-	if want := "run configuration " + runURL + `: start a new run to change the model key it starts with: the run started with "first", and this run configuration selects no model key; the policy in force stays`; err == nil || err.Error() != want {
+	if want := "run configuration " + runURL + `: Start a new run to change the default model provider credential: the run started with "first", and this configuration selects no model key; the policy in force stays`; err == nil || err.Error() != want {
 		t.Errorf("a reload with no model key:\n got %v\nwant %s", err, want)
 	}
 	if _, err := reload(t, r, document(t, doc("first"), digest('4'))); err != nil {
@@ -1156,7 +1158,7 @@ func TestAReloadKeepsTheStartKey(t *testing.T) {
 		t.Fatalf("start %q", r.Held().Start)
 	}
 	_, err = reload(t, r, document(t, doc("first"), digest('6')))
-	if want := "run configuration " + runURL + `: start a new run to change the model key it starts with: the run started with no model key, and this run configuration selects "first"; the policy in force stays`; err == nil || err.Error() != want {
+	if want := "run configuration " + runURL + `: Start a new run to change the default model provider credential: the run started with no model key, and this configuration selects "first"; the policy in force stays`; err == nil || err.Error() != want {
 		t.Errorf("a reload that adds a model key:\n got %v\nwant %s", err, want)
 	}
 }

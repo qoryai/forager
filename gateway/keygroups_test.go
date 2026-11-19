@@ -119,7 +119,7 @@ func startKeyGroupsRun(t *testing.T, machine bool, startKey string) *mixedRun {
 	if !machine {
 		policy = `{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}}`
 	}
-	c.serveDocument(`{"version":1,"security_policy":`+policy+`,"model_credential":"`+startKey+`","credentials":[`+
+	c.serveDocument(`{"version":1,"security_policy":`+policy+`,"default_model_provider_credential_name":"`+startKey+`","credentials":[`+
 		entry("a-1", "a")+`,`+entry("b-1", "b")+`,`+entry("a-2", "a")+`,`+entry("b-2", "b")+`]}`, 'a')
 	c.mu.Lock()
 	c.secrets = map[string]string{"a-1": mixedValues["a-1"], "a-2": mixedValues["a-2"], "b-1": mixedValues["b-1"], "b-2": mixedValues["b-2"]}
@@ -151,8 +151,8 @@ func startKeyGroupsRun(t *testing.T, machine bool, startKey string) *mixedRun {
 	}
 	a := m.h.open(server.LinkRunRequest{Wall: true})
 	m.runID, m.hosts = a.RunID, a.CredentialHosts
-	if a.ModelCredential != startKey {
-		t.Fatalf("the run's start key %q; want %s", a.ModelCredential, startKey)
+	if a.DefaultModelProviderCredentialName != startKey {
+		t.Fatalf("the run's start key %q; want %s", a.DefaultModelProviderCredentialName, startKey)
 	}
 	for _, c := range a.CredentialHosts {
 		if c.Name == "machine" && c.Group != "" {
@@ -247,11 +247,11 @@ func (m *mixedRun) limit(names ...string) {
 // the answer.
 func (m *mixedRun) join(t *testing.T, name string) string {
 	t.Helper()
-	a, err := m.h.linkOf(m.runID).Join(t.Context(), server.LocalOrigin+"/v1/run-configuration", m.runID, server.LinkJoinRequest{Passes: []string{}, ModelKey: true, ModelCredential: name})
+	a, err := m.h.linkOf(m.runID).Join(t.Context(), server.LocalOrigin+"/v1/run-configuration", m.runID, server.LinkJoinRequest{Passes: []string{}, ModelKey: true, ModelProviderCredentialName: name})
 	if err != nil {
 		t.Fatalf("the join naming %q: %v", name, err)
 	}
-	return a.ModelCredential
+	return a.ModelProviderCredentialName
 }
 
 // TestAMachineKeyIsInNoKeyGroup pins a run whose start key is the machine's model key,

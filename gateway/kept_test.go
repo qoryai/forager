@@ -35,7 +35,7 @@ var keptNames = []string{"request.json", "ca.pem", "ca.key", "given.jsonl", "joi
 // the run's CA; c serves the run configuration that lists it.
 func caConfig(t *testing.T, c *control) gateway.Config {
 	t.Setenv("GATEWAY_TEST_FIRST_KEY", "fake-first-value-0001")
-	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]},"credentials":[{"name":"first"}]},"model_credential":"first"}`, 'a')
+	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]},"credentials":[{"name":"first"}]},"default_model_provider_credential_name":"first"}`, 'a')
 	creds := []gateway.Credential{{Name: "first", Env: "GATEWAY_TEST_FIRST_KEY", Format: "anthropic-messages", Endpoint: "https://localhost:9/v1", Scheme: "header", Header: "x-api-key"}}
 	node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost"}}}
 	return gateway.Config{Server: c.server(), Credentials: creds, Policy: node}
@@ -148,7 +148,7 @@ func TestASeparateGatewayKeepsWhatReopensARun(t *testing.T) {
 	os.Remove(filepath.Join(dir, "joins.jsonl"))
 	a := r.do(t, e.key, http.MethodPost, joinPath, body)
 	var joined server.LinkJoinAnswer
-	if json.Unmarshal(a.body, &joined); a.status != http.StatusOK || joined.Session != 1 || joined.ModelCredential != "first" {
+	if json.Unmarshal(a.body, &joined); a.status != http.StatusOK || joined.Session != 1 || joined.ModelProviderCredentialName != "first" {
 		t.Fatalf("the join: %d %s", a.status, a.body)
 	}
 	if mode, err := modeOf(filepath.Join(dir, "joins.jsonl")); err != nil || mode != 0o600 {
@@ -161,12 +161,12 @@ func TestASeparateGatewayKeepsWhatReopensARun(t *testing.T) {
 }
 
 // TestAJoinSentAgainGetsItsAnswerAgain pins the replay of a join on the one address:
-// the run's last join, answered 200 and with neither session.started nor
-// session.exited numbered, sent again with the same passes, model_key and
-// model_credential, gets the same 200, session number and model key, and nothing new
-// is numbered or written; another join while it is open is the 400 of a join while
-// another is open; once its session.started is numbered, the same request is that 400
-// too. On the local link the same request is that 400 at once.
+// the run's last join, answered 200 and with neither session.started nor session.exited
+// numbered, sent again with the same passes, model_key and
+// model_provider_credential_name, gets the same 200, session number and model key, and
+// nothing new is numbered or written; another join while it is open is the 400 of a
+// join while another is open; once its session.started is numbered, the same request is
+// that 400 too. On the local link the same request is that 400 at once.
 func TestAJoinSentAgainGetsItsAnswerAgain(t *testing.T) {
 	c := gatewayControl(t)
 	cfg := caConfig(t, c)
@@ -175,16 +175,16 @@ func TestAJoinSentAgainGetsItsAnswerAgain(t *testing.T) {
 	e := r.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true})
 	dir := filepath.Join(r.cfg.Dir, "runs", runID)
 	joinPath := "/qory-link/run-configuration/" + runID + "/sessions"
-	same := []byte(`{"version":1,"passes":["HOME"],"model_key":true,"model_credential":"first"}`)
+	same := []byte(`{"version":1,"passes":["HOME"],"model_key":true,"model_provider_credential_name":"first"}`)
 	for i := range 2 {
 		a := r.do(t, e.key, http.MethodPost, joinPath, same)
 		var joined server.LinkJoinAnswer
-		if json.Unmarshal(a.body, &joined); a.status != http.StatusOK || joined.Session != 1 || joined.ModelCredential != "first" {
+		if json.Unmarshal(a.body, &joined); a.status != http.StatusOK || joined.Session != 1 || joined.ModelProviderCredentialName != "first" {
 			t.Fatalf("join try %d: %d %s", i+1, a.status, a.body)
 		}
 	}
 	for _, other := range []string{
-		`{"version":1,"passes":["HOME","PATH"],"model_key":true,"model_credential":"first"}`,
+		`{"version":1,"passes":["HOME","PATH"],"model_key":true,"model_provider_credential_name":"first"}`,
 		`{"version":1,"passes":["HOME"],"model_key":true}`,
 		`{"version":1,"passes":["HOME"],"model_key":false}`,
 	} {
@@ -192,7 +192,7 @@ func TestAJoinSentAgainGetsItsAnswerAgain(t *testing.T) {
 			t.Errorf("another join while session 1 is open, %s: %d %s", other, a.status, a.body)
 		}
 	}
-	if got := lineMaps(t, filepath.Join(dir, "joins.jsonl")); len(got) != 1 || got[0]["model_credential"] != "first" {
+	if got := lineMaps(t, filepath.Join(dir, "joins.jsonl")); len(got) != 1 || got[0]["model_provider_credential_name"] != "first" {
 		t.Errorf("joins.jsonl %v; want the one join", got)
 	}
 	if got := e.post(t, sessionStarted(runID, 1)); got.status != http.StatusAccepted {
@@ -237,8 +237,9 @@ func TestAJoinSentAgainGetsItsAnswerAgain(t *testing.T) {
 // TestARefusedJoinSentAgainGetsItsRefusalAgain pins the replay of a join answered 403
 // on the one address: the run's last join, refused with placeholder_conflict and with
 // no session.exited numbered, sent again with the same passes, model_key and
-// model_credential, gets the same 403, and nothing new is numbered or written; once
-// the refused join's session.exited is numbered, the next join is session 2.
+// model_provider_credential_name, gets the same 403, and nothing new is numbered or
+// written; once the refused join's session.exited is numbered, the next join is session
+// 2.
 func TestARefusedJoinSentAgainGetsItsRefusalAgain(t *testing.T) {
 	t.Setenv("GATEWAY_TEST_SECRET", "s3cret-value-of-the-test")
 	c := gatewayControl(t)
@@ -601,7 +602,7 @@ func TestTheModelKeyMarkFollowsPassAndResume(t *testing.T) {
 		return `{"name":"` + name + `","group":"anthropic","format":"anthropic-messages","endpoint":"` + url + `","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
 	}
 	c := gatewayControl(t)
-	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"model_credential":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
+	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"default_model_provider_credential_name":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
 	c.mu.Lock()
 	c.secrets = map[string]string{"model": "fake-group-value-0001", "model-2": "fake-group-value-0002"}
 	c.mu.Unlock()

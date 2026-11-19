@@ -223,19 +223,19 @@ func TestAModelKeyStartsTheRunAsModelCredentialSays(t *testing.T) {
 		want   string
 	}{
 		"two model keys and no start": {[]Definition{first, plain, second}, nil, "", nil,
-			"set model_credential in the run configuration, or give the run one model key: the run has the model keys first, second: run_configuration_invalid"},
+			"Set default_model_provider_credential_name, or give the run one model key.\nThe run has the model keys first, second: run_configuration_invalid"},
 		"a model key of each and no start": {[]Definition{first}, []Stored{server}, "", nil,
-			"set model_credential in the run configuration, or give the run one model key: the run has the model keys first, server-model: run_configuration_invalid"},
+			"Set default_model_provider_credential_name, or give the run one model key.\nThe run has the model keys first, server-model: run_configuration_invalid"},
 		"a start and no model key": {[]Definition{plain}, nil, "first", []string{"first"},
-			`remove model_credential from the run configuration, or give the run a model key "first": the run has no model key: run_configuration_invalid: first`},
+			"Remove default_model_provider_credential_name, or give the run a model key \"first\".\nThe run has no model key: run_configuration_invalid: first"},
 		"a start and no credential": {nil, nil, "first", []string{"first"},
-			`remove model_credential from the run configuration, or give the run a model key "first": the run has no model key: run_configuration_invalid: first`},
+			"Remove default_model_provider_credential_name, or give the run a model key \"first\".\nThe run has no model key: run_configuration_invalid: first"},
 		"a start that names no model key": {[]Definition{first, second}, nil, "third", []string{"third"},
-			`set model_credential in the run configuration to one of the run's model keys, first, second: the run has no model key "third": run_configuration_invalid: third`},
+			"Set default_model_provider_credential_name to one of the run's model keys.\nThe run has the model keys first, second, and no model key \"third\": run_configuration_invalid: third"},
 		"a start that names a host credential": {[]Definition{first, plain}, nil, "plain", []string{"plain"},
-			`set model_credential in the run configuration to one of the run's model keys, first: the run has no model key "plain": run_configuration_invalid: plain`},
+			"Set default_model_provider_credential_name to one of the run's model keys.\nThe run has the model keys first, and no model key \"plain\": run_configuration_invalid: plain"},
 		"a start with a secret in its name": {[]Definition{first}, nil, "x-qak_not-a-real-secret", []string{"(a name that contains an access key secret)"},
-			"set model_credential in the run configuration to one of the run's model keys, first: the run has no model key (a name that contains an access key secret): run_configuration_invalid: (a name that contains an access key secret)"},
+			"Set default_model_provider_credential_name to one of the run's model keys.\nThe run has the model keys first, and no model key (a name that contains an access key secret): run_configuration_invalid: (a name that contains an access key secret)"},
 	} {
 		held, err := ResolveWith(context.Background(), c.defs, selected(c.defs), c.stored, c.start, policy.Observe, nil, func(l string) { t.Log(l) })
 		if err == nil {

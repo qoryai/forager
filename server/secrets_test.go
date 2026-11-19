@@ -23,7 +23,7 @@ import (
 
 // credentialDoc is a run configuration with two credentials: an API credential and a
 // host credential.
-const credentialDoc = `{"version":1,"credentials":[{"name":"model","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer","oauth":true},"key_prefixes":["sk-ant-"]},{"name":"forge","apply":[{"hosts":["git.example"],"scheme":"basic","username":"x-access-token"}],"placeholders":["FORGE_TOKEN"]}],"model_credential":"model"}`
+const credentialDoc = `{"version":1,"credentials":[{"name":"model","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer","oauth":true},"key_prefixes":["sk-ant-"]},{"name":"forge","apply":[{"hosts":["git.example"],"scheme":"basic","username":"x-access-token"}],"placeholders":["FORGE_TOKEN"]}],"default_model_provider_credential_name":"model"}`
 
 // TestARunConfigurationsCredentialsAndItsComputedDigest pins the reading of
 // credentials: each entry decoded, and Computed the SHA-256 of the bytes as they came,
@@ -40,8 +40,8 @@ func TestARunConfigurationsCredentialsAndItsComputedDigest(t *testing.T) {
 		{Name: "model", Group: "anthropic", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: server.Auth{Scheme: "bearer", OAuth: true}, KeyPrefixes: []string{"sk-ant-"}},
 		{Name: "forge", Apply: []server.Apply{{Hosts: []string{"git.example"}, Scheme: "basic", Username: "x-access-token"}}, Placeholders: []string{"FORGE_TOKEN"}},
 	}
-	if !reflect.DeepEqual(rc.Credentials, want) || rc.ModelCredential != "model" {
-		t.Errorf("credentials %+v, model_credential %q", rc.Credentials, rc.ModelCredential)
+	if !reflect.DeepEqual(rc.Credentials, want) || rc.DefaultModelProviderCredentialName != "model" {
+		t.Errorf("credentials %+v, default_model_provider_credential_name %q", rc.Credentials, rc.DefaultModelProviderCredentialName)
 	}
 	for i, w := range [][]server.Apply{
 		{{Hosts: []string{"api.model.example"}, Scheme: "bearer"}},
@@ -59,12 +59,13 @@ func TestARunConfigurationsCredentialsAndItsComputedDigest(t *testing.T) {
 	}
 }
 
-// TestARunConfigurationsCredentialsAreRefused pins what Forager refuses of
-// credentials, beside the schema, each run_configuration_invalid with the name: a name
-// twice, a header that frames the request or that the proxy sets, in any case and
-// with underscores for dashes, an endpoint whose host Forager does not read, and a
-// model_credential that names a host credential. Two API credentials without a
-// model_credential are refused with no name.
+// TestARunConfigurationsCredentialsAreRefused pins what Forager refuses of credentials,
+// beside the schema, each run_configuration_invalid with the name: a name twice, a
+// header that frames the request or that the proxy sets, in any case and with
+// underscores for dashes, an endpoint whose host Forager does not read, and a
+// default_model_provider_credential_name that names a host credential. Two API
+// credentials without a default_model_provider_credential_name are refused with no
+// name.
 func TestARunConfigurationsCredentialsAreRefused(t *testing.T) {
 	entry := func(name, header string) string {
 		return `{"name":"` + name + `","apply":[{"hosts":["api.model.example"],"scheme":"header","header":"` + header + `"}]}`
@@ -75,8 +76,8 @@ func TestARunConfigurationsCredentialsAreRefused(t *testing.T) {
 			"Give the credential \"model\" an endpoint whose host is a DNS name or an IP address, port 1 to 65535.\nForager reads no host from its endpoint"},
 		"an endpoint's port": {`{"version":1,"credentials":[{"name":"model","group":"openai-chat","format":"openai-chat","endpoint":"https://api.model.example:99999","auth":{"scheme":"bearer"}}]}`,
 			"Give the credential \"model\" an endpoint whose host is a DNS name or an IP address, port 1 to 65535.\n"},
-		"a host credential as the start key": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `],"model_credential":"model"}`,
-			"Set model_credential to a credential that has a format.\nThe credential \"model\" has no format, so it is not a model key"},
+		"a host credential as the start key": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `],"default_model_provider_credential_name":"model"}`,
+			"Set default_model_provider_credential_name to a credential that has a format.\nThe credential \"model\" has no format, so it is not a model key"},
 	}
 	for _, h := range []string{"Host", "content-length", "Transfer-Encoding", "Connection", "TE", "Trailer", "Upgrade", "Keep-Alive", "Cookie", "Proxy-Authorization", "proxy_authorization", "X-Qory-Credential-Set", "x_qory_credential_set", "Qory-Anything"} {
 		cases["the header "+h] = struct{ doc, want string }{`{"version":1,"credentials":[` + entry("model", h) + `]}`, "Set the credential \"model\" in a header other than \"" + h + "\".\nThat header frames the request, or the proxy sets it"}
@@ -95,13 +96,13 @@ func TestARunConfigurationsCredentialsAreRefused(t *testing.T) {
 	}
 	v.runDoc = `{"version":1,"credentials":[` + api("model") + `,` + api("backup") + `]}`
 	_, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)
-	if want := "Set model_credential to the model key the runtime starts with.\nThe document lists the model keys model, backup"; code(err) != "run_configuration_invalid" || !strings.Contains(err.Error(), want) {
-		t.Errorf("two model keys without model_credential: %v; want %q", err, want)
+	if want := "Set default_model_provider_credential_name to the model provider credential the first session uses: the document lists model, backup."; code(err) != "run_configuration_invalid" || !strings.Contains(err.Error(), want) {
+		t.Errorf("two model keys without default_model_provider_credential_name: %v; want %q", err, want)
 	}
 	for _, doc := range []string{
-		`{"version":1,"credentials":[` + api("model") + `,` + api("backup") + `],"model_credential":"backup"}`,
+		`{"version":1,"credentials":[` + api("model") + `,` + api("backup") + `],"default_model_provider_credential_name":"backup"}`,
 		`{"version":1,"credentials":[` + api("model") + `]}`,
-		`{"version":1,"credentials":[` + api("model") + `],"model_credential":"machine-model"}`,
+		`{"version":1,"credentials":[` + api("model") + `],"default_model_provider_credential_name":"machine-model"}`,
 	} {
 		v.runDoc = doc
 		if _, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID); err != nil {

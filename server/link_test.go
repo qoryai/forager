@@ -164,7 +164,7 @@ func TestTheLinkSpeaksTheContractOverTheSocket(t *testing.T) {
 		t.Errorf("reload answer %+v", re)
 	}
 	j, err := k.Join(ctx, d.Run.URL, runID, server.LinkJoinRequest{Passes: []string{"NODE_ENV", "HOME"}, ModelKey: true})
-	if err != nil || j.Session != 1 || j.ModelCredential != "" {
+	if err != nil || j.Session != 1 || j.ModelProviderCredentialName != "" {
 		t.Errorf("join answer %+v, %v", j, err)
 	}
 	del, err := k.Deliver(ctx, d.Events.URL, "d1", []byte(`[]`), runDigest)
