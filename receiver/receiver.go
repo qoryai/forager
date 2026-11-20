@@ -699,18 +699,18 @@ func readRegistration(body []byte) (*registrationBody, error) {
 	if err := validate(registrationSchema, body); err != nil {
 		return nil, err
 	}
+	// encoding/json/v2 matches member names by exact case, as every reader of a
+	// contract document does.
 	var reg registrationBody
-	if err := json.Unmarshal(body, &reg); err != nil {
+	if err := jsonv2.Unmarshal(body, &reg); err != nil {
 		return nil, err
 	}
 	if err := server.CheckLabels(reg.Labels); err != nil {
 		return nil, err
 	}
 	if reg.About != nil {
-		dec := json.NewDecoder(bytes.NewReader(reg.About))
-		dec.DisallowUnknownFields()
 		var a server.About
-		if err := dec.Decode(&a); err != nil {
+		if err := jsonv2.Unmarshal(reg.About, &a, jsonv2.RejectUnknownMembers(true)); err != nil {
 			return nil, err
 		}
 		if err := server.CheckAbout(&a); err != nil {
@@ -954,7 +954,7 @@ func (h *Handler) attach(w http.ResponseWriter, v verified, runID string, body [
 	var a attachBody
 	err := validate(attachSchema, body)
 	if err == nil {
-		err = json.Unmarshal(body, &a)
+		err = jsonv2.Unmarshal(body, &a)
 	}
 	if !h.timely(w, v, err, a.Time) {
 		return
@@ -1060,7 +1060,7 @@ func (h *Handler) outcome(w http.ResponseWriter, v verified, runID string, body 
 	var o outcomeBody
 	err := validate(outcomeSchema, body)
 	if err == nil {
-		err = json.Unmarshal(body, &o)
+		err = jsonv2.Unmarshal(body, &o)
 	}
 	if !h.timely(w, v, err, o.Time) {
 		return
@@ -1509,14 +1509,16 @@ type head struct {
 // member, until the batch that carries the run's dev.qory.run.exited, whose answer and
 // every one after it holds none.
 func (h *Handler) deliver(w http.ResponseWriter, v verified, body []byte) {
+	// No schema check comes first: encoding/json/v2 matches member names by exact case,
+	// so SUBJECT, TYPE or ID set no field of a head, and such an event is refused.
 	var batch []json.RawMessage
-	if err := json.Unmarshal(body, &batch); err != nil || len(batch) == 0 {
+	if err := jsonv2.Unmarshal(body, &batch); err != nil || len(batch) == 0 {
 		h.refuseSigned(w, v, http.StatusBadRequest, "invalid_request")
 		return
 	}
 	heads := make([]head, len(batch))
 	for i, raw := range batch {
-		if err := json.Unmarshal(raw, &heads[i]); err != nil || heads[i].ID == "" || heads[i].Subject == "" || heads[i].Type == "" ||
+		if err := jsonv2.Unmarshal(raw, &heads[i]); err != nil || heads[i].ID == "" || heads[i].Subject == "" || heads[i].Type == "" ||
 			heads[i].Subject != heads[0].Subject {
 			h.refuseSigned(w, v, http.StatusBadRequest, "invalid_request")
 			return

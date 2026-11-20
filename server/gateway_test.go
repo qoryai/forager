@@ -429,12 +429,12 @@ func TestAttach(t *testing.T) {
 	}
 }
 
-// TestAnAnswerMatchesMemberNamesByExactCase pins that a member of an attach or a
+// TestAnAnswerIsReadByExactCase pins that a member of an attach or a
 // registration answer that differs from a defined one only in case sets nothing: LABELS
 // and ABOUT beside labels and about leave the defined values, LABELS and ABOUT alone
 // leave none, and RUN_ID and RUN_KEY of another run beside run_id and run_key leave
 // the registration's.
-func TestAnAnswerMatchesMemberNamesByExactCase(t *testing.T) {
+func TestAnAnswerIsReadByExactCase(t *testing.T) {
 	a := newApiary(t)
 	c := a.client()
 	ctx := context.Background()

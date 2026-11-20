@@ -1148,6 +1148,10 @@ release may change what an existing document does, and says so under Upgrading.
   the secret is set. An unknown `scheme` or `format` is still refused, and the other
   objects keep their rule. A reader of `runtimes.json` follows the same rule for each
   runtime. README §Versions, Members a reader does not define, has the rule.
+- Forager reads Qory Apiary's attach, registration, model-keys and run-outcome
+  answers, and the configuration, by exact case: a member such as `WORKSPACES` sets
+  nothing. A configuration whose `version` is `1.0` or `1e0` is refused with `Write
+  /version as a whole number, such as 1, with no fraction or exponent`.
 - A run with a run key writes neutral values in its events: `dev.qory.run.started`
   has no `host`, `dir` of `dev.qory.session.started` is `/workspace`, `command` and
   `args` have `<run>`, `<home>` and `<inputs>` at each occurrence of the run

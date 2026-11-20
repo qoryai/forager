@@ -239,10 +239,16 @@ func decode(name, schemaName string, b []byte, out any) error {
 	if err != nil {
 		return err
 	}
-	// encoding/json/v2 matches member names by exact case, so a variant in an open
-	// object sets no field. Its error can quote a member name of the document, so none
-	// of it is printed.
-	if jsonv2.Unmarshal(j, out) != nil {
+	// encoding/json/v2 matches member names by exact case: a member name that differs
+	// only in case sets no field. Past the schema, which takes 1.0 and 1e0 as an
+	// integer, only such a number fails to decode. The structs that decode documents
+	// have no map, so the error's pointer contains only member names that they define.
+	if err := jsonv2.Unmarshal(j, out); err != nil {
+		var se *jsonv2.SemanticError
+		if errors.As(err, &se) && se.JSONPointer != "" {
+			return fmt.Errorf("Write %s as a whole number, such as 1, with no fraction or exponent\n"+
+				"it does not decode as %s defines it", accesskey.ShownValue(string(se.JSONPointer), false), schemaName)
+		}
 		return fmt.Errorf("it does not decode as %s defines it", schemaName)
 	}
 	return nil

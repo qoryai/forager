@@ -100,11 +100,13 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 			refuse(w, ref.Status, ref.Code, nil, ref.From, ref.Error())
 			return
 		}
+		// link-run-request.schema.json has a closed root, so readRunRequest has refused a
+		// member such as LABELS already; labels and about are matched by exact case here.
 		var members struct {
 			Labels json.RawMessage `json:"labels"`
 			About  json.RawMessage `json:"about"`
 		}
-		if json.Unmarshal(body, &members) != nil || members.Labels != nil || members.About != nil {
+		if jsonv2.Unmarshal(body, &members) != nil || members.Labels != nil || members.About != nil {
 			invalid(w)
 			return
 		}

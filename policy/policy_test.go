@@ -63,7 +63,8 @@ func TestFixturesReadWithDigest(t *testing.T) {
 }
 
 // TestInvalidPolicyIsAnError pins the rule that a configured policy that does not
-// read means no run: a refused document is a *policy.Error naming the document.
+// read means no run: a refused document is a *policy.Error naming the document. A
+// member name that differs from a defined one only in case is refused.
 func TestInvalidPolicyIsAnError(t *testing.T) {
 	for _, name := range []string{"fixtures/invalid/policy-mode-log.yaml", "fixtures/invalid/policy-allow-widens.yaml", "fixtures/invalid/policy-deny-port.yaml"} {
 		_, err := policy.Read(name, fixture(t, name))
@@ -74,6 +75,11 @@ func TestInvalidPolicyIsAnError(t *testing.T) {
 	}
 	if _, err := policy.Read("policy", []byte(`{"version":1,"egress":{"mode":"log"}}`)); err == nil {
 		t.Error("mode log was accepted")
+	}
+	for _, doc := range []string{`{"version":1,"egress":{"mode":"observe","MODE":"enforce"}}`, `{"version":1,"Egress":{"mode":"observe"},"egress":{"mode":"observe"}}`} {
+		if p, err := policy.Read("policy", []byte(doc)); err == nil {
+			t.Errorf("%s: read as %+v; want a member that differs only in case refused", doc, p.Policy)
+		}
 	}
 }
 

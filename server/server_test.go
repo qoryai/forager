@@ -333,7 +333,8 @@ func (v *verified) client() *server.Client {
 // of a node's key without workspaces, of a gateway's key with workspaces, without the
 // run endpoint or whose run endpoint has a trailing slash, a query or a fragment; a
 // gateway's key's document without workspaces is read, with none, and so is one with
-// WORKSPACES, a member that differs from workspaces in case and sets nothing.
+// WORKSPACES, a member that differs from workspaces in case and sets nothing. A version
+// of 1.0 or 1e0, which the schema takes, fails with the fix for /version first.
 func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	v := newVerified(t)
 	c := v.client()
@@ -381,6 +382,18 @@ func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 		var de *server.DocumentError
 		if !errors.As(err, &de) || de.URL != v.srv.URL+server.WellKnown || !strings.HasPrefix(err.Error(), "configuration "+v.srv.URL+server.WellKnown+": ") {
 			t.Errorf("a configuration %s: %v", name, err)
+		}
+	}
+	for _, version := range []string{"1.0", "1e0"} {
+		v.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			doc := []byte(`{"version":` + version + `,"node_id":"` + node + `",` + workspaces + `"events":{"url":"` + v.srv.URL + `/v1/events","types":["*"]}` + run + `,"apiary_public_key":[{"alg":"ed25519","public_key":"` + v.signer.PublicKey().String() + `"}]}`)
+			w.Header().Set(server.HeaderConfiguration, "sha256=c0")
+			w.Header().Set(server.HeaderSignature, v.signer.SignAnswer(accesskey.Answer{Status: 200, RequestSignature: r.Header.Get(server.HeaderSignature), Body: doc, Configuration: "sha256=c0"}))
+			w.Write(doc)
+		})
+		_, _, err := c.Discover(context.Background())
+		if want := "configuration " + v.srv.URL + server.WellKnown + ": Write /version as a whole number, such as 1, with no fraction or exponent\n"; err == nil || !strings.HasPrefix(err.Error(), want) {
+			t.Errorf("a configuration with version %s: %v; want %q first", version, err, want)
 		}
 	}
 	v.srv.Config.Handler = inner
