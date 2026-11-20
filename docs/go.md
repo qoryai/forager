@@ -564,11 +564,11 @@ err = run.Built(session.Built{
 A refusal the gateway or the server answers with a code returns a `*session.Refusal`,
 with the code, the names it concerns and `From`, `apiary` or `gateway`. Its `Error` is
 the refusal's `message`, the text such a run returns, such as
-`register https://qory.example/v1/runs: instance_limit (status 409)`. When the server's
-last answer to the registration, or to the attach behind a separate gateway, has a
-`Retry-After` of whole seconds, `RetryAfter` is that wait, at most 31 days: wait that
-long before you open the run again. A run whose policy
-needs a wall and has none returns the error of [`wall_required`](../contracts/forager/v1/README.md#the-gateways-link)
+`register https://qory.example/v1/runs: instance_limit (status 409)`. When the last
+answer of Qory Apiary as the run opens, to its registration or attach, the reload after
+the attach, or its secrets request, has a `Retry-After` of whole seconds, `RetryAfter`
+is that wait, at most 31 days: wait that long, then open a run with a new run id. A
+run whose policy needs a wall and has none returns the error of [`wall_required`](../contracts/forager/v1/README.md#the-gateways-link)
 as the session words it, and so does a run the gateway could not open for a reason
 without a code.
 

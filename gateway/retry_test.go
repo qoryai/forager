@@ -22,8 +22,8 @@ import (
 
 // apiaryReply is one answer of Qory Apiary's a test scripts: its status and body, with
 // its Content-Type, signed under the test's signing key or not, with the digest of a
-// run configuration when it carries one, and with retryAfter as its Retry-After when
-// set; drop closes the connection unanswered.
+// run configuration when it carries one, and with retryAfter as its Retry-After when it
+// has one; drop closes the connection unanswered.
 type apiaryReply struct {
 	status      int
 	body        string
@@ -246,42 +246,45 @@ func TestTheTriesOfQoryApiaryAsARunOpens(t *testing.T) {
 
 // TestARunThatDidNotOpenHasItsRetryAfter pins the wait of the registration's last
 // answer: a final coded refusal and the last of the tries of a 429 rate_limited or a
-// 503, each with Retry-After: 7, reach the caller of OpenRun with RetryAfter 7 s, in a
-// link refusal with retry_after 7 that link-refusal.schema.json takes; without the
-// header there is no wait. The tries wait their own waits, not the Retry-After.
+// 503 with Retry-After: 7 reach the caller of OpenRun with RetryAfter 7 s, in a link
+// refusal with retry_after 7 that is valid against link-refusal.schema.json. A last
+// answer without the header, after a try with Retry-After: 3, and an unsigned 429 or 401
+// with Retry-After: 7 give no wait. The tries wait 50 ms, not the 7 s of Retry-After.
 func TestARunThatDidNotOpenHasItsRetryAfter(t *testing.T) {
-	withWait := func(r apiaryReply) apiaryReply { r.retryAfter = "7"; return r }
+	waiting := func(r apiaryReply, wait string) apiaryReply { r.retryAfter = wait; return r }
 	for _, c := range []struct {
 		name    string
 		replies []apiaryReply
 		want    time.Duration
 	}{
-		{"a 409 instance_limit with Retry-After: 7", []apiaryReply{withWait(coded(409, "instance_limit"))}, 7 * time.Second},
+		{"a 409 instance_limit with Retry-After: 7", []apiaryReply{waiting(coded(409, "instance_limit"), "7")}, 7 * time.Second},
 		{"a 409 instance_limit without Retry-After", []apiaryReply{coded(409, "instance_limit")}, 0},
-		{"a 429 rate_limited with Retry-After: 7 twice", []apiaryReply{withWait(coded(429, "rate_limited")), withWait(coded(429, "rate_limited"))}, 7 * time.Second},
-		{"a 503 unavailable with Retry-After: 7 twice", []apiaryReply{withWait(coded(503, "unavailable")), withWait(coded(503, "unavailable"))}, 7 * time.Second},
-		{"a 429 rate_limited twice without Retry-After", []apiaryReply{coded(429, "rate_limited"), coded(429, "rate_limited")}, 0},
+		{"a 429 rate_limited with Retry-After: 3, then 7", []apiaryReply{waiting(coded(429, "rate_limited"), "3"), waiting(coded(429, "rate_limited"), "7")}, 7 * time.Second},
+		{"a 503 unavailable with Retry-After: 3, then 7", []apiaryReply{waiting(coded(503, "unavailable"), "3"), waiting(coded(503, "unavailable"), "7")}, 7 * time.Second},
+		{"a 429 rate_limited with Retry-After: 3, then none", []apiaryReply{waiting(coded(429, "rate_limited"), "3"), coded(429, "rate_limited")}, 0},
+		{"an unsigned 429 with Retry-After: 7", []apiaryReply{waiting(unsignedReply(429, "application/json", `{"error":"rate_limited"}`), "7")}, 0},
+		{"an unsigned 401 with Retry-After: 7", []apiaryReply{waiting(unsignedReply(401, "application/json", `{"error":"unauthorized"}`), "7")}, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ctl := newControl(t)
 			ctl.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, 'a')
 			cfg := gateway.Config{Server: ctl.server()}
-			// Two tries 50 milliseconds apart, and no third: the window ends first.
-			gateway.SetOpenTries(&cfg, []time.Duration{50 * time.Millisecond, 10 * time.Second}, time.Second)
+			// Two tries 50 milliseconds apart, and no third: its wait is an hour.
+			gateway.SetOpenTries(&cfg, []time.Duration{50 * time.Millisecond, time.Hour}, 5*time.Second)
 			h := start(t, cfg)
 			s := script(ctl)
 			s.then(runPath, c.replies...)
 			begin := time.Now()
 			_, err := h.tryOpen(server.LinkRunRequest{RunID: event.NewRunID()})
 			if took := time.Since(begin); took > 5*time.Second {
-				t.Errorf("the open took %v; the tries wait their own waits", took)
+				t.Errorf("the open took %v; the tries wait 50 ms, not the 7 s of Retry-After", took)
 			}
 			if n := len(s.requests(runPath)); n != len(c.replies) {
-				t.Errorf("asked %d times; want %d", n, len(c.replies))
+				t.Errorf("%d registrations sent; want %d", n, len(c.replies))
 			}
 			var ref *accesskey.Refusal
-			if !errors.As(err, &ref) || ref.From != accesskey.FromApiary || ref.RetryAfter != c.want {
-				t.Fatalf("the refusal %#v; want RetryAfter %v from apiary", err, c.want)
+			if !errors.As(err, &ref) || ref.RetryAfter != c.want {
+				t.Fatalf("the refusal %#v; want RetryAfter %v", err, c.want)
 			}
 
 			s.then(runPath, c.replies...)

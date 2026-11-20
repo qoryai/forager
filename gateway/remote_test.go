@@ -996,12 +996,15 @@ func TestTheGatewayAllowsTheSkewPastAttachBy(t *testing.T) {
 
 // TestTheServersRunKeyExpiredIsKept pins the server's run_key_expired refusal of an
 // attach within the skew: two run requests with a run key 10 s past its attach_by send
-// one attach, and both get the server's refusal, the same answer. Once the gateway
+// one attach, and both get the server's refusal, the same answer but for the first's
+// retry_after from the attach's Retry-After, which the second has not. Once the gateway
 // holds a record of the run, the kept refusal is not given: the run request is the 409
 // run_attached of a run the gateway has a record of.
 func TestTheServersRunKeyExpiredIsKept(t *testing.T) {
 	r := startRemote(t, nil, gateway.Config{})
 	r.c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusConflict, Code: "run_key_expired"})
+	wait := "7"
+	r.c.attachRetryAfter.Store(&wait)
 	runID := event.NewRunID()
 	key := runKeyFor(t, runID, func(k *runkey.Key) {
 		k.AttachBy = time.Now().Add(-10 * time.Second).Truncate(time.Second)
@@ -1011,8 +1014,13 @@ func TestTheServersRunKeyExpiredIsKept(t *testing.T) {
 	refused(t, "the first run request", first, http.StatusConflict, "run_key_expired", "apiary", r.attachLine(runID, "run_key_expired"))
 	second := r.tryOpen(t, key, server.LinkRunRequest{})
 	refused(t, "the second run request", second, http.StatusConflict, "run_key_expired", "apiary", r.attachLine(runID, "run_key_expired"))
-	if !bytes.Equal(first.body, second.body) {
-		t.Errorf("the second refusal %s; want the first's, %s", second.body, first.body)
+	firstRef, secondRef := first.refusal(), second.refusal()
+	if firstRef["retry_after"] != 7.0 {
+		t.Errorf("the first refusal %s; want retry_after 7", first.body)
+	}
+	delete(firstRef, "retry_after")
+	if !reflect.DeepEqual(firstRef, secondRef) {
+		t.Errorf("the second refusal %s; want the first's without retry_after, %s", second.body, first.body)
 	}
 	if n := len(r.c.attached()); n != 1 {
 		t.Errorf("%d attaches; want 1", n)

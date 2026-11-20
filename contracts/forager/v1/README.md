@@ -5103,17 +5103,20 @@ once the run's close began or for a run with no control plane. The other answers
 **Waiting before a request again.** When Qory Apiary's coded refusal of a host call
 has `Retry-After: 7`, the link refusal has `"retry_after": 7`, and `Run.NextSession`
 and `Run.PushedCommits` return an `*accesskey.Refusal` whose `RetryAfter` is 7
-seconds. A run that did not open has the same: when the last answer to its
-registration, or to its attach behind a separate gateway, is a coded refusal with
-`Retry-After: 7`, the link refusal has `"retry_after": 7`, and the refusal that
-`server.Link.OpenRun` returns has `RetryAfter` 7 seconds; the gateway's tries before
-it ignore `Retry-After` (Tries as a run opens, above). Wait that long before you send
-the request again. The gateway reads only a
-`Retry-After` of digits alone, sent once, and passes a wait over 31 days as 31 days.
-For `Retry-After: 0`, an HTTP date, any other form and no `Retry-After`, the link
-refusal has no `retry_after`, and `RetryAfter` is 0. A `5xx` with the code `internal`
-is a `*server.StatusError`, with no wait. `Retry-After` is outside the signature of
-Qory Apiary's answer (§Signed answers), as on the run API's route.
+seconds. A run that did not open has the same from the last answer of Qory Apiary as
+the run opens: to its registration or attach, the reload after the attach, or its
+secrets request. When that answer is a coded refusal with `Retry-After: 7`, the link
+refusal has `"retry_after": 7`, and the refusal that `server.Link.OpenRun` returns has
+`RetryAfter` 7 seconds; the gateway's tries before it ignore `Retry-After` (Tries as a
+run opens, above). Wait that long before you send the request again. On the local
+link, send the run request with a new `run_id`: the refused one is `run_id_used`.
+Behind a separate gateway, a refused attach leaves the run key free to send again. The
+gateway reads only a `Retry-After` of digits alone, sent once, and passes a wait over
+31 days as 31 days. For `Retry-After: 0`, an HTTP date, any other form and no
+`Retry-After`, the link refusal has no `retry_after`, and `RetryAfter` is 0. A `5xx`
+with the code `internal` is a `*server.StatusError`, with no wait. `Retry-After` is
+outside the signature of Qory Apiary's answer (§Signed answers), as on the run API's
+route.
 
 A `410` on the link ends the session's run, and only the gateway ends a run there, so
 Qory Apiary's `410` is a `502`. Qory Apiary returns the same result for a request it

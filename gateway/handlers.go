@@ -312,12 +312,14 @@ func (g *Gateway) discard(lr *linkRun) {
 }
 
 // refuseOpen answers a run that did not open. A refusal passes on with its code and
-// names, and who refused: the server's with its status and the retry_after of its
-// Retry-After, apiary, whatever its code; the gateway's own, gateway, a 403 for a
-// refusal of the run's configuration Forager decides and for a run without a wall
-// whose policy needs one, wall_required. Any other failure is a 500 internal. Each
-// carries the error's text as its message, which the session returns as its error,
-// the text today's session returned; the gateway itself tells the user nothing of it.
+// names, and who refused: the server's, apiary, whatever its code, with its status and
+// the retry_after of the Retry-After of its last answer as the run opens, to the
+// registration or attach, the reload after the attach, or the secrets request; the
+// gateway's, gateway, a 403 for a refusal of the run's configuration Forager decides
+// and for a run without a wall whose policy needs one, wall_required. Any other failure
+// is a 500 internal. Each has the error's text as its message, which the session
+// returns as its error, the text today's session returned; the gateway writes none of
+// it to the user.
 // A server's 410 is no refusal: it is a failure without a code, so no 410 crosses the
 // link from here, signed or not.
 func refuseOpen(w http.ResponseWriter, err error) {

@@ -38,7 +38,7 @@
       "$ref": "events/run.exited.schema.json#/properties/reason"
     },
     "retry_after": {
-      "description": "On a refusal of the server's to a host call, next-session or pushed-commits, the whole seconds of the server's Retry-After: wait this long before you send the request again. The gateway sets it only from a Retry-After of digits alone, sent once, and passes a wait over 31 days as 31 days. Absent for no Retry-After, for 0, for an HTTP date or another form, and on every other refusal.",
+      "description": "On a refusal of the server's to a host call, next-session or pushed-commits, or to a run request, from the last answer of Qory Apiary as the run opens: to its registration or attach, the reload after the attach, or its secrets request, the whole seconds of the server's Retry-After: wait this long before you send the request again. The gateway sets it only from a Retry-After of digits alone, sent once, and passes a wait over 31 days as 31 days. Absent for no Retry-After, for 0, for an HTTP date or another form, and on every other refusal.",
       "type": "integer",
       "minimum": 1,
       "maximum": 2678400

@@ -1012,10 +1012,12 @@ var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 // OpenRun posts the run request to runURL, the discovery's run.url, and returns the
 // run answer: a 200 the schema accepts, whose run_id is the request's. A 410 is the end
 // of the run, [Ended]; a coded refusal is an [*accesskey.Refusal] with its status, who
-// refused, From, and the wait of the server's last Retry-After, RetryAfter. It waits
-// [OpenWait] for the answer, where every other request of the link waits [Timeout]. Once the run is open on the local link, every later batch
-// has it in X-Qory-Run-Id. The local link takes no narrowing, and a separate gateway
-// no labels or about, which are the starter's registration's.
+// refused, From, and in RetryAfter the wait of the Retry-After of Qory Apiary's last
+// answer as the run opens: to the registration or attach, the reload after the attach,
+// or the secrets request. It waits [OpenWait] for the answer, where every other request
+// of the link waits [Timeout]. Once the run is open on the local link, every later
+// batch has it in X-Qory-Run-Id. The local link takes no narrowing, and a separate
+// gateway no labels or about, which are the starter's registration's.
 func (k *Link) OpenRun(ctx context.Context, runURL string, req LinkRunRequest) (*LinkRunAnswer, error) {
 	if err := k.onLink("the run URL", runURL); err != nil {
 		return nil, fmt.Errorf("%s: %w", k.name, accesskey.ShownError(err))

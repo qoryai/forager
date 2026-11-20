@@ -376,7 +376,8 @@ release may change what an existing document does, and says so under Upgrading.
   `rate_limited` or a `503` `unavailable` with `Retry-After: 7`, the gateway passes
   that wait on, and `Run.NextSession` and `Run.PushedCommits` return a refusal whose
   `RetryAfter` is 7 seconds. A run that did not open has the same from the last answer
-  to its registration or attach: `server.Link.OpenRun`, and so `session.Open`, return
+  of Qory Apiary as the run opens: to its registration or attach, the reload after the
+  attach, or its secrets request. `server.Link.OpenRun`, and so `session.Open`, return
   it. The gateway's tries as a run opens still ignore `Retry-After`. The gateway
   passes a wait over 31 days, `server.MaxRetryAfter`, as 31 days, and passes none for
   `Retry-After: 0`, an HTTP date or any other form; `server.ReadRetryAfter` reads it.

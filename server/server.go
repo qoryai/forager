@@ -675,7 +675,7 @@ func (c *Client) verifies(resp *http.Response, sig string, a accesskey.Answer) b
 // refusal is the error of an answer at run start that is not the one wanted: a 401 is
 // unauthorized, the server's refusal though unsigned; an answer that did not verify is
 // answer_unsigned, which Forager decides; a signed answer is the code its body
-// contains, with the wait of its Retry-After, or, without one, an error naming its
+// contains, with the wait of its Retry-After, or, without one, an error with its
 // status.
 func (a *answer) refusal(what string) error {
 	switch {
