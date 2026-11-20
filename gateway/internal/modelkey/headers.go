@@ -118,7 +118,8 @@ var knownWindows = map[string]bool{
 
 // maxReset is the furthest after an answer's arrival that the gateway takes a reset or a
 // retry-after of the provider's: a later one counts as this far, so every time a report
-// has is a year of four digits.
+// has is a year of four digits. A link refusal's retry_after has the same bound,
+// [github.com/qoryai/forager/server.MaxRetryAfter].
 const maxReset = 31 * 24 * time.Hour
 
 // seen is what one answer's headers contain of one window.

@@ -691,7 +691,8 @@ Forager sends no request again: send it again after a `5xx` or a transport failu
 since Qory Apiary returns the same result for a repeated request. When Qory Apiary's
 refusal has a `Retry-After` of whole seconds, `RetryAfter` of the `*accesskey.Refusal`
 is that wait, at most 31 days: wait that long before you send the request again. It is
-0 for no `Retry-After`, for `Retry-After: 0` and for any other form. The contract's
+0 for no `Retry-After`, for `Retry-After: 0` and for any other form. A `5xx` with the
+code `internal` is a `*server.StatusError`, with no wait. The contract's
 README, §The gateway's link, The host calls, lists every answer.
 
 ### The run API

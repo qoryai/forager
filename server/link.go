@@ -750,9 +750,9 @@ func (a *linkAnswer) from() string {
 	return accesskey.FromGateway
 }
 
-// MaxRetryAfter is the longest retry_after a link refusal has, 31 days, as the
-// gateway's bound on a model provider's retry-after: the gateway passes a longer
-// Retry-After as this, and a wait in seconds this long fits a [time.Duration].
+// MaxRetryAfter is the longest retry_after a link refusal has, 31 days, as maxReset in
+// gateway/internal/modelkey bounds a model provider's retry-after: the gateway passes
+// a longer Retry-After as this, and a wait in seconds this long fits a [time.Duration].
 const MaxRetryAfter = 31 * 24 * time.Hour
 
 // retryAfter is the body's retry_after, a wait of 1 to [MaxRetryAfter] whole seconds;
@@ -769,7 +769,7 @@ func (a *linkAnswer) retryAfter() time.Duration {
 
 // refusal is the error of an answer that is not the one wanted: a 410 is the end of
 // the run, its code one of [EndCodes]; a coded body is its code with its names, who
-// refused and its retry_after; anything else names its status.
+// refused and its retry_after; anything else is an error with its status.
 //
 // A refusal's message, the text its user is told, is its Text, so its Error says it
 // word for word. A 5xx whose code is internal, or that has none, is a failure without

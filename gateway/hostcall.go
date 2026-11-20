@@ -196,8 +196,8 @@ func (g *Gateway) hostCallFailed(w http.ResponseWriter, runID string, c *hostCal
 }
 
 // retryAfter is the wait in h's Retry-After, in whole seconds, at most
-// [server.MaxRetryAfter]: zero, which writes no retry_after, for none, for 0, for a
-// header sent twice, for an HTTP date and for any other form.
+// [server.MaxRetryAfter]: zero, for which the link refusal has no retry_after, for
+// none, for 0, for a header sent twice, for an HTTP date and for any other form.
 func retryAfter(h http.Header) int64 {
 	most := int64(server.MaxRetryAfter / time.Second)
 	v := h.Values("Retry-After")

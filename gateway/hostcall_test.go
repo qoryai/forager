@@ -218,7 +218,8 @@ func TestAHostCallPassesOnTheControlPlanesRefusal(t *testing.T) {
 // plane's, 429 rate_limited and 503 unavailable, from its Retry-After to the caller's
 // refusal through the gateway and the link: whole seconds pass, a value over 31 days
 // is 31 days, and none, 0, a header sent twice and any other form, an HTTP date
-// among them, are no wait. Each body link-refusal.schema.json takes.
+// among them, are no wait. The link refusal with Retry-After: 7 and the one without
+// it pass link-refusal.schema.json.
 func TestAHostCallPassesOnRetryAfter(t *testing.T) {
 	o := openRunAPIRun(t)
 	cases := []struct {
@@ -263,6 +264,14 @@ func TestAHostCallPassesOnRetryAfter(t *testing.T) {
 		validDocument(t, "link-refusal.schema.json", []byte(body))
 		if status != refused.status || !strings.Contains(body, `"retry_after":7`) {
 			t.Errorf("a signed %d with Retry-After: 7 on the link: %d %s", refused.status, status, body)
+		}
+		o.f.answers(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			o.f.sign(w, r, refused.status, []byte(`{"error":"`+refused.code+`"}`))
+		})
+		status, body = rawPost(t, raw(t, o.h.g.LocalLink()), "/v1/run-configuration/"+o.a.RunID+"/pushed-commits", "application/json", "{}")
+		validDocument(t, "link-refusal.schema.json", []byte(body))
+		if status != refused.status || strings.Contains(body, "retry_after") {
+			t.Errorf("a signed %d with no Retry-After on the link: %d %s", refused.status, status, body)
 		}
 	}
 }
