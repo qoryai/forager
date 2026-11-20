@@ -1172,15 +1172,28 @@ func TestARunThroughTheGateway(t *testing.T) {
 
 // TestAnAttachRefusalReachesTheSession pins the server's refusal of the attach: the
 // session has it as the link's refusal, its status and code, from apiary, reading
-// attach <run.url>/<run_id>: <code> (status <status>); the run does not open, and the
-// gateway holds nothing of it.
+// attach <run.url>/<run_id>: <code> (status <status>), with retry_after only when the
+// refusal has a Retry-After; the run does not open, and the gateway holds nothing of it.
 func TestAnAttachRefusalReachesTheSession(t *testing.T) {
 	r := startRemote(t, nil, gateway.Config{})
 	for _, ref := range []receiver.Refusal{{Status: http.StatusConflict, Code: "run_attached"}, {Status: http.StatusConflict, Code: "run_key_expired"}, {Status: http.StatusConflict, Code: "not_a_gateway"}, {Status: http.StatusConflict, Code: "workspace_not_served"}} {
 		r.c.attachRefusal.Store(&ref)
 		runID := event.NewRunID()
-		refused(t, ref.Code, r.tryOpen(t, runKeyFor(t, runID, nil), server.LinkRunRequest{}), ref.Status, ref.Code, "apiary", r.attachLine(runID, ref.Code))
+		got := r.tryOpen(t, runKeyFor(t, runID, nil), server.LinkRunRequest{})
+		refused(t, ref.Code, got, ref.Status, ref.Code, "apiary", r.attachLine(runID, ref.Code))
+		if _, ok := got.refusal()["retry_after"]; ok {
+			t.Errorf("%s without Retry-After: %s", ref.Code, got.body)
+		}
 	}
+	wait := "7"
+	r.c.attachRetryAfter.Store(&wait)
+	r.c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusConflict, Code: "workspace_not_served"})
+	got := r.tryOpen(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{})
+	validDocument(t, "link-refusal.schema.json", got.body)
+	if got.status != http.StatusConflict || got.refusal()["retry_after"] != 7.0 {
+		t.Errorf("an attach refusal with Retry-After: 7: %d %s", got.status, got.body)
+	}
+	r.c.attachRetryAfter.Store(nil)
 	if runs, _ := gateway.Held(r.g); runs != 0 {
 		t.Errorf("%d runs held", runs)
 	}

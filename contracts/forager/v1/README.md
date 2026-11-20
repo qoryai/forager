@@ -4877,8 +4877,9 @@ that fails Forager's checks. The gateway builds the registration's body once, an
 try sends the same bytes, `time` included, for which a server that accepted them under
 the same access key returns the same answer; the run's record has
 `dev.qory.run.registered` once. Once the tries are spent the last answer is the
-session's, as without them: its code and status passed on from `apiary`, or a `500`
-`internal`.
+session's, as without them: its code and status passed on from `apiary`, with
+`retry_after` from its `Retry-After` (Waiting before a request again, below), or a
+`500` `internal`.
 
 With `images`, the gateway then decides the run as the session decides it
 on one machine today, in the same order, and before it sets anything: the policy in
@@ -5090,7 +5091,7 @@ once the run's close began or for a run with no control plane. The other answers
 
 | Status | `error` | `from` | When |
 |---|---|---|---|
-| Qory Apiary's | Qory Apiary's | `apiary` | a signed answer of Qory Apiary's with a code and a status from `400` to `599` but `401` and `410`, such as `409` `run_ended` or `503` `unavailable`, with its `names` and its `message`; a name that contains a secret is a phrase in its place. With a `Retry-After` of whole seconds, such as on a `429` `rate_limited`, it has `retry_after`, those seconds (Waiting before a host call again, below) |
+| Qory Apiary's | Qory Apiary's | `apiary` | a signed answer of Qory Apiary's with a code and a status from `400` to `599` but `401` and `410`, such as `409` `run_ended` or `503` `unavailable`, with its `names` and its `message`; a name that contains a secret is a phrase in its place. With a `Retry-After` of whole seconds, such as on a `429` `rate_limited`, it has `retry_after`, those seconds (Waiting before a request again, below) |
 | `400` | `invalid_request` | `gateway` | a `Content-Type` other than `application/json`; on the local link, a run id of no run there; nothing is sent |
 | `400` | `run_key_invalid` | `gateway` | behind a separate gateway, a run id that is not the run key's; nothing is sent |
 | `404` | `not_found` | `gateway` | the run has no control plane; nothing is sent |
@@ -5099,10 +5100,15 @@ once the run's close began or for a run with no control plane. The other answers
 | `502` | `control_plane_unavailable` | `gateway` | no answer of Qory Apiary's, one that fails verification, an unsigned `401` among them, a signed `410`, an answer with no code that is no `2xx`, a `2xx` over its limit, or a `2xx` body without `Content-Type: application/json`; the gateway writes one line to its log |
 | `503` | none | | no body: the gateway closes and suspends the run, before the send or while Qory Apiary has the request, or behind a separate gateway the run's reopen goes on; send the request again |
 
-**Waiting before a host call again.** When Qory Apiary's coded refusal of a host call
+**Waiting before a request again.** When Qory Apiary's coded refusal of a host call
 has `Retry-After: 7`, the link refusal has `"retry_after": 7`, and `Run.NextSession`
 and `Run.PushedCommits` return an `*accesskey.Refusal` whose `RetryAfter` is 7
-seconds. Wait that long before you send the request again. The gateway reads only a
+seconds. A run that did not open has the same: when the last answer to its
+registration, or to its attach behind a separate gateway, is a coded refusal with
+`Retry-After: 7`, the link refusal has `"retry_after": 7`, and the refusal that
+`server.Link.OpenRun` returns has `RetryAfter` 7 seconds; the gateway's tries before
+it ignore `Retry-After` (Tries as a run opens, above). Wait that long before you send
+the request again. The gateway reads only a
 `Retry-After` of digits alone, sent once, and passes a wait over 31 days as 31 days.
 For `Retry-After: 0`, an HTTP date, any other form and no `Retry-After`, the link
 refusal has no `retry_after`, and `RetryAfter` is 0. A `5xx` with the code `internal`

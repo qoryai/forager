@@ -312,13 +312,14 @@ func (g *Gateway) discard(lr *linkRun) {
 }
 
 // refuseOpen answers a run that did not open. A refusal passes on with its code and
-// names, and who refused: the server's with its status, apiary, whatever its code; the
-// gateway's own, gateway, a 403 for a refusal of the run's configuration Forager
-// decides and for a run without a wall whose policy needs one, wall_required. Any
-// other failure is a 500 internal. Each carries the error's text as its message, which
-// the session returns as its error, the text today's session returned; the gateway
-// itself tells the user nothing of it. A server's 410 is no refusal: it is a failure
-// without a code, so no 410 crosses the link from here, signed or not.
+// names, and who refused: the server's with its status and the retry_after of its
+// Retry-After, apiary, whatever its code; the gateway's own, gateway, a 403 for a
+// refusal of the run's configuration Forager decides and for a run without a wall
+// whose policy needs one, wall_required. Any other failure is a 500 internal. Each
+// carries the error's text as its message, which the session returns as its error,
+// the text today's session returned; the gateway itself tells the user nothing of it.
+// A server's 410 is no refusal: it is a failure without a code, so no 410 crosses the
+// link from here, signed or not.
 func refuseOpen(w http.ResponseWriter, err error) {
 	err = codeless(err)
 	var wall *refusal.NeedsWall
@@ -343,7 +344,7 @@ func refuseOpen(w http.ResponseWriter, err error) {
 		// A refusal of an answer that came without one, answer_unsigned to a 2xx say.
 		status = http.StatusBadGateway
 	}
-	refuse(w, status, ref.Code, accesskey.ShownNames(ref.Names), from, err.Error())
+	answerRefusal(w, status, linkRefusal{Error: ref.Code, Names: accesskey.ShownNames(ref.Names), Message: message(err.Error()), From: from, RetryAfter: seconds(ref.RetryAfter)})
 }
 
 // markOpening marks the run id as opening for the run request r, which the CA key sweep

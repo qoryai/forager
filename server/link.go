@@ -755,6 +755,22 @@ func (a *linkAnswer) from() string {
 // a longer Retry-After as this, and a wait in seconds this long fits a [time.Duration].
 const MaxRetryAfter = 31 * 24 * time.Hour
 
+// ReadRetryAfter is the wait in h's Retry-After, in whole seconds, at most
+// [MaxRetryAfter]: zero for none, for 0, for a header sent twice, for an HTTP date
+// and for any other form.
+func ReadRetryAfter(h http.Header) time.Duration {
+	v := h.Values("Retry-After")
+	if len(v) != 1 || v[0] == "" || strings.Trim(v[0], "0123456789") != "" {
+		return 0
+	}
+	// Digits alone fail only past the largest int64, which ParseInt then returns.
+	n, _ := strconv.ParseInt(v[0], 10, 64)
+	if n > int64(MaxRetryAfter/time.Second) {
+		return MaxRetryAfter
+	}
+	return time.Duration(n) * time.Second
+}
+
 // retryAfter is the body's retry_after, a wait of 1 to [MaxRetryAfter] whole seconds;
 // zero for none and for any other value.
 func (a *linkAnswer) retryAfter() time.Duration {
@@ -995,9 +1011,9 @@ var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 
 // OpenRun posts the run request to runURL, the discovery's run.url, and returns the
 // run answer: a 200 the schema accepts, whose run_id is the request's. A 410 is the end
-// of the run, [Ended]; a coded refusal is an [*accesskey.Refusal] with its status and
-// who refused, From. It waits [OpenWait] for the answer, where every other request of
-// the link waits [Timeout]. Once the run is open on the local link, every later batch
+// of the run, [Ended]; a coded refusal is an [*accesskey.Refusal] with its status, who
+// refused, From, and the wait of the server's last Retry-After, RetryAfter. It waits
+// [OpenWait] for the answer, where every other request of the link waits [Timeout]. Once the run is open on the local link, every later batch
 // has it in X-Qory-Run-Id. The local link takes no narrowing, and a separate gateway
 // no labels or about, which are the starter's registration's.
 func (k *Link) OpenRun(ctx context.Context, runURL string, req LinkRunRequest) (*LinkRunAnswer, error) {

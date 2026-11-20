@@ -68,8 +68,8 @@ type Refusal struct {
 	// tells it apart from an engine that cannot be asked. Error does not show it.
 	EntryUnreadable bool
 	// RetryAfter is how long to wait before the request is sent again: the
-	// retry_after of a link refusal, which the gateway sets from the Retry-After of
-	// Qory Apiary's refusal of a host call. Zero for none. Error does not show it.
+	// Retry-After of the server's signed refusal, or on the gateway's link the
+	// retry_after the gateway passes on from it. Zero for none. Error does not show it.
 	RetryAfter time.Duration
 }
 

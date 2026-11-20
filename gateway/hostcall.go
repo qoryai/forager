@@ -8,7 +8,6 @@ import (
 	"mime"
 	"net/http"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -174,7 +173,7 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 			Message string `json:"message"`
 		}
 		jsonv2.Unmarshal(a.Body, &doc)
-		answerRefusal(w, a.Status, linkRefusal{Error: ref.Code, Names: shownNames(ref.Names), Message: message(accesskey.ShownValue(doc.Message, false)), From: accesskey.FromApiary, RetryAfter: retryAfter(a.Header)})
+		answerRefusal(w, a.Status, linkRefusal{Error: ref.Code, Names: shownNames(ref.Names), Message: message(accesskey.ShownValue(doc.Message, false)), From: accesskey.FromApiary, RetryAfter: seconds(server.ReadRetryAfter(a.Header))})
 	case a.Status == http.StatusGone:
 		g.hostCallFailed(w, runID, c, false, "a signed 410, which only the gateway sends on the link")
 	default:
@@ -193,23 +192,6 @@ func (g *Gateway) hostCallFailed(w http.ResponseWriter, runID string, c *hostCal
 		text = fmt.Sprintf("Send the %s request again: the gateway got no valid answer from the control plane.", c.name)
 	}
 	refuse(w, http.StatusBadGateway, codeControlPlaneUnavailable, nil, accesskey.FromGateway, text)
-}
-
-// retryAfter is the wait in h's Retry-After, in whole seconds, at most
-// [server.MaxRetryAfter]: zero, for which the link refusal has no retry_after, for
-// none, for 0, for a header sent twice, for an HTTP date and for any other form.
-func retryAfter(h http.Header) int64 {
-	most := int64(server.MaxRetryAfter / time.Second)
-	v := h.Values("Retry-After")
-	if len(v) != 1 || v[0] == "" || strings.Trim(v[0], "0123456789") != "" {
-		return 0
-	}
-	n, err := strconv.ParseInt(v[0], 10, 64)
-	if err != nil {
-		// Digits alone fail only past the largest int64.
-		return most
-	}
-	return min(n, most)
 }
 
 // shownNames are the names of a refusal of Qory Apiary's as the link lists them: each

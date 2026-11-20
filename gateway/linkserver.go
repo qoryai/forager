@@ -262,10 +262,13 @@ type linkRefusal struct {
 	From    string   `json:"from"`
 	State   string   `json:"state,omitempty"`
 	Reason  string   `json:"reason,omitempty"`
-	// RetryAfter is the seconds of the Retry-After of Qory Apiary's refusal of a host
-	// call, [retryAfter]; zero for none.
+	// RetryAfter is the seconds of the Retry-After of Qory Apiary's refusal, read by
+	// [server.ReadRetryAfter]; zero for none, and then the refusal has no retry_after.
 	RetryAfter int64 `json:"retry_after,omitempty"`
 }
+
+// seconds is d in whole seconds, as a link refusal's retry_after has it.
+func seconds(d time.Duration) int64 { return int64(d / time.Second) }
 
 // refuse answers a coded refusal: the code, its names, who refused, and text, the
 // error's text the session returns, as the message holds it.

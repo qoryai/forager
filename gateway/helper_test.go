@@ -127,8 +127,9 @@ type control struct {
 	// starter gave, signed with the answer.
 	end atomic.Pointer[server.ServerEnd]
 	// attachRefusal, when set, answers every attach a signed refusal with its status
-	// and code.
-	attachRefusal atomic.Pointer[receiver.Refusal]
+	// and code, and with attachRetryAfter as its Retry-After when that is set.
+	attachRefusal    atomic.Pointer[receiver.Refusal]
+	attachRetryAfter atomic.Pointer[string]
 
 	mu sync.Mutex
 	// node and workspaces are what the configuration document lists: the test node and
@@ -404,6 +405,9 @@ func (c *control) attach(w http.ResponseWriter, r *http.Request) {
 	}
 	if ref := c.attachRefusal.Load(); ref != nil {
 		body := []byte(`{"error":"` + ref.Code + `"}`)
+		if v := c.attachRetryAfter.Load(); v != nil {
+			w.Header().Set("Retry-After", *v)
+		}
 		w.Header().Set(server.HeaderConfiguration, conf)
 		w.Header().Set(server.HeaderSignature, c.signer.SignAnswer(accesskey.Answer{Status: ref.Status, RequestSignature: sig, Body: body, Configuration: conf}))
 		w.WriteHeader(ref.Status)
