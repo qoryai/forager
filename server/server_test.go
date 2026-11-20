@@ -332,7 +332,9 @@ func (v *verified) client() *server.Client {
 // dev.qory.run.registered, and no run on a status that is not 200 or on a document
 // of a node's key without workspaces, of a gateway's key with workspaces, without the
 // run endpoint or whose run endpoint has a trailing slash, a query or a fragment; a
-// gateway's key's document without workspaces is read, with none.
+// gateway's key's document without workspaces is read, with none, and so is one with
+// WORKSPACES, a member that differs from workspaces in case and sets nothing. A version
+// of 1.0 or 1e0, which the schema takes, fails with the fix for /version first.
 func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	v := newVerified(t)
 	c := v.client()
@@ -360,7 +362,8 @@ func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 		"without the run endpoint": {node, workspaces, "", false}, "with a trailing slash": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/runs/"}`, false},
 		"with a query": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/runs?x=1"}`, false}, "with a fragment": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/runs#x"}`, false},
 		"of a gateway's key without workspaces": {gateway, "", run, true}, "of a gateway's key with workspaces": {gateway, workspaces, run, false},
-		"with qak_ in run.url": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/qak_FAKE/runs"}`, false}, "with QRK_ in run.url": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/QRK_FAKE"}`, false},
+		"of a gateway's key with WORKSPACES": {gateway, strings.Replace(workspaces, "workspaces", "WORKSPACES", 1), run, true},
+		"with qak_ in run.url":               {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/qak_FAKE/runs"}`, false}, "with QRK_ in run.url": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/QRK_FAKE"}`, false},
 		"with qecn_ in run.url": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/qecn_FAKE"}`, false}, "with QeCi_ in run.url": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/QeCi_FAKE"}`, false},
 		"with qEcD_ in run.url": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/qEcD_FAKE"}`, false}} {
 		v.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -379,6 +382,18 @@ func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 		var de *server.DocumentError
 		if !errors.As(err, &de) || de.URL != v.srv.URL+server.WellKnown || !strings.HasPrefix(err.Error(), "configuration "+v.srv.URL+server.WellKnown+": ") {
 			t.Errorf("a configuration %s: %v", name, err)
+		}
+	}
+	for _, version := range []string{"1.0", "1e0"} {
+		v.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			doc := []byte(`{"version":` + version + `,"node_id":"` + node + `",` + workspaces + `"events":{"url":"` + v.srv.URL + `/v1/events","types":["*"]}` + run + `,"apiary_public_key":[{"alg":"ed25519","public_key":"` + v.signer.PublicKey().String() + `"}]}`)
+			w.Header().Set(server.HeaderConfiguration, "sha256=c0")
+			w.Header().Set(server.HeaderSignature, v.signer.SignAnswer(accesskey.Answer{Status: 200, RequestSignature: r.Header.Get(server.HeaderSignature), Body: doc, Configuration: "sha256=c0"}))
+			w.Write(doc)
+		})
+		_, _, err := c.Discover(context.Background())
+		if want := "configuration " + v.srv.URL + server.WellKnown + ": Write /version as a whole number, such as 1, with no fraction or exponent\n"; err == nil || !strings.HasPrefix(err.Error(), want) {
+			t.Errorf("a configuration with version %s: %v; want %q first", version, err, want)
 		}
 	}
 	v.srv.Config.Handler = inner

@@ -153,7 +153,7 @@ func (c *Client) RegisterThroughGateway(ctx context.Context, runURL string, body
 	var sent struct {
 		RunID string `json:"run_id"`
 	}
-	if err := json.Unmarshal(body, &sent); err != nil || sent.RunID == "" {
+	if err := jsonv2.Unmarshal(body, &sent); err != nil || sent.RunID == "" {
 		return nil, fmt.Errorf("%s: the body names no run id", what)
 	}
 	a, err := c.send(ctx, http.MethodPost, runURL, body, MaxRefusal, func(h http.Header) {
@@ -405,8 +405,9 @@ func readAnswer(schemaName string, body []byte, out any) error {
 		}
 		return fmt.Errorf("%s refuses %s", schemaName, strings.Join(leaves(ve), ", "))
 	}
-	// encoding/json reads About's details as the raw JSON they are.
-	if err := json.Unmarshal(body, out); err != nil {
+	// encoding/json/v2 matches member names by exact case: LABELS in an open root sets
+	// no Labels. It reads About's details as the raw JSON they are.
+	if err := jsonv2.Unmarshal(body, out); err != nil {
 		return errors.New("it does not decode")
 	}
 	return nil

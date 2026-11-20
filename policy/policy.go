@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"maps"
 	"math"
@@ -190,8 +191,10 @@ func parse(name string, b []byte) (*Policy, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	// encoding/json/v2 matches member names by exact case: a member name that differs
+	// from a defined one only in case sets no field.
 	var p Policy
-	if err := json.Unmarshal(j, &p); err != nil {
+	if err := jsonv2.Unmarshal(j, &p); err != nil {
 		return nil, nil, err
 	}
 	if err := formed(p.Egress); err != nil {

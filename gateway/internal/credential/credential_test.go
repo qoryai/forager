@@ -750,7 +750,8 @@ func TestAFileThatCannotBeReadPrintsAPhraseForASecretInItsPath(t *testing.T) {
 // an adapter's answer contains: a path it claims and a scheme a definition gives print
 // the value's phrase in place of a value that contains qak_ or qrk_ in any case, and a
 // clean one as it is; an answer that fails the schema prints only the locations and
-// keywords, with no value, and no member name other than the schema's.
+// keywords, with no value, and no member name other than the schema's, nor a pointer
+// of must_understand.
 func TestAnAdaptersAnswerContentsPrintAPhraseForASecret(t *testing.T) {
 	answer := func(apply string) string {
 		return `echo '{"version":1,"token":"t","apply":[` + apply + `]}'` + "\n"
@@ -763,7 +764,7 @@ func TestAnAdaptersAnswerContentsPrintAPhraseForASecret(t *testing.T) {
 		"a path above":           {answer(`{"hosts":["a.example"],"scheme":"bearer","paths":["/qak_x"]}`), Definition{Paths: []string{"/x/*"}}, " claims the path " + accessKeyValuePhrase + ", above the paths the machine gives it"},
 		"a clean path above":     {answer(`{"hosts":["a.example"],"scheme":"bearer","paths":["/y"]}`), Definition{Paths: []string{"/x/*"}}, " claims the path /y, above the paths the machine gives it"},
 		"a host of the schema":   {answer(`{"hosts":["QRK_x.example"],"scheme":"bearer"}`), Definition{}, " to match credential.schema.json: /apply/0/hosts/0 fails pattern"},
-		"a member of the schema": {`echo '{"version":1,"token":"t","apply":[{"hosts":["a.example"],"scheme":"bearer"}],"qak_x":1}'` + "\n", Definition{}, " to match credential.schema.json: / fails additionalProperties"},
+		"a member of the schema": {`echo '{"version":1,"token":"t","apply":[{"hosts":["a.example"],"scheme":"bearer"}],"qak_x":1,"must_understand":["/qak_x"]}'` + "\n", Definition{}, " to match credential.schema.json: /must_understand/0 fails pattern"},
 	} {
 		path := adapterIn(t, "model", c.body)
 		d := c.def
@@ -1079,7 +1080,7 @@ func TestAnAdaptersAnswerThatFailsTheSchemaHasNoKey(t *testing.T) {
 	}{
 		{"a token in the header's place", `{"version":1,` + apply(`"`+secret+`"`) + `}`, secret, "/apply/0/header fails pattern"},
 		{"a token of 5,400 bytes in the header", `{"version":1,` + apply(`"`+long+`"`) + `}`, long, "/apply/0/header fails pattern"},
-		{"a token as a member name", `{"version":1,"` + secret + `":1,"token":"t",` + `"apply":[{"hosts":["a.example"],"scheme":"bearer"}]}`, secret, "/ fails additionalProperties"},
+		{"a token as a pointer of must_understand", `{"version":1,"token":"t","must_understand":["/` + secret + `"],` + `"apply":[{"hosts":["a.example"],"scheme":"bearer"}]}`, secret, "/must_understand/0 fails pattern"},
 		{"an expires_at that is a number", `{"version":1,"expires_at":5,` + apply(`"`+secret+`"`) + `}`, secret, "/apply/0/header fails pattern; /expires_at fails type"},
 		{"a token with a quote", `{"version":1,` + apply(`"fake'secret-token-0123"`) + `}`, "secret-token-0123", "/apply/0/header fails pattern"},
 		{"a token with a control byte", `{"version":1,` + apply(`"fake\u0001secret-token-0123"`) + `}`, "secret-token-0123", "/apply/0/header fails pattern"},
@@ -1097,6 +1098,104 @@ func TestAnAdaptersAnswerThatFailsTheSchemaHasNoKey(t *testing.T) {
 			!strings.HasSuffix(err.Error(), " to match credential.schema.json: "+c.want) {
 			t.Errorf("%s: %.300s", c.name, err)
 		}
+	}
+}
+
+// TestAnAdaptersAnswerIgnoresAMemberItDoesNotDefine pins credential.schema.json's
+// rule for a member it does not define: an answer with one, at its root or in an apply
+// item, sets the token as an answer without it does, and an answer whose
+// must_understand, or an item's, lists that member is refused. An answer that does not
+// decode is refused with a text that has no member name of it, and one whose expires_at
+// the schema takes and time.Time does not with the fix for expires_at. A member that differs from a defined
+// one only in case is one the schema does not define, and sets no field.
+func TestAnAdaptersAnswerIgnoresAMemberItDoesNotDefine(t *testing.T) {
+	const (
+		item      = `{"hosts":["a.example"],"scheme":"bearer","paths":["/x/*"]`
+		oneObject = "Fix the adapter's output: one JSON object in UTF-8, each member name once\nthe output of the adapter "
+		notime    = "Write expires_at as RFC 3339 with an upper-case T and Z, seconds 00 to 59\nthe output of the adapter "
+	)
+	for _, c := range []struct {
+		name, answer, want string
+	}{
+		{"an unknown member at the root", `{"version":1,"token":"t","zz":{"a":1},"apply":[` + item + `}]}`, ""},
+		{"an unknown member in an item", `{"version":1,"token":"t","apply":[` + item + `,"methods":["GET"]}]}`, ""},
+		{"a known member in must_understand", `{"version":1,"token":"t","must_understand":["/apply/0/paths","/token"],"apply":[` + item + `}]}`, ""},
+		{"a root member in must_understand", `{"version":1,"token":"t","zz":1,"must_understand":["/zz"],"apply":[` + item + `}]}`, "/must_understand/0 fails pattern"},
+		{"an item's member in must_understand", `{"version":1,"token":"t","must_understand":["/apply/0/methods"],"apply":[` + item + `,"methods":["GET"]}]}`, "/must_understand/0 fails pattern"},
+		{"an index with a leading zero", `{"version":1,"token":"t","must_understand":["/apply/00/paths"],"apply":[` + item + `}]}`, "/must_understand/0 fails pattern"},
+		{"must_understand itself", `{"version":1,"token":"t","must_understand":["/must_understand"],"apply":[` + item + `}]}`, "/must_understand/0 fails pattern"},
+		{"a scheme outside the set", `{"version":1,"token":"t","apply":[{"hosts":["a.example"],"scheme":"digest"}]}`, "/apply/0/scheme fails enum"},
+		{"a variant of token alone", `{"version":1,"TOKEN":"t","apply":[` + item + `}]}`, "gave no token"},
+		{"a member name twice", `{"version":1,"token":"t","fake-secret-0123":1,"fake-secret-0123":2,"apply":[` + item + `}]}`, oneObject},
+		{"invalid UTF-8", "{\"version\":1,\"token\":\"t\",\"fake-secret-0123\xff\":1,\"apply\":[" + item + "}]}", oneObject},
+		{"a defined member in an item's must_understand", `{"version":1,"token":"t","apply":[` + item + `,"must_understand":["/paths","/hosts/0"]}]}`, ""},
+		{"an item's member in the item's must_understand", `{"version":1,"token":"t","apply":[` + item + `,"methods":["GET"],"must_understand":["/methods"]}]}`, "/apply/0/must_understand/0 fails pattern"},
+		{"an expires_at with a lower-case t and z", `{"version":1,"token":"t","expires_at":"2099-09-19t14:00:00z","apply":[` + item + `}]}`, notime},
+		{"an expires_at at second 60", `{"version":1,"token":"t","expires_at":"2099-12-31T23:59:60Z","apply":[` + item + `}]}`, notime},
+	} {
+		body := "cat <<'EOF'\n" + c.answer + "\nEOF\n"
+		held, err := Resolve(context.Background(), []Definition{{Name: "product", Adapter: []string{adapter(t, body)}}}, []policy.Selected{{Name: "product"}}, policy.Observe, nil, func(l string) { t.Log(l) })
+		if c.want != "" {
+			if err == nil {
+				held.Close()
+				t.Errorf("%s: no error, want one with %q", c.name, c.want)
+			} else if !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), "fake-secret") {
+				t.Errorf("%s: %v, want an error with %q", c.name, err, c.want)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		if len(held.Uses) != 1 || held.Uses[0].Token() != "t" || held.Uses[0].Scheme != "bearer" || !slices.Equal(held.Uses[0].Paths, []string{"/x/*"}) {
+			t.Errorf("%s: uses %+v", c.name, held.Uses)
+		}
+		held.Close()
+	}
+}
+
+// TestAnAdaptersAnswerWithAMisspelledMemberSetsTheToken pins two answers that the
+// open schema takes, whose misspelled member is ignored: an item with path in place of
+// paths has every path the definition gives, every path for a definition without
+// paths; a second item with tokn in place of token gets the answer's token.
+func TestAnAdaptersAnswerWithAMisspelledMemberSetsTheToken(t *testing.T) {
+	resolve := func(answer string) *Held {
+		t.Helper()
+		body := "cat <<'EOF'\n" + answer + "\nEOF\n"
+		held, err := Resolve(context.Background(), []Definition{{Name: "product", Adapter: []string{adapter(t, body)}}}, []policy.Selected{{Name: "product"}}, policy.Observe, nil, func(l string) { t.Log(l) })
+		if err != nil {
+			t.Fatalf("%s: %v", answer, err)
+		}
+		t.Cleanup(held.Close)
+		return held
+	}
+	held := resolve(`{"version":1,"token":"t","apply":[{"hosts":["a.example"],"scheme":"bearer","path":["/x/*"]}]}`)
+	if len(held.Uses) != 1 || held.Uses[0].Paths != nil || held.Uses[0].Token() != "t" {
+		t.Errorf("path in place of paths: uses %+v, want every path", held.Uses)
+	}
+	held = resolve(`{"version":1,"token":"token-for-a","apply":[{"hosts":["a.example"],"scheme":"bearer"},{"hosts":["b.example"],"scheme":"bearer","tokn":"token-for-b"}]}`)
+	if len(held.Uses) != 2 || held.Uses[1].Token() != "token-for-a" || !slices.Equal(held.Uses[1].Hosts, []string{"b.example"}) {
+		t.Errorf("tokn in place of token: uses %+v, want b.example with the answer's token", held.Uses)
+	}
+}
+
+// TestAnAdaptersAnswerMatchesNamesByExactCase pins that a member that differs from a
+// defined one only in case never sets it, before or after the defined one.
+func TestAnAdaptersAnswerMatchesNamesByExactCase(t *testing.T) {
+	for _, answer := range []string{
+		`{"version":1,"token":"t","Token":"u","apply":[{"hosts":["a.example"],"scheme":"bearer","SCHEME":"basic","Hosts":["b.example"]}]}`,
+		`{"version":1,"Token":"u","token":"t","apply":[{"Hosts":["b.example"],"SCHEME":"basic","hosts":["a.example"],"scheme":"bearer"}]}`,
+	} {
+		body := "cat <<'EOF'\n" + answer + "\nEOF\n"
+		held, err := Resolve(context.Background(), []Definition{{Name: "product", Adapter: []string{adapter(t, body)}}}, []policy.Selected{{Name: "product"}}, policy.Observe, nil, func(l string) { t.Log(l) })
+		if err != nil {
+			t.Fatalf("%s: %v", answer, err)
+		}
+		if len(held.Uses) != 1 || held.Uses[0].Token() != "t" || held.Uses[0].Scheme != "bearer" || !slices.Equal(held.Uses[0].Hosts, []string{"a.example"}) {
+			t.Errorf("%s: uses %+v", answer, held.Uses)
+		}
+		held.Close()
 	}
 }
 

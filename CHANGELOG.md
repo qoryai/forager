@@ -1136,6 +1136,22 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- An `auth` (`auth.schema.json`), an adapter's answer (`credential.schema.json`) with
+  its `apply` items, and the data of a `dev.qory.run.exited` accept a member that their
+  schema does not define. The member is ignored and the rest is read. Each has an
+  optional `must_understand`, a list of JSON Pointers counted from the object, such as
+  `["/account_header"]`; an adapter's answer and each of its `apply` items can have
+  one. An object whose list contains a pointer to a member that Forager does not define
+  is refused, and so is the document that contains it. List a new `auth` member that
+  changes how or where the key is sent in `must_understand`, and so a new member of an
+  adapter's answer or of an `apply` item that narrows where, when or with which token
+  the secret is set. An unknown `scheme` or `format` is still refused, and the other
+  objects keep their rule. A reader of `runtimes.json` follows the same rule for each
+  runtime. README §Versions, Members a reader does not define, has the rule.
+- Forager reads Qory Apiary's attach, registration, model-keys and run-outcome
+  answers, and the configuration, by exact case: a member such as `WORKSPACES` sets
+  nothing. A configuration whose `version` is `1.0` or `1e0` is refused with `Write
+  /version as a whole number, such as 1, with no fraction or exponent`.
 - A run with a run key writes neutral values in its events: `dev.qory.run.started`
   has no `host`, `dir` of `dev.qory.session.started` is `/workspace`, `command` and
   `args` have `<run>`, `<home>` and `<inputs>` at each occurrence of the run
@@ -1351,6 +1367,13 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Print an adapter's answer as one JSON object in UTF-8 with each member name once,
+  and member names in the case `credential.schema.json` has them: the gateway reads
+  the answer with `encoding/json/v2`, so `TOKEN` never sets `token`. An answer with a
+  member name twice or with invalid UTF-8 is no run, `Fix the adapter's output: one
+  JSON object in UTF-8, each member name once`. Write `expires_at` with an upper-case
+  `T` and `Z` and a second below 60: another is no run, `Write expires_at as RFC 3339
+  with an upper-case T and Z, seconds 00 to 59`.
 - Expect one key group per `group` value of a run's API credentials, each with its
   rotation, cooldowns and stop apart from the others' (contract README §Credentials,
   Several model keys). A join request with a key of a group in
@@ -2375,6 +2398,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Write a runtime descriptor in JSON with each member name once, in UTF-8, and with
+  member names in the case `descriptor.schema.json` has them: the session reads it with
+  `encoding/json/v2`, so `SCHEME` in an `auth` never sets `scheme`, and a member name
+  twice or invalid UTF-8 is refused.
 - Install the runtime's program on the machine and set `SessionSpec.RuntimeInstall`, the
   folder and the version you installed, for each session of a runtime whose descriptor
   sets `install_required`, such as Claude Code: the session starts the program from that

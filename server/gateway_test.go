@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -425,6 +426,50 @@ func TestAttach(t *testing.T) {
 	}
 	if _, _, err := c.Attach(ctx, a.runURL(), "not-a-run", body); err == nil {
 		t.Error("an attach of a run id outside its form was sent")
+	}
+}
+
+// TestAnAnswerIsReadByExactCase pins that a member of an attach or a
+// registration answer that differs from a defined one only in case sets nothing: LABELS
+// and ABOUT beside labels and about leave the defined values, LABELS and ABOUT alone
+// leave none, and RUN_ID and RUN_KEY of another run beside run_id and run_key leave
+// the registration's.
+func TestAnAnswerIsReadByExactCase(t *testing.T) {
+	a := newApiary(t)
+	c := a.client()
+	ctx := context.Background()
+	rk := runKeyOf(t, gatewayRunID)
+	attach, err := server.Attach{RunKey: rk, IntervalSeconds: 30, ForagerVersion: "v0.0.0-test"}.Body()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := "sha256=" + strings.Repeat("2", 64)
+	answerWith := func(doc string, h http.Header) {
+		a.answer = func(*http.Request, []byte) (int, http.Header, string) { return 200, h, doc }
+	}
+	attached := http.Header{server.HeaderRunConfiguration: {digest}, "Etag": {`"` + digest + `"`}}
+	for _, doc := range []string{
+		`{"version":1,"labels":{"repository":"acme/shop"},"about":{"title":"Fix the build"},"LABELS":{"team":"other"},"ABOUT":{"kind":"other","title":"Other"}}`,
+		`{"version":1,"LABELS":{"team":"other"},"ABOUT":{"kind":"other","title":"Other"},"labels":{"repository":"acme/shop"},"about":{"title":"Fix the build"}}`,
+	} {
+		answerWith(doc, attached)
+		ans, _, err := c.Attach(ctx, a.runURL(), gatewayRunID, attach)
+		if err != nil || !maps.Equal(ans.Labels, map[string]string{"repository": "acme/shop"}) || ans.About == nil || ans.About.Title != "Fix the build" || ans.About.Kind != "" {
+			t.Errorf("%s: %+v, %v; want the labels and about alone", doc, ans, err)
+		}
+	}
+	answerWith(`{"version":1,"LABELS":{"repository":"acme/shop"},"ABOUT":{"title":"Fix the build"}}`, attached)
+	if ans, _, err := c.Attach(ctx, a.runURL(), gatewayRunID, attach); err != nil || ans.Labels != nil || ans.About != nil {
+		t.Errorf("LABELS and ABOUT alone: %+v, %v; want no labels and no about", ans, err)
+	}
+	register, err := server.GatewayRegistration{RunID: gatewayRunID}.Body()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := "0192f0c1-7d4e-7a2b-8c3d-000000000000"
+	answerWith(`{"version":1,"run_id":"`+gatewayRunID+`","run_key":"`+rk+`","RUN_ID":"`+other+`","RUN_KEY":"`+runKeyOf(t, other)+`","LABELS":{"team":"other"},"ABOUT":{"title":"Other"}}`, nil)
+	if ans, err := c.RegisterThroughGateway(ctx, a.runURL(), register); err != nil || ans.RunID != gatewayRunID || ans.RunKey != rk {
+		t.Errorf("RUN_ID and RUN_KEY beside run_id and run_key: %+v, %v; want the registration's", ans, err)
 	}
 }
 

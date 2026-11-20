@@ -1265,7 +1265,8 @@ func TestEachKeyDiscoversItsOwnNode(t *testing.T) {
 // TestABatchIsOfOneRun pins that a batch whose events are not all of one run is a
 // signed 400 invalid_request, before wrong_gateway and wrong_node and before
 // deduplication: from a key outside the run's node or from the run's own gateway, it
-// stores nothing and changes no run, whichever run its last event names.
+// stores nothing and changes no run, whichever run its last event names. A member
+// SUBJECT that differs from subject only in case names no run.
 func TestABatchIsOfOneRun(t *testing.T) {
 	s := newStand(t)
 	id, other := event.NewRunID(), event.NewRunID()
@@ -1293,6 +1294,12 @@ func TestABatchIsOfOneRun(t *testing.T) {
 	unknownID, unknown := lineOf(event.NewRunID(), event.RunStarted)
 	otherExitedID, otherExited := lineOf(other, event.RunExited)
 	beatID, beat := lineOf(id, event.RunHeartbeat)
+	var beatMembers map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(beat), &beatMembers); err != nil {
+		t.Fatal(err)
+	}
+	// Another run's event with SUBJECT, the run's subject, after its subject.
+	folded := strings.TrimSuffix(otherExited, "}") + `,"SUBJECT":` + string(beatMembers["subject"]) + `}`
 	for name, c := range map[string]struct {
 		keyID string
 		lines []string
@@ -1302,6 +1309,7 @@ func TestABatchIsOfOneRun(t *testing.T) {
 		"the pool's key, the gateway run's run.exited then an unknown run's event":     {key, []string{exited, unknown}},
 		"the run's gateway, another run's run.exited then a heartbeat of its run":      {gwKey, []string{otherExited, beat}},
 		"the run's gateway, its run's run.exited then another run's":                   {gwKey2, []string{exited, otherExited}},
+		"the run's gateway, a heartbeat of its run then another run's with SUBJECT":    {gwKey, []string{beat, folded}},
 	} {
 		req, rec := s.batchOf(c.keyID, []byte("["+strings.Join(c.lines, ",")+"]"))
 		s.expect(name, req, rec, http.StatusBadRequest, "invalid_request")

@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
@@ -1084,9 +1083,9 @@ func (h *held) masked(s string) string {
 // which can be the token, so none of it is printed. The keyword is the first of the
 // error kind's KeywordPath, a keyword of the schema such as pattern, never a value.
 // A location has only array indexes and the member names the schema defines: it stops
-// before any other name, which the answer chose and which can be a token. A
-// failure of additionalProperties is at the object, so the name it refused is never
-// in the location.
+// before any other name, which the answer chose and which can be a token. A pointer
+// of must_understand that fails is at its index, such as /must_understand/0, so the
+// pointer is never in the location.
 func schemaFailures(err error, schema any) string {
 	known := map[string]bool{}
 	var names func(any)
@@ -1234,9 +1233,20 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 		document, _ := contracts.Document("credential.schema.json")
 		return nil, fmt.Errorf("Fix the output of the adapter %s to match credential.schema.json: %s", path, schemaFailures(err, document))
 	}
+	// encoding/json/v2 matches member names by exact case: a member such as TOKEN is
+	// one the schema does not define, and sets no field. Its error can quote a member
+	// name in the adapter's output, which can be the token, so none of it is printed.
+	// Past the schema, only expires_at can fail to decode: a time the schema's
+	// date-time takes and time.Time does not, such as a lower-case t or a second of 60.
 	var a answer
-	if err := json.Unmarshal(stdout.Bytes(), &a); err != nil {
-		return nil, accesskey.ShownError(err)
+	if err := jsonv2.Unmarshal(stdout.Bytes(), &a); err != nil {
+		var syn *jsontext.SyntacticError
+		if errors.As(err, &syn) {
+			return nil, fmt.Errorf("Fix the adapter's output: one JSON object in UTF-8, each member name once\n"+
+				"the output of the adapter %s does not decode", path)
+		}
+		return nil, fmt.Errorf("Write expires_at as RFC 3339 with an upper-case T and Z, seconds 00 to 59\n"+
+			"the output of the adapter %s has an expires_at that is no time", path)
 	}
 	if d.Format != "" && len(a.Placeholders) > 0 {
 		return nil, fmt.Errorf("remove placeholders from the output of the adapter %s: the model key %s takes none, since the session gives the runtime the key's variable", path, accesskey.ShownName(d.Name, false))

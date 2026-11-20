@@ -1055,7 +1055,8 @@ func mustRunID(t *testing.T, key string) string {
 
 // TestTheRunRequestBehindTheGateway pins what a run request may carry behind a separate
 // gateway: a run id other than its run key's is run_key_invalid; labels or about, the
-// starter's registration's, are invalid_request; a run the gateway holds, or holds a
+// starter's registration's, are invalid_request, and so are LABELS, Labels, ABOUT and
+// About; a run the gateway holds, or holds a
 // record of, is 409 run_attached, read as the server's refusal of the attach; and a
 // reload of another run id than the run key's is run_key_invalid.
 func TestTheRunRequestBehindTheGateway(t *testing.T) {
@@ -1065,6 +1066,13 @@ func TestTheRunRequestBehindTheGateway(t *testing.T) {
 	refused(t, "another run id", r.tryOpen(t, key, server.LinkRunRequest{RunID: event.NewRunID()}), http.StatusBadRequest, "run_key_invalid", "gateway", keyInvalid)
 	refused(t, "labels", r.tryOpen(t, key, server.LinkRunRequest{Labels: map[string]string{"repository": "example-namespace/project"}}), http.StatusBadRequest, "invalid_request", "gateway", "the gateway refused the run: invalid_request")
 	refused(t, "about", r.tryOpen(t, key, server.LinkRunRequest{About: &server.About{Title: "Fix the failing build"}}), http.StatusBadRequest, "invalid_request", "gateway", "the gateway refused the run: invalid_request")
+	r.mu.Lock()
+	r.keys = append(r.keys, key)
+	r.mu.Unlock()
+	for name, value := range map[string]string{"LABELS": `{"team":"x"}`, "Labels": `{"team":"x"}`, "ABOUT": `{"title":"x"}`, "About": `{"title":"x"}`} {
+		body := []byte(`{"version":1,"run_id":"` + runID + `","wall":false,"` + name + `":` + value + `}`)
+		refused(t, name, r.do(t, key, http.MethodPost, "/qory-link/run-configuration", body), http.StatusBadRequest, "invalid_request", "gateway", "the gateway refused the run: invalid_request")
+	}
 	if n := len(r.c.attached()); n != 0 {
 		t.Errorf("%d attaches", n)
 	}
