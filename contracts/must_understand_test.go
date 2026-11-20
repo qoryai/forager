@@ -2,6 +2,7 @@ package contracts_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +13,15 @@ import (
 // openSchemas are the schemas whose objects accept a member they do not define, each
 // with the must_understand that lists the members a reader must understand.
 var openSchemas = []string{"auth.schema.json", "credential.schema.json", "events/run.exited.schema.json"}
+
+// understoodObjects are the objects of the open schemas that have a must_understand:
+// the schema and the JSON Pointer of the object's node in it, "" for the root.
+var understoodObjects = []struct{ schema, node string }{
+	{"auth.schema.json", ""},
+	{"credential.schema.json", ""},
+	{"credential.schema.json", "/properties/apply/items"},
+	{"events/run.exited.schema.json", ""},
+}
 
 // definedPointers lists the JSON Pointers that the schema node defines below the
 // pointer at: each member of properties but must_understand, and below a member whose
@@ -61,18 +71,30 @@ func closed(node any) bool {
 // of a list at the index 0 or 12, passes; a pointer to a member it does not define,
 // below a member that has none, to must_understand itself, at an index with a leading
 // zero, of another case, without its first /, with a line feed or with a ~ that is not
-// ~0 or ~1 fails; and so does a pointer twice. The list has at most 32 pointers.
+// ~0 or ~1 fails; and so does a pointer twice. The list has at most 32 pointers, each
+// of at most 256 characters. The root of each open schema has a must_understand, and so
+// does an apply item of credential.schema.json, with pointers counted from the item.
 func TestMustUnderstandListsTheDefinedMembers(t *testing.T) {
 	for _, name := range openSchemas {
 		doc, err := contracts.Document(name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		root := doc.(map[string]any)
-		if closed(root) {
+		if closed(doc) {
 			t.Errorf("%s has an object with additionalProperties false; want each open", name)
 		}
-		schema, err := contracts.Compile(name + "#/properties/must_understand")
+	}
+	for _, o := range understoodObjects {
+		name := o.schema + o.node
+		doc, err := contracts.Document(o.schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		root := doc.(map[string]any)
+		for _, seg := range strings.Split(o.node, "/")[1:] {
+			root = root[seg].(map[string]any)
+		}
+		schema, err := contracts.Compile(o.schema + "#" + o.node + "/properties/must_understand")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -89,14 +111,14 @@ func TestMustUnderstandListsTheDefinedMembers(t *testing.T) {
 		}
 		for _, p := range defined {
 			if err := list(p); err != nil {
-				t.Errorf("%s: must_understand refuses %s, a member it defines: %v", name, p, err)
+				t.Errorf("%s: the schema does not accept %s in must_understand, a member it defines: %v", name, p, err)
 			}
 			if strings.Contains(p, "/0") {
 				if err := list(strings.ReplaceAll(p, "/0", "/12")); err != nil {
-					t.Errorf("%s: must_understand refuses %s at the index 12: %v", name, p, err)
+					t.Errorf("%s: the schema does not accept %s at the index 12 in must_understand: %v", name, p, err)
 				}
 				if err := list(strings.ReplaceAll(p, "/0", "/00")); err == nil {
-					t.Errorf("%s: must_understand takes %s at the index 00", name, p)
+					t.Errorf("%s: the schema accepts %s at the index 00 in must_understand", name, p)
 				}
 			}
 			for _, bad := range []string{p + "/zz", p + "/", strings.ToUpper(p), p[1:], p + "\n", p + "~2"} {
@@ -104,17 +126,39 @@ func TestMustUnderstandListsTheDefinedMembers(t *testing.T) {
 					continue
 				}
 				if err := list(bad); err == nil {
-					t.Errorf("%s: must_understand takes %q", name, bad)
+					t.Errorf("%s: the schema accepts %q in must_understand", name, bad)
 				}
 			}
 		}
 		for _, bad := range []string{"/zz", "/must_understand", "/", "", "zz"} {
 			if err := list(bad); err == nil {
-				t.Errorf("%s: must_understand takes %q", name, bad)
+				t.Errorf("%s: the schema accepts %q in must_understand", name, bad)
 			}
 		}
 		if err := list(defined[0], defined[0]); err == nil {
-			t.Errorf("%s: must_understand takes %s twice", name, defined[0])
+			t.Errorf("%s: the schema accepts %s twice in must_understand", name, defined[0])
+		}
+		// A list item's pointer is long and many at its index alone, so the length and
+		// count limits fail with no other rule.
+		if i := slices.IndexFunc(defined, func(p string) bool { return strings.HasSuffix(p, "/0") }); i >= 0 {
+			list0 := strings.TrimSuffix(defined[i], "0")
+			long := func(n int) string { return list0 + strings.Repeat("1", n-len(list0)) }
+			if err := list(long(256)); err != nil {
+				t.Errorf("%s: the schema does not accept a pointer of 256 characters: %v", name, err)
+			}
+			if err := list(long(257)); err == nil {
+				t.Errorf("%s: the schema accepts a pointer of 257 characters", name)
+			}
+			many := make([]string, 33)
+			for n := range many {
+				many[n] = fmt.Sprintf("%s%d", list0, n)
+			}
+			if err := list(many[:32]...); err != nil {
+				t.Errorf("%s: the schema does not accept 32 pointers: %v", name, err)
+			}
+			if err := list(many...); err == nil {
+				t.Errorf("%s: the schema accepts 33 pointers", name)
+			}
 		}
 		mu, _ := root["properties"].(map[string]any)["must_understand"].(map[string]any)
 		if mu["maxItems"] != json.Number("32") {

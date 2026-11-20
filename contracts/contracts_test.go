@@ -481,8 +481,8 @@ const beyondLinkSchema = "-beyond-schema-"
 // or a string with a line feed or over 4096 characters, or a key with a space, whose
 // model key or declared secret has an account_header, or whose resume has a prefix
 // with * or an empty after. For members a reader does not define: a run configuration
-// whose API credential's auth, a run.exited and an adapter's answer whose
-// must_understand lists a member that the schema does not define.
+// whose API credential's auth has a must_understand that lists a member the schema
+// does not define, and a run.exited and an adapter's answer with such a list.
 // A fixture whose name contains -beyond-schema- breaks a rule only the gateway checks,
 // or for a descriptor the session, and passes its schema. The longest schema name the
 // file name starts with is the schema, so run-configuration-variable-value-not-string

@@ -85,10 +85,24 @@ A credential's secret comes from one of three sources:
   fails `credential.schema.json`, the gateway reports `Fix the output of the adapter
   <PATH> to match credential.schema.json: /apply/0/header fails pattern; ...`: each
   failing location and keyword, at most 5 and then how many more, with no value, and no
-  member name other than the schema's. The gateway ignores a member of the output that
-  the schema does not define. If the output's `must_understand` lists that member, such
-  as `["/apply/0/methods"]`, the output fails the schema at `/must_understand/0`. A tool's lines on standard error have `***` in place of
-  the shapes too.
+  member name other than the schema's. Two more errors print no value of the output:
+  - `Fix the adapter's output: one JSON object in UTF-8, each member name once`, for an
+    output with a member name twice or with invalid UTF-8;
+  - `Write expires_at as RFC 3339 with an upper-case T and Z, seconds 00 to 59`, for
+    an `expires_at` such as `2026-09-19t14:00:00z` or `2026-12-31T23:59:60Z`.
+
+  A tool's lines on standard error have `***` in place of the shapes too.
+- The gateway ignores a member of an adapter's output that the schema does not define,
+  in the output and in each `apply` item. If the output's `must_understand` lists that
+  member, such as `["/apply/0/methods"]`, or the item's does, such as `["/methods"]`,
+  the output fails the schema. A new member of an adapter's answer or of an `apply`
+  item that narrows where, when or with which token the secret is set must be listed in
+  `must_understand`.
+- Give an adapter's definition `hosts` and `paths` in `forager.yaml`, under
+  `gateway.credentials.<name>`. They are the most the adapter may claim: an output that
+  claims a host or a path outside them is no run. With `paths` set, an output with
+  `path` in place of `paths` claims every path, and the run does not start, where
+  without them the token goes on every path of the hosts.
 - The route to the caller, `http://host.qory.invalid` in `QORY_HOST_URL`, sets no
   credential. The session's forwarder takes every header off a request but
   `Content-Type`, `Proxy-Authorization` among them, adds `Qory-Session`, the number of

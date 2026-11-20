@@ -91,7 +91,8 @@ func TestRunConfigurationRefusalsQuoteNoValue(t *testing.T) {
 // define reads as one without it, and its value is set as before; with that member in
 // the auth's must_understand, the run configuration is run_configuration_invalid, and
 // the error has the pointer's place, not the pointer. A member that differs from a
-// defined one only in case never sets it. An unknown scheme stays refused.
+// defined one only in case never sets it, and MUST_UNDERSTAND is such a member. An empty
+// must_understand is taken, and a null one is refused. An unknown scheme stays refused.
 func TestAnAuthIgnoresAMemberItDoesNotDefine(t *testing.T) {
 	doc := func(auth string) string {
 		return `{"version":1,"credentials":[{"name":"model","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":` + auth + `}]}`
@@ -103,6 +104,8 @@ func TestAnAuthIgnoresAMemberItDoesNotDefine(t *testing.T) {
 		`{"scheme":"header","header":"x-api-key","must_understand":["/header","/scheme"]}`,
 		`{"scheme":"header","header":"x-api-key","SCHEME":"basic","Username":"bot","Header":"authorization"}`,
 		`{"Header":"authorization","SCHEME":"basic","header":"x-api-key","scheme":"header"}`,
+		`{"scheme":"header","header":"x-api-key","region":"eu","MUST_UNDERSTAND":["/region"]}`,
+		`{"scheme":"header","header":"x-api-key","must_understand":[]}`,
 	} {
 		v := newVerified(t)
 		v.runDoc = doc(auth)
@@ -122,6 +125,7 @@ func TestAnAuthIgnoresAMemberItDoesNotDefine(t *testing.T) {
 		{`{"scheme":"header","header":"x-api-key","region":"eu","must_understand":["/region-` + value + `"]}`, "/credentials/0/auth/must_understand/0 (pattern)"},
 		{`{"scheme":"header","header":"x-api-key","must_understand":["/must_understand"]}`, "/credentials/0/auth/must_understand/0 (pattern)"},
 		{`{"scheme":"digest"}`, "/credentials/0/auth/scheme (enum)"},
+		{`{"scheme":"header","header":"x-api-key","must_understand":null}`, "/credentials/0/auth/must_understand (type)"},
 	} {
 		v := newVerified(t)
 		v.runDoc = doc(tc.auth)
