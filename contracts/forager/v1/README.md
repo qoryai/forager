@@ -5104,8 +5104,8 @@ has `Retry-After: 7`, the link refusal has `"retry_after": 7`, and `Run.NextSess
 and `Run.PushedCommits` return an `*accesskey.Refusal` whose `RetryAfter` is 7
 seconds. Wait that long before you send the request again. The gateway reads only a
 `Retry-After` of digits alone, sent once, and passes a wait over 31 days as 31 days.
-`Retry-After: 0`, an HTTP date, any other form and no `Retry-After` give no
-`retry_after`, and `RetryAfter` is 0.
+For `Retry-After: 0`, an HTTP date, any other form and no `Retry-After`, the link
+refusal has no `retry_after`, and `RetryAfter` is 0.
 
 A `410` on the link ends the session's run, and only the gateway ends a run there, so
 Qory Apiary's `410` is a `502`. Qory Apiary returns the same result for a request it

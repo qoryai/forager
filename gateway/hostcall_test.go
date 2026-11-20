@@ -314,8 +314,9 @@ func TestTheGatewaysRefusalsOfAHostCall(t *testing.T) {
 // TestAHostCallBehindASeparateGateway pins both host calls on the one address: under
 // /qory-link/run-configuration/<run_id>/ with the run key, the body forwarded unread,
 // the answer signed whole, a 204 with no body among them; a refusal of the control
-// plane's passes from apiary; another run's key is 400 run_key_invalid; and a body over
-// the limit 413; the control plane gets nothing for either refusal of the gateway.
+// plane's passes from apiary, with the retry_after of its Retry-After in the signed
+// body; another run's key is 400 run_key_invalid; and a body over the limit 413; the
+// control plane gets nothing for either refusal of the gateway.
 func TestAHostCallBehindASeparateGateway(t *testing.T) {
 	c := gatewayControl(t)
 	f := runAPIOf(c)
@@ -338,9 +339,10 @@ func TestAHostCallBehindASeparateGateway(t *testing.T) {
 	}
 
 	f.answers(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		w.Header().Set("Retry-After", "7")
 		f.sign(w, r, http.StatusConflict, []byte(`{"error":"not_writable","message":"Record pushed commits only from a run with write access."}`))
 	})
-	if got := r.do(t, e.key, http.MethodPost, base+"/pushed-commits", []byte(`{}`)); got.status != http.StatusConflict || got.refusal()["error"] != "not_writable" || got.refusal()["from"] != "apiary" {
+	if got := r.do(t, e.key, http.MethodPost, base+"/pushed-commits", []byte(`{}`)); got.status != http.StatusConflict || got.refusal()["error"] != "not_writable" || got.refusal()["from"] != "apiary" || got.refusal()["retry_after"] != 7.0 {
 		t.Errorf("a signed 409: %d %s", got.status, got.body)
 	}
 	// An unsigned answer is a 502 with one line in the gateway's log, which the
