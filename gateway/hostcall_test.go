@@ -214,6 +214,59 @@ func TestAHostCallPassesOnTheControlPlanesRefusal(t *testing.T) {
 	}
 }
 
+// TestAHostCallPassesOnRetryAfter pins the wait of a signed refusal of the control
+// plane's, 429 rate_limited and 503 unavailable, from its Retry-After to the caller's
+// refusal through the gateway and the link: whole seconds pass, a value over 31 days
+// is 31 days, and none, 0, a header sent twice and any other form, an HTTP date
+// among them, are no wait. Each body link-refusal.schema.json takes.
+func TestAHostCallPassesOnRetryAfter(t *testing.T) {
+	o := openRunAPIRun(t)
+	cases := []struct {
+		what   string
+		values []string
+		want   time.Duration
+	}{
+		{"Retry-After: 7", []string{"7"}, 7 * time.Second},
+		{"no Retry-After", nil, 0},
+		{"Retry-After: 0", []string{"0"}, 0},
+		{"over 31 days", []string{"2678401"}, server.MaxRetryAfter},
+		{"past the largest int64", []string{"99999999999999999999"}, server.MaxRetryAfter},
+		{"an HTTP date", []string{"Wed, 21 Oct 2026 07:28:00 GMT"}, 0},
+		{"a fraction", []string{"7.5"}, 0},
+		{"a sign", []string{"+7"}, 0},
+		{"a negative", []string{"-7"}, 0},
+		{"an empty value", []string{""}, 0},
+		{"two headers", []string{"7", "8"}, 0},
+	}
+	for _, refused := range []struct {
+		status int
+		code   string
+	}{{http.StatusTooManyRequests, "rate_limited"}, {http.StatusServiceUnavailable, "unavailable"}} {
+		for _, c := range cases {
+			what := fmt.Sprintf("a signed %d with %s", refused.status, c.what)
+			o.f.answers(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				for _, v := range c.values {
+					w.Header().Add("Retry-After", v)
+				}
+				o.f.sign(w, r, refused.status, []byte(`{"error":"`+refused.code+`","message":"Send it again."}`))
+			})
+			_, err := hostCall(o.h, o.a.RunID, "/next-session", []byte(`{}`))
+			if ref := refusalWith(t, what, err, refused.status, refused.code, accesskey.FromApiary); ref != nil && ref.RetryAfter != c.want {
+				t.Errorf("%s: RetryAfter %v, want %v", what, ref.RetryAfter, c.want)
+			}
+		}
+		o.f.answers(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			w.Header().Set("Retry-After", "7")
+			o.f.sign(w, r, refused.status, []byte(`{"error":"`+refused.code+`"}`))
+		})
+		status, body := rawPost(t, raw(t, o.h.g.LocalLink()), "/v1/run-configuration/"+o.a.RunID+"/pushed-commits", "application/json", "{}")
+		validDocument(t, "link-refusal.schema.json", []byte(body))
+		if status != refused.status || !strings.Contains(body, `"retry_after":7`) {
+			t.Errorf("a signed %d with Retry-After: 7 on the link: %d %s", refused.status, status, body)
+		}
+	}
+}
+
 // TestTheGatewaysRefusalsOfAHostCall pins the refusals the gateway decides, with
 // nothing sent to the control plane: a body over the limit is 413 payload_too_large, a
 // Content-Type other than application/json 400 invalid_request, a run id of no run

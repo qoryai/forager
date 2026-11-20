@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The refusal codes this package and Forager's client decide or read. The contract's
@@ -66,6 +67,10 @@ type Refusal struct {
 	// free, cannot be read, so that its run's binds and engine are unknown: a caller
 	// tells it apart from an engine that cannot be asked. Error does not show it.
 	EntryUnreadable bool
+	// RetryAfter is how long to wait before the request is sent again: the
+	// retry_after of a link refusal, which the gateway sets from the Retry-After of
+	// Qory Apiary's refusal of a host call. Zero for none. Error does not show it.
+	RetryAfter time.Duration
 }
 
 // The values of [Refusal.From].

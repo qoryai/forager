@@ -262,6 +262,9 @@ type linkRefusal struct {
 	From    string   `json:"from"`
 	State   string   `json:"state,omitempty"`
 	Reason  string   `json:"reason,omitempty"`
+	// RetryAfter is the seconds of the Retry-After of Qory Apiary's refusal of a host
+	// call, [retryAfter]; zero for none.
+	RetryAfter int64 `json:"retry_after,omitempty"`
 }
 
 // refuse answers a coded refusal: the code, its names, who refused, and text, the

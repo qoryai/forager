@@ -27,7 +27,8 @@ var ErrRunClosed = errors.New("this run is closed")
 // began or the gateway closed the run, and an error with nothing sent for a run with no
 // control plane. In an open run with no control plane, the error does not wrap
 // [ErrRunClosed]. It returns an [*accesskey.Refusal] for a refusal: From is apiary for
-// Qory Apiary's code, passed on with its status, such as 409 run_ended, and gateway for
+// Qory Apiary's code, passed on with its status, such as 409 run_ended, with
+// RetryAfter set from Qory Apiary's Retry-After of whole seconds, and gateway for
 // the gateway's, such as 413 payload_too_large for a body over the limit or 502
 // control_plane_unavailable when no valid answer came; a 410 is the end of the run at
 // the gateway, which [server.Ended] reports. A 503 with no code, while the gateway

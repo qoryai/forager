@@ -371,6 +371,12 @@ release may change what an existing document does, and says so under Upgrading.
   a Codex 0.167.2 agent file, such as `$CODEX_HOME/agents/reviewer.toml`, takes the
   keys of `config.toml` at its top. `runtimes.json` lists both, `runtimes.ModelPlaces`
   has `Agent`, a `*runtimes.AgentKey`, and `runtimes.AgentPlace` has `TOML`.
+- `retry_after` in a link refusal, and `RetryAfter` in `accesskey.Refusal`: when Qory
+  Apiary refuses a host call with `Retry-After` in whole seconds, such as a `429`
+  `rate_limited` or a `503` `unavailable` with `Retry-After: 7`, the gateway passes
+  that wait on, and `Run.NextSession` returns a refusal whose `RetryAfter` is 7
+  seconds. The gateway passes a wait over 31 days as 31 days, and passes none for
+  `Retry-After: 0`, an HTTP date or any other form.
 - Two host calls of the gateway's link, `POST <run.url>/<run_id>/next-session` and
   `POST <run.url>/<run_id>/pushed-commits`, and `Run.NextSession` and
   `Run.PushedCommits`, which send them: the gateway forwards the body unread to Qory

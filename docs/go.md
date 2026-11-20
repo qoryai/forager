@@ -688,7 +688,10 @@ gateway's, such as `413` `payload_too_large` or `502` `control_plane_unavailable
 `410` is the end of the run at the gateway, which `server.Ended` reports. A `503` with
 no code, while the gateway closes or reopens the run, is a `*server.StatusError`.
 Forager sends no request again: send it again after a `5xx` or a transport failure,
-since Qory Apiary returns the same result for a repeated request. The contract's
+since Qory Apiary returns the same result for a repeated request. When Qory Apiary's
+refusal has a `Retry-After` of whole seconds, `RetryAfter` of the `*accesskey.Refusal`
+is that wait, at most 31 days: wait that long before you send the request again. It is
+0 for no `Retry-After`, for `Retry-After: 0` and for any other form. The contract's
 README, §The gateway's link, The host calls, lists every answer.
 
 ### The run API

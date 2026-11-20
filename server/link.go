@@ -750,9 +750,26 @@ func (a *linkAnswer) from() string {
 	return accesskey.FromGateway
 }
 
+// MaxRetryAfter is the longest retry_after a link refusal has, 31 days, as the
+// gateway's bound on a model provider's retry-after: the gateway passes a longer
+// Retry-After as this, and a wait in seconds this long fits a [time.Duration].
+const MaxRetryAfter = 31 * 24 * time.Hour
+
+// retryAfter is the body's retry_after, a wait of 1 to [MaxRetryAfter] whole seconds;
+// zero for none and for any other value.
+func (a *linkAnswer) retryAfter() time.Duration {
+	var doc struct {
+		RetryAfter int64 `json:"retry_after"`
+	}
+	if jsonv2.Unmarshal(a.body, &doc) != nil || doc.RetryAfter < 1 || doc.RetryAfter > int64(MaxRetryAfter/time.Second) {
+		return 0
+	}
+	return time.Duration(doc.RetryAfter) * time.Second
+}
+
 // refusal is the error of an answer that is not the one wanted: a 410 is the end of
-// the run, its code one of [EndCodes]; a coded body is its code with its names and who
-// refused; anything else names its status.
+// the run, its code one of [EndCodes]; a coded body is its code with its names, who
+// refused and its retry_after; anything else names its status.
 //
 // A refusal's message, the text its user is told, is its Text, so its Error says it
 // word for word. A 5xx whose code is internal, or that has none, is a failure without
@@ -770,6 +787,7 @@ func (a *linkAnswer) refusal(what string) error {
 	}
 	if r := accesskey.ReadRefusal(a.status, a.body); r != nil {
 		r.Detail, r.From, r.Text = what, a.from(), accesskey.ShownValue(doc.Message, false)
+		r.RetryAfter = a.retryAfter()
 		return r
 	}
 	return &StatusError{What: what, Status: a.status, Message: accesskey.ShownValue(doc.Message, false)}

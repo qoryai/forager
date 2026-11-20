@@ -51,9 +51,10 @@ const hostCallWait = 4 * time.Minute
 // form, with nothing sent; for a transport failure or no answer within 4 minutes; and
 // for every answer other than a 2xx: a 410 is the end of the run, [Ended]; a coded
 // refusal is an [*accesskey.Refusal] whose From is apiary for Qory Apiary's code, which
-// the gateway passes on with its status, and gateway for the gateway's; any other
-// answer is a [*StatusError], the gateway's 503 with no body while it closes or reopens
-// the run among them. A 2xx body over [MaxNextSessionAnswer] is an error too.
+// the gateway passes on with its status and the wait of its Retry-After, RetryAfter,
+// and gateway for the gateway's; any other answer is a [*StatusError], the gateway's
+// 503 with no body while it closes or reopens the run among them. A 2xx body over
+// [MaxNextSessionAnswer] is an error too.
 func (k *Link) NextSession(ctx context.Context, runURL, runID string, body []byte) ([]byte, error) {
 	return k.hostCall(ctx, "the next-session request", runURL, runID, "/next-session", body, MaxNextSessionAnswer)
 }
