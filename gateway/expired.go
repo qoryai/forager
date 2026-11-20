@@ -49,7 +49,8 @@ func (e *expired) refusal(runKey string, now time.Time) error {
 
 // keep keeps err for the run key until the time given, when it is the server's
 // refusal with the code run_key_expired and the time is after now; anything else is not
-// kept. The refusals past their time go first; when the most are kept still, the one
+// kept. It keeps a copy with err's text and no RetryAfter: a wait the server set for
+// the first request does not hold for a later one. The refusals past their time go first; when the most are kept still, the one
 // whose time ends soonest goes.
 func (e *expired) keep(runKey string, err error, until, now time.Time) {
 	var ref *accesskey.Refusal
@@ -77,5 +78,7 @@ func (e *expired) keep(runKey string, err error, until, now time.Time) {
 		}
 		delete(e.kept, soonest)
 	}
-	e.kept[sum] = expiredRefusal{err: err, until: until}
+	kept := *ref
+	kept.Text, kept.RetryAfter = err.Error(), 0
+	e.kept[sum] = expiredRefusal{err: &kept, until: until}
 }

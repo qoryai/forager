@@ -437,9 +437,10 @@ const beyondLinkSchema = "-beyond-schema-"
 // does not define, the old model_credential among them, or with a name of the form
 // <name>=<value> in passes, a link join answer without its session or numbered 0, and
 // a link refusal without from, with a control character other than tab and newline in
-// its message, C0, DEL or C1, or with a state other than the three, paused among them,
-// a run outcome and a batch answer's end paused, and an API format outside the list, in
-// upper case or as an object; and, for several model keys and a resume, a run
+// its message, C0, DEL or C1, with a state other than the three, paused among them, or
+// with a retry_after of 0 or over 31 days, a run outcome and a batch answer's end
+// paused, and an API format outside the list, in upper case or as an object; and, for
+// several model keys and a resume, a run
 // configuration whose API credential has a pause_for_s of 0 or over a week or a
 // resets_at that is no time, with seven API credentials, a host credential with
 // pause_for_s or with use_up_to_percent and use_up_to_windows, an API credential with a

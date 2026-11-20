@@ -284,6 +284,22 @@ func TestASealedAnswerThatDoesNotOpenIsNoRun(t *testing.T) {
 	}
 }
 
+// TestASecretsRefusalHasItsRetryAfter pins the wait of the secrets request, the last
+// answer of Qory Apiary as a run opens: a signed 409 secrets_not_allowed with
+// Retry-After: 7 is a link refusal with retry_after 7.
+func TestASecretsRefusalHasItsRetryAfter(t *testing.T) {
+	ctl, h := sealedGateway(t, sealedDoc, map[string]string{"model": sealedValue})
+	ctl.mu.Lock()
+	ctl.secretsAnswer = func(server.SecretsRequest, string) (int, []byte) {
+		return http.StatusConflict, []byte(`{"error":"secrets_not_allowed"}`)
+	}
+	ctl.secretsRetryAfter = "7"
+	ctl.mu.Unlock()
+	if status, got := h.refusalOf("/v1/run-configuration", walledBody()); status != http.StatusConflict || got["error"] != "secrets_not_allowed" || got["retry_after"] != 7.0 {
+		t.Errorf("%d %v; want 409 secrets_not_allowed with retry_after 7", status, got)
+	}
+}
+
 // TestASealedModelKeyWithoutItsPrefixIsNoRun pins a model key from the server with
 // key_prefixes: a stored value that starts with none of them is run_configuration_invalid,
 // a 403 from the gateway with the credential's name and the text word for word, opens

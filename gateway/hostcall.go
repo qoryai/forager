@@ -77,8 +77,8 @@ func (c Config) hostCallTimeOf() time.Duration {
 //     application/json alone. The body of a 200 is at most c.answer bytes, and that of
 //     any other 2xx at most [server.MaxRefusal]; the gateway reads no further.
 //   - A signed coded refusal of Qory Apiary's, 400 to 599 but 410, passes with its
-//     status, code, names and message, from apiary. A 401 is never signed, so it never
-//     passes.
+//     status, code, names and message, from apiary, and with retry_after when it has a
+//     Retry-After of seconds. A 401 is never signed, so it never passes.
 //   - Every other answer, one that fails verification, and no answer are 502
 //     control_plane_unavailable, the gateway's, with one line in its log. Qory
 //     Apiary's 410 is among them: on the link a 410 ends the session's run, and only
@@ -173,7 +173,7 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 			Message string `json:"message"`
 		}
 		jsonv2.Unmarshal(a.Body, &doc)
-		answerRefusal(w, a.Status, linkRefusal{Error: ref.Code, Names: shownNames(ref.Names), Message: message(accesskey.ShownValue(doc.Message, false)), From: accesskey.FromApiary})
+		answerRefusal(w, a.Status, linkRefusal{Error: ref.Code, Names: shownNames(ref.Names), Message: message(accesskey.ShownValue(doc.Message, false)), From: accesskey.FromApiary, RetryAfter: seconds(server.ReadRetryAfter(a.Header))})
 	case a.Status == http.StatusGone:
 		g.hostCallFailed(w, runID, c, false, "a signed 410, which only the gateway sends on the link")
 	default:

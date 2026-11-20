@@ -789,3 +789,23 @@ func TestAnEnginePasswordIsMaskedAsAURLPrintsIt(t *testing.T) {
 		t.Errorf("output.log %q", got)
 	}
 }
+
+// TestOpenKeepsTheRefusalsRetryAfter pins the wait of a run request the gateway refuses
+// with retry_after 7: session.Open returns a *session.Refusal with RetryAfter 7 s, both
+// when the masker changes its message, as a masked copy, and when it does not.
+func TestOpenKeepsTheRefusalsRetryAfter(t *testing.T) {
+	for _, msg := range []string{"register https://apiary.example/v1/runs: " + maskValue, "register https://apiary.example/v1/runs: rate_limited (status 429)"} {
+		sp, g := specGateway(t)
+		g.OnRun(func(server.LinkRunRequest) linktest.Reply {
+			b := linktest.Refusal("rate_limited", "apiary")
+			b["message"], b["retry_after"] = msg, 7
+			return linktest.Reply{Status: 429, Body: b}
+		})
+		sp.Masker = maskerOf(t, maskValue)
+		_, err := session.Open(context.Background(), opened(sp))
+		var ref *session.Refusal
+		if !errors.As(err, &ref) || ref.RetryAfter != 7*time.Second || strings.Contains(err.Error(), maskValue) {
+			t.Errorf("%q: %v (%+v); want a refusal with RetryAfter 7s and the value masked", msg, err, ref)
+		}
+	}
+}

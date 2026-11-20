@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,7 +14,8 @@ import (
 // TestTheExpiredRefusalsAreBounded pins what the gateway keeps of the server's
 // run_key_expired: only a refusal of the server's with that code, each until its time,
 // at most keepExpired at once, those past their time going first and then the one whose
-// time ends soonest.
+// time ends soonest. The refusal kept has the text of the one given, its code, status
+// and from, and no RetryAfter.
 func TestTheExpiredRefusalsAreBounded(t *testing.T) {
 	now := time.Now()
 	ref := func(code, from string) error {
@@ -27,12 +29,20 @@ func TestTheExpiredRefusalsAreBounded(t *testing.T) {
 		}
 	}
 	expiredRef := ref(codeRunKeyExpired, accesskey.FromApiary)
+	waited := &accesskey.Refusal{Code: codeRunKeyExpired, Status: http.StatusConflict, Detail: "attach https://apiary.example/v1/runs/x", From: accesskey.FromApiary, RetryAfter: 7 * time.Second}
+	e.keep("qrk_waited", fmt.Errorf("opening: %w", waited), now.Add(time.Minute), now)
+	var kept *accesskey.Refusal
+	if got := e.refusal("qrk_waited", now); !errors.As(got, &kept) || kept.RetryAfter != 0 || got.Error() != "opening: "+waited.Error() ||
+		kept.Code != waited.Code || kept.Status != waited.Status || kept.From != waited.From {
+		t.Errorf("kept %v (%+v); want the refusal's text, code, status and from, and no RetryAfter", got, kept)
+	}
+	delete(e.kept, sha256.Sum256([]byte("qrk_waited")))
 	e.keep("qrk_past", expiredRef, now, now)
 	if e.refusal("qrk_past", now) != nil {
 		t.Error("kept a refusal whose time is past")
 	}
 	e.keep("qrk_lapses", expiredRef, now.Add(time.Second), now)
-	if e.refusal("qrk_lapses", now) != expiredRef || e.refusal("qrk_lapses", now.Add(time.Second)) != nil {
+	if e.refusal("qrk_lapses", now) == nil || e.refusal("qrk_lapses", now.Add(time.Second)) != nil {
 		t.Error("a refusal is not kept until its time alone")
 	}
 	e.keep("qrk_lapses", expiredRef, now.Add(time.Second), now)

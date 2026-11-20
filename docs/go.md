@@ -564,8 +564,11 @@ err = run.Built(session.Built{
 A refusal the gateway or the server answers with a code returns a `*session.Refusal`,
 with the code, the names it concerns and `From`, `apiary` or `gateway`. Its `Error` is
 the refusal's `message`, the text such a run returns, such as
-`register https://qory.example/v1/runs: instance_limit (status 409)`. A run whose policy
-needs a wall and has none returns the error of [`wall_required`](../contracts/forager/v1/README.md#the-gateways-link)
+`register https://qory.example/v1/runs: instance_limit (status 409)`. When the last
+answer of Qory Apiary as the run opens, to its registration or attach, the reload after
+the attach, or its secrets request, has a `Retry-After` of whole seconds, `RetryAfter`
+is that wait, at most 31 days: wait that long, then open a run with a new run id. A
+run whose policy needs a wall and has none returns the error of [`wall_required`](../contracts/forager/v1/README.md#the-gateways-link)
 as the session words it, and so does a run the gateway could not open for a reason
 without a code.
 
@@ -688,7 +691,11 @@ gateway's, such as `413` `payload_too_large` or `502` `control_plane_unavailable
 `410` is the end of the run at the gateway, which `server.Ended` reports. A `503` with
 no code, while the gateway closes or reopens the run, is a `*server.StatusError`.
 Forager sends no request again: send it again after a `5xx` or a transport failure,
-since Qory Apiary returns the same result for a repeated request. The contract's
+since Qory Apiary returns the same result for a repeated request. When Qory Apiary's
+refusal has a `Retry-After` of whole seconds, `RetryAfter` of the `*accesskey.Refusal`
+is that wait, at most 31 days: wait that long before you send the request again. It is
+0 for no `Retry-After`, for `Retry-After: 0` and for any other form. A `5xx` with the
+code `internal` is a `*server.StatusError`, with no wait. The contract's
 README, §The gateway's link, The host calls, lists every answer.
 
 ### The run API

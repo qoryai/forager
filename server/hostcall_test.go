@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -88,6 +89,40 @@ func TestTheLinkSendsTheHostCalls(t *testing.T) {
 	}
 	if _, err := k.PushedCommits(ctx, runURL, runID, []byte(`{}`)); err == nil || !strings.HasPrefix(err.Error(), "Check the gateway and the control plane: ") {
 		t.Errorf("an answer over the most: %v", err)
+	}
+}
+
+// TestALinkRefusalHasItsRetryAfter pins the wait the link reads from a coded refusal's
+// retry_after: whole seconds from 1 to 31 days are the wait, and none, 0, a negative,
+// a fraction, a string and a value over 31 days are no wait.
+func TestALinkRefusalHasItsRetryAfter(t *testing.T) {
+	var body string
+	g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		answer(w, http.StatusTooManyRequests, body)
+	}))
+	k, _ := newLink(t, g)
+	runURL := server.LocalOrigin + "/v1/run-configuration"
+	most := int64(server.MaxRetryAfter / time.Second)
+	for retryAfter, want := range map[string]time.Duration{
+		`7`:                           7 * time.Second,
+		strconv.FormatInt(most, 10):   server.MaxRetryAfter,
+		``:                            0,
+		`0`:                           0,
+		`-7`:                          0,
+		`7.5`:                         0,
+		`"7"`:                         0,
+		strconv.FormatInt(most+1, 10): 0,
+	} {
+		body = `{"error":"rate_limited","from":"apiary","message":"Send it again."}`
+		if retryAfter != "" {
+			body = `{"error":"rate_limited","from":"apiary","message":"Send it again.","retry_after":` + retryAfter + `}`
+		}
+		_, err := k.NextSession(context.Background(), runURL, runID, []byte(`{}`))
+		var ref *accesskey.Refusal
+		if !errors.As(err, &ref) || ref.Code != "rate_limited" || ref.RetryAfter != want || err.Error() != "Send it again." {
+			t.Errorf("retry_after %q: %v (%+v), want RetryAfter %v", retryAfter, err, ref, want)
+		}
 	}
 }
 

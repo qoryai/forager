@@ -750,9 +750,42 @@ func (a *linkAnswer) from() string {
 	return accesskey.FromGateway
 }
 
+// MaxRetryAfter is the longest retry_after a link refusal has, 31 days, as maxReset in
+// gateway/internal/modelkey bounds a model provider's retry-after: the gateway passes
+// a longer Retry-After as this, and a wait in seconds this long fits a [time.Duration].
+const MaxRetryAfter = 31 * 24 * time.Hour
+
+// ReadRetryAfter is the wait in h's Retry-After, in whole seconds, at most
+// [MaxRetryAfter]: zero for none, for 0, for a header sent twice, for an HTTP date
+// and for any other form.
+func ReadRetryAfter(h http.Header) time.Duration {
+	v := h.Values("Retry-After")
+	if len(v) != 1 || v[0] == "" || strings.Trim(v[0], "0123456789") != "" {
+		return 0
+	}
+	// Digits alone fail only past the largest int64, which ParseInt then returns.
+	n, _ := strconv.ParseInt(v[0], 10, 64)
+	if n > int64(MaxRetryAfter/time.Second) {
+		return MaxRetryAfter
+	}
+	return time.Duration(n) * time.Second
+}
+
+// retryAfter is the body's retry_after, a wait of 1 to [MaxRetryAfter] whole seconds;
+// zero for none and for any other value.
+func (a *linkAnswer) retryAfter() time.Duration {
+	var doc struct {
+		RetryAfter int64 `json:"retry_after"`
+	}
+	if jsonv2.Unmarshal(a.body, &doc) != nil || doc.RetryAfter < 1 || doc.RetryAfter > int64(MaxRetryAfter/time.Second) {
+		return 0
+	}
+	return time.Duration(doc.RetryAfter) * time.Second
+}
+
 // refusal is the error of an answer that is not the one wanted: a 410 is the end of
-// the run, its code one of [EndCodes]; a coded body is its code with its names and who
-// refused; anything else names its status.
+// the run, its code one of [EndCodes]; a coded body is its code with its names, who
+// refused and its retry_after; anything else is an error with its status.
 //
 // A refusal's message, the text its user is told, is its Text, so its Error says it
 // word for word. A 5xx whose code is internal, or that has none, is a failure without
@@ -770,6 +803,7 @@ func (a *linkAnswer) refusal(what string) error {
 	}
 	if r := accesskey.ReadRefusal(a.status, a.body); r != nil {
 		r.Detail, r.From, r.Text = what, a.from(), accesskey.ShownValue(doc.Message, false)
+		r.RetryAfter = a.retryAfter()
 		return r
 	}
 	return &StatusError{What: what, Status: a.status, Message: accesskey.ShownValue(doc.Message, false)}
@@ -977,11 +1011,13 @@ var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 
 // OpenRun posts the run request to runURL, the discovery's run.url, and returns the
 // run answer: a 200 the schema accepts, whose run_id is the request's. A 410 is the end
-// of the run, [Ended]; a coded refusal is an [*accesskey.Refusal] with its status and
-// who refused, From. It waits [OpenWait] for the answer, where every other request of
-// the link waits [Timeout]. Once the run is open on the local link, every later batch
-// has it in X-Qory-Run-Id. The local link takes no narrowing, and a separate gateway
-// no labels or about, which are the starter's registration's.
+// of the run, [Ended]; a coded refusal is an [*accesskey.Refusal] with its status, who
+// refused, From, and in RetryAfter the wait of the Retry-After of Qory Apiary's last
+// answer as the run opens: to the registration or attach, the reload after the attach,
+// or the secrets request. It waits [OpenWait] for the answer, where every other request
+// of the link waits [Timeout]. Once the run is open on the local link, every later
+// batch has it in X-Qory-Run-Id. The local link takes no narrowing, and a separate
+// gateway no labels or about, which are the starter's registration's.
 func (k *Link) OpenRun(ctx context.Context, runURL string, req LinkRunRequest) (*LinkRunAnswer, error) {
 	if err := k.onLink("the run URL", runURL); err != nil {
 		return nil, fmt.Errorf("%s: %w", k.name, accesskey.ShownError(err))
