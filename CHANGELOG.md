@@ -1136,6 +1136,21 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- An `auth` (`auth.schema.json`), an adapter's answer (`credential.schema.json`) with
+  its `apply` items, and the data of a `dev.qory.run.exited` accept a member that their
+  schema does not define. Forager ignores the member and reads the rest. Each has an
+  optional `must_understand`, a list of JSON Pointers counted from the object, such as
+  `["/account_header"]`. Forager refuses an object whose list contains a pointer to a
+  member that it does not define, and the document that contains the object. List a
+  new `auth` member that changes how or where the key is sent in `must_understand`. An
+  unknown `scheme` or `format` is still refused, and the other objects keep their rule. A
+  reader of `runtimes.json` follows the same rule for each runtime. README §Versions,
+  Members a reader does not define, has the rule.
+- The gateway reads an adapter's answer, and the session a runtime descriptor in JSON,
+  with `encoding/json/v2`: a member name matches by exact case, so `TOKEN` never sets
+  `token`. A member name twice in one object, or invalid UTF-8, is refused: for an
+  adapter's answer, with `Fix the output of the adapter <PATH> to be one JSON object in
+  UTF-8 with each member name once`.
 - A run with a run key writes neutral values in its events: `dev.qory.run.started`
   has no `host`, `dir` of `dev.qory.session.started` is `/workspace`, `command` and
   `args` have `<run>`, `<home>` and `<inputs>` at each occurrence of the run

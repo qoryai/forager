@@ -386,8 +386,8 @@ func TestFixedIsChecked(t *testing.T) {
 }
 
 // TestSecretsAreChecked pins what a descriptor's secrets are held to, by the schema and
-// beyond it: exact hosts, a scheme of the closed set with its header, no secret of its
-// own in a declaration's auth, and groups of declared ids, each in one group at most.
+// beyond it: exact hosts, a scheme of the closed set with its header, and groups of
+// declared ids, each in one group at most.
 // A descriptor without secrets stays valid, and runtimes.json writes a basic
 // declaration's username beside its scheme.
 func TestSecretsAreChecked(t *testing.T) {
@@ -427,8 +427,6 @@ func TestSecretsAreChecked(t *testing.T) {
 		"an IP literal":              " declares:\n  - {id: key, title: Key, name: AMP_KEY, hosts: [192.0.2.1], auth: {scheme: bearer}}\n",
 		"a header scheme, no header": " declares:\n  - {id: key, title: Key, name: AMP_KEY, hosts: [api.example.com], auth: {scheme: header}}\n",
 		"a scheme outside the set":   " declares:\n  - {id: key, title: Key, name: AMP_KEY, hosts: [api.example.com], auth: {scheme: digest}}\n",
-		"an unknown auth member":     " declares:\n  - {id: key, title: Key, name: AMP_KEY, hosts: [api.example.com], auth: {scheme: bearer, secret: key}}\n",
-		"an unknown basic member":    " declares:\n  - {id: key, title: Key, name: AMP_KEY, hosts: [api.example.com], auth: {scheme: basic, username_secret: key}}\n",
 		"no hosts":                   " declares:\n  - {id: key, title: Key, name: AMP_KEY, auth: {scheme: bearer}}\n",
 		"a relative credential file": " credential_files: [.amp/key]\n",
 		"an id declared twice":       " declares:\n" + key + key,
@@ -440,6 +438,74 @@ func TestSecretsAreChecked(t *testing.T) {
 	} {
 		if _, err := descriptor.Parse("amp.yaml", []byte(head+"secrets:\n"+secrets)); err == nil {
 			t.Errorf("%s was accepted", name)
+		}
+	}
+}
+
+// TestAnAuthIgnoresAMemberItDoesNotDefine pins auth.schema.json's rule in a
+// descriptor, the source of a runtime's object in runtimes.json: an auth with a member
+// it does not define loads as one without it, and runtimes.json leaves the member out;
+// an auth whose must_understand lists that member is refused, and one that lists a
+// defined member loads. An unknown scheme and an unknown format stay refused. A member
+// that differs from a defined one only in case never sets it, in YAML and in JSON.
+func TestAnAuthIgnoresAMemberItDoesNotDefine(t *testing.T) {
+	const head = "version: 1\nruntime: amp\ntitle: Amp\nsources: {output: {format: jsonl}}\n" +
+		"rules: [{source: output, match: {type: end}, type: dev.qory.runtime.ended, data: {reason: why}}]\n"
+	doc := func(auth, format string) string {
+		return head + "secrets:\n declares:\n  - {id: key, title: Key, name: AMP_KEY, hosts: [api.example.com], auth: " + auth + "}\n" +
+			"model:\n formats: [anthropic-messages]\n model: {flag: --model}\n endpoint: {variable: AMP_URL}\n" +
+			" keys: [{format: " + format + ", auth: " + auth + ", variable: AMP_MODEL_KEY}]\n"
+	}
+	for name, auth := range map[string]string{
+		"an unknown member":                   "{scheme: bearer, region: eu}",
+		"a defined member in must_understand": "{scheme: bearer, must_understand: [/scheme, /oauth]}",
+		"a variant of scheme":                 "{scheme: bearer, SCHEME: basic, Username: bot}",
+	} {
+		d, err := descriptor.Parse("amp.yaml", []byte(doc(auth, "anthropic-messages")))
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		want := descriptor.Auth{Scheme: "bearer"}
+		if got := d.Secrets.Declares[0].Auth; got != want {
+			t.Errorf("%s: the declaration's auth is %+v, want %+v", name, got, want)
+		}
+		if got := d.Model.Keys[0].Auth; got != want {
+			t.Errorf("%s: the model key's auth is %+v, want %+v", name, got, want)
+		}
+		rendered, err := descriptor.Runtimes(fstest.MapFS{"runtimes/amp/descriptor.yaml": {Data: []byte(doc(auth, "anthropic-messages"))}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r := string(rendered); strings.Count(r, `"scheme": "bearer"`) != 2 ||
+			strings.Contains(r, "region") || strings.Contains(r, "must_understand") || strings.Contains(r, "SCHEME") {
+			t.Errorf("%s: runtimes.json is\n%s", name, r)
+		}
+	}
+	for name, d := range map[string]string{
+		"an unknown member in must_understand": doc("{scheme: bearer, region: eu, must_understand: [/region]}", "anthropic-messages"),
+		"must_understand itself":               doc("{scheme: bearer, must_understand: [/must_understand]}", "anthropic-messages"),
+		"an unknown scheme":                    doc("{scheme: digest}", "anthropic-messages"),
+		"an unknown format":                    doc("{scheme: bearer}", "anthropic-chat"),
+	} {
+		if _, err := descriptor.Parse("amp.yaml", []byte(d)); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	const jsonDoc = `{"version": 1, "runtime": "amp", "title": "Amp", "sources": {"output": {"format": "jsonl"}},
+"rules": [{"source": "output", "match": {"type": "end"}, "type": "dev.qory.runtime.ended", "data": {"reason": "why"}}],
+"secrets": {"declares": [{"id": "key", "title": "Key", "name": "AMP_KEY", "hosts": ["api.example.com"], "auth": %s}]}}`
+	for _, auth := range []string{
+		`{"scheme": "bearer", "SCHEME": "basic", "Username": "bot"}`,
+		`{"Username": "bot", "SCHEME": "basic", "scheme": "bearer"}`,
+	} {
+		d, err := descriptor.Parse("amp.json", []byte(fmt.Sprintf(jsonDoc, auth)))
+		if err != nil {
+			t.Errorf("%s: %v", auth, err)
+			continue
+		}
+		if got := d.Secrets.Declares[0].Auth; got != (descriptor.Auth{Scheme: "bearer"}) {
+			t.Errorf("%s: the declaration's auth is %+v, want the scheme bearer alone", auth, got)
 		}
 	}
 }

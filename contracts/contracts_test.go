@@ -94,15 +94,17 @@ func TestEverySchemaCompiles(t *testing.T) {
 
 // TestDocumentFixturesValidate pins that every policy, server, configuration, run
 // registration, run configuration, attach answer, outcome, batch answer, API format,
-// descriptor, model keys report, model keys answer and secrets request fixture passes
-// its schema.
+// descriptor, model keys report, model keys answer, secrets request and adapter's
+// answer fixture passes its schema.
 func TestDocumentFixturesValidate(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-registration.schema.json", "run-configuration.schema.json",
 		"run-attach-answer.schema.json", "run-outcome.schema.json", "batch-answer.schema.json",
 		"api-format.schema.json", "descriptor.schema.json",
-		"model-keys-report.schema.json", "model-keys-answer.schema.json", "secrets-request.schema.json")
+		"model-keys-report.schema.json", "model-keys-answer.schema.json", "secrets-request.schema.json",
+		"credential.schema.json")
 	dirs := map[string]string{
+		"fixtures/credential":        "credential.schema.json",
 		"fixtures/secrets-request":   "secrets-request.schema.json",
 		"fixtures/model-keys-report": "model-keys-report.schema.json",
 		"fixtures/model-keys-answer": "model-keys-answer.schema.json",
@@ -288,7 +290,8 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // a session.exited and a run.exited paused with model_key_limit and one of a
 // session.exited alone, the same two with model_key_switch, and with
 // model_key_unauthorized and failed, a batch answer with each of those two stops, a
-// batch of two session.transcript chunks, and refusals from the gateway, two internal
+// batch of two session.transcript chunks, a batch of a run.exited with a member that
+// its schema does not define, and refusals from the gateway, two internal
 // ones among them, one whose message spans lines, two 410s with the state and the
 // reason of the run's end, and from apiary.
 func TestLinkFixturesValidate(t *testing.T) {
@@ -477,7 +480,9 @@ const beyondLinkSchema = "-beyond-schema-"
 // or one of 65 keys, a fixed value that is a fraction, a table, an integer over 2^53-1,
 // or a string with a line feed or over 4096 characters, or a key with a space, whose
 // model key or declared secret has an account_header, or whose resume has a prefix
-// with * or an empty after.
+// with * or an empty after. For members a reader does not define: a run configuration
+// whose API credential's auth, a run.exited and an adapter's answer whose
+// must_understand lists a member that the schema does not define.
 // A fixture whose name contains -beyond-schema- breaks a rule only the gateway checks,
 // or for a descriptor the session, and passes its schema. The longest schema name the
 // file name starts with is the schema, so run-configuration-variable-value-not-string
@@ -491,7 +496,8 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 		"run-key.schema.json", "run-registration-answer.schema.json",
 		"run-attach.schema.json", "run-attach-answer.schema.json", "run-outcome.schema.json",
 		"run-outcome-answer.schema.json", "batch-answer.schema.json",
-		"secrets-request.schema.json", "secrets-answer.schema.json", "sealed-plaintext.schema.json")
+		"secrets-request.schema.json", "secrets-answer.schema.json", "sealed-plaintext.schema.json",
+		"credential.schema.json")
 	for _, f := range files(t, "fixtures/invalid") {
 		kind := namedSchema(s, f)
 		schema, ok := s[kind+".schema.json"]

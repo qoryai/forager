@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
@@ -1234,9 +1233,12 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 		document, _ := contracts.Document("credential.schema.json")
 		return nil, fmt.Errorf("Fix the output of the adapter %s to match credential.schema.json: %s", path, schemaFailures(err, document))
 	}
+	// encoding/json/v2 matches member names by exact case: a member such as TOKEN is
+	// one the schema does not define, and sets no field. Its error can quote a member
+	// name the adapter chose, which can be the token, so none of it is printed.
 	var a answer
-	if err := json.Unmarshal(stdout.Bytes(), &a); err != nil {
-		return nil, accesskey.ShownError(err)
+	if jsonv2.Unmarshal(stdout.Bytes(), &a) != nil {
+		return nil, fmt.Errorf("Fix the output of the adapter %s to be one JSON object in UTF-8 with each member name once", path)
 	}
 	if d.Format != "" && len(a.Placeholders) > 0 {
 		return nil, fmt.Errorf("remove placeholders from the output of the adapter %s: the model key %s takes none, since the session gives the runtime the key's variable", path, accesskey.ShownName(d.Name, false))

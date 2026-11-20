@@ -32,6 +32,7 @@ package descriptor
 
 import (
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"maps"
 	"math"
@@ -412,7 +413,9 @@ func Parse(name string, b []byte) (*Descriptor, error) {
 	case ".yaml", ".yml":
 		err = yaml.Unmarshal(b, &d)
 	default:
-		err = json.Unmarshal(b, &d)
+		// encoding/json/v2 matches member names by exact case, as YAML does: a member
+		// such as SCHEME in an auth is one the schema does not define, and sets no field.
+		err = jsonv2.Unmarshal(b, &d)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", shown, accesskey.ShownError(err))

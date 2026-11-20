@@ -85,7 +85,9 @@ A credential's secret comes from one of three sources:
   fails `credential.schema.json`, the gateway reports `Fix the output of the adapter
   <PATH> to match credential.schema.json: /apply/0/header fails pattern; ...`: each
   failing location and keyword, at most 5 and then how many more, with no value, and no
-  member name other than the schema's. A tool's lines on standard error have `***` in place of
+  member name other than the schema's. The gateway ignores a member of the output that
+  the schema does not define. If the output's `must_understand` lists that member, such
+  as `["/apply/0/methods"]`, the output fails the schema at `/must_understand/0`. A tool's lines on standard error have `***` in place of
   the shapes too.
 - The route to the caller, `http://host.qory.invalid` in `QORY_HOST_URL`, sets no
   credential. The session's forwarder takes every header off a request but

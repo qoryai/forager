@@ -74,7 +74,8 @@ func TestTheLinkRefusesARunExitedBeyondItsSchema(t *testing.T) {
 // reserved reason out of its place, a reason that is no code, and a starter's reason
 // with another state are refused, and the run ends failed, batch_refused, its reason in
 // the report. environment_image_missing is none of the image codes, which the gateway
-// takes only in a run with no join.
+// takes only in a run with no join. A member that the schema does not define is
+// ignored, and one that must_understand lists is refused.
 func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 	h := start(t, gateway.Config{})
 	for _, c := range []struct {
@@ -167,6 +168,14 @@ func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 		{map[string]any{"state": "failed", "exit_code": 0, "reason": "push_refused"}, false, ""},
 		{map[string]any{"state": "failed", "reason": "push_refused"}, false, ""},
 		{map[string]any{"state": "failed", "reason": "push_refused"}, true, ""},
+		// A member the schema does not define is ignored, unless must_understand lists
+		// it; a member that differs from a defined one only in case is such a member.
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "no_session", "summary": map[string]any{"lines": 3}}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "no_session", "must_understand": []string{"/reason", "/state"}}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "no_session", "summary": 3, "must_understand": []string{"/summary"}}, false, "one link-batch.schema.json refuses"},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "no_session", "must_understand": []string{"/must_understand"}}, false, "one link-batch.schema.json refuses"},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "no_session", "REASON": "timeout", "State": "cancelled"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "no_session", "REASON": "timeout"}, true, "a run.exited no_session of a run with a join"},
 	} {
 		a := h.open(server.LinkRunRequest{})
 		if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {

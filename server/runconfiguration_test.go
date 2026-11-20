@@ -86,6 +86,53 @@ func TestRunConfigurationRefusalsQuoteNoValue(t *testing.T) {
 	}
 }
 
+// TestAnAuthIgnoresAMemberItDoesNotDefine pins auth.schema.json's rule in a run
+// configuration: an API credential whose auth has a member that the schema does not
+// define reads as one without it, and its value is set as before; with that member in
+// the auth's must_understand, the run configuration is run_configuration_invalid, and
+// the error has the pointer's place, not the pointer. A member that differs from a
+// defined one only in case never sets it. An unknown scheme stays refused.
+func TestAnAuthIgnoresAMemberItDoesNotDefine(t *testing.T) {
+	doc := func(auth string) string {
+		return `{"version":1,"credentials":[{"name":"model","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":` + auth + `}]}`
+	}
+	want := server.Auth{Scheme: "header", Header: "x-api-key"}
+	for _, auth := range []string{
+		`{"scheme":"header","header":"x-api-key"}`,
+		`{"scheme":"header","header":"x-api-key","region":{"name":"eu"}}`,
+		`{"scheme":"header","header":"x-api-key","must_understand":["/header","/scheme"]}`,
+		`{"scheme":"header","header":"x-api-key","SCHEME":"basic","Username":"bot","Header":"authorization"}`,
+		`{"Header":"authorization","SCHEME":"basic","header":"x-api-key","scheme":"header"}`,
+	} {
+		v := newVerified(t)
+		v.runDoc = doc(auth)
+		rc, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)
+		if err != nil {
+			t.Errorf("%s: %v", auth, err)
+			continue
+		}
+		if got := rc.Credentials[0].Auth; got != want {
+			t.Errorf("%s: auth %+v, want %+v", auth, got, want)
+		}
+		if a := rc.Credentials[0].Applies(); len(a) != 1 || a[0].Scheme != "header" || a[0].Header != "x-api-key" || a[0].Username != "" || !slices.Equal(a[0].Hosts, []string{"api.model.example"}) {
+			t.Errorf("%s: applies %+v", auth, a)
+		}
+	}
+	for _, tc := range []struct{ auth, where string }{
+		{`{"scheme":"header","header":"x-api-key","region":"eu","must_understand":["/region-` + value + `"]}`, "/credentials/0/auth/must_understand/0 (pattern)"},
+		{`{"scheme":"header","header":"x-api-key","must_understand":["/must_understand"]}`, "/credentials/0/auth/must_understand/0 (pattern)"},
+		{`{"scheme":"digest"}`, "/credentials/0/auth/scheme (enum)"},
+	} {
+		v := newVerified(t)
+		v.runDoc = doc(tc.auth)
+		_, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)
+		var r *accesskey.Refusal
+		if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid || !strings.Contains(err.Error(), tc.where) || strings.Contains(err.Error(), value) {
+			t.Errorf("%s: %v, want run_configuration_invalid at %s", tc.auth, err, tc.where)
+		}
+	}
+}
+
 // TestARunConfigurationIsReadOnlyOnceItsAnswerVerifies pins that the run
 // configuration's body is read only after its answer's signature verifies under the
 // pin: an answer unsigned, signed under another key or bound to another request is
