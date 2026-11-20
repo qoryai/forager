@@ -405,8 +405,9 @@ func readAnswer(schemaName string, body []byte, out any) error {
 		}
 		return fmt.Errorf("%s refuses %s", schemaName, strings.Join(leaves(ve), ", "))
 	}
-	// encoding/json reads About's details as the raw JSON they are.
-	if err := json.Unmarshal(body, out); err != nil {
+	// encoding/json/v2 matches member names by exact case, so LABELS in an open root
+	// sets no Labels, and reads About's details as the raw JSON they are.
+	if err := jsonv2.Unmarshal(body, out); err != nil {
 		return errors.New("it does not decode")
 	}
 	return nil

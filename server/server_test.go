@@ -332,7 +332,8 @@ func (v *verified) client() *server.Client {
 // dev.qory.run.registered, and no run on a status that is not 200 or on a document
 // of a node's key without workspaces, of a gateway's key with workspaces, without the
 // run endpoint or whose run endpoint has a trailing slash, a query or a fragment; a
-// gateway's key's document without workspaces is read, with none.
+// gateway's key's document without workspaces is read, with none, and so is one with
+// WORKSPACES, a member that differs from workspaces in case and sets nothing.
 func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	v := newVerified(t)
 	c := v.client()
@@ -360,7 +361,8 @@ func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 		"without the run endpoint": {node, workspaces, "", false}, "with a trailing slash": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/runs/"}`, false},
 		"with a query": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/runs?x=1"}`, false}, "with a fragment": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/runs#x"}`, false},
 		"of a gateway's key without workspaces": {gateway, "", run, true}, "of a gateway's key with workspaces": {gateway, workspaces, run, false},
-		"with qak_ in run.url": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/qak_FAKE/runs"}`, false}, "with QRK_ in run.url": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/QRK_FAKE"}`, false},
+		"of a gateway's key with WORKSPACES": {gateway, strings.Replace(workspaces, "workspaces", "WORKSPACES", 1), run, true},
+		"with qak_ in run.url":               {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/qak_FAKE/runs"}`, false}, "with QRK_ in run.url": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/QRK_FAKE"}`, false},
 		"with qecn_ in run.url": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/qecn_FAKE"}`, false}, "with QeCi_ in run.url": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/QeCi_FAKE"}`, false},
 		"with qEcD_ in run.url": {node, workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/qEcD_FAKE"}`, false}} {
 		v.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

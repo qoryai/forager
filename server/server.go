@@ -36,6 +36,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -238,7 +239,13 @@ func decode(name, schemaName string, b []byte, out any) error {
 	if err != nil {
 		return err
 	}
-	return accesskey.ShownError(json.Unmarshal(j, out))
+	// encoding/json/v2 matches member names by exact case, so a variant in an open
+	// object sets no field. Its error can quote a member name of the document, so none
+	// of it is printed.
+	if jsonv2.Unmarshal(j, out) != nil {
+		return fmt.Errorf("it does not decode as %s defines it", schemaName)
+	}
+	return nil
 }
 
 // Configuration is the configuration document the server answers discovery with:
