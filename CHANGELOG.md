@@ -1138,10 +1138,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 - An `auth` (`auth.schema.json`), an adapter's answer (`credential.schema.json`) with
   its `apply` items, and the data of a `dev.qory.run.exited` accept a member that their
-  schema does not define. Forager ignores the member and reads the rest. Each has an
+  schema does not define. The member is ignored and the rest is read. Each has an
   optional `must_understand`, a list of JSON Pointers counted from the object, such as
-  `["/account_header"]`. Forager refuses an object whose list contains a pointer to a
-  member that it does not define, and the document that contains the object. List a
+  `["/account_header"]`. An object whose list contains a pointer to a member that
+  Forager does not define is refused, and so is the document that contains it. List a
   new `auth` member that changes how or where the key is sent in `must_understand`. An
   unknown `scheme` or `format` is still refused, and the other objects keep their rule. A
   reader of `runtimes.json` follows the same rule for each runtime. README §Versions,

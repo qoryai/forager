@@ -34,7 +34,7 @@ and nodes, access keys, instances and enrolment (§The server).
 
 **Members a reader does not define.** Four objects that other programs write or read
 accept a member that their schema does not define, so a writer at a later revision can
-add one. A reader ignores such a member and reads the rest:
+add one. Such a member is ignored, and the rest of the object is read:
 
 - an `auth`, `auth.schema.json`, wherever a document has one: an API credential of a
   run configuration, a credential of the run answer, and a secret or a model key of a
@@ -44,9 +44,9 @@ add one. A reader ignores such a member and reads the rest:
 - each runtime of `runtimes.json`, which has no schema.
 
 The other objects of this contract keep the rule that their section states.
-`format`, `api-format.schema.json`, stays a fixed list, and the set of
-schemes stays closed: an unknown `scheme` or `format` is a bad value of a member that
-Forager defines, and is refused.
+`format`, `api-format.schema.json`, stays a fixed list, and the set of schemes stays
+closed: an unknown `scheme` or `format` is a bad value of a member that Forager
+defines, and is refused.
 
 - `must_understand`, optional, lists the members that the reader must understand. Each
   is a JSON Pointer ([RFC 6901](https://www.rfc-editor.org/rfc/rfc6901)) counted from
@@ -54,32 +54,34 @@ Forager defines, and is refused.
   an adapter's answer, `/reason` in a `dev.qory.run.exited`'s data. An item of a list is
   its index, digits with no leading zero. Write a pointer once, at most 32 of them, each
   of at most 256 characters, with no line feed and `~` only as `~0` or `~1`.
-- A reader refuses an object whose `must_understand` lists a pointer to a member that
-  it does not define, and the document that contains that object. The schema of each of
-  the four objects accepts a pointer to a member that it defines, and refuses any other.
+- An object whose `must_understand` lists a pointer to a member that the reader does not
+  define is refused, and so is the document that contains the object. The schema of
+  each of the four objects accepts a pointer to a member that it defines, and no other.
   `/must_understand` is not a member.
-- A reader refuses a bad value of a member that it defines.
-- A reader matches member names by exact case. `SCHEME` is a member the schema does not
-  define, and never sets `scheme`. Forager's readers of these objects decode with
-  `encoding/json/v2`, which matches names exactly.
+- A bad value of a member that the reader defines is refused.
+- Member names match by exact case. `SCHEME` is a member the schema does not define,
+  and never sets `scheme`. Forager decodes an adapter's answer, a run configuration, a
+  run answer and a runtime descriptor in JSON with `encoding/json/v2`, a descriptor in
+  YAML with `yaml.v3`, and the data of a `dev.qory.run.exited` into a map: each matches
+  names exactly.
 - A new `auth` member that changes how or where the key is sent must be listed in the
-  `auth`'s `must_understand`. A reader that does not define the member then refuses the
-  document and sends no key. Without the list, that reader sends the key as before and
-  ignores the member.
+  `auth`'s `must_understand`. With the list, the document is refused by a reader that
+  does not define the member, and no key is sent. Without the list, that reader ignores
+  the member and sends the key as before.
 
-Where Forager is the reader, the refusal is the one for a document that fails its
-schema: an API credential's `auth` makes the run configuration
-`run_configuration_invalid`, an adapter's answer is refused as an output that does not
-match `credential.schema.json`, and a session's `dev.qory.run.exited` makes the gateway
-refuse the batch, `batch_refused`. Forager has no reader of `runtimes.json`: a reader of
-it, such as `qory` or a server, follows this section for each runtime, with the
-runtime's object as the object that has the list.
+Where Forager is the reader, the document is refused as one that fails its schema: an
+API credential's `auth` makes the run configuration `run_configuration_invalid`, an
+adapter's answer is refused as an output that does not match `credential.schema.json`,
+and the session's batch that contains the `dev.qory.run.exited` is refused on the
+gateway's link, `batch_refused`. Forager has no reader of `runtimes.json`: a reader of it, such as
+`qory` or a server, follows this section for each runtime, with the runtime's object
+as the object that has the list.
 
 Example: an adapter prints `{"version": 1, "token": "…", "apply": [{"hosts":
 ["git.example.com"], "scheme": "bearer", "methods": ["GET"]}]}`. A gateway that does
 not define `methods` sets the token on every request to the host. With
-`"must_understand": ["/apply/0/methods"]` beside it, that gateway refuses the answer
-and sets nothing.
+`"must_understand": ["/apply/0/methods"]` beside it, the answer is refused and the
+token is set nowhere.
 
 `v1` is the first generation of this namespace, not a stability promise. The Forager
 module is at `v0`, which under Go's rules promises no compatibility: while the module is

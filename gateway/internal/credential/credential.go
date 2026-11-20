@@ -1083,9 +1083,9 @@ func (h *held) masked(s string) string {
 // which can be the token, so none of it is printed. The keyword is the first of the
 // error kind's KeywordPath, a keyword of the schema such as pattern, never a value.
 // A location has only array indexes and the member names the schema defines: it stops
-// before any other name, which the answer chose and which can be a token. A
-// failure of additionalProperties is at the object, so the name it refused is never
-// in the location.
+// before any other name, which the answer chose and which can be a token. A pointer
+// of must_understand that fails is at its index, such as /must_understand/0, so the
+// pointer is never in the location.
 func schemaFailures(err error, schema any) string {
 	known := map[string]bool{}
 	var names func(any)
