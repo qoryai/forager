@@ -220,8 +220,8 @@ func receivePacks(records []recorded) []string {
 	return out
 }
 
-// TestASessionsRequestsGetOnlyTheWorkCredential pins the split, in a write run
-// and in a write-no-push run, on the local link: what the sessions, the setup step,
+// TestASessionsRequestsGetOnlyTheWorkCredential pins the split between the work and
+// push credentials, in a write run and in a write-no-push run, on the local link: what the sessions, the setup step,
 // After, the image step and the host proxy send through the run's proxy, the run
 // answer's proxy_secret, gets the read work credential alone, never push-1's value. A
 // push of the work item's branch through it gets the branch guard's 403, wall:push-ref,

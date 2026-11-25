@@ -58,7 +58,7 @@ func accountValues(values map[string]string) func(string, int) (answer, error) {
 // key with paths opens beside a host credential with other paths of its host. Each use has
 // its paths, the subscription its account header and the account id of its value, and both
 // subscriptions are the key group. With the host credential's paths gone, or overlapping
-// the key's, or the key's paths gone, the run is refused as before.
+// the key's, or the key's paths gone, the run does not open.
 func TestAPathLimitedSubscriptionSitsBesideAHostCredential(t *testing.T) {
 	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, accountDoc, digest('1')),
 		Secrets: (&controlPlane{answer: accountValues(nil)}).fetch})

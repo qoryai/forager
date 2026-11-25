@@ -11,11 +11,12 @@ release may change what an existing document does, and says so under Upgrading.
 #### Upgrading
 
 - Write the member names of Qory Apiary's attach, registration, model-keys and
-  run-outcome answers, of the configuration, of a security policy and of a link run
-  request in the case their schemas have them. Forager reads each by exact case: in a
-  configuration, a member such as `WORKSPACES` sets nothing. Write a configuration's
-  `version` as a whole number: `1.0` or `1e0` fails with `Write /version as a whole
-  number, such as 1, with no fraction or exponent`.
+  run-outcome answers, and of the configuration, in the case their schemas have them.
+  Forager reads them by exact case: at the root of one, a member in another case, such
+  as `WORKSPACES` in a configuration, sets nothing. In an object whose schema allows no
+  other member, such as a configuration's `events`, it fails the document, as before.
+  The reference receiver reads the events of a batch by exact case too: `SUBJECT` does
+  not set `subject`, and an event without `subject` is `400` `invalid_request`.
 - Rename `model_credential`: in a run configuration and in the run answer it is
   `default_model_provider_credential_name`, and in a join request and a join answer it
   is `model_provider_credential_name`. The Go fields follow:
@@ -1154,6 +1155,9 @@ release may change what an existing document does, and says so under Upgrading.
   the secret is set. An unknown `scheme` or `format` is still refused, and the other
   objects keep their rule. A reader of `runtimes.json` follows the same rule for each
   runtime. README §Versions, Members a reader does not define, has the rule.
+- A configuration whose `version` is `1.0` or `1e0` fails with `Write /version as a whole
+  number, such as 1, with no fraction or exponent`. Before, it failed with the decoder's
+  error.
 - A run with a run key writes neutral values in its events: `dev.qory.run.started`
   has no `host`, `dir` of `dev.qory.session.started` is `/workspace`, `command` and
   `args` have `<run>`, `<home>` and `<inputs>` at each occurrence of the run
