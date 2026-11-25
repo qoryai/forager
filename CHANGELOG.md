@@ -90,8 +90,11 @@ release may change what an existing document does, and says so under Upgrading.
   `mount_target_conflict`, and fails a run with `run_configuration_invalid` when the run
   configuration's API credential has `paths`, `account_header` or `account_claim`.
 - A gateway built before this change returns `405` to the link's host calls, `POST
-  <run.url>/<run_id>/next-session` and `POST <run.url>/<run_id>/pushed-commits`: run
-  `Run.NextSession` and `Run.PushedCommits` against a gateway of this change.
+  <run.url>/<run_id>/next-session`, `POST <run.url>/<run_id>/pushed-commits` and `POST
+  <run.url>/<run_id>/findings`, and `400` to `GET <run.url>/<run_id>/findings`,
+  `invalid_request` on the local link and `run_key_invalid` on the one address: run
+  `Run.NextSession`, `Run.PushedCommits`, `Run.PostFindings` and `Run.Findings` against a
+  gateway of this change.
 - A gateway built before this change fails a run whose run configuration has a
   credential with `purpose: push` with `run_configuration_invalid`, and reads a
   `QORY-PUSH` connection on its one address as a request of the link's HTTP. A schema
@@ -374,13 +377,24 @@ release may change what an existing document does, and says so under Upgrading.
 - `retry_after` in a link refusal, and `RetryAfter` in `accesskey.Refusal`: when Qory
   Apiary's refusal of a host call has `Retry-After` in whole seconds, such as a `429`
   `rate_limited` or a `503` `unavailable` with `Retry-After: 7`, the gateway passes
-  that wait on, and `Run.NextSession` and `Run.PushedCommits` return a refusal whose
-  `RetryAfter` is 7 seconds. A run that did not open has the same from the last answer
-  of Qory Apiary as the run opens: to its registration or attach, the reload after the
-  attach, or its secrets request. `server.Link.OpenRun`, and so `session.Open`, return
-  it. The gateway's tries as a run opens still ignore `Retry-After`. The gateway
-  passes a wait over 31 days, `server.MaxRetryAfter`, as 31 days, and passes none for
-  `Retry-After: 0`, an HTTP date or any other form; `server.ReadRetryAfter` reads it.
+  that wait on, and `Run.NextSession`, `Run.PushedCommits`, `Run.Findings` and
+  `Run.PostFindings` return a refusal whose `RetryAfter` is 7 seconds. A run that did not
+  open has the same from the last answer of Qory Apiary as the run opens: to its
+  registration or attach, the reload after the attach, or its secrets request.
+  `server.Link.OpenRun`, and so `session.Open`, return it. The gateway's tries as a run
+  opens still ignore `Retry-After`. The gateway passes a wait over 31 days,
+  `server.MaxRetryAfter`, as 31 days, and passes none for `Retry-After: 0`, an HTTP date
+  or any other form; `server.ReadRetryAfter` reads it.
+- The findings host calls of the gateway's link, `GET <run.url>/<run_id>/findings` and
+  `POST <run.url>/<run_id>/findings`, and `Run.Findings` and `Run.PostFindings`, which
+  send them: a run's host work reads and writes the findings of its work item, forwarded
+  unread to Qory Apiary's run endpoint, signed with the gateway's access key. A POST's
+  body is at most 8 MiB and its answer 64 KiB, and a GET's answer 16 MiB. Past 1 MiB, a
+  body and an answer count in the gateway's 512 MiB: over it, the gateway's refusal is
+  `429` `rate_limited`. Read the findings before you send a POST findings again: Qory
+  Apiary has no key for a repeated one, so the same raises make new findings. No container
+  reaches either call: they go over the link alone, and the run API's route returns `404`
+  for both (§The gateway's link, The host calls).
 - Two host calls of the gateway's link, `POST <run.url>/<run_id>/next-session` and
   `POST <run.url>/<run_id>/pushed-commits`, and `Run.NextSession` and
   `Run.PushedCommits`, which send them: the gateway forwards the body unread to Qory
@@ -1532,6 +1546,12 @@ release may change what an existing document does, and says so under Upgrading.
   another, the run is refused at its start, `run_configuration_invalid`. A renewed value
   without the string is a renewal refused for its form, and the run keeps the value it
   had.
+- The findings host calls: the gateway matches a host call's method and its path, and
+  sends a `GET` with no body and no `Content-Type`. On the one address, the signature of
+  an answer to a POST findings covers a body up to 8 MiB and one byte, and to any other
+  request up to 2 MiB and one byte, as before. A POST findings body counts in the
+  gateway's 512 MiB as it arrives, and a GET findings answer from its read to the end of
+  its write, which has 60 seconds. `server.Client.HostCall` takes the method.
 - The link's host calls, `POST <run.url>/<run_id>/next-session` and `POST
   <run.url>/<run_id>/pushed-commits`: the gateway reads the body, at most 4 KiB and
   64 KiB, before it looks up or reopens the run, and sends it unread to Qory Apiary with
@@ -2690,6 +2710,8 @@ release may change what an existing document does, and says so under Upgrading.
   check's context ended, gets the `503` `push_check_unavailable`. The check gets the
   verdicts of a program that sends each after the reply to the one before in the order
   sent.
+- `Run.Findings` and `Run.PostFindings`: the GET findings and POST findings host calls,
+  with the errors of `Run.NextSession`.
 - `session.ErrRunClosed`: the error of `Run.NextSession` and `Run.PushedCommits` wraps
   it once `Close` began or the gateway closed the run, with nothing sent, so a caller
   tests the case with `errors.Is`. A `410` from the gateway, for a run that ended there

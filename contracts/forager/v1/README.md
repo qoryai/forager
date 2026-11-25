@@ -4429,7 +4429,7 @@ what a run request and its answer carry.
 | The session knows the gateway | the socket's peer is the session's user, by its uid | the certificate chain, for the host name of `gateway_url`, against the system's roots or the authorities of the run's CA file, and the pin of the certificate's public key when one is set (below); and on every connection the binding, the gateway's proof that it holds a key the run key names, and every answer signed under one (below) |
 | The gateway knows the session | the socket's peer is the gateway's user, by its uid; a batch names its run in `X-Qory-Run-Id` | the run key, sent only once the connection is bound: `Authorization: Bearer` on every request, and the relay's preamble of every proxy connection |
 | The run's labels | the session's | the run's registration's; the run request carries none |
-| Paths | `/.well-known/qory-configuration`, `/v1/run-configuration`, the join's `/v1/run-configuration/<run_id>/sessions`, the transcript request's `/v1/run-configuration/<run_id>/transcript`, the host calls' `/v1/run-configuration/<run_id>/next-session` and `/v1/run-configuration/<run_id>/pushed-commits`, and `/v1/events` | under `/qory-link/`: `/qory-link/configuration`, `/qory-link/run-configuration`, the join's `/qory-link/run-configuration/<run_id>/sessions`, the transcript request's `/qory-link/run-configuration/<run_id>/transcript`, the host calls' `/qory-link/run-configuration/<run_id>/next-session` and `/qory-link/run-configuration/<run_id>/pushed-commits`, and `/qory-link/events` |
+| Paths | `/.well-known/qory-configuration`, `/v1/run-configuration`, the join's `/v1/run-configuration/<run_id>/sessions`, the transcript request's `/v1/run-configuration/<run_id>/transcript`, the host calls' `/v1/run-configuration/<run_id>/next-session`, `/v1/run-configuration/<run_id>/pushed-commits` and `/v1/run-configuration/<run_id>/findings`, and `/v1/events` | under `/qory-link/`: `/qory-link/configuration`, `/qory-link/run-configuration`, the join's `/qory-link/run-configuration/<run_id>/sessions`, the transcript request's `/qory-link/run-configuration/<run_id>/transcript`, the host calls' `/qory-link/run-configuration/<run_id>/next-session`, `/qory-link/run-configuration/<run_id>/pushed-commits` and `/qory-link/run-configuration/<run_id>/findings`, and `/qory-link/events` |
 | Answers | unsigned | signed under the gateway's access key, a key the run key names |
 | The run answer's `labels`, `proxy_secret` and `stack_proxy_secret` | present | absent |
 | The run answer's `push_proxy_secret` | present for a run with a push credential | absent |
@@ -4454,10 +4454,10 @@ preamble and no secret of the link. The directory, mode `0700`, and the socket, 
 The socket's peer uid is the whole of the local link's trust. A process of the same
 user that reaches the socket is served as a session is: knowing a local run's id, it can
 post a batch into that run, fetch the run's configuration again, send the run's host
-calls, next-session and pushed-commits, to Qory Apiary (The host calls, below), or end
-the run: with a batch that carries its `dev.qory.run.exited`, or with any batch of that
-run the link refuses with `400` `invalid_request` once its body has arrived whole, which
-ends the run `failed` with `batch_refused` (Events, below).
+calls, next-session, pushed-commits, GET findings and POST findings, to Qory Apiary (The
+host calls, below), or end the run: with a batch that carries its `dev.qory.run.exited`,
+or with any batch of that run the link refuses with `400` `invalid_request` once its body
+has arrived whole, which ends the run `failed` with `batch_refused` (Events, below).
 
 **In one process.** When the session and the gateway share one process, as `qory` runs
 them on one machine, the session reaches the gateway's link in memory and never dials
@@ -4528,7 +4528,10 @@ the lower-case hex SHA-256 of
 ```
 
 the lines joined by `\n`, which binds the answer to its connection and its request,
-since a request of the link carries no signature. An answer with no signature, with two,
+since a request of the link carries no signature. Of a body longer than 8 MiB and one
+byte for a POST findings (The host calls, below), or 2 MiB and one byte for any other
+request, the hash has the first bytes up to that length alone, so the answer fails the
+session's check. An answer with no signature, with two,
 or with one under a key the run key does not name is no answer: nothing of it is
 applied, and the error is "the gateway at <gateway_url> answered under a key the run key
 does not name".
@@ -5114,15 +5117,18 @@ comes and the connection closes. The other answers:
 | `502` | `transcript_unavailable` | `gateway` | any other answer of Qory Apiary, one that fails verification, or none; the gateway writes one line to its log |
 | `410` | the end's code | `gateway` | the run ended at the gateway |
 
-**The host calls.** Two requests of the link reach Qory Apiary for the run's host work,
+**The host calls.** Four requests of the link reach Qory Apiary for the run's host work,
 and no container reaches them: the link's socket and the run key never enter one, and
-the run API's route serves neither path (§The run API). `qory` sends them from the
-host, as `Run.NextSession` and `Run.PushedCommits` in Go:
+the run API's route serves none of their paths (§The run API). `qory` sends them from the
+host, as `Run.NextSession`, `Run.PushedCommits`, `Run.Findings` and `Run.PostFindings` in
+Go:
 
 | Request | Qory Apiary's | Largest body | Largest `2xx` body |
 |---|---|---|---|
 | `POST <run.url>/<run_id>/next-session` | `POST <run.url>/<run_id>/next-session` | 4 KiB | a `200` of 1 MiB, the run documents' limit, and any other `2xx` of 64 KiB |
 | `POST <run.url>/<run_id>/pushed-commits` | `POST <run.url>/<run_id>/pushed-commits` | 64 KiB | 64 KiB |
+| `GET <run.url>/<run_id>/findings`, GET findings | `GET <run.url>/<run_id>/findings` | none | a `200` of 16 MiB, and any other `2xx` of 64 KiB |
+| `POST <run.url>/<run_id>/findings`, POST findings | `POST <run.url>/<run_id>/findings` | 8 MiB | 64 KiB |
 
 Qory Apiary returns a next-session answer with `200`. The gateway reads at most one
 byte over the limit of the answer's status, so a `201` of more than 64 KiB is a `502`,
@@ -5133,53 +5139,74 @@ it, keeps the host calls to the process that holds the link in memory. With a so
 any process of the session's user that reaches the socket can send them for a local
 run whose id it knows (The local link, above).
 
-Each is a `POST` to the path of `run.url`, a slash, the `run_id` and the call's name,
-with `Content-Type: application/json`; behind a separate gateway with the run key, as
-on the join. The bodies are qoryai/integrations' documents, such as
-`next-session-request.schema.json` and `next-session-answer.schema.json`: Forager reads
-neither, and checks only the media type and the size. The gateway sends the body as it
-came to Qory Apiary's run endpoint, `run.url` of the discovery, signed with its access
-key as every request of the run API (§The run API, What Qory Apiary gets), once, within
-60 seconds, and sends nothing again after a failure. A `2xx` of Qory Apiary's that
-verifies under the pin passes with its status and its body, with `Content-Type:
-application/json` when it has one: a next-session answer's `200`, a pushed-commits
-answer's `204` with no body. The session waits 4 minutes at most, and sends nothing
-once the run's close began or for a run with no control plane. The other answers:
+Each goes to the path of `run.url`, a slash, the `run_id` and the last part of the call's
+path; behind a separate gateway with the run key, as on the join. A `POST` has
+`Content-Type: application/json`. A GET findings has no body, and the gateway reads none:
+it ignores a body and a `Content-Type` a caller sends with it. The method is part of the
+call: the gateway never sends a `GET` on as a `POST`, nor a `POST` as a `GET`. The bodies
+are qoryai/integrations' documents, such as `next-session-request.schema.json` and
+`next-session-answer.schema.json`, and for findings `findings.schema.json` and
+`findings-post.schema.json`: Forager reads none of them, and checks only the media type
+and the size. The gateway sends the body as it came to Qory Apiary's run endpoint,
+`run.url` of the discovery, signed with its access key as every request of the run API
+(§The run API, What Qory Apiary gets), once, within 60 seconds, and sends nothing again
+after a failure. A `2xx` of Qory Apiary's that verifies under the pin passes with its
+status and its body, with `Content-Type: application/json` when it has one: a
+next-session answer's `200`, a pushed-commits answer's `204` with no body, a findings
+answer's `200`. The session waits 4 minutes at most, and sends nothing once the run's
+close began or for a run with no control plane. The other answers:
 
 | Status | `error` | `from` | When |
 |---|---|---|---|
 | Qory Apiary's | Qory Apiary's | `apiary` | a signed answer of Qory Apiary's with a code and a status from `400` to `599` but `401` and `410`, such as `409` `run_ended` or `503` `unavailable`, with its `names` and its `message`; a name that contains a secret is a phrase in its place. With a `Retry-After` of whole seconds, such as on a `429` `rate_limited`, it has `retry_after`, those seconds (Waiting before a request again, below) |
-| `400` | `invalid_request` | `gateway` | a `Content-Type` other than `application/json`; on the local link, a run id of no run there; nothing is sent |
+| `400` | `invalid_request` | `gateway` | a `POST` with a `Content-Type` other than `application/json`, or whose body the gateway did not read whole; on the local link, a run id of no run there; nothing is sent |
 | `400` | `run_key_invalid` | `gateway` | behind a separate gateway, a run id that is not the run key's; nothing is sent |
 | `404` | `not_found` | `gateway` | the run has no control plane; nothing is sent |
 | `413` | `payload_too_large` | `gateway` | the body is over its limit; nothing is sent |
+| `429` | `rate_limited` | `gateway` | a POST findings body over 1 MiB, nothing of which is sent, or a GET findings answer over 1 MiB, which the gateway drops, while the gateway's 512 MiB are full (below); no `retry_after` |
 | `410` | the end's code | `gateway` | the run ended at the gateway: nothing is sent, or the gateway cancels the request it sent |
 | `502` | `control_plane_unavailable` | `gateway` | no answer of Qory Apiary's, one that fails verification, an unsigned `401` among them, a signed `410`, an answer with no code that is no `2xx`, a `2xx` over its limit, or a `2xx` body without `Content-Type: application/json`; the gateway writes one line to its log |
-| `503` | none | | no body: the gateway closes and suspends the run, before the send or while Qory Apiary has the request, or behind a separate gateway the run's reopen goes on; send the request again |
+| `503` | none | | no body: the gateway closes and suspends the run, before the send or while Qory Apiary has the request, or behind a separate gateway the run's reopen goes on; send the request again, but a POST findings as below |
+
+**What a findings call takes.** The gateway keeps at most 512 MiB of bodies and answers
+(§The run API, The limits), and a POST findings body and a GET findings answer count there
+past the first 1 MiB of each. A body counts as its bytes arrive, before the gateway signs
+it, until the request ends. An answer counts once it is read and verified, until its write
+to the caller ends, within 60 seconds. Behind a separate gateway the gateway also keeps a
+copy of the answer, to sign it, that does not count. The other host calls have no body or
+answer over 1 MiB, so they take none of the 512 MiB.
+
+**A POST findings again.** Qory Apiary has no key for a repeated POST findings: a second
+request with the same raises makes new findings. Nothing was sent for a session's error
+before the send, in a closed run, which wraps `session.ErrRunClosed` in Go, or in a run
+with no control plane, and for the gateway's `400`, `404`, `413` and `429`. After any
+other error, Qory Apiary may have stored the findings: read them with GET findings before
+you send the POST findings again.
 
 **Waiting before a request again.** When Qory Apiary's coded refusal of a host call
-has `Retry-After: 7`, the link refusal has `"retry_after": 7`, and `Run.NextSession`
-and `Run.PushedCommits` return an `*accesskey.Refusal` whose `RetryAfter` is 7
-seconds. A run that did not open has the same from the last answer of Qory Apiary as
-the run opens: to its registration or attach, the reload after the attach, or its
-secrets request. When that answer is a coded refusal with `Retry-After: 7`, the link
-refusal has `"retry_after": 7`, and the refusal that `server.Link.OpenRun` returns has
-`RetryAfter` 7 seconds; the gateway's tries before it ignore `Retry-After` (Tries as a
-run opens, above). Wait that long before you send the request again. On the local
-link, send the run request with a new `run_id`: the refused one is `run_id_used`.
-Behind a separate gateway, a refused attach leaves the run key free to send again. The
-gateway reads only a `Retry-After` of digits alone, sent once, and passes a wait over
-31 days as 31 days. For `Retry-After: 0`, an HTTP date, any other form and no
-`Retry-After`, the link refusal has no `retry_after`, and `RetryAfter` is 0. A `5xx`
-with the code `internal` is a `*server.StatusError`, with no wait. `Retry-After` is
+has `Retry-After: 7`, the link refusal has `"retry_after": 7`, and `Run.NextSession`,
+`Run.PushedCommits`, `Run.Findings` and `Run.PostFindings` return an `*accesskey.Refusal`
+whose `RetryAfter` is 7 seconds. A run that did not open has the same from the last
+answer of Qory Apiary as the run opens: to its registration or attach, the reload after
+the attach, or its secrets request. When that answer is a coded refusal with
+`Retry-After: 7`, the link refusal has `"retry_after": 7`, and the refusal that
+`server.Link.OpenRun` returns has `RetryAfter` 7 seconds; the gateway's tries before it
+ignore `Retry-After` (Tries as a run opens, above). Wait that long before you send the
+request again. On the local link, send the run request with a new `run_id`: the refused
+one is `run_id_used`. Behind a separate gateway, a refused attach leaves the run key free
+to send again. The gateway reads only a `Retry-After` of digits alone, sent once, and
+passes a wait over 31 days as 31 days. For `Retry-After: 0`, an HTTP date, any other form
+and no `Retry-After`, the link refusal has no `retry_after`, and `RetryAfter` is 0. A
+`5xx` with the code `internal` is a `*server.StatusError`, with no wait. `Retry-After` is
 outside the signature of Qory Apiary's answer (§Signed answers), as on the run API's
 route.
 
 A `410` on the link ends the session's run, and only the gateway ends a run there, so
-Qory Apiary's `410` is a `502`. Qory Apiary returns the same result for a request it
-already took: a second next-session request for the same session gets the same answer,
-and a second pushed-commits request adds no commit the run already has, so a caller may
-send either again after a `5xx` or a transport failure.
+Qory Apiary's `410` is a `502`. Qory Apiary returns the same result for a next-session or
+pushed-commits request it already took: a second next-session request for the same
+session gets the same answer, and a second pushed-commits request adds no commit the run
+already has, so a caller may send either again after a `5xx` or a transport failure. This
+is not so for a POST findings (A POST findings again, above).
 
 **Joining a session.** The run answer opens the run; each session then joins it with a
 `POST` to `<run.url>/<run_id>/sessions`, the path of `run.url`, a slash, the `run_id`
@@ -5827,17 +5854,17 @@ URL, and no other:
 
 The gateway decodes each segment of the path and escapes it again. It sends nothing and
 signs nothing for a request outside the five, `GET /resume/transcript` among them
-(The transcript of a paused run, below), and `POST /next-session` and `POST
-/pushed-commits`, which the host sends over the gateway's link (§The gateway's link,
-The host calls): another path of the run, such as `attach`,
-`outcome`, `reload` or `diagnostics`, the run's path with nothing after it, another
-run's id, another method, an HTTP/1.0 request that reaches the proxy, a target over
-4 KiB as sent, a path after the run's id over 1 KiB once escaped, a query, even an empty
-one, a fragment, a port other than 80, an empty segment,
-`.` or `..`, or a segment that decodes to a slash, a backslash, a control character or
-bytes that are not UTF-8. The forwarder of a run with no wall sends every plain request
-as HTTP/1.1, and so does the forwarder of a walled run with a check before the push, so
-only a program behind a wall without such a check reaches the proxy with HTTP/1.0.
+(The transcript of a paused run, below), and `POST /next-session`, `POST
+/pushed-commits`, `GET /findings` and `POST /findings`, which the host sends over the
+gateway's link (§The gateway's link, The host calls): another path of the run, such as
+`attach`, `outcome`, `reload` or `diagnostics`, the run's path with nothing after it,
+another run's id, another method, an HTTP/1.0 request that reaches the proxy, a target
+over 4 KiB as sent, a path after the run's id over 1 KiB once escaped, a query, even an
+empty one, a fragment, a port other than 80, an empty segment, `.` or `..`, or a segment
+that decodes to a slash, a backslash, a control character or bytes that are not UTF-8.
+The forwarder of a run with no wall sends every plain request as HTTP/1.1, and so does
+the forwarder of a walled run with a check before the push, so only a program behind a
+wall without such a check reaches the proxy with HTTP/1.0.
 
 **What Qory Apiary gets.** The gateway builds a request from the parsed path and signs it
 as every request of the server (§The server), to `<run.url>/<run_id>` and the path. No
@@ -5855,7 +5882,7 @@ with the fix.
 
 | Status | `error` | When |
 |---|---|---|
-| `404` | `not_found` | the request is outside the five, `GET /resume/transcript` among them, which the session reads over the gateway's link (The transcript of a paused run, below), and `POST /next-session` and `POST /pushed-commits`, the link's host calls |
+| `404` | `not_found` | the request is outside the five, `GET /resume/transcript` among them, which the session reads over the gateway's link (The transcript of a paused run, below), and `POST /next-session`, `POST /pushed-commits`, `GET /findings` and `POST /findings`, the link's host calls |
 | `413` | `payload_too_large` | a POST's body is over its limit; nothing is sent |
 | `429` | `rate_limited` | a limit below, or a body or answer over 1 MiB while the gateway's 512 MiB are full; with `Retry-After: 1` |
 | `502` | `answer_unverified` | the answer fails verification under the pin, an unsigned `401` among them; its body does not reach the caller |
@@ -5948,7 +5975,8 @@ sends 8 `POST /artifacts` with a body over 1 MiB at once, each from the end of i
 read to the end of the read of its answer. A smaller body takes none of the 8.
 
 Each gateway also keeps at most 512 MiB of `POST /artifacts` bodies and of answers other
-than files, counting the bytes of each past its first 1 MiB. A body counts as its bytes
+than files, and of the findings host calls (§The gateway's link, The host calls), counting
+the bytes of each past its first 1 MiB. A body counts as its bytes
 arrive, until the request ends, so a head with a `Content-Length` and no bytes costs
 nothing, and a body that stalls costs what it sent past 1 MiB, at most 31 MiB. A read that
 would pass 512 MiB ends: the caller gets the `429` on a closed connection, and nothing is
