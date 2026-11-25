@@ -389,13 +389,27 @@ release may change what an existing document does, and says so under Upgrading.
   `POST <run.url>/<run_id>/findings`, and `Run.Findings` and `Run.PostFindings`, which
   send them: a run's host work reads and writes the findings of its work item, forwarded
   unread to Qory Apiary's run endpoint, signed with the gateway's access key. A POST's
-  body is at most 8 MiB and its answer 64 KiB, and a GET's answer 16 MiB. Past 1 MiB, a
-  body and an answer count in the gateway's 512 MiB: over it, the gateway's refusal is
-  `429` `rate_limited`. A run has at most one of each in flight, and a second one gets the
-  same code. Read the findings before you send a POST findings again: Qory
-  Apiary has no key for a repeated one, so the same raises make new findings. No container
-  reaches either call: they go over the link alone, and the run API's route returns `404`
-  for both (§The gateway's link, The host calls).
+  body is at most 8 MiB and its answer 64 KiB, and a GET's answer 16 MiB. The gateway
+  matches a host call's method and its path, and sends a `GET` with no body and no
+  `Content-Type`. A GET findings with a body gets `400` `invalid_request`, and a POST
+  findings whose `Content-Length` is over 8 MiB gets `413` `payload_too_large` before the
+  gateway reads the body. Past 1 MiB, a body and an answer count in the gateway's 512 MiB:
+  a POST findings body from its arrival, within 60 seconds, to the end of the call to Qory
+  Apiary, and a GET findings answer from its read to the end of its write, which has 60
+  seconds. Over the 512 MiB, the gateway's refusal is `429` `rate_limited`. A run has at
+  most one of each in flight, and a second one gets the same code. The gateway reads no
+  body until it checks the run id, the run's end, the request's head, and whether the run
+  has one in flight. Behind a separate gateway, it also checks first whether the gateway's
+  close began. The body of a request that one of these checks refuses counts nothing. On
+  the one address, the signature of an answer to a POST findings covers a body up to 8 MiB
+  and one byte, and to any other request up to 2 MiB and one byte, as before.
+  `Run.Findings` and `Run.PostFindings` return the errors of `Run.NextSession`, and for a
+  body over 8 MiB `Run.PostFindings` returns an error that starts with the fix, with
+  nothing sent. Read the findings before you send a POST findings again: Qory Apiary has
+  no key for a repeated one, so the same raises make new findings.
+  `server.Client.HostCall` takes the method. No container reaches either call: they go
+  over the link alone, and the run API's route returns `404` for both (§The gateway's
+  link, The host calls).
 - Two host calls of the gateway's link, `POST <run.url>/<run_id>/next-session` and
   `POST <run.url>/<run_id>/pushed-commits`, and `Run.NextSession` and
   `Run.PushedCommits`, which send them: the gateway forwards the body unread to Qory
@@ -1547,17 +1561,6 @@ release may change what an existing document does, and says so under Upgrading.
   another, the run is refused at its start, `run_configuration_invalid`. A renewed value
   without the string is a renewal refused for its form, and the run keeps the value it
   had.
-- The findings host calls: the gateway matches a host call's method and its path, and
-  sends a `GET` with no body and no `Content-Type`. On the one address, the signature of
-  an answer to a POST findings covers a body up to 8 MiB and one byte, and to any other
-  request up to 2 MiB and one byte, as before. A POST findings body counts in the
-  gateway's 512 MiB from its arrival, within 60 seconds, to the end of the call to Qory
-  Apiary, and a GET findings answer from its read to the end of its write, which has 60
-  seconds. The gateway reads no body until it checks the run id, the run's end, and
-  whether the run has one in flight. Behind a separate gateway, it also checks first
-  whether the gateway's close began. The body of a request that one of these checks
-  refuses counts nothing.
-  `server.Client.HostCall` takes the method.
 - The link's host calls, `POST <run.url>/<run_id>/next-session` and `POST
   <run.url>/<run_id>/pushed-commits`: the gateway reads the body, at most 4 KiB and
   64 KiB, before it looks up or reopens the run, and sends it unread to Qory Apiary with
@@ -2716,9 +2719,6 @@ release may change what an existing document does, and says so under Upgrading.
   check's context ended, gets the `503` `push_check_unavailable`. The check gets the
   verdicts of a program that sends each after the reply to the one before in the order
   sent.
-- `Run.Findings` and `Run.PostFindings`: the GET findings and POST findings host calls,
-  with the errors of `Run.NextSession`. For a body over 8 MiB, `Run.PostFindings` returns
-  an error that starts with the fix, with nothing sent.
 - `session.ErrRunClosed`: the error of `Run.NextSession` and `Run.PushedCommits` wraps
   it once `Close` began or the gateway closed the run, with nothing sent, so a caller
   tests the case with `errors.Is`. A `410` from the gateway, for a run that ended there

@@ -843,7 +843,11 @@ func TestAHostCallAdmitsItsConnection(t *testing.T) {
 			t.Fatal(err)
 		}
 		pending(1)
-		if a := b.do(t, e.key, method, "/qory-link/run-configuration/"+e.a.RunID+path, []byte(`{}`)); a.status != status || a.close {
+		var body []byte
+		if method == http.MethodPost {
+			body = []byte(`{}`)
+		}
+		if a := b.do(t, e.key, method, "/qory-link/run-configuration/"+e.a.RunID+path, body); a.status != status || a.close {
 			t.Errorf("%s: %d close=%v %s", call, a.status, a.close, a.body)
 		}
 		pending(0)

@@ -85,7 +85,7 @@ func sendRaw(t *testing.T, h *harness, method, path string, body []byte) (int, [
 
 // TestAHostCallHasItsMethod pins the method of each host call, on the local link and on
 // the one address: a GET of findings is sent as a GET, with no body and no Content-Type
-// though the caller sent both, and a POST as a POST; a GET of next-session and of
+// though the caller sent one, and a POST as a POST; a GET of next-session and of
 // pushed-commits is no host call, but a reload of no run; and any other method of
 // findings gets the 405 it gets of next-session. The control plane gets the GET and the
 // POST of findings alone.
@@ -109,8 +109,8 @@ func TestAHostCallHasItsMethod(t *testing.T) {
 		serveHostCalls(o.f)
 		o.f.reset()
 		base := "/v1/run-configuration/" + o.a.RunID
-		for _, method := range []string{http.MethodGet, http.MethodPost} {
-			if status, _ := sendRaw(t, o.h, method, base+"/findings", []byte(`{"a":1}`)); status != http.StatusOK {
+		for method, body := range map[string][]byte{http.MethodGet: nil, http.MethodPost: []byte(`{"a":1}`)} {
+			if status, _ := sendRaw(t, o.h, method, base+"/findings", body); status != http.StatusOK {
 				t.Errorf("%s findings: %d", method, status)
 			}
 		}
@@ -137,11 +137,11 @@ func TestAHostCallHasItsMethod(t *testing.T) {
 		e := r.open(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{})
 		f.reset()
 		base := "/qory-link/run-configuration/" + e.a.RunID
-		// The signature of a GET's answer covers no body, though the GET has one.
-		for _, method := range []string{http.MethodGet, http.MethodPost} {
-			if got := r.do(t, e.key, method, base+"/findings", []byte(`{"a":1}`)); got.status != http.StatusOK {
-				t.Errorf("%s findings: %d %s", method, got.status, got.body)
-			}
+		if got := r.do(t, e.key, http.MethodGet, base+"/findings", nil, http.Header{"Content-Type": {"application/json"}}); got.status != http.StatusOK {
+			t.Errorf("GET findings: %d %s", got.status, got.body)
+		}
+		if got := r.do(t, e.key, http.MethodPost, base+"/findings", []byte(`{"a":1}`)); got.status != http.StatusOK {
+			t.Errorf("POST findings: %d %s", got.status, got.body)
 		}
 		for _, path := range []string{"/next-session", "/pushed-commits"} {
 			if got := r.do(t, e.key, http.MethodGet, base+path, nil); got.status != http.StatusBadRequest {
@@ -179,8 +179,12 @@ func TestAFindingsAnswerHasItsLimit(t *testing.T) {
 			for _, fake := range []*fakeRunAPI{f, o.f} {
 				fake.answers(func(w http.ResponseWriter, r *http.Request, _ []byte) { fake.sign(w, r, http.StatusOK, doc) })
 			}
-			got, err := hostCall(o.h, o.a.RunID, l.method+" /findings", []byte(`{}`))
-			signed := r.do(t, e.key, l.method, "/qory-link/run-configuration/"+e.a.RunID+"/findings", []byte(`{}`))
+			var body []byte
+			if l.method == http.MethodPost {
+				body = []byte(`{}`)
+			}
+			got, err := hostCall(o.h, o.a.RunID, l.method+" /findings", body)
+			signed := r.do(t, e.key, l.method, "/qory-link/run-configuration/"+e.a.RunID+"/findings", body)
 			if over == 0 {
 				if err != nil || !bytes.Equal(got, doc) {
 					t.Errorf("%s: %d bytes, %v", what, len(got), err)
@@ -449,8 +453,8 @@ func budgetWays(t *testing.T, cfg func(*gateway.Config), try func(t *testing.T, 
 }
 
 // TestAFullBudgetRefusesAFindingsCall pins the gateway's 512 MiB for the findings calls:
-// while it is full, a POST of 1 MiB and an answer of 1 MiB pass; a longer POST, up to one
-// past the limit, is 429 rate_limited from the gateway, with nothing sent, and a longer
+// while it is full, a POST of 1 MiB and an answer of 1 MiB pass; a longer POST, up to the
+// limit, is 429 rate_limited from the gateway, with nothing sent, and a longer
 // answer is 429, with the answer dropped; and each passes once the budget has room, which
 // is free again after every call.
 func TestAFullBudgetRefusesAFindingsCall(t *testing.T) {
@@ -466,7 +470,7 @@ func TestAFullBudgetRefusesAFindingsCall(t *testing.T) {
 			t.Errorf("a POST of 1 MiB: %d %s", status, code)
 		}
 		sent := len(at.f.requests())
-		for _, n := range []int{freeBytes + 1, 8 << 20, 8<<20 + 1} {
+		for _, n := range []int{freeBytes + 1, 8 << 20} {
 			status, code, message, from := at.call(http.MethodPost, make([]byte, n))
 			if status != http.StatusTooManyRequests || code != "rate_limited" || from != "gateway" || !strings.HasPrefix(message, "Retry in 1 second: ") || !strings.HasSuffix(message, "and this body would pass that.") {
 				t.Errorf("a POST of %d bytes: %d %s from %s: %s", n, status, code, from, message)
@@ -583,21 +587,65 @@ func TestAFindingsBodyCountsBeforeItIsSigned(t *testing.T) {
 	})
 }
 
-// TestAFindingsBodyIsBounded pins that the gateway reads at most one byte over the limit
-// of a POST findings: a body with a longer Content-Length is 413 while its caller still
-// holds the rest back, nothing is sent, and its count ends with the answer.
+// TestAFindingsBodyIsBounded pins the limit of a POST findings body, 8 MiB. A
+// Content-Length one byte over it is 413 before the gateway reads the body: on the local
+// link while the caller holds the body back, and on the one address, which reads the body
+// to sign the answer, while the memory budget is full. A Content-Length at the limit
+// passes the head: with the budget full its body is read and 429, and with room it is
+// sent. A chunked body one byte over the limit is 413 once read, and a body over the limit
+// of another run's id gets the refusal of the run id. Nothing else is sent, and nothing
+// counts after the answers.
 func TestAFindingsBodyIsBounded(t *testing.T) {
+	const limit = server.MaxPostFindingsRequest
 	budgetWays(t, func(*gateway.Config) {}, func(t *testing.T, at *budgetAt) {
+		// send writes head, a Content-Length of size and sent bytes of the body, and
+		// returns the answer's status.
+		send := func(head string, size, sent int) int {
+			conn := at.dial()
+			defer conn.Close()
+			at.write(conn, head, size, sent)
+			return statusOn(t, conn)
+		}
+		release := fill(t, at.g, 0)
+		over := limit + 1
+		if !at.remote {
+			// The gateway closes the connection after the 413 with the body unread: a caller
+			// that still writes 8 MiB gets an error.
+			over = 0
+		}
+		if status := send(at.head(http.MethodPost), limit+1, over); status != http.StatusRequestEntityTooLarge {
+			t.Errorf("a Content-Length over the limit with the budget full: %d", status)
+		}
+		if status := send(at.head(http.MethodPost), limit, limit); status != http.StatusTooManyRequests {
+			t.Errorf("a Content-Length at the limit with the budget full: %d", status)
+		}
+		release()
+
 		conn := at.dial()
 		defer conn.Close()
-		fmt.Fprintf(conn, "%sContent-Length: %d\r\n\r\n", at.head(http.MethodPost), 64<<20)
-		conn.Write(make([]byte, server.MaxPostFindingsRequest+1))
-		conn.SetReadDeadline(time.Now().Add(20 * time.Second))
-		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
-		if err != nil || resp.StatusCode != http.StatusRequestEntityTooLarge {
-			t.Errorf("a body held back past the limit: %v %v", resp, err)
+		conn.SetWriteDeadline(time.Now().Add(20 * time.Second))
+		fmt.Fprintf(conn, "%sTransfer-Encoding: chunked\r\n\r\n%x\r\n", at.head(http.MethodPost), limit+1)
+		conn.Write(make([]byte, limit+1))
+		io.WriteString(conn, "\r\n0\r\n\r\n")
+		if status := statusOn(t, conn); status != http.StatusRequestEntityTooLarge {
+			t.Errorf("a chunked body over the limit: %d", status)
+		}
+
+		unknown := event.NewRunID()
+		if at.remote {
+			unknown = at.runs[1]
+		}
+		if status := send(at.lineTo(http.MethodPost, unknown), limit+1, limit+1); status != http.StatusBadRequest {
+			t.Errorf("a body over the limit of another run id: %d", status)
 		}
 		if seen := at.f.requests(); len(seen) != 0 {
+			t.Errorf("the control plane got %d requests", len(seen))
+		}
+		isFree(t, "after the refusals", at.g)
+		if status := send(at.head(http.MethodPost), limit, limit); status != http.StatusOK {
+			t.Errorf("a body at the limit: %d", status)
+		}
+		if seen := at.f.requests(); len(seen) != 1 || len(seen[0].body) != limit {
 			t.Errorf("the control plane got %d requests", len(seen))
 		}
 		isFree(t, "after the answer", at.g)
@@ -628,33 +676,37 @@ func TestAFindingsAnswerCountsUntilItIsWritten(t *testing.T) {
 	})
 }
 
-// TestAFindingsCallOfAGETWithAnUnsentBodyEnds pins a GET findings with a Content-Length
-// and no body, which net/http reads before it writes the answer's head: the answer counts
-// meanwhile, and is free once the caller hangs up, and once the time of a host call passed
-// for a caller that does not.
-func TestAFindingsCallOfAGETWithAnUnsentBodyEnds(t *testing.T) {
-	for _, hangUp := range []bool{true, false} {
-		wait := 3 * time.Second
-		if hangUp {
-			wait = time.Minute
-		}
-		budgetWays(t, func(c *gateway.Config) { gateway.SetHostCallTime(c, wait) }, func(t *testing.T, at *budgetAt) {
-			at.f.answers(func(w http.ResponseWriter, r *http.Request, _ []byte) {
-				at.f.sign(w, r, http.StatusOK, make([]byte, 3<<20))
-			})
+// TestAFindingsGETWithABodyIsRefused pins the refusal of a GET findings with a body, by
+// its Content-Length and chunked: 400 invalid_request from the gateway while the caller
+// holds the body back, with nothing sent and nothing counted. The refused GET takes no
+// place of the run, so the run's next GET findings, with no body, passes while the first
+// caller keeps its connection open.
+func TestAFindingsGETWithABodyIsRefused(t *testing.T) {
+	budgetWays(t, func(*gateway.Config) {}, func(t *testing.T, at *budgetAt) {
+		const want = "Send the GET findings request with no body: the gateway sent nothing."
+		for _, head := range []string{"Content-Length: 1\r\n", "Transfer-Encoding: chunked\r\n"} {
 			conn := at.dial()
 			defer conn.Close()
-			io.WriteString(conn, at.head(http.MethodGet)+"Content-Length: 1\r\n\r\n")
-			eventually(t, "the answer counted", func() bool { return gateway.UsedRunAPI(at.g) == 2<<20 })
-			if hangUp {
-				conn.Close()
+			io.WriteString(conn, at.head(http.MethodGet)+head+"\r\n")
+			conn.SetReadDeadline(time.Now().Add(20 * time.Second))
+			resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+			if err != nil {
+				t.Errorf("a GET with %q: no answer: %v", head, err)
+				continue
 			}
-			freeWithin(t, fmt.Sprintf("a GET with an unsent body, hang up %v", hangUp), at.g, 20*time.Second)
+			body, _ := io.ReadAll(resp.Body)
+			if status, code, message, from := at.refusalOf(answer{status: resp.StatusCode, body: body}); status != http.StatusBadRequest || code != "invalid_request" || from != "gateway" || message != want {
+				t.Errorf("a GET with %q: %d %s from %s: %q", head, status, code, from, message)
+			}
 			if status, code, _, _ := at.call(http.MethodGet, nil); status != http.StatusOK {
-				t.Errorf("the next GET: %d %s", status, code)
+				t.Errorf("a GET with no body after one with %q: %d %s", head, status, code)
 			}
-		})
-	}
+		}
+		if seen := at.f.requests(); len(seen) != 2 {
+			t.Errorf("the control plane got %d requests", len(seen))
+		}
+		isFree(t, "after the GETs", at.g)
+	})
 }
 
 // TestAFindingsBodyCountsUntilTheCallEnds pins that a POST findings body is free once the

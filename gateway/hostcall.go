@@ -92,8 +92,7 @@ func (c Config) hostCallTimeOf() time.Duration {
 // unread to Qory Apiary, c's method to <run.url>/<run_id> and c's path with its signed
 // client, within [server.HostCallTime], and writes what Qory Apiary returned. It sends a
 // POST once; net/http's transport may send a GET again on a reused connection that
-// closes with no answer. The body of a GET is not read, as a transcript request's, so a
-// GET that came with a body goes on after its caller hangs up, until the call ends.
+// closes with no answer.
 //
 //   - A 2xx passes with its status and body, a body with Content-Type:
 //     application/json alone. The body of a 200 is at most c.answer bytes, and that of
@@ -112,7 +111,9 @@ func (c Config) hostCallTimeOf() time.Duration {
 // The gateway's other refusals: those of [Gateway.linkRunOf], and a suspended run's 503
 // with no body. A Content-Type other than application/json is 400 invalid_request, a
 // body over c.request bytes 413 payload_too_large, and a run with no control plane 404
-// not_found; Qory Apiary gets nothing for any of them.
+// not_found; Qory Apiary gets nothing for any of them. For a c.single, a GET with a body,
+// a Content-Length over 0 or a chunked one, is 400 invalid_request, and a Content-Length
+// over c.request is the 413 before the gateway reads the body.
 //
 // A request's body and an answer count past their first 1 MiB in the gateway's memory
 // budget ([proxy.RunAPILimits]): a body as it is read, before it is signed, until the call
@@ -122,11 +123,12 @@ func (c Config) hostCallTimeOf() time.Duration {
 //
 // A run has at most one c in flight when c.single is true: a second one is 429
 // rate_limited, and Qory Apiary gets nothing of it. For such a c, the run id and the end
-// of the run are checked first ([Gateway.bodyRefusal]), then the place is taken, and then
-// the body is read, on the local link within [server.HostCallTime], as on the one address
-// within [edgeReadWait]. A request is in flight until its answer is written; on the one
-// address, any answer but a GET's 200 only until the handler passes it to
-// [signedWriter], which signs and writes it after the handler.
+// of the run are checked first ([Gateway.bodyRefusal]), then a GET's body and the
+// Content-Length, then the place is taken, and then the body is read, on the local link
+// within [server.HostCallTime], as on the one address within [edgeReadWait]. A request is
+// in flight until its answer is written; on the one address, any answer but a GET's 200
+// only until the handler passes it to [signedWriter], which signs and writes it after the
+// handler.
 func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request, runID string, c *hostCall) {
 	rc := http.NewResponseController(w)
 	release := func() {}
@@ -145,6 +147,13 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 	}
 	if c.single {
 		refusal := g.bodyRefusal(s, r, runID)
+		// unread is true for a refusal of the request's head, which reads none of its body:
+		// the connection closes after it.
+		unread := false
+		if refusal == nil {
+			refusal = c.headRefusal(r)
+			unread = refusal != nil
+		}
 		call := runCall{runID, c}
 		if refusal == nil {
 			if _, taken := g.inFlight.LoadOrStore(call, nil); taken {
@@ -155,7 +164,10 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 			}
 		}
 		if refusal != nil {
-			if local {
+			switch {
+			case unread:
+				w.Header().Set("Connection", "close")
+			case local:
 				drop()
 			}
 			refusal(w)
@@ -207,8 +219,9 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 			fmt.Sprintf("Send the %s request again: the gateway did not read its body whole, and sent nothing.\n%v", c.name, accesskey.ShownError(readErr)))
 		return
 	case len(body) > c.request:
-		refuse(w, http.StatusRequestEntityTooLarge, codePayloadTooLarge, nil, accesskey.FromGateway,
-			fmt.Sprintf("Send a %s body of at most %d bytes: this one is longer, so the gateway sent nothing.", c.name, c.request))
+		// A chunked body comes to this check, as does every body of a call other than a
+		// c.single.
+		c.tooLarge(w)
 		return
 	}
 	if g.client == nil || lr.r == nil {
@@ -224,10 +237,8 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 	if c.single {
 		// A caller that stops reading the answer ends its write at the deadline. On the
 		// local link, and for a GET findings 200 on the one address, the answer's count and
-		// the run's place end when that write ends.
-		// net/http reads a body that came with a GET before it writes the answer's head, so
-		// that read has the deadline too. net/http clears both before the connection's next
-		// request.
+		// the run's place end when that write ends. net/http clears both deadlines before
+		// the connection's next request.
 		deadline := time.Now().Add(g.cfg.hostCallTimeOf())
 		rc.SetReadDeadline(deadline)
 		rc.SetWriteDeadline(deadline)
@@ -292,6 +303,28 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 	default:
 		g.hostCallFailed(w, runID, c, true, fmt.Sprintf("status %d with no code the link passes on", a.Status))
 	}
+}
+
+// headRefusal returns the func that writes the refusal of the request r of c that its
+// head decides, or nil: a GET with a body, a Content-Length over 0 or a chunked one, and
+// a Content-Length over c.request.
+func (c *hostCall) headRefusal(r *http.Request) func(http.ResponseWriter) {
+	switch {
+	case c.method == http.MethodGet && r.ContentLength != 0:
+		return func(w http.ResponseWriter) {
+			refuse(w, http.StatusBadRequest, server.CodeInvalidRequest, nil, accesskey.FromGateway,
+				fmt.Sprintf("Send the %s request with no body: the gateway sent nothing.", c.name))
+		}
+	case r.ContentLength > int64(c.request):
+		return c.tooLarge
+	}
+	return nil
+}
+
+// tooLarge writes the 413 payload_too_large of a body of c over c.request bytes.
+func (c *hostCall) tooLarge(w http.ResponseWriter) {
+	refuse(w, http.StatusRequestEntityTooLarge, codePayloadTooLarge, nil, accesskey.FromGateway,
+		fmt.Sprintf("Send a %s body of at most %d bytes: this one is longer, so the gateway sent nothing.", c.name, c.request))
 }
 
 // hostCallFailed writes one line of the failure why of the host call c of the run

@@ -5141,9 +5141,10 @@ run whose id it knows (The local link, above).
 
 Each goes to the path of `run.url`, a slash, the `run_id` and the last part of the call's
 path; behind a separate gateway with the run key, as on the join. A `POST` has
-`Content-Type: application/json`. A GET findings has no body, and the gateway reads none:
-it ignores a body and a `Content-Type` a caller sends with it. The method is part of the
-call: the gateway never sends a `GET` on as a `POST`, nor a `POST` as a `GET`. The bodies
+`Content-Type: application/json`. A GET findings has no body: one with a `Content-Length`
+over 0 or a chunked body gets the gateway's `400`, and the gateway ignores a
+`Content-Type` a caller sends with it. The method is part of the call: the gateway never
+sends a `GET` on as a `POST`, nor a `POST` as a `GET`. The bodies
 are qoryai/integrations' documents, such as `next-session-request.schema.json` and
 `next-session-answer.schema.json`, and for findings `findings.schema.json` and
 `findings-post.schema.json`: Forager reads none of them, and checks only the media type
@@ -5165,10 +5166,10 @@ other answers:
 | Status | `error` | `from` | When |
 |---|---|---|---|
 | Qory Apiary's | Qory Apiary's | `apiary` | a signed answer of Qory Apiary's with a code and a status from `400` to `599` but `401` and `410`, such as `409` `run_ended` or `503` `unavailable`, with its `names` and its `message`; a name that contains a secret is a phrase in its place. With a `Retry-After` of whole seconds, such as on a `429` `rate_limited`, it has `retry_after`, those seconds (Waiting before a request again, below) |
-| `400` | `invalid_request` | `gateway` | a `POST` with a `Content-Type` other than `application/json`, or whose body the gateway did not read whole, on the local link a POST findings body that did not arrive within 60 seconds among them; on the local link, a run id of no run there; nothing is sent |
+| `400` | `invalid_request` | `gateway` | a GET findings with a body; a `POST` with a `Content-Type` other than `application/json`, or whose body the gateway did not read whole, on the local link a POST findings body that did not arrive within 60 seconds among them; on the local link, a run id of no run there; nothing is sent |
 | `400` | `run_key_invalid` | `gateway` | behind a separate gateway, a run id that is not the run key's; nothing is sent |
 | `404` | `not_found` | `gateway` | the run has no control plane; nothing is sent |
-| `413` | `payload_too_large` | `gateway` | the body is over its limit; nothing is sent. For a POST findings body over 8 MiB, the session's link returns an error with nothing sent, so only another client gets this `413` |
+| `413` | `payload_too_large` | `gateway` | the body is over its limit; nothing is sent. A POST findings whose `Content-Length` is over 8 MiB gets it before the gateway reads the body. For a POST findings body over 8 MiB, the session's link returns an error with nothing sent, so only another client gets this `413` |
 | `429` | `rate_limited` | `gateway` | a GET findings or a POST findings of a run that has one of the same method in flight, nothing of which is sent; a POST findings body over 1 MiB, nothing of which is sent, or a GET findings answer over 1 MiB, which the gateway drops, while the gateway's 512 MiB are full (below); no `retry_after` |
 | `410` | the end's code | `gateway` | the run ended at the gateway: nothing is sent, or the gateway cancels the request it sent |
 | `502` | `control_plane_unavailable` | `gateway` | no answer of Qory Apiary's, one that fails verification, an unsigned `401` among them, a signed `410`, an answer with no code that is no `2xx`, a `2xx` over its limit, or a `2xx` body without `Content-Type: application/json`; the gateway writes one line to its log |
@@ -5184,18 +5185,17 @@ body or answer over 1 MiB, so they take none of the 512 MiB.
 
 A run has at most one GET findings and one POST findings in flight. A second one of the
 same method gets the `429`, and the gateway reads its body only to drop it. The gateway
-reads no body until it checks the run id, the run's end, and whether the run has one in
-flight. Behind a separate gateway, it also checks first whether the gateway's close
-began. The body of a request that one of these checks refuses counts nothing. Behind a
-separate gateway, the body of a run that the gateway reopens counts during the reopen, up
-to 120 seconds. A POST findings body has 60 seconds to arrive. A request is in flight
-until the gateway writes its answer, at most 60 seconds after the call to Qory Apiary
-ends. Behind a separate gateway, only a GET findings `200` is written in flight. For any
-other answer, the request is in flight only until the gateway has the answer to sign. A
-caller that hangs up while Qory Apiary has its request ends the call. The gateway reads
-no body of a GET findings, so after the hang-up of a GET findings that came with a body,
-the call goes on until Qory Apiary answers or the 60 seconds end, and the run has that
-GET findings in flight.
+reads no body until it checks the run id, the run's end, the head (a GET findings with a
+body, or a `Content-Length` over 8 MiB), and whether the run has one in flight. Behind a
+separate gateway, it also checks first whether the gateway's close began. The body of a
+request that one of these checks refuses counts nothing. Behind a separate gateway, the
+body of a run that the gateway reopens counts during the reopen, up to 120 seconds. A
+POST findings body has 60 seconds to arrive. A request is in flight until the gateway
+writes its answer, at most 60 seconds after the call to Qory Apiary ends. Behind a
+separate gateway, only a GET findings `200` is written in flight. For any other answer,
+the request is in flight only until the gateway has the answer to sign. A caller that
+hangs up while Qory Apiary has its request ends the call. A GET findings with a body
+gets the `400` and is never in flight.
 
 **A POST findings again.** Qory Apiary has no key for a repeated POST findings: a second
 request with the same raises makes new findings. Nothing was sent for a session's error
