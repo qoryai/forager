@@ -50,10 +50,11 @@ func fill(t *testing.T, g *gateway.Gateway, left int) func() {
 	return release
 }
 
-// isFree fails the test unless g's whole memory budget is free within a few seconds.
+// isFree fails the test unless g's whole memory budget, and no more than it, is free
+// within a few seconds.
 func isFree(t *testing.T, what string, g *gateway.Gateway) {
 	t.Helper()
-	eventually(t, what+": the whole memory budget free", func() bool { return hasRoom(g, memoryBudget) })
+	eventually(t, what+": the whole memory budget free", func() bool { return hasRoom(g, memoryBudget) && !hasRoom(g, memoryBudget+1) })
 }
 
 // sendRaw sends a request of method to path on the local link of h, with body, and
