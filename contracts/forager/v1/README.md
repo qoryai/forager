@@ -937,7 +937,7 @@ values the server stores for the run, at most 16, and
 ```json
 "default_model_provider_credential_name": "model",
 "credentials": [
-  {"name": "model", "group": "anthropic", "format": "anthropic-messages",
+  {"name": "model", "group": "con_49cey7zrc2eb9qgn", "format": "anthropic-messages",
    "endpoint": "https://api.model.example/anthropic",
    "auth": {"scheme": "header", "header": "x-api-key"},
    "key_prefixes": ["sk-ant-"]},
@@ -1132,26 +1132,26 @@ apart from every other group's. The keys of one group have one `format`, `endpoi
 `auth`: a key whose `format`, `endpoint`, `auth.scheme`, `auth.username`, `auth.header`
 (letter case ignored), `auth.oauth`, `auth.account_header` (letter case ignored) or
 `auth.account_claim` differs from the group's first key's is
-`run_configuration_invalid`, with the two lines `Give the keys of group "anthropic" one
-format, endpoint and auth.` and `The credentials "model" and "model-2" differ in
-endpoint`. An API credential without `group` fails the schema, and so does a host
-credential with one. The order of a group's entries in `credentials` is the order in
-which the proxy sets them, the default model provider credential's place included. The
-default model provider credential's group starts on the default model provider
-credential, wherever its place in the order, and every other group on its first key. A
-run configuration has at most 6 API credentials, across every key group. A local model
-provider credential, from `forager.yaml`, has no `group` and is never in a key group: a
-session on it gets that key alone, with no rotation, cooldown, model keys report entry
-or renewal after a `401`. Each key of a group may have `pause_for_s`, `resets_at`,
-`schedule_resets_at`, `cooldown_until`, and `use_up_to_percent` with `use_up_to_windows`
-(`run-configuration.schema.json`). `pause_for_s` is the key's cooldown in seconds after
-a limit refusal with no reset, for a key without `schedule_resets_at`. A key without
-`pause_for_s` has a cooldown of 60 seconds for an API key, and of 3600 seconds for a
-subscription, a key whose `auth` has `oauth`. A `pause_for_s` below 1 fails the schema,
-and the gateway checks it on each key of every group too: a key of the group with one
-below 1 is `run_configuration_invalid` with the key's name, `set pause_for_s on the
-model key "model-2" to a value from 1 to 604800, or remove it for the default cooldown:
-pause_for_s is 0`.
+`run_configuration_invalid`, with the two lines `Give the keys of group
+"con_49cey7zrc2eb9qgn" one format, endpoint and auth.` and `The credentials "model" and
+"model-2" differ in endpoint`. An API credential without `group` fails the schema, and
+so does a host credential with one. The order of a group's entries in `credentials` is
+the order in which the proxy sets them, the default model provider credential's place
+included. The default model provider credential's group starts on the default model
+provider credential, wherever its place in the order, and every other group on its first
+key. A run configuration has at most 6 API credentials, across every key group. A local
+model provider credential, from `forager.yaml`, has no `group` and is never in a key
+group: a session on it gets that key alone, with no rotation, cooldown, model keys
+report entry or renewal after a `401`. Each key of a group may have `pause_for_s`,
+`resets_at`, `schedule_resets_at`, `cooldown_until`, and `use_up_to_percent` with
+`use_up_to_windows` (`run-configuration.schema.json`). `pause_for_s` is the key's
+cooldown in seconds after a limit refusal with no reset, for a key without
+`schedule_resets_at`. A key without `pause_for_s` has a cooldown of 60 seconds for an
+API key, and of 3600 seconds for a subscription, a key whose `auth` has `oauth`. A
+`pause_for_s` below 1 fails the schema, and the gateway checks it on each key of every
+group too: a key of the group with one below 1 is `run_configuration_invalid` with the
+key's name, `set pause_for_s on the model key "model-2" to a value from 1 to 604800, or
+remove it for the default cooldown: pause_for_s is 0`.
 
 `use_up_to_percent` is the key's Use up to percentage, 1 to 99, and `use_up_to_windows`
 are the limit windows it applies to: 1 to 11 names, none twice, each in the grammar of a
@@ -1327,7 +1327,7 @@ a JSON pointer (RFC 6901, with `~1` for `/` and `~0` for `~` inside a member nam
 string in the token's JWT payload. A ChatGPT subscription is such a key:
 
 ```json
-{"name": "subscription", "group": "openai", "format": "openai-responses",
+{"name": "subscription", "group": "con_8k2mxq0rt5vw7yzb", "format": "openai-responses",
  "endpoint": "https://chatgpt.example/backend-api/codex",
  "auth": {"scheme": "bearer", "oauth": true, "account_header": "chatgpt-account-id",
           "account_claim": "/https:~1~1api.openai.com~1auth/chatgpt_account_id"},
@@ -3110,11 +3110,11 @@ A restart). The local link writes none of them.
   when the join asked for one, `model_provider_credential_name`.
 - `model-key-limit`: present while the run's proxy has passed a model provider's limit
   refusal or a `401` to the session (§The gateway's link, A stop in a batch's answer):
-  one JSON object, `{"version": 1, "groups": [{"group": "anthropic", "reason":
-  "model_key_limit"}]}`, with each key group that passed since its last join or end of
-  a session, by its `group` value, and the stop's reason once an answer to a batch had
-  it. A reopen gives the stop to each group listed. A reopen reads any other content
-  as no stop, removes the file and writes one `dev.qory.run.log` line.
+  one JSON object, `{"version": 1, "groups": [{"group": "con_49cey7zrc2eb9qgn",
+  "reason": "model_key_limit"}]}`, with each key group that passed since its last join
+  or end of a session, by its `group` value, and the stop's reason once an answer to a
+  batch had it. A reopen gives the stop to each group listed. A reopen reads any other
+  content as no stop, removes the file and writes one `dev.qory.run.log` line.
 - `held.jsonl`: the gateway's `dev.qory.run.egress` and `dev.qory.run.target_write`
   events that waited for
   `dev.qory.run.started` when the gateway stopped, one per line. The reopen reads it
@@ -4456,7 +4456,7 @@ user that reaches the socket is served as a session is: knowing a local run's id
 post a batch into that run, fetch the run's configuration again, send the run's host
 calls, next-session, pushed-commits, GET findings and POST findings, to Qory Apiary (The
 host calls, below), or end the run: with a batch that carries its `dev.qory.run.exited`,
-or with any batch of that run the link refuses with `400` `invalid_request` once its body
+or with any batch of that run that gets the link's `400` `invalid_request` once its body
 has arrived whole, which ends the run `failed` with `batch_refused` (Events, below).
 
 **In one process.** When the session and the gateway share one process, as `qory` runs
@@ -5184,18 +5184,22 @@ count, nor does the copy of it that a separate gateway signs. The other host cal
 body or answer over 1 MiB, so they take none of the 512 MiB.
 
 A run has at most one GET findings and one POST findings in flight. A second one of the
-same method gets the `429`, and the gateway reads its body only to drop it. The gateway
-reads no body until it checks the run id, the run's end, the head (a GET findings with a
-body, or a `Content-Length` over 8 MiB), and whether the run has one in flight. Behind a
-separate gateway, it also checks first whether the gateway's close began. The body of a
-request that one of these checks refuses counts nothing. Behind a separate gateway, the
-body of a run that the gateway reopens counts during the reopen, up to 120 seconds. A
-POST findings body has 60 seconds to arrive. A request is in flight until the gateway
-writes its answer, at most 60 seconds after the call to Qory Apiary ends. Behind a
-separate gateway, only a GET findings `200` is written in flight. For any other answer,
-the request is in flight only until the gateway has the answer to sign. A caller that
-hangs up while Qory Apiary has its request ends the call. A GET findings with a body
-gets the `400` and is never in flight.
+same method gets the `429`, and the gateway reads its body only to drop it, or behind a
+separate gateway to sign the `429`. The gateway reads no body until it checks the run
+id, the run's end, the head (a GET findings with a body, or a `Content-Length` over
+8 MiB), and whether the run has one in flight. Behind a separate gateway, it also checks
+first whether the gateway's close began. The body of a request that fails one of these
+checks counts nothing. Behind a separate gateway, the body of a run that the gateway
+reopens counts during the reopen, up to 120 seconds. A POST findings body has 60 seconds
+to arrive. Behind a separate gateway, the gateway signs its answer to a POST findings
+that fails one of these checks, such as the `413` and the `429`, over the body: the
+body, up to 8 MiB and one byte, has 10 seconds to arrive, or the connection closes with
+no answer. A request is in flight until the gateway writes its answer, at most 60
+seconds after the call to Qory Apiary ends. Behind a separate gateway, only a GET
+findings `200` is written in flight. For any other answer, the request is in flight only
+until the gateway has the answer to sign. A caller that hangs up while Qory Apiary has
+its request ends the call. A GET findings with a body gets the `400` and is never in
+flight.
 
 **A POST findings again.** Qory Apiary has no key for a repeated POST findings: a second
 request with the same raises makes new findings. Nothing was sent for a session's error

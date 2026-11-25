@@ -427,7 +427,7 @@ func TestKeyGroupsAreChecked(t *testing.T) {
 		t.Errorf("a host credential with group: %v", err)
 	}
 	if err := server.CheckCredentials([]server.RunCredential{{Name: "a", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: server.Auth{Scheme: "bearer"}}}, "a"); err == nil ||
-		!strings.HasPrefix(err.Error(), "Give the API credential \"a\" a group, the public id of its provider.\n") {
+		!strings.HasPrefix(err.Error(), "Give each API credential a group, the public id of its provider.\nThe credential \"a\" has no group: ") {
 		t.Errorf("an API credential without group: %v", err)
 	}
 }

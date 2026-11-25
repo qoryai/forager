@@ -678,9 +678,10 @@ func TestAFindingsAnswerCountsUntilItIsWritten(t *testing.T) {
 
 // TestAFindingsGETWithABodyIsRefused pins the refusal of a GET findings with a body, by
 // its Content-Length and chunked: 400 invalid_request from the gateway while the caller
-// holds the body back, with nothing sent and nothing counted. The refused GET takes no
-// place of the run, so the run's next GET findings, with no body, passes while the first
-// caller keeps its connection open.
+// holds the body back, with nothing sent and nothing counted; on the local link the
+// connection closes after the 400. The refused GET takes no place of the run, so the
+// run's next GET findings, with no body, passes while the first caller keeps its
+// connection open.
 func TestAFindingsGETWithABodyIsRefused(t *testing.T) {
 	budgetWays(t, func(*gateway.Config) {}, func(t *testing.T, at *budgetAt) {
 		const want = "Send the GET findings request with no body: the gateway sent nothing."
@@ -689,7 +690,8 @@ func TestAFindingsGETWithABodyIsRefused(t *testing.T) {
 			defer conn.Close()
 			io.WriteString(conn, at.head(http.MethodGet)+head+"\r\n")
 			conn.SetReadDeadline(time.Now().Add(20 * time.Second))
-			resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+			br := bufio.NewReader(conn)
+			resp, err := http.ReadResponse(br, nil)
 			if err != nil {
 				t.Errorf("a GET with %q: no answer: %v", head, err)
 				continue
@@ -697,6 +699,16 @@ func TestAFindingsGETWithABodyIsRefused(t *testing.T) {
 			body, _ := io.ReadAll(resp.Body)
 			if status, code, message, from := at.refusalOf(answer{status: resp.StatusCode, body: body}); status != http.StatusBadRequest || code != "invalid_request" || from != "gateway" || message != want {
 				t.Errorf("a GET with %q: %d %s from %s: %q", head, status, code, from, message)
+			}
+			if !at.remote {
+				// net/http reads up to 256 KiB of a body left unread after the handler. Behind
+				// a separate gateway, that read has the 10 seconds the gateway gives the body
+				// of a refused request, so the check runs on the local link alone.
+				conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+				_, err = io.Copy(io.Discard, br)
+				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+					t.Errorf("a GET with %q: the connection is open 2 seconds after the 400", head)
+				}
 			}
 			if status, code, _, _ := at.call(http.MethodGet, nil); status != http.StatusOK {
 				t.Errorf("a GET with no body after one with %q: %d %s", head, status, code)
@@ -706,6 +718,64 @@ func TestAFindingsGETWithABodyIsRefused(t *testing.T) {
 			t.Errorf("the control plane got %d requests", len(seen))
 		}
 		isFree(t, "after the GETs", at.g)
+	})
+}
+
+// TestAFindingsHeadIsCheckedBeforeThePlace pins that the head of a findings call is
+// checked before the run's place: while the run has a GET findings in flight, a GET with
+// a body is 400 invalid_request, and while it has a POST findings in flight, a POST whose
+// Content-Length is over the limit is 413 payload_too_large, neither 429. Nothing of
+// either is sent.
+func TestAFindingsHeadIsCheckedBeforeThePlace(t *testing.T) {
+	const limit = server.MaxPostFindingsRequest
+	budgetWays(t, func(*gateway.Config) {}, func(t *testing.T, at *budgetAt) {
+		arrived, let := make(chan struct{}, 2), make(chan struct{})
+		at.f.answers(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			arrived <- struct{}{}
+			select {
+			case <-let:
+			case <-r.Context().Done():
+			}
+			at.f.sign(w, r, http.StatusOK, []byte(`{}`))
+		})
+		done := make(chan int, 2)
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			var body []byte
+			if method == http.MethodPost {
+				body = []byte(`{}`)
+			}
+			go func() { done <- at.send(0, method, "/findings", body).status }()
+			within(t, method+" findings at the control plane", arrived, 10*time.Second)
+		}
+
+		conn := at.dial()
+		defer conn.Close()
+		io.WriteString(conn, at.head(http.MethodGet)+"Content-Length: 1\r\n\r\n")
+		if status := statusOn(t, conn); status != http.StatusBadRequest {
+			t.Errorf("a GET with a body beside a GET in flight: %d", status)
+		}
+		over := limit + 1
+		if !at.remote {
+			// On the local link the gateway reads none of the body before the 413: a caller
+			// that still writes 8 MiB gets an error.
+			over = 0
+		}
+		large := at.dial()
+		defer large.Close()
+		at.write(large, at.head(http.MethodPost), limit+1, over)
+		if status := statusOn(t, large); status != http.StatusRequestEntityTooLarge {
+			t.Errorf("a Content-Length over the limit beside a POST in flight: %d", status)
+		}
+		if n := len(at.f.requests()); n != 2 {
+			t.Errorf("the control plane got %d requests", n)
+		}
+		close(let)
+		for range 2 {
+			if status := <-done; status != http.StatusOK {
+				t.Errorf("a request in flight: %d", status)
+			}
+		}
+		isFree(t, "at the end", at.g)
 	})
 }
 

@@ -384,12 +384,12 @@ func gk(t *testing.T, first int) map[string]string {
 }
 
 // TestTheLengthCap pins the run key's length cap: a run key of up to 2048 characters
-// passes the length check, and a longer one is refused by Parse and Verify before
-// anything else, though its signature verifies. Only a gateway_url over its 300
-// characters makes a run key that long, so run-key.schema.json refuses the run key of
-// 2048 characters; the longest run key Sign makes, with a gateway_url of 300 characters,
-// an instance_id of 64 characters and two gateway keys, is under the cap, and Sign
-// refuses a gateway_url of 1616 characters.
+// passes the length check, and a longer one fails Parse and Verify before anything
+// else, though its signature verifies. Only a gateway_url over its 300 characters makes
+// a run key that long, so the run key of 2048 characters fails run-key.schema.json; the
+// longest run key Sign makes, with a gateway_url of 300 characters, an instance_id of 64
+// characters and two gateway keys, is under the cap, and Sign returns an error for a
+// gateway_url of 1616 characters.
 func TestTheLengthCap(t *testing.T) {
 	signing := knownanswers.SigningKey()
 	pin := pinOf(signing)

@@ -114,8 +114,10 @@ func (c Config) hostCallTimeOf() time.Duration {
 // not_found; Qory Apiary gets nothing for any of them. For a c.single, a GET with a body,
 // a Content-Length over 0 or a chunked one, is 400 invalid_request, and a Content-Length
 // over c.request is the 413 with none of the body counted: on the local link the gateway
-// reads none of it, and behind a separate gateway it reads up to c.request + 1 bytes only
-// to sign the 413.
+// reads none of it. Behind a separate gateway, a refusal of a POST before its body is
+// read, such as the 413 and the 429 of a place taken, is signed over the body, up to
+// c.request + 1 bytes, which must arrive within [refusedWait], 10 seconds; otherwise the
+// connection closes with no answer.
 //
 // A request's body and an answer count past their first 1 MiB in the gateway's memory
 // budget ([proxy.RunAPILimits]): a body as it is read, before it is signed, until the call
@@ -149,8 +151,10 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 	}
 	if c.single {
 		refusal := g.bodyRefusal(s, r, runID)
-		// unread is true for a refusal of the request's head, which reads none of its body:
-		// the connection closes after it.
+		// unread is true for a refusal of the request's head, which reads none of its body.
+		// After the handler, net/http reads up to 256 KiB of a body left unread; a read
+		// deadline of now ends that read, so the connection closes after the refusal. Behind
+		// a separate gateway, [Gateway.edgeHandler] sets the deadline to [refusedWait] again.
 		unread := false
 		if refusal == nil {
 			refusal = c.headRefusal(r)
@@ -169,6 +173,7 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 			switch {
 			case unread:
 				w.Header().Set("Connection", "close")
+				rc.SetReadDeadline(time.Now())
 			case local:
 				drop()
 			}

@@ -33,20 +33,21 @@ release may change what an existing document does, and says so under Upgrading.
   `{toml: model}` for an agent's model id and `{toml: model_reasoning_effort}` for an
   agent's effort value.
 - Give each API credential of a run configuration `group`, the public id of the provider
-  of the run's model choice (its `con_` id): the schema refuses an API credential without
-  it, and a host credential with it. The API credentials with one `group` value are one
-  key group, and a run can have several. Give the keys of one group one `format`,
-  `endpoint` and `auth`: `server.CheckCredentials` refuses others with
-  `run_configuration_invalid`, such as `Give the keys of group "anthropic" one format,
-  endpoint and auth.` with the cause on a second line. `server.KeyGroupDiffers` returns
-  the member in which two keys differ. The run answer's `credential_hosts` entries of an
-  API credential from the server have `group` (`server.LinkCredentialHosts.Group`), and
-  `link.GroupPlaceholder` returns a key's placeholder: that of its group's first key in
-  that list. A session sets the runtime's key variable to it. A run configuration still
-  has at most 6 API credentials, across every group, and `server.CheckCredentials`
-  refuses a seventh in a document built in Go too: `Remove API credentials until the run
-  has 6 at most.` A separate gateway's `model-key-limit` lists each key group that
-  passed, by its `group` value, with the stop's reason, as JSON.
+  of the run's model choice (its `con_` id): an API credential without it, and a host
+  credential with it, fail the schema. The API credentials with one `group` value are
+  one key group, and a run can have several. Give the keys of one group one `format`,
+  `endpoint` and `auth`: for others, `server.CheckCredentials` returns
+  `run_configuration_invalid`, such as `Give the keys of group "con_49cey7zrc2eb9qgn"
+  one format, endpoint and auth.` with the cause on a second line.
+  `server.KeyGroupDiffers` returns the member in which two keys differ. The run answer's
+  `credential_hosts` entries of an API credential from the server have `group`
+  (`server.LinkCredentialHosts.Group`), and `link.GroupPlaceholder` returns a key's
+  placeholder: that of its group's first key in that list. A session sets the runtime's
+  key variable to it. A run configuration still has at most 6 API credentials, across
+  every group, and a seventh in a document built in Go fails `server.CheckCredentials`
+  too: `Remove API credentials until the run has 6 at most.` A separate gateway's
+  `model-key-limit` lists each key group that passed, by its `group` value, with the
+  stop's reason, as JSON.
 - Read `model.endpoint` of a runtime in `runtimes.json` as one of `variable` and
   `setting`: a descriptor's endpoint may be a setting, such as
   `model_providers.qory.base_url`, and then has no `variable`. Read `resume` of a
@@ -402,9 +403,12 @@ release may change what an existing document does, and says so under Upgrading.
   most one of each in flight, and a second one gets the same code. The gateway reads no
   body until it checks the run id, the run's end, the request's head, and whether the run
   has one in flight. Behind a separate gateway, it also checks first whether the gateway's
-  close began. The body of a request that one of these checks refuses counts nothing. On
-  the one address, the signature of an answer to a POST findings covers a body up to 8 MiB
-  and one byte, and to any other request up to 2 MiB and one byte, as before.
+  close began. The body of a request that fails one of these checks counts nothing.
+  Behind a separate gateway, the gateway signs its answer to a POST findings that fails
+  one of these checks, such as the `413` and the `429`, over the body: the body, up to
+  8 MiB and one byte, has 10 seconds to arrive, or the connection closes with no answer.
+  On the one address, the signature of an answer to a POST findings covers a body up to
+  8 MiB and one byte, and to any other request up to 2 MiB and one byte, as before.
   `Run.Findings` and `Run.PostFindings` return the errors of `Run.NextSession`, and for a
   body over 8 MiB `Run.PostFindings` returns an error that starts with the fix, with
   nothing sent. Read the findings before you send a POST findings again: Qory Apiary has

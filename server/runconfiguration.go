@@ -193,7 +193,7 @@ func checkKeyGroups(creds []RunCredential) error {
 		switch {
 		case c.Format != "" && c.Group == "":
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"Give the API credential %s a group, the public id of its provider.\nThe credential has no group", name)
+				"Give each API credential a group, the public id of its provider.\nThe credential %s has no group", name)
 		case c.Format == "" && c.Group != "":
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
 				"Remove group from the credential %s.\nOnly an API credential, one with format, has a group", name)

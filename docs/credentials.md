@@ -259,8 +259,9 @@ are one key group, in the order of `credentials`. A run can have several groups,
 one of Anthropic keys and one of OpenAI keys, and each group rotates, cools down and
 stops apart from the others. The keys of one group need one `format`, `endpoint` and
 `auth`: two that differ stop the run with `run_configuration_invalid`, such as `Give the
-keys of group "anthropic" one format, endpoint and auth.` A key of `forager.yaml` has no
-`group` and is never in a key group: a session on it gets that key alone.
+keys of group "con_49cey7zrc2eb9qgn" one format, endpoint and auth.` A key of
+`forager.yaml` has no `group` and is never in a key group: a session on it gets that key
+alone.
 
 A session starts on the key in its join request's `model_provider_credential_name`, or
 on the default model provider credential when the request has none. For a key of a
@@ -347,7 +348,7 @@ values. An entry is one of two kinds:
 {"version": 1,
  "default_model_provider_credential_name": "model",
  "credentials": [
-   {"name": "model", "group": "anthropic", "format": "anthropic-messages",
+   {"name": "model", "group": "con_49cey7zrc2eb9qgn", "format": "anthropic-messages",
     "endpoint": "https://api.model.example/anthropic",
     "auth": {"scheme": "header", "header": "x-api-key"},
     "key_prefixes": ["sk-ant-"]},
@@ -464,7 +465,7 @@ both or neither. The proxy sets the header beside the token, to the string that
 subscription login is such a key:
 
 ```json
-{"name": "subscription", "group": "openai", "format": "openai-responses",
+{"name": "subscription", "group": "con_8k2mxq0rt5vw7yzb", "format": "openai-responses",
  "endpoint": "https://chatgpt.example/backend-api/codex",
  "auth": {"scheme": "bearer", "oauth": true, "account_header": "chatgpt-account-id",
           "account_claim": "/https:~1~1api.openai.com~1auth/chatgpt_account_id"},
