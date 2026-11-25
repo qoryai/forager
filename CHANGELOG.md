@@ -32,8 +32,8 @@ release may change what an existing document does, and says so under Upgrading.
   composer that reads `frontmatter` alone finds no agent place in Codex's entry,
   `{toml: model}` for an agent's model id and `{toml: model_reasoning_effort}` for an
   agent's effort value.
-- Give each API credential of a run configuration `group`, the id of its provider as
-  the server sets it, such as `anthropic`: the schema refuses an API credential without
+- Give each API credential of a run configuration `group`, the public id of the provider
+  of the run's model choice (its `con_` id): the schema refuses an API credential without
   it, and a host credential with it. The API credentials with one `group` value are one
   key group, and a run can have several. Give the keys of one group one `format`,
   `endpoint` and `auth`: `server.CheckCredentials` refuses others with

@@ -1124,9 +1124,9 @@ credential's name (§The gateway's link).
 
 **Several model keys.** A run can have several model keys of one provider, so that the
 run goes on when the provider returns a limit refusal for one key. Each API credential
-of `credentials` has `group`, the id of its provider as the server sets it, such as
-`anthropic`. The API credentials with one `group` value are one key group, and a run can
-have several key groups, such as one of `anthropic` keys and one of `openai` keys. The
+of `credentials` has `group`, the public id of the provider of the run's model choice
+(its `con_` id). The API credentials with one `group` value are one key group, and a run
+can have several key groups, such as one of Anthropic keys and one of OpenAI keys. The
 gateway sets the keys of each group one at a time, with a rotation, cooldowns and a stop
 apart from every other group's. The keys of one group have one `format`, `endpoint` and
 `auth`: a key whose `format`, `endpoint`, `auth.scheme`, `auth.username`, `auth.header`

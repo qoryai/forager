@@ -253,14 +253,14 @@ model key.
 ### Several keys of one provider
 
 A key group lets a run go on when the model provider returns a limit refusal for a key.
-Each API credential of the run configuration has `group`, the id of its provider, such
-as `anthropic`, and the API credentials with one `group` value are one key group, in the
-order of `credentials`. A run can have several groups, such as one of `anthropic` keys
-and one of `openai` keys, and each group rotates, cools down and stops apart from the
-others. The keys of one group need one `format`, `endpoint` and `auth`: two that differ
-stop the run with `run_configuration_invalid`, such as `Give the keys of group
-"anthropic" one format, endpoint and auth.` A key of `forager.yaml` has no `group` and
-is never in a key group: a session on it gets that key alone.
+Each API credential of the run configuration has `group`, the public id of the provider
+of the run's model choice (its `con_` id), and the API credentials with one `group` value
+are one key group, in the order of `credentials`. A run can have several groups, such as
+one of `anthropic` keys and one of `openai` keys, and each group rotates, cools down and
+stops apart from the others. The keys of one group need one `format`, `endpoint` and
+`auth`: two that differ stop the run with `run_configuration_invalid`, such as `Give the
+keys of group "anthropic" one format, endpoint and auth.` A key of `forager.yaml` has no
+`group` and is never in a key group: a session on it gets that key alone.
 
 A session starts on the key in its join request's `model_provider_credential_name`, or
 on the default model provider credential when the request has none. For a key of a

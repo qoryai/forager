@@ -353,8 +353,9 @@ type RunConfiguration struct {
 // host credential has Apply, Placeholders and Purpose.
 type RunCredential struct {
 	Name string `json:"name"`
-	// Group is an API credential's key group, the id of its provider: the API
-	// credentials with one group are one key group. Empty for a host credential.
+	// Group is an API credential's key group, the public id of the provider of the
+	// run's model choice (its con_ id): the API credentials with one group are one key
+	// group. Empty for a host credential.
 	Group string `json:"group,omitzero"`
 	// Format is the API format of an API credential, one of api-format.schema.json;
 	// empty for a host credential.
