@@ -156,21 +156,14 @@ func (g *Gateway) recorded(runID string) bool {
 // failed in a way that may pass; and otherwise a 410 run_closed, a run that ended here
 // before, whose reopen failed for good, or that never opened here.
 func (g *Gateway) heldRun(w http.ResponseWriter, r *http.Request, runID string) *linkRun {
-	g.mu.Lock()
-	lr, closing := g.runs[runID], g.closing
-	g.mu.Unlock()
-	if closing {
-		w.WriteHeader(http.StatusServiceUnavailable)
+	held, refusal := g.heldNow(runID)
+	switch {
+	case refusal != nil:
+		refusal(w)
 		return nil
-	}
-	if lr != nil && lr.remote {
-		return lr
-	}
-	if sp, ok := g.spentOf(runID); ok {
-		gone(w, sp.end)
-		return nil
-	}
-	if lr == nil && g.reopenable(runID) {
+	case held != nil:
+		return held
+	default:
 		// The run key verified: while the connection waits on the reopen, up to 120
 		// seconds, it counts against the one address's bounds in all alone, not of its
 		// source or its /48, and is closed for no newer one (the user's "547 (a)").
@@ -195,6 +188,31 @@ func (g *Gateway) heldRun(w http.ResponseWriter, r *http.Request, runID string) 
 	}
 	gone(w, runEnd{code: accesskey.CodeRunClosed, from: accesskey.FromGateway})
 	return nil
+}
+
+// heldNow is the run runID that the one address holds, or the refusal of a request of it
+// that needs no reopen: a 503 with no body from the start of Close, the 410 of a run the
+// gateway ended and let go of, and a 410 run_closed of a run that is neither held nor
+// suspended here. Both are nil for a run that a request reopens ([Gateway.heldRun]).
+func (g *Gateway) heldNow(runID string) (*linkRun, func(http.ResponseWriter)) {
+	g.mu.Lock()
+	lr, closing := g.runs[runID], g.closing
+	g.mu.Unlock()
+	switch {
+	case closing:
+		return nil, func(w http.ResponseWriter) { w.WriteHeader(http.StatusServiceUnavailable) }
+	case lr != nil && lr.remote:
+		return lr, nil
+	}
+	if sp, ok := g.spentOf(runID); ok {
+		return nil, func(w http.ResponseWriter) { gone(w, sp.end) }
+	}
+	if lr == nil && g.reopenable(runID) {
+		return nil, nil
+	}
+	return nil, func(w http.ResponseWriter) {
+		gone(w, runEnd{code: accesskey.CodeRunClosed, from: accesskey.FromGateway})
+	}
 }
 
 // relayTo is the proxy of a run a bound connection's first line opens ([relayWords]).

@@ -119,36 +119,42 @@ func (c Config) hostCallTimeOf() time.Duration {
 // Apiary gets nothing of the body, and the gateway drops the answer.
 //
 // A run has at most one c in flight when c.single is true: a second one is 429
-// rate_limited, and Qory Apiary gets nothing of it. For such a c, the run id is checked
-// first ([Gateway.refusedRunID]), then the place is taken, and then the body is read, on
-// the local link within [server.HostCallTime], as on the one address within
-// [edgeReadWait].
+// rate_limited, and Qory Apiary gets nothing of it. For such a c, the run id and the end
+// of the run are checked first ([Gateway.bodyRefusal]), then the place is taken, and then
+// the body is read, on the local link within [server.HostCallTime], as on the one address
+// within [edgeReadWait].
 func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request, runID string, c *hostCall) {
 	rc := http.NewResponseController(w)
 	release := func() {}
-	// drop reads and drops what is left of the body, up to one byte over the limit, so a
-	// caller that still writes it gets the answer.
+	// drop reads and drops what is left of the body, up to one byte over the limit, before
+	// the gateway writes a refusal, so a caller that still writes the body gets it.
 	drop := func() { io.Copy(io.Discard, io.LimitReader(r.Body, int64(c.request)+1)) }
-	// The local link's server sets no deadline for a body, and drops none of a refused one
-	// over 256 KiB, as the one address does ([Gateway.edgeHandler]).
+	// The local link's server sets no deadline for a body, and closes the connection after
+	// a refusal that leaves 256 KiB or more of the body unread; the one address has both
+	// ([Gateway.edgeHandler]). net/http clears the deadline once the body ends. A body of
+	// no bytes gets none: net/http's background read, which ends the request's context when
+	// the caller hangs up, then starts before the handler, and the deadline would end that
+	// read, and with it the call, at the time of a host call.
 	local := c.single && c.method == http.MethodPost && !s.remote
-	if local {
+	if local && r.ContentLength != 0 {
 		rc.SetReadDeadline(time.Now().Add(g.cfg.hostCallTimeOf()))
 	}
 	if c.single {
-		if g.refusedRunID(s, w, r, runID) {
-			if local {
-				drop()
-			}
-			return
-		}
+		refusal := g.bodyRefusal(s, r, runID)
 		call := runCall{runID, c}
-		if _, taken := g.inFlight.LoadOrStore(call, nil); taken {
-			refuse(w, http.StatusTooManyRequests, accesskey.CodeRateLimited, nil, accesskey.FromGateway,
-				fmt.Sprintf("Retry once the run's other %s request ends: a run has at most one in flight.\nThe gateway sent nothing.", c.name))
+		if refusal == nil {
+			if _, taken := g.inFlight.LoadOrStore(call, nil); taken {
+				refusal = func(w http.ResponseWriter) {
+					refuse(w, http.StatusTooManyRequests, accesskey.CodeRateLimited, nil, accesskey.FromGateway,
+						fmt.Sprintf("Retry once the run's other %s request ends: a run has at most one in flight.\nThe gateway sent nothing.", c.name))
+				}
+			}
+		}
+		if refusal != nil {
 			if local {
 				drop()
 			}
+			refusal(w)
 			return
 		}
 		defer g.inFlight.Delete(call)
@@ -163,15 +169,10 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 		charged, release = g.runAPILimits.ChargeBody(io.LimitReader(r.Body, int64(c.request)+1))
 		defer release()
 		body, readErr = io.ReadAll(charged)
-		switch {
-		case errors.Is(readErr, proxy.ErrRunAPIBudget):
+		if errors.Is(readErr, proxy.ErrRunAPIBudget) {
 			body = nil
 			release()
 			drop()
-		case local && readErr == nil && len(body) <= c.request:
-			// The body ended. A body that did not keeps its deadline, for net/http's read of
-			// the rest before the answer.
-			rc.SetReadDeadline(time.Time{})
 		}
 	}
 	lr := g.linkRunOf(s, w, r, runID)

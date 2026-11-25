@@ -311,7 +311,8 @@ func gone(w http.ResponseWriter, end runEnd) {
 // run_key_invalid, and a run the gateway does not hold is reopened, or gets a 503 or a
 // 410 ([Gateway.heldRun]); and a run that ended at the gateway is 410.
 func (g *Gateway) linkRunOf(s *side, w http.ResponseWriter, r *http.Request, runID string) *linkRun {
-	if g.refusedRunID(s, w, r, runID) {
+	if refusal := g.runIDRefusal(s, r, runID); refusal != nil {
+		refusal(w)
 		return nil
 	}
 	var lr *linkRun
@@ -330,24 +331,48 @@ func (g *Gateway) linkRunOf(s *side, w http.ResponseWriter, r *http.Request, run
 	return lr
 }
 
-// refusedRunID reports whether runID is the id of no run that the link request r is for,
-// and w then has the refusal: on the one address any id but the run key's, on the local
-// link the id of no run here. It opens and reopens no run.
-func (g *Gateway) refusedRunID(s *side, w http.ResponseWriter, r *http.Request, runID string) bool {
+// runIDRefusal writes the refusal of the link request r when runID is the id of no run
+// that r is for, and is nil otherwise: on the one address of any id but the run key's, on
+// the local link of the id of no run here. It opens and reopens no run.
+func (g *Gateway) runIDRefusal(s *side, r *http.Request, runID string) func(http.ResponseWriter) {
 	if s.remote {
 		p, _ := runKeyOf(r.Context())
 		if runID == p.key.RunID {
-			return false
+			return nil
 		}
 		ref := runKeyInvalid()
-		refuse(w, ref.Status, ref.Code, nil, ref.From, ref.Error())
-		return true
+		return func(w http.ResponseWriter) { refuse(w, ref.Status, ref.Code, nil, ref.From, ref.Error()) }
 	}
 	if g.localRun(runID) != nil {
-		return false
+		return nil
 	}
-	invalid(w)
-	return true
+	return invalid
+}
+
+// bodyRefusal writes the refusal of the link request r of the run runID that the gateway
+// knows before it reads r's body, and is nil otherwise: that of [Gateway.runIDRefusal];
+// on the one address that of [Gateway.heldNow]; and the 410 of a run that ended at the
+// gateway. A run that the one address may reopen gets its answer after the reopen.
+func (g *Gateway) bodyRefusal(s *side, r *http.Request, runID string) func(http.ResponseWriter) {
+	if refusal := g.runIDRefusal(s, r, runID); refusal != nil {
+		return refusal
+	}
+	var lr *linkRun
+	if s.remote {
+		var refusal func(http.ResponseWriter)
+		if lr, refusal = g.heldNow(runID); refusal != nil {
+			return refusal
+		}
+	} else {
+		lr = g.localRun(runID)
+	}
+	if lr == nil {
+		return nil
+	}
+	if end, ended := lr.gone(); ended {
+		return func(w http.ResponseWriter) { gone(w, end) }
+	}
+	return nil
 }
 
 // callContext is the context of a request of the run lr to the server for the link

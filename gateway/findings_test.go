@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -301,6 +302,8 @@ type budgetAt struct {
 	// and a run id's findings on it, with the headers every request of the first run has.
 	dial   func() net.Conn
 	lineTo func(method, runID string) string
+	// end ends run at the gateway.
+	end func(run int)
 }
 
 // head is the request line of the first run's findings call of method, with the headers
@@ -390,6 +393,7 @@ func budgetWays(t *testing.T, cfg func(*gateway.Config), try func(t *testing.T, 
 		at.lineTo = func(method, runID string) string {
 			return line(method, "/v1/run-configuration/"+runID+"/findings") + "Host: localhost\r\nContent-Type: application/json\r\n"
 		}
+		at.end = func(run int) { h.post(exited(at.runs[run])) }
 		try(t, at)
 	})
 	t.Run("the one address", func(t *testing.T) {
@@ -422,6 +426,12 @@ func budgetWays(t *testing.T, cfg func(*gateway.Config), try func(t *testing.T, 
 		}
 		at.lineTo = func(method, runID string) string {
 			return line(method, "/qory-link/run-configuration/"+runID+"/findings") + "Host: gateway.example:8443\r\nAuthorization: Bearer " + keys[0] + "\r\nContent-Type: application/json\r\n"
+		}
+		at.end = func(run int) {
+			body, _ := json.Marshal([]map[string]any{exited(at.runs[run])})
+			if got := at.sendTo(run, http.MethodPost, "/qory-link/events", body); got.status != http.StatusAccepted {
+				t.Fatalf("the run's end: %d %s", got.status, got.body)
+			}
 		}
 		try(t, at)
 	})
@@ -826,7 +836,8 @@ func TestAFindingsRunIDIsCheckedBeforeItsBody(t *testing.T) {
 // TestAFindingsBodyOnTheLocalLinkHasItsTime pins the time of a POST findings body on the
 // local link, the time of a host call: a body that stalls, one past the budget's room, one
 // of a run with a POST in flight and one of no run get their answer once it passed, with
-// nothing counted after it; and a body that ends in time leaves the call its whole time.
+// nothing counted after it; a body that ends in time leaves the call its whole time; and
+// a POST with no body whose call passes the time of a host call gets the gateway's 502.
 func TestAFindingsBodyOnTheLocalLinkHasItsTime(t *testing.T) {
 	const wait = 4 * time.Second
 	budgetWays(t, func(c *gateway.Config) { gateway.SetHostCallTime(c, wait) }, func(t *testing.T, at *budgetAt) {
@@ -871,6 +882,39 @@ func TestAFindingsBodyOnTheLocalLinkHasItsTime(t *testing.T) {
 		slow.Write([]byte("x"))
 		if status := statusOn(t, slow); status != http.StatusOK {
 			t.Errorf("a call past the time of its body: %d", status)
+		}
+
+		arrived, _ := holdHostCalls(at.f)
+		empty := at.dial()
+		defer empty.Close()
+		io.WriteString(empty, at.head(http.MethodPost)+"Content-Length: 0\r\n\r\n")
+		within(t, "a POST with no body at the control plane", arrived, 10*time.Second)
+		if status := statusOn(t, empty); status != http.StatusBadGateway {
+			t.Errorf("a POST with no body past the time of a host call: %d", status)
+		}
+	})
+}
+
+// TestAFindingsBodyOfARunThatEndedCountsNothing pins that the gateway answers a POST
+// findings of a run that ended at the gateway with the run's 410 before it reads the
+// body: the body counts nothing, and nothing is sent.
+func TestAFindingsBodyOfARunThatEndedCountsNothing(t *testing.T) {
+	budgetWays(t, func(*gateway.Config) {}, func(t *testing.T, at *budgetAt) {
+		at.end(0)
+		eventually(t, "the run's end", func() bool { return at.send(0, http.MethodGet, "/findings", nil).status == http.StatusGone })
+		at.f.reset()
+		conn := at.dial()
+		defer conn.Close()
+		at.write(conn, at.head(http.MethodPost), 8<<20, 8<<20-1)
+		if used := gateway.UsedRunAPI(at.g); used != 0 {
+			t.Errorf("%d bytes of a body of a run that ended count", used)
+		}
+		conn.Write(make([]byte, 1))
+		if status := statusOn(t, conn); status != http.StatusGone {
+			t.Errorf("a POST findings of a run that ended: %d", status)
+		}
+		if n := len(at.f.requests()); n != 0 {
+			t.Errorf("the control plane got %d requests", n)
 		}
 	})
 }

@@ -1553,8 +1553,9 @@ release may change what an existing document does, and says so under Upgrading.
   request up to 2 MiB and one byte, as before. A POST findings body counts in the
   gateway's 512 MiB from its arrival, within 60 seconds, to the end of the call to Qory
   Apiary, and a GET findings answer from its read to the end of its write, which has 60
-  seconds. The gateway checks the run id, and that the run has no other call of the method
-  in flight, before it reads the body. `server.Client.HostCall` takes the method.
+  seconds. The gateway checks the run id, whether the run ended, and that the run has no
+  other call of the method in flight, before it reads the body.
+  `server.Client.HostCall` takes the method.
 - The link's host calls, `POST <run.url>/<run_id>/next-session` and `POST
   <run.url>/<run_id>/pushed-commits`: the gateway reads the body, at most 4 KiB and
   64 KiB, before it looks up or reopens the run, and sends it unread to Qory Apiary with
