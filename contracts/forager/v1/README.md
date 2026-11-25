@@ -5156,10 +5156,11 @@ Qory Apiary's that verifies under the pin passes with its status and its body, w
 `Content-Type: application/json` when it has one: a next-session answer's `200`, a
 pushed-commits answer's `204` with no body, a findings answer's `200`. The session
 waits 4 minutes at most, and sends nothing once the run's close began or for a run with
-no control plane. Behind a separate gateway, the 4 minutes are 60 seconds for the body,
-120 for a reopen of the run and the 60 seconds at Qory Apiary, with no time left for
-the answer's write: when the wait ends, read the findings before you send a POST
-findings again (A POST findings again, below). The other answers:
+no control plane. Behind a separate gateway, the 4 minutes have three parts. The body has
+60 seconds to arrive. A reopen of the run takes up to 120 seconds. Qory Apiary has 60
+seconds to answer. No time is left to write the answer. If the wait ends, read the
+findings before you send the POST findings again (A POST findings again, below). The
+other answers:
 
 | Status | `error` | `from` | When |
 |---|---|---|---|
@@ -5183,18 +5184,18 @@ body or answer over 1 MiB, so they take none of the 512 MiB.
 
 A run has at most one GET findings and one POST findings in flight. A second one of the
 same method gets the `429`, and the gateway reads its body only to drop it. The gateway
-checks the run id and whether the run ended first, then whether the run has one in
-flight, then reads the body. A body of another run's id, on the local link of no run,
-and of a run that ended at the gateway counts nothing. Behind a separate gateway, the
-body of a run that the gateway reopens counts during the reopen, up to 120 seconds. A
-POST findings body has 60 seconds to arrive. A request is in flight until the gateway
-wrote its answer, within 60 seconds of the end of the call to Qory Apiary. Behind a
-separate gateway, every answer but a GET findings `200` is written after that: the
-request is in flight until the gateway has the answer to sign. A caller that hangs up
-while Qory Apiary has its request ends the call. The gateway reads no body of a GET
-findings, so after the hang-up of a GET findings that came with a body, the call goes on
-until Qory Apiary answers or the 60 seconds end, and the run has that GET findings in
-flight.
+reads no body until it checks the run id, the run's end, and whether the run has one in
+flight. Behind a separate gateway, it also checks first whether the gateway's close
+began. The body of a request that one of these checks refuses counts nothing. Behind a
+separate gateway, the body of a run that the gateway reopens counts during the reopen, up
+to 120 seconds. A POST findings body has 60 seconds to arrive. A request is in flight
+until the gateway writes its answer, at most 60 seconds after the call to Qory Apiary
+ends. Behind a separate gateway, only a GET findings `200` is written in flight. For any
+other answer, the request is in flight only until the gateway has the answer to sign. A
+caller that hangs up while Qory Apiary has its request ends the call. The gateway reads
+no body of a GET findings, so after the hang-up of a GET findings that came with a body,
+the call goes on until Qory Apiary answers or the 60 seconds end, and the run has that
+GET findings in flight.
 
 **A POST findings again.** Qory Apiary has no key for a repeated POST findings: a second
 request with the same raises makes new findings. Nothing was sent for a session's error

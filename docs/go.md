@@ -672,17 +672,16 @@ if errors.As(err, &ref) && ref.From == accesskey.FromApiary && ref.Code == "run_
 ```
 
 Forager reads no body of them. The gateway sends each request to Qory Apiary, signed with
-its access key, a `POST` once, and returns the answer's body as it came: a next-session
-answer, the empty body of a pushed-commits `204`, or a findings answer. A body is at most
-4 KiB for next-session, 64 KiB for pushed-commits and 8 MiB for POST findings; GET
-findings has none, and its answer is at most 16 MiB. `PostFindings` returns an error for
-a body over 8 MiB, with nothing sent. Call each at any time from `Open` to `Close`, from
-any goroutine, while a `Join` runs too, and from the check of `Run.SetRunAPICheck`. A
-call waits at most 4 minutes; in the check, it ends with the check's context, after 90
-seconds at most. Behind a separate gateway, a call can take the whole 4 minutes: 60
-seconds for its body, 120 for a reopen of the run and 60 at Qory Apiary. The wait can
-then end as the answer arrives, so read the findings before you send a POST findings
-again after that error.
+its access key, and returns the answer's body as it came: a next-session answer, the
+empty body of a pushed-commits `204`, or a findings answer. It sends a `POST` once. It
+may send a GET findings twice, when Qory Apiary closes a kept connection before it
+answers. A body is at most 4 KiB for next-session, 64 KiB for pushed-commits and 8 MiB
+for POST findings; GET findings has none, and its answer is at most 16 MiB.
+`PostFindings` returns an error for a body over 8 MiB, with nothing sent. Call each at
+any time from `Open` to `Close`, from any goroutine, while a `Join` runs too, and from
+the check of `Run.SetRunAPICheck`. A call waits at most 4 minutes; in the check, it ends
+with the check's context, after 90 seconds at most. If `PostFindings` returns an error
+after 4 minutes, read the findings before you send it again.
 
 No container reaches any of the calls. On one machine, only a gateway started with
 `gateway.Config.NoLinkSocket` keeps them to the process that holds the link in memory:
