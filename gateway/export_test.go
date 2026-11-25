@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"reflect"
+	"sync/atomic"
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
@@ -72,8 +73,15 @@ func SetHostCallTime(c *Config, d time.Duration) { c.hostCallTime = d }
 // HostCallTimeOf is the most time one host call has at the server under c.
 func HostCallTimeOf(c Config) time.Duration { return c.hostCallTimeOf() }
 
+// UsedRunAPI is the bytes of g's memory budget of run API bodies and answers taken now. It
+// charges nothing, so it takes no room of a request that charges meanwhile.
+func UsedRunAPI(g *Gateway) int64 {
+	used := reflect.ValueOf(&g.runAPILimits).Elem().FieldByName("used")
+	return (*atomic.Int64)(used.Addr().UnsafePointer()).Load()
+}
+
 // ChargeRunAPI takes n bytes of g's memory budget of run API bodies and answers, and
-// reports whether they had room, with what gives them back.
+// reports whether they had room, with the func that ends the charge.
 func ChargeRunAPI(g *Gateway, n int) (release func(), ok bool) {
 	return g.runAPILimits.ChargeAnswer(n + 1<<20)
 }

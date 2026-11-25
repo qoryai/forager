@@ -352,11 +352,13 @@ func TestTheGatewaysRefusalsOfAHostCall(t *testing.T) {
 	serveHostCalls(o.f)
 	for call, limit := range postLimits {
 		_, path := methodPath(call)
-		_, err := hostCall(o.h, o.a.RunID, call, bytes.Repeat([]byte("a"), limit+1))
-		if ref := refusalWith(t, call+": over the limit", err, http.StatusRequestEntityTooLarge, "payload_too_large", accesskey.FromGateway); ref != nil && !startsWithAFix.MatchString(err.Error()) {
-			t.Errorf("%s: the text %q starts with no fix", call, err)
+		// Sent without [server.Link], whose PostFindings sends no body over its limit.
+		status, body := rawPost(t, raw(t, o.h.g.LocalLink()), "/v1/run-configuration/"+o.a.RunID+path, server.LinkContentType, strings.Repeat("a", limit+1))
+		ref := refusalOf([]byte(body))
+		if text, _ := ref["message"].(string); status != http.StatusRequestEntityTooLarge || ref["error"] != "payload_too_large" || ref["from"] != "gateway" || !startsWithAFix.MatchString(text) {
+			t.Errorf("%s: over the limit: %d %s", call, status, body)
 		}
-		status, body := rawPost(t, raw(t, o.h.g.LocalLink()), "/v1/run-configuration/"+o.a.RunID+path, "text/plain", "{}")
+		status, body = rawPost(t, raw(t, o.h.g.LocalLink()), "/v1/run-configuration/"+o.a.RunID+path, "text/plain", "{}")
 		if status != http.StatusBadRequest || !strings.Contains(body, `"error":"invalid_request"`) || !strings.Contains(body, `"from":"gateway"`) ||
 			!strings.Contains(body, `"message":"Send the `+callName(call)+` request with Content-Type: application/json: the gateway sent nothing.\nContent-Type: text/plain"`) {
 			t.Errorf("%s: text/plain: %d %s", call, status, body)

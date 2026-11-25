@@ -210,17 +210,17 @@ func (l *RunAPILimits) charge(n int64) bool {
 }
 
 // ChargeBody is r, the body of a request, charged to the memory budget as it is read
-// ([chargedBody]), and what gives the bytes back: the caller calls release once it keeps
-// the body no more, and a second call gives nothing back.
+// ([chargedBody]), and the func that ends the charge: the caller calls release once it
+// keeps the body no more, and a second call does nothing.
 func (l *RunAPILimits) ChargeBody(r io.Reader) (body io.Reader, release func()) {
 	b := &chargedBody{r: r, limits: l}
 	return b, b.release
 }
 
 // ChargeAnswer charges the memory budget for each byte past [runAPIFreeBytes] of an
-// answer of n bytes, and reports whether they had room, with what gives them back: the
-// caller calls release once, after the write of the answer. With no room it counts
-// nothing.
+// answer of n bytes, and reports whether they had room, with the func that ends the
+// charge: the caller calls release once, after the write of the answer. With no room it
+// counts nothing.
 func (l *RunAPILimits) ChargeAnswer(n int) (release func(), ok bool) {
 	over := int64(n) - runAPIFreeBytes
 	if over <= 0 {
@@ -232,10 +232,10 @@ func (l *RunAPILimits) ChargeAnswer(n int) (release func(), ok bool) {
 	return func() { l.used.Add(-over) }, true
 }
 
-// chargedBody reads a POST artifacts body or a host call's and charges [RunAPILimits] for each byte past
-// [runAPIFreeBytes] as it arrives, so a head with a Content-Length and no bytes costs
-// nothing. A read that would pass the budget ends in [ErrRunAPIBudget]. release gives
-// every byte back.
+// chargedBody reads a POST artifacts body or a host call's and charges [RunAPILimits] for
+// each byte past [runAPIFreeBytes] as it arrives, so a head with a Content-Length and no
+// bytes costs nothing. A read that would pass the budget ends in [ErrRunAPIBudget].
+// release ends the charge.
 type chargedBody struct {
 	r       io.Reader
 	limits  *RunAPILimits
@@ -255,7 +255,7 @@ func (b *chargedBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// release gives back what the body was charged, once.
+// release ends the body's charge. A second call does nothing.
 func (b *chargedBody) release() {
 	b.limits.used.Add(-b.charged)
 	b.charged = 0

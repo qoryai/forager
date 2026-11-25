@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -32,13 +31,7 @@ const (
 )
 
 // hasRoom reports whether g's memory budget has room for n bytes.
-func hasRoom(g *gateway.Gateway, n int) bool {
-	release, ok := gateway.ChargeRunAPI(g, n)
-	if ok {
-		release()
-	}
-	return ok
-}
+func hasRoom(g *gateway.Gateway, n int) bool { return gateway.UsedRunAPI(g)+int64(n) <= memoryBudget }
 
 // fill takes all of g's memory budget but left bytes until the returned func is called.
 func fill(t *testing.T, g *gateway.Gateway, left int) func() {
@@ -54,12 +47,22 @@ func fill(t *testing.T, g *gateway.Gateway, left int) func() {
 // within a few seconds.
 func isFree(t *testing.T, what string, g *gateway.Gateway) {
 	t.Helper()
-	eventually(t, what+": the whole memory budget free", func() bool { return hasRoom(g, memoryBudget) && !hasRoom(g, memoryBudget+1) })
+	freeWithin(t, what, g, 10*time.Second)
+}
+
+// freeWithin is isFree within d.
+func freeWithin(t *testing.T, what string, g *gateway.Gateway, d time.Duration) {
+	t.Helper()
+	for deadline := time.Now().Add(d); gateway.UsedRunAPI(g) != 0; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: %d bytes of the memory budget taken after %s", what, gateway.UsedRunAPI(g), d)
+		}
+	}
 }
 
 // sendRaw sends a request of method to path on the local link of h, with body, and
-// returns the status.
-func sendRaw(t *testing.T, h *harness, method, path string, body []byte) int {
+// returns the answer's status and body.
+func sendRaw(t *testing.T, h *harness, method, path string, body []byte) (int, []byte) {
 	t.Helper()
 	req, err := http.NewRequest(method, server.LocalOrigin+path, bytes.NewReader(body))
 	if err != nil {
@@ -71,8 +74,11 @@ func sendRaw(t *testing.T, h *harness, method, path string, body []byte) int {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
-	return resp.StatusCode
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Errorf("%s %s: %v", method, path, err)
+	}
+	return resp.StatusCode, got
 }
 
 // TestAHostCallHasItsMethod pins the method of each host call, on the local link and on
@@ -102,18 +108,18 @@ func TestAHostCallHasItsMethod(t *testing.T) {
 		o.f.reset()
 		base := "/v1/run-configuration/" + o.a.RunID
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
-			if status := sendRaw(t, o.h, method, base+"/findings", []byte(`{"a":1}`)); status != http.StatusOK {
+			if status, _ := sendRaw(t, o.h, method, base+"/findings", []byte(`{"a":1}`)); status != http.StatusOK {
 				t.Errorf("%s findings: %d", method, status)
 			}
 		}
 		for _, path := range []string{"/next-session", "/pushed-commits"} {
-			if status := sendRaw(t, o.h, http.MethodGet, base+path, nil); status != http.StatusBadRequest {
+			if status, _ := sendRaw(t, o.h, http.MethodGet, base+path, nil); status != http.StatusBadRequest {
 				t.Errorf("GET %s: %d", path, status)
 			}
 		}
 		for _, method := range others {
 			for _, path := range []string{"/next-session", "/findings"} {
-				if status := sendRaw(t, o.h, method, base+path, []byte(`{}`)); status != http.StatusMethodNotAllowed {
+				if status, _ := sendRaw(t, o.h, method, base+path, []byte(`{}`)); status != http.StatusMethodNotAllowed {
 					t.Errorf("%s %s: %d", method, path, status)
 				}
 			}
@@ -279,16 +285,68 @@ func TestAPostFindingsBodyVerifiesWhole(t *testing.T) {
 	isFree(t, "after the bodies", r.g)
 }
 
-// budgetAt is the two ways to a gateway's findings calls that the budget's tests take:
-// call sends one and returns its status and the refusal's code, message and from.
+// budgetAt is the two ways to a gateway's findings calls that the budget's tests take, the
+// local link and the one address, with two runs of the gateway.
 type budgetAt struct {
-	g    *gateway.Gateway
-	f    *fakeRunAPI
-	call func(method string, body []byte) (status int, code, message, from string)
-	// dial opens a connection for a request, and head is the request line of a method on
-	// it, with the headers every request has.
-	dial func() net.Conn
-	head func(method string) string
+	t      *testing.T
+	g      *gateway.Gateway
+	f      *fakeRunAPI
+	remote bool
+	// runs are the ids of the two runs, and send sends a request of run with body to the
+	// path under its id and returns its answer.
+	runs [2]string
+	send func(run int, method, path string, body []byte) answer
+	// dial opens a connection for a request, and lineTo is the request line of a method
+	// and a run id's findings on it, with the headers every request of the first run has.
+	dial   func() net.Conn
+	lineTo func(method, runID string) string
+}
+
+// head is the request line of the first run's findings call of method, with the headers
+// every request has.
+func (at *budgetAt) head(method string) string { return at.lineTo(method, at.runs[0]) }
+
+// call sends the first run's findings call of method and returns its status and the
+// refusal's code, message and from.
+func (at *budgetAt) call(method string, body []byte) (status int, code, message, from string) {
+	return at.refusalOf(at.send(0, method, "/findings", body))
+}
+
+// refusalOf is got's status and its refusal's code, message and from.
+func (at *budgetAt) refusalOf(got answer) (status int, code, message, from string) {
+	if got.status == http.StatusOK {
+		return got.status, "", "", ""
+	}
+	validDocument(at.t, "link-refusal.schema.json", got.body)
+	ref := got.refusal()
+	if ref["retry_after"] != nil {
+		at.t.Errorf("retry_after %v", ref["retry_after"])
+	}
+	code, _ = ref["error"].(string)
+	message, _ = ref["message"].(string)
+	from, _ = ref["from"].(string)
+	return got.status, code, message, from
+}
+
+// stall opens a connection, sends the first run's POST findings with a Content-Length of
+// size and sent bytes of the body, and returns the connection.
+func (at *budgetAt) stall(size, sent int) net.Conn {
+	conn := at.dial()
+	fmt.Fprintf(conn, "%sContent-Length: %d\r\n\r\n", at.head(http.MethodPost), size)
+	conn.Write(make([]byte, sent))
+	return conn
+}
+
+// statusOn is the status of the answer on conn, read within 20 seconds.
+func statusOn(t *testing.T, conn net.Conn) int {
+	t.Helper()
+	conn.SetReadDeadline(time.Now().Add(20 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Errorf("no answer: %v", err)
+		return 0
+	}
+	return resp.StatusCode
 }
 
 // budgetWays runs try on the local link and on the one address.
@@ -298,32 +356,28 @@ func budgetWays(t *testing.T, cfg func(*gateway.Config), try func(t *testing.T, 
 		f := runAPIOf(c)
 		conf := gateway.Config{Server: c.server()}
 		cfg(&conf)
-		o := startRunAPIRun(t, start(t, conf), f)
+		h := start(t, conf)
+		at := &budgetAt{t: t, g: h.g, f: f}
+		for i := range at.runs {
+			at.runs[i] = startRunAPIRun(t, h, f).a.RunID
+		}
 		serveHostCalls(f)
 		f.reset()
-		try(t, &budgetAt{g: o.h.g, f: f, call: func(method string, body []byte) (int, string, string, string) {
-			_, err := hostCall(o.h, o.a.RunID, method+" /findings", body)
-			var ref *accesskey.Refusal
-			switch {
-			case err == nil:
-				return http.StatusOK, "", "", ""
-			case errors.As(err, &ref):
-				if ref.RetryAfter != 0 {
-					t.Errorf("RetryAfter %v", ref.RetryAfter)
-				}
-				return ref.Status, ref.Code, ref.Text, ref.From
-			}
-			t.Errorf("%s findings: %v", method, err)
-			return 0, "", "", ""
-		}, dial: func() net.Conn {
-			conn, err := net.Dial("unix", o.h.g.LocalLink().Socket)
+		at.send = func(run int, method, path string, body []byte) answer {
+			status, got := sendRaw(t, h, method, "/v1/run-configuration/"+at.runs[run]+path, body)
+			return answer{status: status, body: got}
+		}
+		at.dial = func() net.Conn {
+			conn, err := net.Dial("unix", h.g.LocalLink().Socket)
 			if err != nil {
 				t.Fatal(err)
 			}
 			return conn
-		}, head: func(method string) string {
-			return line(method, "/v1/run-configuration/"+o.a.RunID+"/findings") + "Host: localhost\r\nContent-Type: application/json\r\n"
-		}})
+		}
+		at.lineTo = func(method, runID string) string {
+			return line(method, "/v1/run-configuration/"+runID+"/findings") + "Host: localhost\r\nContent-Type: application/json\r\n"
+		}
+		try(t, at)
 	})
 	t.Run("the one address", func(t *testing.T) {
 		c := gatewayControl(t)
@@ -333,29 +387,27 @@ func budgetWays(t *testing.T, cfg func(*gateway.Config), try func(t *testing.T, 
 		var conf gateway.Config
 		cfg(&conf)
 		r := startRemote(t, c, conf)
-		e := r.open(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{})
+		at := &budgetAt{t: t, g: r.g, f: f, remote: true}
+		var keys [2]string
+		for i := range at.runs {
+			e := r.open(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{})
+			at.runs[i], keys[i] = e.a.RunID, e.key
+		}
 		f.reset()
-		path := "/qory-link/run-configuration/" + e.a.RunID + "/findings"
-		try(t, &budgetAt{g: r.g, f: f, call: func(method string, body []byte) (int, string, string, string) {
-			got := r.do(t, e.key, method, path, body)
-			if got.status == http.StatusOK {
-				return got.status, "", "", ""
-			}
-			ref := got.refusal()
-			code, _ := ref["error"].(string)
-			message, _ := ref["message"].(string)
-			from, _ := ref["from"].(string)
-			validDocument(t, "link-refusal.schema.json", got.body)
-			return got.status, code, message, from
-		}, dial: func() net.Conn {
+		at.send = func(run int, method, path string, body []byte) answer {
+			return r.do(t, keys[run], method, "/qory-link/run-configuration/"+at.runs[run]+path, body)
+		}
+		at.dial = func() net.Conn {
 			b, err := r.bind(t, gatewayKeys())
 			if err != nil {
 				t.Fatal(err)
 			}
 			return b
-		}, head: func(method string) string {
-			return line(method, path) + "Host: gateway.example:8443\r\nAuthorization: Bearer " + e.key + "\r\nContent-Type: application/json\r\n"
-		}})
+		}
+		at.lineTo = func(method, runID string) string {
+			return line(method, "/qory-link/run-configuration/"+runID+"/findings") + "Host: gateway.example:8443\r\nAuthorization: Bearer " + keys[0] + "\r\nContent-Type: application/json\r\n"
+		}
+		try(t, at)
 	})
 }
 
@@ -521,7 +573,8 @@ func TestAFindingsBodyIsBounded(t *testing.T) {
 // time of a host call passed for a caller that stops reading.
 func TestAFindingsAnswerCountsUntilItIsWritten(t *testing.T) {
 	const size = 16 << 20
-	budgetWays(t, func(c *gateway.Config) { gateway.SetHostCallTime(c, 3*time.Second) }, func(t *testing.T, at *budgetAt) {
+	const wait = 10 * time.Second
+	budgetWays(t, func(c *gateway.Config) { gateway.SetHostCallTime(c, wait) }, func(t *testing.T, at *budgetAt) {
 		at.f.answers(func(w http.ResponseWriter, r *http.Request, _ []byte) {
 			at.f.sign(w, r, http.StatusOK, make([]byte, size))
 		})
@@ -533,7 +586,260 @@ func TestAFindingsAnswerCountsUntilItIsWritten(t *testing.T) {
 			if hangUp {
 				conn.Close()
 			}
-			isFree(t, fmt.Sprintf("after the caller's end, hang up %v", hangUp), at.g)
+			freeWithin(t, fmt.Sprintf("after the caller's end, hang up %v", hangUp), at.g, 3*wait)
+		}
+	})
+}
+
+// TestAFindingsCallOfAGETWithAnUnsentBodyEnds pins a GET findings with a Content-Length
+// and no body, which net/http reads before it writes the answer's head: the answer counts
+// meanwhile, and is free once the caller hangs up, and once the time of a host call passed
+// for a caller that does not.
+func TestAFindingsCallOfAGETWithAnUnsentBodyEnds(t *testing.T) {
+	for _, hangUp := range []bool{true, false} {
+		wait := 3 * time.Second
+		if hangUp {
+			wait = time.Minute
+		}
+		budgetWays(t, func(c *gateway.Config) { gateway.SetHostCallTime(c, wait) }, func(t *testing.T, at *budgetAt) {
+			at.f.answers(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				at.f.sign(w, r, http.StatusOK, make([]byte, 3<<20))
+			})
+			conn := at.dial()
+			defer conn.Close()
+			io.WriteString(conn, at.head(http.MethodGet)+"Content-Length: 1\r\n\r\n")
+			eventually(t, "the answer counted", func() bool { return gateway.UsedRunAPI(at.g) == 2<<20 })
+			if hangUp {
+				conn.Close()
+			}
+			freeWithin(t, fmt.Sprintf("a GET with an unsent body, hang up %v", hangUp), at.g, 20*time.Second)
+			if status, code, _, _ := at.call(http.MethodGet, nil); status != http.StatusOK {
+				t.Errorf("the next GET: %d %s", status, code)
+			}
+		})
+	}
+}
+
+// TestAFindingsBodyCountsUntilTheCallEnds pins that a POST findings body is free while the
+// caller does not read the answer, and that the run's next POST passes once the time of a
+// host call passed.
+func TestAFindingsBodyCountsUntilTheCallEnds(t *testing.T) {
+	const wait = 6 * time.Second
+	budgetWays(t, func(c *gateway.Config) { gateway.SetHostCallTime(c, wait) }, func(t *testing.T, at *budgetAt) {
+		sent := make(chan struct{}, 1)
+		at.f.answers(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			at.f.sign(w, r, http.StatusOK, bytes.Repeat([]byte(" "), 64<<10))
+			sent <- struct{}{}
+		})
+		conn := at.stall(3<<20, 3<<20)
+		defer conn.Close()
+		within(t, "the answer", sent, 10*time.Second)
+		freeWithin(t, "with the answer unread", at.g, wait/2)
+		eventually(t, "the next POST", func() bool {
+			status, _, _, _ := at.call(http.MethodPost, []byte(`{}`))
+			return status == http.StatusOK
+		})
+	})
+}
+
+// TestARunHasOneFindingsCallOfAMethodInFlight pins the one POST findings and the one GET
+// findings of a run in flight: from before its body is read, a second one is 429
+// rate_limited from the gateway, with nothing sent and nothing counted, its body over
+// 1 MiB among them; one POST beside one GET, another run's, and two next-session requests
+// pass; and the next one passes after an answer, a refusal, a failed call, a body cut off,
+// and a caller that hangs up while the control plane has the request, which ends the
+// request's handler in a panic.
+func TestARunHasOneFindingsCallOfAMethodInFlight(t *testing.T) {
+	budgetWays(t, func(*gateway.Config) {}, func(t *testing.T, at *budgetAt) {
+		arrived, let := make(chan struct{}, 16), make(chan struct{})
+		at.f.answers(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			arrived <- struct{}{}
+			select {
+			case <-let:
+			case <-r.Context().Done():
+			}
+			at.f.sign(w, r, http.StatusOK, []byte(`{}`))
+		})
+		refused := func(what, method string, body []byte) {
+			t.Helper()
+			status, code, message, from := at.call(method, body)
+			want := "Retry once the run's other " + method + " findings request ends: a run has at most one in flight.\nThe gateway sent nothing."
+			if status != http.StatusTooManyRequests || code != "rate_limited" || from != "gateway" || message != want {
+				t.Errorf("%s: %d %s from %s: %q", what, status, code, from, message)
+			}
+		}
+		done := make(chan int, 16)
+		hold := func(run int, method, path string, body []byte) {
+			t.Helper()
+			go func() { done <- at.send(run, method, path, body).status }()
+			within(t, fmt.Sprintf("run %d: %s %s at the control plane", run, method, path), arrived, 10*time.Second)
+		}
+		hold(0, http.MethodPost, "/findings", make([]byte, 3<<20))
+		refused("a second POST", http.MethodPost, []byte(`{}`))
+		refused("a second POST of 8 MiB", http.MethodPost, make([]byte, 8<<20))
+		if used := gateway.UsedRunAPI(at.g); used != 2<<20 {
+			t.Errorf("%d bytes count beside a second POST", used)
+		}
+		hold(0, http.MethodGet, "/findings", nil)
+		refused("a second GET", http.MethodGet, nil)
+		hold(1, http.MethodPost, "/findings", []byte(`{}`))
+		hold(1, http.MethodGet, "/findings", nil)
+		hold(0, http.MethodPost, "/next-session", []byte(`{}`))
+		hold(0, http.MethodPost, "/next-session", []byte(`{}`))
+		if n := len(at.f.requests()); n != 6 {
+			t.Errorf("the control plane got %d requests", n)
+		}
+		close(let)
+		for range 6 {
+			if status := <-done; status != http.StatusOK {
+				t.Errorf("a request in flight: %d", status)
+			}
+		}
+
+		passes := func(what string) {
+			t.Helper()
+			serveHostCalls(at.f)
+			for _, method := range []string{http.MethodPost, http.MethodGet} {
+				if status, code, _, _ := at.call(method, nil); status != http.StatusOK {
+					t.Errorf("%s: %s findings: %d %s", what, method, status, code)
+				}
+			}
+		}
+		passes("after an answer")
+		at.call(http.MethodPost, make([]byte, 8<<20+1))
+		passes("after a 413")
+		release := fill(t, at.g, 0)
+		at.call(http.MethodPost, make([]byte, 2<<20))
+		release()
+		passes("after a 429 of the budget")
+		at.f.answers(func(w http.ResponseWriter, r *http.Request, _ []byte) { w.WriteHeader(http.StatusInternalServerError) })
+		for _, method := range []string{http.MethodPost, http.MethodGet} {
+			if status, _, _, _ := at.call(method, nil); status != http.StatusBadGateway {
+				t.Errorf("a failed %s: %d", method, status)
+			}
+		}
+		passes("after a failed call")
+
+		// frees is passes once the caller that hung up has let go.
+		frees := func(what, method string) {
+			t.Helper()
+			serveHostCalls(at.f)
+			eventually(t, what, func() bool {
+				status, _, _, _ := at.call(method, nil)
+				return status == http.StatusOK
+			})
+		}
+		conn := at.stall(3<<20, 2<<20)
+		eventually(t, "a part of a body counted", func() bool { return gateway.UsedRunAPI(at.g) > 0 })
+		refused("a second POST while the first's body arrives", http.MethodPost, []byte(`{}`))
+		conn.Close()
+		frees("a POST after a body cut off", http.MethodPost)
+		for _, method := range []string{http.MethodPost, http.MethodGet} {
+			arrived, ended := holdHostCalls(at.f)
+			conn := at.dial()
+			head := at.head(method)
+			if method == http.MethodPost {
+				head += "Content-Length: 0\r\n"
+			}
+			io.WriteString(conn, head+"\r\n")
+			within(t, "the request at the control plane", arrived, 10*time.Second)
+			refused("a second "+method+" before the hang up", method, nil)
+			conn.Close()
+			within(t, "the control plane's request cancelled", ended, 10*time.Second)
+			frees("a "+method+" after a hang up", method)
+		}
+		isFree(t, "at the end", at.g)
+	})
+}
+
+// TestAFindingsRunIDIsCheckedBeforeItsBody pins that the body of a POST findings of no run
+// here, on the local link, and of another run than the run key's, on the one address,
+// counts nothing and takes no run's place, and that its refusal is the one of every other
+// request of the run id.
+func TestAFindingsRunIDIsCheckedBeforeItsBody(t *testing.T) {
+	budgetWays(t, func(*gateway.Config) {}, func(t *testing.T, at *budgetAt) {
+		want := "invalid_request"
+		unknown := event.NewRunID()
+		if at.remote {
+			want, unknown = "run_key_invalid", at.runs[1]
+		}
+		conn := at.dial()
+		defer conn.Close()
+		// The write ends once the gateway read all but what the connection buffers.
+		fmt.Fprintf(conn, "%sContent-Length: %d\r\n\r\n", at.lineTo(http.MethodPost, unknown), 8<<20)
+		conn.Write(make([]byte, 8<<20-1))
+		if used := gateway.UsedRunAPI(at.g); used != 0 {
+			t.Errorf("%d bytes of a body of no run count", used)
+		}
+		for run := range at.runs {
+			if got := at.send(run, http.MethodPost, "/findings", []byte(`{}`)); got.status != http.StatusOK {
+				t.Errorf("run %d beside it: %d %s", run, got.status, got.body)
+			}
+		}
+		conn.Write(make([]byte, 1))
+		conn.SetReadDeadline(time.Now().Add(20 * time.Second))
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		if status, code, _, from := at.refusalOf(answer{status: resp.StatusCode, body: body}); status != http.StatusBadRequest || code != want || from != "gateway" {
+			t.Errorf("%d %s from %s", status, code, from)
+		}
+		if n := len(at.f.requests()); n != 2 {
+			t.Errorf("the control plane got %d requests", n)
+		}
+	})
+}
+
+// TestAFindingsBodyOnTheLocalLinkHasItsTime pins the time of a POST findings body on the
+// local link, the time of a host call: a body that stalls, one past the budget's room, one
+// of a run with a POST in flight and one of no run get their answer once it passed, with
+// nothing counted after it; and a body that ends in time leaves the call its whole time.
+func TestAFindingsBodyOnTheLocalLinkHasItsTime(t *testing.T) {
+	const wait = 4 * time.Second
+	budgetWays(t, func(c *gateway.Config) { gateway.SetHostCallTime(c, wait) }, func(t *testing.T, at *budgetAt) {
+		if at.remote {
+			return // Its server has a time for every body, EdgeReadWait.
+		}
+		conn := at.stall(8<<20, 8<<20-1)
+		defer conn.Close()
+		eventually(t, "the body counted", func() bool { return gateway.UsedRunAPI(at.g) == 7<<20-1 })
+		second := at.stall(8<<20, 8<<20-1)
+		defer second.Close()
+		if status := statusOn(t, second); status != http.StatusTooManyRequests {
+			t.Errorf("a second body that stalls: %d", status)
+		}
+		if status := statusOn(t, conn); status != http.StatusBadRequest {
+			t.Errorf("a body that stalls: %d", status)
+		}
+		isFree(t, "after a body that stalled", at.g)
+
+		unknown := at.dial()
+		defer unknown.Close()
+		fmt.Fprintf(unknown, "%sContent-Length: %d\r\n\r\n", at.lineTo(http.MethodPost, event.NewRunID()), 8<<20)
+		if status := statusOn(t, unknown); status != http.StatusBadRequest {
+			t.Errorf("a body of no run that stalls: %d", status)
+		}
+		release := fill(t, at.g, 0)
+		past := at.stall(8<<20, 8<<20-1)
+		defer past.Close()
+		if status := statusOn(t, past); status != http.StatusTooManyRequests {
+			t.Errorf("a body past the budget that stalls: %d", status)
+		}
+		release()
+		isFree(t, "after a body past the budget", at.g)
+
+		at.f.answers(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			time.Sleep(wait * 5 / 8)
+			at.f.sign(w, r, http.StatusOK, []byte(`{}`))
+		})
+		slow := at.stall(2, 1)
+		defer slow.Close()
+		time.Sleep(wait * 5 / 8)
+		slow.Write([]byte("x"))
+		if status := statusOn(t, slow); status != http.StatusOK {
+			t.Errorf("a call past the time of its body: %d", status)
 		}
 	})
 }

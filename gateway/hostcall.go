@@ -29,14 +29,23 @@ type hostCall struct {
 	// readFirst is true for a request that Qory Apiary stores again when it is repeated: a
 	// caller reads what is stored before it sends the request again.
 	readFirst bool
+	// single is true for a request that a run has at most one of in flight: its body or
+	// its answer may be over 1 MiB.
+	single bool
+}
+
+// runCall is a run's host call of one method and path in flight, by the run's id.
+type runCall struct {
+	runID string
+	call  *hostCall
 }
 
 // The link's host calls.
 var (
 	nextSessionCall   = hostCall{name: "next-session", method: http.MethodPost, path: "/next-session", request: server.MaxNextSessionRequest, answer: server.MaxNextSessionAnswer}
 	pushedCommitsCall = hostCall{name: "pushed-commits", method: http.MethodPost, path: "/pushed-commits", request: server.MaxPushedCommitsRequest, answer: server.MaxPushedCommitsAnswer}
-	findingsCall      = hostCall{name: "GET findings", method: http.MethodGet, path: "/findings", answer: server.MaxFindingsAnswer}
-	postFindingsCall  = hostCall{name: "POST findings", method: http.MethodPost, path: "/findings", request: server.MaxPostFindingsRequest, answer: server.MaxPostFindingsAnswer, readFirst: true}
+	findingsCall      = hostCall{name: "GET findings", method: http.MethodGet, path: "/findings", answer: server.MaxFindingsAnswer, single: true}
+	postFindingsCall  = hostCall{name: "POST findings", method: http.MethodPost, path: "/findings", request: server.MaxPostFindingsRequest, answer: server.MaxPostFindingsAnswer, readFirst: true, single: true}
 )
 
 // hostCallOf is the run id and the host call of a request's method and path under runs,
@@ -104,24 +113,65 @@ func (c Config) hostCallTimeOf() time.Duration {
 // not_found; Qory Apiary gets nothing for any of them.
 //
 // A request's body and an answer count past their first 1 MiB in the gateway's memory
-// budget ([proxy.RunAPILimits]): a body as it is read, before it is signed, to the end of
-// the request, and an answer once it is read and verified, to the end of its write,
-// within [server.HostCallTime]. One past the budget is 429 rate_limited: Qory Apiary gets
-// nothing of the body, and the gateway drops the answer.
+// budget ([proxy.RunAPILimits]): a body as it is read, before it is signed, until the call
+// to Qory Apiary ends, and an answer once it is read and verified, to the end of its
+// write, within [server.HostCallTime]. One past the budget is 429 rate_limited: Qory
+// Apiary gets nothing of the body, and the gateway drops the answer.
+//
+// A run has at most one c in flight when c.single is true: a second one is 429
+// rate_limited, and Qory Apiary gets nothing of it. For such a c, the run id is checked
+// first ([Gateway.refusedRunID]), then the place is taken, and then the body is read, on
+// the local link within [server.HostCallTime], as on the one address within
+// [edgeReadWait].
 func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request, runID string, c *hostCall) {
+	rc := http.NewResponseController(w)
+	release := func() {}
+	// drop reads and drops what is left of the body, up to one byte over the limit, so a
+	// caller that still writes it gets the answer.
+	drop := func() { io.Copy(io.Discard, io.LimitReader(r.Body, int64(c.request)+1)) }
+	// The local link's server sets no deadline for a body, and drops none of a refused one
+	// over 256 KiB, as the one address does ([Gateway.edgeHandler]).
+	local := c.single && c.method == http.MethodPost && !s.remote
+	if local {
+		rc.SetReadDeadline(time.Now().Add(g.cfg.hostCallTimeOf()))
+	}
+	if c.single {
+		if g.refusedRunID(s, w, r, runID) {
+			if local {
+				drop()
+			}
+			return
+		}
+		call := runCall{runID, c}
+		if _, taken := g.inFlight.LoadOrStore(call, nil); taken {
+			refuse(w, http.StatusTooManyRequests, accesskey.CodeRateLimited, nil, accesskey.FromGateway,
+				fmt.Sprintf("Retry once the run's other %s request ends: a run has at most one in flight.\nThe gateway sent nothing.", c.name))
+			if local {
+				drop()
+			}
+			return
+		}
+		defer g.inFlight.Delete(call)
+	}
 	// The body is read before the run is looked up, at most one byte over the limit: on
 	// the one address a reopen of the run may take 120 seconds, longer than the one
 	// address's time to read a request.
 	var body []byte
 	var readErr error
 	if c.method == http.MethodPost {
-		charged, release := g.runAPILimits.ChargeBody(io.LimitReader(r.Body, int64(c.request)+1))
+		var charged io.Reader
+		charged, release = g.runAPILimits.ChargeBody(io.LimitReader(r.Body, int64(c.request)+1))
 		defer release()
-		if body, readErr = io.ReadAll(charged); errors.Is(readErr, proxy.ErrRunAPIBudget) {
-			// The rest is read and dropped, so a caller that still writes it gets the answer.
+		body, readErr = io.ReadAll(charged)
+		switch {
+		case errors.Is(readErr, proxy.ErrRunAPIBudget):
 			body = nil
 			release()
-			io.Copy(io.Discard, io.LimitReader(r.Body, int64(c.request)))
+			drop()
+		case local && readErr == nil && len(body) <= c.request:
+			// The body ended. A body that did not keeps its deadline, for net/http's read of
+			// the rest before the answer.
+			rc.SetReadDeadline(time.Time{})
 		}
 	}
 	lr := g.linkRunOf(s, w, r, runID)
@@ -165,6 +215,16 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 	ctx, cancel := lr.callContext(r, g.cfg.hostCallTimeOf())
 	defer cancel()
 	a, err := g.client.HostCall(ctx, conf.Run.URL, runID, c.method, c.path, body, c.answer)
+	release()
+	if c.single {
+		// A caller that stops reading the answer ends its write at the deadline, and so the
+		// answer's count and the run's place. net/http reads a body that came with a GET
+		// before it writes the answer's head, so that read has the deadline too. net/http
+		// clears both before the connection's next request.
+		deadline := time.Now().Add(g.cfg.hostCallTimeOf())
+		rc.SetReadDeadline(deadline)
+		rc.SetWriteDeadline(deadline)
+	}
 	if err != nil {
 		end, ended := lr.gone()
 		switch {
@@ -189,27 +249,23 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 				return
 			}
 		}
-		release, ok := g.runAPILimits.ChargeAnswer(len(a.Body))
+		written, ok := g.runAPILimits.ChargeAnswer(len(a.Body))
 		if !ok {
 			refuse(w, http.StatusTooManyRequests, accesskey.CodeRateLimited, nil, accesskey.FromGateway, proxy.RunAPIAnswerFull)
 			return
 		}
-		defer release()
+		defer written()
 		if len(a.Body) > 0 {
 			w.Header().Set("Content-Type", "application/json")
-		}
-		if c.method == http.MethodGet {
-			// The one answer that counts: its write ends before the release, and a caller
-			// that stops reading ends it at the deadline.
-			rc := http.NewResponseController(w)
-			rc.SetWriteDeadline(time.Now().Add(g.cfg.hostCallTimeOf()))
-			defer rc.SetWriteDeadline(time.Time{})
-			defer rc.Flush()
+			if c.method == http.MethodGet {
+				// The one answer that counts: its write ends before the count does.
+				defer rc.Flush()
+			}
 		}
 		w.WriteHeader(a.Status)
-		// shortcut: the copy of the answer that the one address signs does not count, so an
-		// answer there takes twice its count until it is written; count the copy when a
-		// gateway's memory needs it.
+		// shortcut: an answer that is read does not count until it is whole, at most one of
+		// 16 MiB for each run, nor does the copy that a separate gateway signs, until it is
+		// written; count both when a gateway's memory needs it.
 		w.Write(a.Body)
 		return
 	}

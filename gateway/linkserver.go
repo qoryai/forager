@@ -311,13 +311,11 @@ func gone(w http.ResponseWriter, end runEnd) {
 // run_key_invalid, and a run the gateway does not hold is reopened, or gets a 503 or a
 // 410 ([Gateway.heldRun]); and a run that ended at the gateway is 410.
 func (g *Gateway) linkRunOf(s *side, w http.ResponseWriter, r *http.Request, runID string) *linkRun {
+	if g.refusedRunID(s, w, r, runID) {
+		return nil
+	}
 	var lr *linkRun
 	if s.remote {
-		if p, _ := runKeyOf(r.Context()); runID != p.key.RunID {
-			ref := runKeyInvalid()
-			refuse(w, ref.Status, ref.Code, nil, ref.From, ref.Error())
-			return nil
-		}
 		if lr = g.heldRun(w, r, runID); lr == nil {
 			return nil
 		}
@@ -330,6 +328,26 @@ func (g *Gateway) linkRunOf(s *side, w http.ResponseWriter, r *http.Request, run
 		return nil
 	}
 	return lr
+}
+
+// refusedRunID reports whether runID is the id of no run that the link request r is for,
+// and w then has the refusal: on the one address any id but the run key's, on the local
+// link the id of no run here. It opens and reopens no run.
+func (g *Gateway) refusedRunID(s *side, w http.ResponseWriter, r *http.Request, runID string) bool {
+	if s.remote {
+		p, _ := runKeyOf(r.Context())
+		if runID == p.key.RunID {
+			return false
+		}
+		ref := runKeyInvalid()
+		refuse(w, ref.Status, ref.Code, nil, ref.From, ref.Error())
+		return true
+	}
+	if g.localRun(runID) != nil {
+		return false
+	}
+	invalid(w)
+	return true
 }
 
 // callContext is the context of a request of the run lr to the server for the link
