@@ -305,9 +305,9 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 	}
 }
 
-// headRefusal returns the func that writes the refusal of the request r of c that its
-// head decides, or nil: a GET with a body, a Content-Length over 0 or a chunked one, and
-// a Content-Length over c.request.
+// headRefusal returns, for a request r of c, the func that writes the refusal of r that
+// follows from its head alone, or nil: a GET with a body, a Content-Length over 0 or a
+// chunked one, and a Content-Length over c.request.
 func (c *hostCall) headRefusal(r *http.Request) func(http.ResponseWriter) {
 	switch {
 	case c.method == http.MethodGet && r.ContentLength != 0:

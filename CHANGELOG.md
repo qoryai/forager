@@ -392,8 +392,10 @@ release may change what an existing document does, and says so under Upgrading.
   body is at most 8 MiB and its answer 64 KiB, and a GET's answer 16 MiB. The gateway
   matches a host call's method and its path, and sends a `GET` with no body and no
   `Content-Type`. A GET findings with a body gets `400` `invalid_request`, and a POST
-  findings whose `Content-Length` is over 8 MiB gets `413` `payload_too_large` before the
-  gateway reads the body. Past 1 MiB, a body and an answer count in the gateway's 512 MiB:
+  findings whose `Content-Length` is over 8 MiB gets `413` `payload_too_large` with none
+  of the body counted. On the local link the gateway reads none of it; behind a separate
+  gateway it reads up to 8 MiB and one byte, only to sign the `413`. Past 1 MiB, a body
+  and an answer count in the gateway's 512 MiB:
   a POST findings body from its arrival, within 60 seconds, to the end of the call to Qory
   Apiary, and a GET findings answer from its read to the end of its write, which has 60
   seconds. Over the 512 MiB, the gateway's refusal is `429` `rate_limited`. A run has at
