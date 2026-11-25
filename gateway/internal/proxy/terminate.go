@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -25,6 +26,16 @@ import (
 // AmbiguousPath is the rule a denial names when a request's path could be read two
 // ways: not a path entry, the proxy's own refusal, in either mode.
 const AmbiguousPath = "wall:ambiguous-path"
+
+// sentPath is the path of u as the proxy forwards it: the opaque text of a target such
+// as https:..;/secret, which the transport sends as the request's path, or the escaped
+// path. An opaque text never starts with a slash, so [policy.CleanPath] refuses it.
+func sentPath(u *url.URL) string {
+	if u.Opaque != "" {
+		return u.Opaque
+	}
+	return u.EscapedPath()
+}
 
 // EchoMethod is the rule a denial names of a TRACE or a TRACK, which echo the
 // request's headers back, to a host a credential is for: a refusal of the proxy's, in
@@ -55,6 +66,16 @@ type Credential struct {
 	// the key is set with. Empty for every other credential, which the proxy sets on
 	// every request to its hosts.
 	Placeholder string
+	// AccountHeader, for a model key whose auth has account_header, is the header the
+	// proxy sets beside the key, to what Account reads from the key's value: the claim
+	// at account_claim in its JWT payload. The proxy takes the header off every request
+	// to the key's hosts, so the session's value of it never passes. Empty for none.
+	AccountHeader string
+	Account       func(value []byte) (string, error)
+	// PushRef is the one ref a git push through the credential may create, update or
+	// delete, such as refs/heads/qory/wi_01: a push to its hosts whose ref commands
+	// name any other gets a 403 from the branch guard, and so does every push when it is empty.
+	PushRef string
 }
 
 // Tool is a program of the machine's that serves hosts: the proxy hands every request
@@ -109,7 +130,8 @@ type modelKey struct {
 // SetModelKey sets the model key, by its name, that the proxy sets from now on: of the
 // credentials with a Placeholder, the model keys, it sets this one alone and none of
 // the others, whose values it still replaces in every answer. The gateway sets the key
-// of the session that runs, and the run's start key between sessions.
+// of the session that runs, and the run's default model provider credential between
+// sessions.
 func (p *Proxy) SetModelKey(name string) { p.model.Store(&modelKey{name: name}) }
 
 // SetNoModelKey makes the proxy set no model key from now on, until [Proxy.SetModelKey]:
@@ -118,35 +140,55 @@ func (p *Proxy) SetModelKey(name string) { p.model.Store(&modelKey{name: name}) 
 func (p *Proxy) SetNoModelKey() { p.model.Store(&modelKey{none: true}) }
 
 // keyChoice is the model key the proxy sets on one request, read once per request so a
-// switch of the group's active key while the request is decided changes nothing of it:
-// the key [Proxy.SetModelKey] set, the run's key group, its active key, and whether
-// that key is out of cooldown.
+// switch of a group's active key while the request is decided changes nothing of it:
+// the key [Proxy.SetModelKey] set, the run's key groups, and of the groups it reads,
+// each one's active key and whether that key is usable.
 type keyChoice struct {
-	m      *modelKey
-	k      *keyGroup
+	m     *modelKey
+	k     *keySet
+	picks map[*keyGroup]keyPick
+}
+
+// keyPick is a group's active key as [modelkey.Group.Pick] returned it.
+type keyPick struct {
 	active string
 	ready  bool
 }
 
-// choice reads the model key the proxy sets on a request.
+// choice reads the model key the proxy sets on a request: the active key of the group
+// of the key [Proxy.SetModelKey] set, or of every group before either it or
+// [Proxy.SetNoModelKey] is called. A group no session runs on is not read, so its
+// active key moves only when a request of a session on it reads it.
 func (p *Proxy) choice() keyChoice {
-	c := keyChoice{m: p.model.Load(), k: p.keys.Load(), ready: true}
-	if c.k != nil {
-		c.active, c.ready = c.k.g.Pick()
+	c := keyChoice{m: p.model.Load(), k: p.keys.Load(), picks: map[*keyGroup]keyPick{}}
+	if c.k == nil {
+		return c
+	}
+	for _, g := range *c.k {
+		if c.m == nil || (!c.m.none && g.g.Has(c.m.name)) {
+			var pk keyPick
+			pk.active, pk.ready = g.g.Pick()
+			c.picks[g] = pk
+		}
 	}
 	return c
 }
 
+// ready reports whether the group g's active key is usable, as the choice read it: true
+// for a group the choice did not read.
+func (c keyChoice) ready(g *keyGroup) bool {
+	pk, ok := c.picks[g]
+	return !ok || pk.ready
+}
+
 // sets reports whether the proxy sets the model key of that name: the one
 // [Proxy.SetModelKey] set, none after [Proxy.SetNoModelKey], or any before either is
-// called. Of the run's key group, it sets the group's active key alone, when the key
-// set is one of the group or none was set.
+// called. Of a key group, it sets the group's active key alone, when the key set is one
+// of that group or none was set.
 func (c keyChoice) sets(name string) bool {
-	if c.k != nil && c.k.g.Has(name) {
-		if c.m != nil && (c.m.none || !c.k.g.Has(c.m.name)) {
-			return false
-		}
-		return c.active == name
+	if g := c.k.of(name); g != nil {
+		pk, ok := c.picks[g]
+		return ok && pk.active == name
 	}
 	return c.m == nil || (!c.m.none && c.m.name == name)
 }
@@ -426,10 +468,15 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			r.Out.URL.Scheme = "https"
 			r.Out.URL.Host = strings.TrimSuffix(authority, ":443")
 			r.Out.Host = ""
-			// The request's own trailer, which the server fills once the body is read:
-			// a copy made before that would carry none.
+			r.Out.Body = endAtEOF(r.Out.Body)
+			// The request's trailer, which the server fills once the body is read: a
+			// copy made before that would carry none. To a host that gets a credential
+			// it sends none: the server merges every trailer it reads, declared or
+			// not, and a trailer could carry a header the proxy sets, such as a model
+			// key's account header, beside the proxy's value.
 			r.Out.Trailer = r.In.Trailer
 			if masked(r.In) != nil {
+				r.Out.Trailer = nil
 				// The value is replaced in the answer only where it can be read: in
 				// an uncompressed body, whole, and on a connection that stays HTTP. A
 				// range of the body could hold part of the value.
@@ -449,11 +496,15 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			// After the request's record, before the answer is changed or withheld.
 			writeOf(resp.Request).answer(resp)
 			name, ok := resp.Request.Context().Value(keyedKey{}).(string)
-			if rs := resendOf(resp.Request); rs != nil {
-				// The key the request went with last, after a resend another than the first.
+			rs := resendOf(resp.Request)
+			if rs != nil {
+				// A resend may have sent the request with another key: name is the key
+				// of the response.
 				name = rs.name
 			}
-			if ok && resp.StatusCode == http.StatusUnauthorized {
+			// For a 401 on the model API's path, [resend.reject] has requested the
+			// key's value again; for a 401 on another path, this code requests it.
+			if ok && (rs == nil || !rs.model) && resp.StatusCode == http.StatusUnauthorized {
 				// The credential the proxy set on the request, of those of the host.
 				if i := slices.IndexFunc(creds, func(c *Credential) bool { return c.Name == name }); i >= 0 && creds[i].Rejected != nil {
 					creds[i].Rejected()
@@ -468,7 +519,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 				return errUnaskedSwitch
 			}
 			if coding := encoded(resp); coding != "" {
-				clean, _ := policy.CleanPath(resp.Request.URL.EscapedPath())
+				clean, _ := policy.CleanPath(sentPath(resp.Request.URL))
 				withheld(resp, coding, resp.Request.Method, d.Host, clean)
 			}
 			return nil
@@ -486,9 +537,9 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		req.Method, req.RequestMethod, req.Mode, req.Rule, req.RequestID = "HTTPS", r.Method, now.Mode, now.Rule, newRequestID()
 		if !now.Allowed {
 			// A host the policy refuses reaches no tool and has no path decision.
-			clean, ok := policy.CleanPath(r.URL.EscapedPath())
+			clean, ok := policy.CleanPath(sentPath(r.URL))
 			if !ok {
-				clean = r.URL.EscapedPath()
+				clean = sentPath(r.URL)
 			}
 			req.Path, req.Allowed, req.Outcome = clean, false, Refused
 			if rated != nil {
@@ -500,7 +551,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			return
 		}
 		keys := t.p.choice()
-		clean, rule, allowed, c := t.decide(d.Host, r.URL.EscapedPath(), now.Mode, keys)
+		clean, rule, allowed, c := t.decide(d.Host, sentPath(r.URL), now.Mode, keys)
 		req.Path, req.PathRule, req.Allowed = clean, rule, allowed
 		tl := t.tool(d.Host)
 		if tl != nil {
@@ -520,14 +571,19 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			return
 		}
 		r.Header.Del(setBy)
+		for _, h := range creds {
+			if h.AccountHeader != "" {
+				dropHeader(r.Header, h.AccountHeader)
+			}
+		}
 		group := (*keyGroup)(nil)
 		if c != nil && allowed && tl == nil && c.carries(r.Header) {
 			group = t.p.group(c.Name)
 		}
-		if group != nil && (group.g.Passed() || !keys.ready) {
-			// The proxy passed a limit refusal to the session, or every key of the group is
-			// in cooldown, which stops the session as a passed refusal does: until its join
-			// ends, no request with the placeholder reaches the provider.
+		if group != nil && (group.g.Passed() || !keys.ready(group)) {
+			// The proxy passed a limit refusal or a 401 to the session, or no key of the
+			// group is usable, which stops the session as a passed refusal does: until its
+			// join ends, no request with the placeholder reaches the provider.
 			group.g.Pass()
 			t.p.limitPassed(w, req)
 			return
@@ -542,8 +598,17 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			for _, h := range creds {
 				v := h.secret()
 				if h == c && c.carries(r.Header) {
-					if name, value, ok := c.header(v); ok {
+					name, value, ok := c.header(v)
+					account, accountOK := c.account(v)
+					if ok && accountOK {
 						r.Header.Set(name, value)
+						if c.AccountHeader != "" {
+							// A Connection header from the session can list this header: the
+							// hop-by-hop removal then drops the value set here, and the request
+							// goes upstream without it. No value from the session goes in its
+							// place: the dropHeader call before this one removed that value.
+							r.Header.Set(c.AccountHeader, account)
+						}
 						r.Header.Set(setBy, c.Name)
 						req.Credential, keyed = c.Name, true
 					}
@@ -561,8 +626,20 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 				fmt.Fprintf(w, "qory: %s %s%s denied by the gateway: the path could be read two ways\n", accesskey.ShownValue(r.Method, false), d.Host, accesskey.ShownValue(clean, false))
 				return
 			}
+			if body := t.p.pathless.Load(); body != nil {
+				io.WriteString(w, (*body)(accesskey.ShownValue(r.Method, false), d.Host, accesskey.ShownValue(clean, false)))
+				return
+			}
 			fmt.Fprintf(w, "qory: %s %s%s denied by policy (mode %s): no path rule of the run's covers it\n", accesskey.ShownValue(r.Method, false), d.Host, accesskey.ShownValue(clean, false), req.Mode)
 			return
+		}
+		// The branch guard reads a push's ref commands before anything is sent, on every
+		// host a credential is for, whether or not the credential is set on the request.
+		if len(creds) > 0 {
+			if err := guardPush(w, r, d.Host, clean, c); err != nil {
+				t.p.refusePush(w, req, err)
+				return
+			}
 		}
 		if tl != nil {
 			t.toTool(w, r, req, tl)
@@ -700,6 +777,33 @@ func (c *Credential) header(v []byte) (string, string, bool) {
 		return c.Header, join("", v), true
 	}
 	return "", "", false
+}
+
+// account is the value of the credential's account header for its value v, which
+// stays the caller's to clear, and whether the proxy may set v: true with "" for a
+// credential with no account header, false when v has no account claim. A value the
+// run loaded has one ([credential.AccountClaim]), so a false is a value that changed
+// since, and the proxy sets neither.
+func (c *Credential) account(v []byte) (string, bool) {
+	if c.AccountHeader == "" {
+		return "", true
+	}
+	if c.Account == nil || len(v) == 0 {
+		return "", false
+	}
+	account, err := c.Account(v)
+	return account, err == nil
+}
+
+// dropHeader takes every header named name off h, case ignored and an underscore read
+// as a dash, which some servers read as the same name.
+func dropHeader(h http.Header, name string) {
+	want := strings.ReplaceAll(strings.ToLower(name), "_", "-")
+	for k := range h {
+		if strings.ReplaceAll(strings.ToLower(k), "_", "-") == want {
+			delete(h, k)
+		}
+	}
 }
 
 // upstream is the transport to the real hosts of terminated connections: verified
@@ -861,6 +965,7 @@ func (t *terminator) toTool(w http.ResponseWriter, r *http.Request, d Decision, 
 				pr.Out.Trailer = out
 				pr.Out.Body = &trailing{ReadCloser: pr.Out.Body, in: in, out: out}
 			}
+			pr.Out.Body = endAtEOF(pr.Out.Body)
 		},
 		Transport:     tl.transport,
 		FlushInterval: -1,
@@ -910,6 +1015,38 @@ func (t *trailing) Read(b []byte) (int, error) {
 		}
 	}
 	return n, err
+}
+
+// endedBody is a request body that returns io.EOF again once it has returned it, and
+// never reads the session's body after that. The transport reads a body with a length
+// once more past its end, and a server closes the session's body as the answer's
+// header goes out, so that read could fail with [http.ErrBodyReadAfterClose]: the
+// transport counts it as a failed write, closes the connection to the host and cuts
+// the answer.
+type endedBody struct {
+	io.ReadCloser
+	ended bool
+}
+
+// Read reads the body until its end, and returns io.EOF after it.
+func (b *endedBody) Read(p []byte) (int, error) {
+	if b.ended {
+		return 0, io.EOF
+	}
+	n, err := b.ReadCloser.Read(p)
+	if err == io.EOF {
+		b.ended = true
+	}
+	return n, err
+}
+
+// endAtEOF is body as an [endedBody]: nil and [http.NoBody] stay as they are, since the
+// transport sends a request with either as one with no body.
+func endAtEOF(body io.ReadCloser) io.ReadCloser {
+	if body == nil || body == http.NoBody {
+		return body
+	}
+	return &endedBody{ReadCloser: body}
 }
 
 // newRequestID is a request's id: 16 random bytes, hex.

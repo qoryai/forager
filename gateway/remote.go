@@ -156,24 +156,17 @@ func (g *Gateway) recorded(runID string) bool {
 // failed in a way that may pass; and otherwise a 410 run_closed, a run that ended here
 // before, whose reopen failed for good, or that never opened here.
 func (g *Gateway) heldRun(w http.ResponseWriter, r *http.Request, runID string) *linkRun {
-	g.mu.Lock()
-	lr, closing := g.runs[runID], g.closing
-	g.mu.Unlock()
-	if closing {
-		w.WriteHeader(http.StatusServiceUnavailable)
+	held, refusal := g.heldNow(runID)
+	switch {
+	case refusal != nil:
+		refusal(w)
 		return nil
-	}
-	if lr != nil && lr.remote {
-		return lr
-	}
-	if sp, ok := g.spentOf(runID); ok {
-		gone(w, sp.end)
-		return nil
-	}
-	if lr == nil && g.reopenable(runID) {
+	case held != nil:
+		return held
+	default:
 		// The run key verified: while the connection waits on the reopen, up to 120
 		// seconds, it counts against the one address's bounds in all alone, not of its
-		// source or its /48, and is closed for no newer one (the user's "547 (a)").
+		// source or its /48, and is closed for no newer one.
 		releaseSource(r.Context())
 		p, _ := runKeyOf(r.Context())
 		lr, final := g.reopenRun(r.Context(), runID, p)
@@ -197,17 +190,53 @@ func (g *Gateway) heldRun(w http.ResponseWriter, r *http.Request, runID string) 
 	return nil
 }
 
+// heldNow is the run runID that the one address holds, or the refusal of a request of it
+// that needs no reopen: a 503 with no body from the start of Close, the 410 of a run the
+// gateway ended and let go of, and a 410 run_closed of a run that is neither held nor
+// suspended here. Both are nil for a run that a request reopens ([Gateway.heldRun]).
+func (g *Gateway) heldNow(runID string) (*linkRun, func(http.ResponseWriter)) {
+	g.mu.Lock()
+	lr, closing := g.runs[runID], g.closing
+	g.mu.Unlock()
+	switch {
+	case closing:
+		return nil, func(w http.ResponseWriter) { w.WriteHeader(http.StatusServiceUnavailable) }
+	case lr != nil && lr.remote:
+		return lr, nil
+	}
+	if sp, ok := g.spentOf(runID); ok {
+		return nil, func(w http.ResponseWriter) { gone(w, sp.end) }
+	}
+	if lr == nil && g.reopenable(runID) {
+		return nil, nil
+	}
+	return nil, func(w http.ResponseWriter) {
+		gone(w, runEnd{code: accesskey.CodeRunClosed, from: accesskey.FromGateway})
+	}
+}
+
+// relayTo is the proxy of a run a bound connection's first line opens ([relayWords]).
+type relayTo int
+
+const (
+	toRunProxy relayTo = iota
+	toStackProxy
+	toPushProxy
+)
+
 // relayRun hands a bound connection that opened with the relay's preamble and a run
 // key to the proxy of that run, live at the gateway, as the shared proxy does a local
 // connection with a run's proxy secret, admit called once the run key verifies; with
-// stack, one that opened with [link.StackPreamble] to that run's stack proxy, until the
-// run's first join request. The run a gateway with Listen suspended at its stop is
+// toStackProxy, one that opened with [link.StackPreamble] to that run's stack proxy,
+// until the run's first join request; with toPushProxy, one that opened with
+// [link.PushPreamble] to that run's push proxy. The run a gateway with Listen suspended at its stop is
 // reopened first ([Gateway.reopenRun]), with c's deadline cleared, until the reopen
 // ends or the gateway closes; meanwhile release keeps c counted in all alone, and
 // admit is called once the run is live. A run key [Gateway.admitRunKey] refuses, one
-// of no live run here, or, with stack, one of a run whose stack proxy is closed,
-// closes the connection unanswered. It reports whether c was handed on.
-func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit, release func(), stack bool) bool {
+// of no live run here, with toStackProxy one of a run whose stack proxy is closed, or
+// with toPushProxy one of a run with no push proxy, closes the connection unanswered.
+// It reports whether c was handed on.
+func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit, release func(), to relayTo) bool {
 	k, ref := g.admitRunKey(value, b64token.MatchString(value))
 	if ref != nil {
 		return false
@@ -222,7 +251,7 @@ func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit, rel
 	if _, spent := g.spentOf(k.RunID); lr == nil && !spent && g.reopenable(k.RunID) {
 		// The run key verified: while the connection waits on the reopen, up to 120
 		// seconds, it counts against the one address's bounds in all alone, not of its
-		// source or its /48, and is closed for no newer one (the user's "547 (a)").
+		// source or its /48, and is closed for no newer one.
 		release()
 		c.SetDeadline(time.Time{})
 		lr, _ = g.reopenRun(g.openCtx, k.RunID, presented{raw: value, key: k})
@@ -240,10 +269,14 @@ func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit, rel
 		return false
 	}
 	px := lr.px
-	if stack {
-		if px = lr.stackProxy(); px == nil {
-			return false
-		}
+	switch to {
+	case toStackProxy:
+		px = lr.stackProxy()
+	case toPushProxy:
+		px = lr.pushProxy()
+	}
+	if px == nil {
+		return false
 	}
 	c.SetDeadline(time.Time{})
 	px.ServeConn(&linkConn{Conn: c, r: r})

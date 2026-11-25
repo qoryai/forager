@@ -134,11 +134,12 @@ type LinkJoinRequest struct {
 	Passes []string `json:"passes"`
 	// ModelKey is whether the gateway sets a model key for this session's requests.
 	// When it is false, the gateway's proxy sets none from the join's 200 until the
-	// session's dev.qory.session.exited, and ModelCredential must be empty.
+	// session's dev.qory.session.exited, and ModelProviderCredentialName must be empty.
 	ModelKey bool `json:"model_key"`
-	// ModelCredential is the name of the model key the session starts with, one the
-	// gateway holds for the run; empty for the run's start key.
-	ModelCredential string `json:"model_credential,omitempty"`
+	// ModelProviderCredentialName is the name of the model key the session starts with,
+	// one the gateway holds for the run; empty for the run's default model provider
+	// credential.
+	ModelProviderCredentialName string `json:"model_provider_credential_name,omitempty"`
 }
 
 // LinkJoinAnswer is what the gateway answers a join request it accepts,
@@ -146,9 +147,9 @@ type LinkJoinRequest struct {
 // from 1, and the model key the session starts with, empty when the gateway holds no
 // model key for the run. A member Forager does not know is ignored.
 type LinkJoinAnswer struct {
-	Version         int    `json:"version"`
-	Session         int    `json:"session"`
-	ModelCredential string `json:"model_credential,omitempty"`
+	Version                     int    `json:"version"`
+	Session                     int    `json:"session"`
+	ModelProviderCredentialName string `json:"model_provider_credential_name,omitempty"`
 }
 
 // LinkNarrowing is a session's narrowing of the policy the gateway holds for its run.
@@ -186,15 +187,15 @@ type LinkImage struct {
 	Reference bool   `json:"reference,omitempty"`
 }
 
-// LinkCredentialHosts is one credential the gateway holds for a run, as the run answer's
-// credential_hosts has it: its name, its hosts as the proxy matches them, which are the
-// hosts applied.credentials lists for it, and the variables the session sets to a
-// placeholder for it. Auth is how the proxy sets its value, for a credential from the
-// server and for a model key of the machine's; nil for every other. Format and Endpoint
-// are an API credential's, a model key's, whose Hosts are the endpoint's host alone:
-// the session gives the key to the variable the run's runtime lists for Format and
-// Auth, and sets the runtime's endpoint variable to Endpoint. Names and hosts alone,
-// never a secret.
+// LinkCredentialHosts is one credential the gateway holds for a run, as the run
+// answer's credential_hosts has it: its name, its hosts as the proxy matches them,
+// which are the hosts applied.credentials lists for it, and the variables the session
+// sets to a placeholder for it. Auth is how the proxy sets its value, for a credential
+// from the server and for a local model provider credential; nil for every other.
+// Format and Endpoint are an API credential's, a model key's, whose Hosts are the
+// endpoint's host alone: the session gives the key to the variable the session's
+// runtime lists for Format and Auth, and sets the runtime's endpoint variable to
+// Endpoint. Names and hosts alone, never a secret.
 type LinkCredentialHosts struct {
 	Name         string   `json:"name"`
 	Hosts        []string `json:"hosts"`
@@ -202,12 +203,16 @@ type LinkCredentialHosts struct {
 	Auth         *Auth    `json:"auth,omitempty"`
 	Format       string   `json:"format,omitempty"`
 	Endpoint     string   `json:"endpoint,omitempty"`
+	// Group is the key group of an API credential from the server, empty for any other
+	// credential: the session sets the placeholder of the group of its key,
+	// [link.GroupPlaceholder].
+	Group string `json:"group,omitempty"`
 }
 
 // LinkRunAnswer is what the gateway answers a run request it accepts,
 // contracts/forager/v1/link-run-answer.schema.json. A member Forager does not know is
-// ignored. Its ProxySecret and StackProxySecret are never printed: fmt, log/slog and
-// encoding/json show each as [redacted].
+// ignored. Its ProxySecret, StackProxySecret and PushProxySecret are never printed:
+// fmt, log/slog and encoding/json show each as [redacted].
 type LinkRunAnswer struct {
 	Version int    `json:"version"`
 	RunID   string `json:"run_id"`
@@ -227,6 +232,11 @@ type LinkRunAnswer struct {
 	// first join request. A separate gateway gives none: [link.StackPreamble] and the
 	// run key open those connections.
 	StackProxySecret string `json:"stack_proxy_secret,omitempty"`
+	// PushProxySecret is the run's push proxy secret on the local link, which opens a
+	// connection to the run's push proxy after the relay's preamble, from the run's open
+	// until its close. Empty for a run with no push credential. A separate gateway gives
+	// none: [link.PushPreamble] and the run key open those connections.
+	PushProxySecret string `json:"push_proxy_secret,omitempty"`
 	// CertificateAuthority is the run's certificate authority, PEM, when the gateway
 	// reads inside HTTPS for the run, with or without a wall.
 	CertificateAuthority string `json:"certificate_authority,omitempty"`
@@ -241,9 +251,10 @@ type LinkRunAnswer struct {
 	// holds for the run, so the session can tell which hosts the run's credentials
 	// cover. Empty when the gateway holds none, or sends no credential_hosts.
 	CredentialHosts []LinkCredentialHosts `json:"credential_hosts,omitempty"`
-	// ModelCredential is the name of the model key the runtime starts with, an entry of
-	// CredentialHosts with Format; empty when the gateway holds no model key for the run.
-	ModelCredential string `json:"model_credential,omitempty"`
+	// DefaultModelProviderCredentialName is the name of the model key the runtime
+	// starts with, an entry of CredentialHosts with Format; empty when the gateway
+	// holds no model key for the run.
+	DefaultModelProviderCredentialName string `json:"default_model_provider_credential_name,omitempty"`
 	// Image is the image the run gets, when it has a wall.
 	Image *LinkImage `json:"image,omitempty"`
 	// RelayImage is the reference of the machine's default image, which the wall starts
@@ -296,6 +307,9 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 	if s.StackProxySecret != "" {
 		s.StackProxySecret = redactedSecret
 	}
+	if s.PushProxySecret != "" {
+		s.PushProxySecret = redactedSecret
+	}
 	// A name or a value that contains qak_, qrk_, qecr_, qecn_, qecp_, qecg_, qeci_ or
 	// qecd_ in any case prints its phrase.
 	s.Labels = ShownLabels(a.Labels)
@@ -310,7 +324,7 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 	}
 	s.Policy, s.Applied = shownDocument(a.Policy), shownDocument(a.Applied)
 	s.Placeholders, s.Reserved = accesskey.ShownNames(a.Placeholders), accesskey.ShownNames(a.Reserved)
-	s.ModelCredential = accesskey.ShownName(a.ModelCredential, false)
+	s.DefaultModelProviderCredentialName = accesskey.ShownName(a.DefaultModelProviderCredentialName, false)
 	if a.CredentialHosts != nil {
 		s.CredentialHosts = make([]LinkCredentialHosts, len(a.CredentialHosts))
 		for i, c := range a.CredentialHosts {
@@ -323,7 +337,7 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 				placeholders = []string{}
 			}
 			s.CredentialHosts[i] = LinkCredentialHosts{Name: accesskey.ShownName(c.Name, false), Hosts: hosts, Placeholders: placeholders,
-				Format: accesskey.ShownValue(c.Format, false), Endpoint: accesskey.ShownValue(c.Endpoint, false)}
+				Format: accesskey.ShownValue(c.Format, false), Endpoint: accesskey.ShownValue(c.Endpoint, false), Group: accesskey.ShownName(c.Group, false)}
 			if c.Auth != nil {
 				s.CredentialHosts[i].Auth = &Auth{Scheme: c.Auth.Scheme, Header: accesskey.ShownValue(c.Auth.Header, false), Username: accesskey.ShownValue(c.Auth.Username, false), OAuth: c.Auth.OAuth}
 			}
@@ -351,7 +365,7 @@ func shownDocument(d json.RawMessage) json.RawMessage {
 }
 
 // Format prints a as fmt prints a struct, under every verb and flag, with its
-// ProxySecret and StackProxySecret redacted.
+// ProxySecret, StackProxySecret and PushProxySecret redacted.
 func (a LinkRunAnswer) Format(f fmt.State, verb rune) {
 	out := fmt.Sprintf(fmt.FormatString(f, verb), a.shown())
 	if verb == 'v' && f.Flag('#') {
@@ -360,15 +374,17 @@ func (a LinkRunAnswer) Format(f fmt.State, verb rune) {
 	io.WriteString(f, out)
 }
 
-// String is a as %v prints it, its ProxySecret and StackProxySecret redacted.
+// String is a as %v prints it, its ProxySecret, StackProxySecret and PushProxySecret
+// redacted.
 func (a LinkRunAnswer) String() string { return fmt.Sprintf("%v", a) }
 
-// GoString is a as %#v prints it, its ProxySecret and StackProxySecret redacted.
+// GoString is a as %#v prints it, its ProxySecret, StackProxySecret and PushProxySecret
+// redacted.
 func (a LinkRunAnswer) GoString() string { return fmt.Sprintf("%#v", a) }
 
 // LogValue is a as log/slog logs it: its run id, digest and the names it carries,
-// never a variable's value, the proxy secret, the stack proxy secret or the
-// certificate.
+// never a variable's value, the proxy secret, the stack proxy secret, the push proxy
+// secret or the certificate.
 func (a LinkRunAnswer) LogValue() slog.Value {
 	names := slices.Sorted(maps.Keys(a.Variables))
 	return slog.GroupValue(
@@ -377,13 +393,14 @@ func (a LinkRunAnswer) LogValue() slog.Value {
 		slog.Any("variables", accesskey.ShownNames(names)),
 		slog.String("proxy_secret", a.shown().ProxySecret),
 		slog.String("stack_proxy_secret", a.shown().StackProxySecret),
+		slog.String("push_proxy_secret", a.shown().PushProxySecret),
 		slog.Any("placeholders", accesskey.ShownNames(a.Placeholders)),
 		slog.Any("reserved", accesskey.ShownNames(a.Reserved)),
 	)
 }
 
-// MarshalJSON is a as encoding/json writes a struct, with its ProxySecret and
-// StackProxySecret redacted, for a log or a dump that writes it so. The gateway writes
+// MarshalJSON is a as encoding/json writes a struct, with its ProxySecret,
+// StackProxySecret and PushProxySecret redacted, for a log or a dump that writes it so. The gateway writes
 // the run answer from a struct in package gateway, not through this method; reading
 // one back is as encoding/json reads a struct.
 func (a LinkRunAnswer) MarshalJSON() ([]byte, error) { return json.Marshal(a.shown()) }
@@ -392,7 +409,7 @@ func (a LinkRunAnswer) MarshalJSON() ([]byte, error) { return json.Marshal(a.sho
 // contracts/forager/v1/link-reload-answer.schema.json: the policy in force for the run
 // now, its digest and the run's variables, placeholders, reserved names, image and the
 // members of policy_applied the gateway decides. It never has the proxy secret, the
-// stack proxy secret or the certificate authority.
+// stack proxy secret, the push proxy secret or the certificate authority.
 type LinkReloadAnswer struct {
 	Version      int                 `json:"version"`
 	Policy       json.RawMessage     `json:"policy,omitzero"`
@@ -733,9 +750,42 @@ func (a *linkAnswer) from() string {
 	return accesskey.FromGateway
 }
 
+// MaxRetryAfter is the longest retry_after a link refusal has, 31 days, as maxReset in
+// gateway/internal/modelkey bounds a model provider's retry-after: the gateway passes
+// a longer Retry-After as this, and a wait in seconds this long fits a [time.Duration].
+const MaxRetryAfter = 31 * 24 * time.Hour
+
+// ReadRetryAfter is the wait in h's Retry-After, in whole seconds, at most
+// [MaxRetryAfter]: zero for none, for 0, for a header sent twice, for an HTTP date
+// and for any other form.
+func ReadRetryAfter(h http.Header) time.Duration {
+	v := h.Values("Retry-After")
+	if len(v) != 1 || v[0] == "" || strings.Trim(v[0], "0123456789") != "" {
+		return 0
+	}
+	// Digits alone fail only past the largest int64, which ParseInt then returns.
+	n, _ := strconv.ParseInt(v[0], 10, 64)
+	if n > int64(MaxRetryAfter/time.Second) {
+		return MaxRetryAfter
+	}
+	return time.Duration(n) * time.Second
+}
+
+// retryAfter is the body's retry_after, a wait of 1 to [MaxRetryAfter] whole seconds;
+// zero for none and for any other value.
+func (a *linkAnswer) retryAfter() time.Duration {
+	var doc struct {
+		RetryAfter int64 `json:"retry_after"`
+	}
+	if jsonv2.Unmarshal(a.body, &doc) != nil || doc.RetryAfter < 1 || doc.RetryAfter > int64(MaxRetryAfter/time.Second) {
+		return 0
+	}
+	return time.Duration(doc.RetryAfter) * time.Second
+}
+
 // refusal is the error of an answer that is not the one wanted: a 410 is the end of
-// the run, its code one of [EndCodes]; a coded body is its code with its names and who
-// refused; anything else names its status.
+// the run, its code one of [EndCodes]; a coded body is its code with its names, who
+// refused and its retry_after; anything else is an error with its status.
 //
 // A refusal's message, the text its user is told, is its Text, so its Error says it
 // word for word. A 5xx whose code is internal, or that has none, is a failure without
@@ -753,6 +803,7 @@ func (a *linkAnswer) refusal(what string) error {
 	}
 	if r := accesskey.ReadRefusal(a.status, a.body); r != nil {
 		r.Detail, r.From, r.Text = what, a.from(), accesskey.ShownValue(doc.Message, false)
+		r.RetryAfter = a.retryAfter()
 		return r
 	}
 	return &StatusError{What: what, Status: a.status, Message: accesskey.ShownValue(doc.Message, false)}
@@ -960,11 +1011,13 @@ var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 
 // OpenRun posts the run request to runURL, the discovery's run.url, and returns the
 // run answer: a 200 the schema accepts, whose run_id is the request's. A 410 is the end
-// of the run, [Ended]; a coded refusal is an [*accesskey.Refusal] with its status and
-// who refused, From. It waits [OpenWait] for the answer, where every other request of
-// the link waits [Timeout]. Once the run is open on the local link, every later batch
-// has it in X-Qory-Run-Id. The local link takes no narrowing, and a separate gateway
-// no labels or about, which are the starter's registration's.
+// of the run, [Ended]; a coded refusal is an [*accesskey.Refusal] with its status, who
+// refused, From, and in RetryAfter the wait of the Retry-After of Qory Apiary's last
+// answer as the run opens: to the registration or attach, the reload after the attach,
+// or the secrets request. It waits [OpenWait] for the answer, where every other request
+// of the link waits [Timeout]. Once the run is open on the local link, every later
+// batch has it in X-Qory-Run-Id. The local link takes no narrowing, and a separate
+// gateway no labels or about, which are the starter's registration's.
 func (k *Link) OpenRun(ctx context.Context, runURL string, req LinkRunRequest) (*LinkRunAnswer, error) {
 	if err := k.onLink("the run URL", runURL); err != nil {
 		return nil, fmt.Errorf("%s: %w", k.name, accesskey.ShownError(err))
@@ -1147,15 +1200,21 @@ func (k *Link) Deliver(ctx context.Context, eventsURL, deliveryID string, body [
 }
 
 // stopReason is the reason of stop in a batch's answer, link-batch-answer.schema.json:
-// model_key_limit, or empty for a body that is empty, is no JSON object, has no stop
-// or has a reason outside Forager's list, after which the session goes on.
+// model_key_limit, model_key_switch or model_key_unauthorized, or empty for a body that
+// is empty, is no JSON object, has no stop or has a reason outside Forager's list,
+// after which the session goes on.
 func stopReason(body []byte) string {
 	var doc struct {
 		Stop *struct {
 			Reason string `json:"reason"`
 		} `json:"stop"`
 	}
-	if len(body) == 0 || jsonv2.Unmarshal(body, &doc) != nil || doc.Stop == nil || doc.Stop.Reason != event.ReasonModelKeyLimit {
+	if len(body) == 0 || jsonv2.Unmarshal(body, &doc) != nil || doc.Stop == nil {
+		return ""
+	}
+	switch doc.Stop.Reason {
+	case event.ReasonModelKeyLimit, event.ReasonModelKeySwitch, event.ReasonModelKeyUnauthorized:
+	default:
 		return ""
 	}
 	return doc.Stop.Reason

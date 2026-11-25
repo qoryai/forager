@@ -16,6 +16,12 @@
 // The enclosure runs Linux, so the helper is the test binary only on Linux, built with
 // CGO_ENABLED=0; elsewhere QORY_WALL_HELPER names a test binary built for Linux, go
 // test -c with GOOS=linux, and without it the suite is skipped.
+//
+// The tests of a real runtime take its image from a variable: QORY_WALL_CLAUDE_IMAGE,
+// an image with Claude Code 2.1.316 at claude on its PATH, and QORY_WALL_CODEX_IMAGE,
+// an image with Codex 0.167.2 at codex on its PATH. Without the variable a test skips;
+// QORY_WALL_REQUIRE turns that skip into a failure for every such test but
+// TestDockerClaudeCodeThroughTheWall.
 package e2e
 
 import (
@@ -34,6 +40,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -86,6 +93,27 @@ const (
 	// modeAfterJoin is the program of a session with no runtime that joins after the
 	// last session.
 	modeAfterJoin = "after-join"
+	// modeForgeAfter is the program After's command starts that sends a record of the after
+	// source to the socket at its argument, as a process of After's container can.
+	modeForgeAfter = "forge-after"
+	// modeAttackAfter is the runtime of an enclosure with nested Docker that, as the agent
+	// can, starts a privileged container of the inner daemon with the enclosure's root
+	// bound, and writes a file there that After's command reads.
+	modeAttackAfter = "attack-after"
+	// modePlantPassword is a runtime that writes its proxy password into the workspace.
+	modePlantPassword = "plant-password"
+	// modeAfterRoute is After's command that sends requests to the route to link.QoryHost,
+	// with and without the password the agent planted.
+	modeAfterRoute = "after-route"
+	// modeAfterInspect is After's command that tries to read and trace the helper of
+	// After's container and to take its descriptors.
+	modeAfterInspect = "after-inspect"
+	// modeBlock is a runtime that prints an empty report and waits for a stop signal.
+	modeBlock = "block"
+	// modeSetupRoute is the program a setup command starts in the setup container that
+	// sends requests to the route to link.QoryHost with the session's proxy password
+	// once the agent wrote it into the workspace, [setupRoute].
+	modeSetupRoute = "setup-route"
 )
 
 // HoldArgs are the arguments that make the helper keep the setup container running.
@@ -133,10 +161,10 @@ const (
 	credentialPath = "/inside-the-paths"
 )
 
-// What a runtime's credentials are in the suite: Claude Code's API key, a model key
-// of the machine's whose endpoint is the first recorder, set in x-api-key in place of
-// the key's placeholder in ANTHROPIC_API_KEY; and a bearer for the second recorder, a
-// host credential whose stand-in is in PROBE_OAUTH_TOKEN, a variable no model key is
+// What a runtime's credentials are in the suite: Claude Code's API key, a local model
+// provider credential whose endpoint is the first recorder, set in x-api-key in place
+// of the key's placeholder in ANTHROPIC_API_KEY; and a bearer for the second recorder,
+// a host credential whose stand-in is in PROBE_OAUTH_TOKEN, a variable no model key is
 // read from. Each is a fake key in the suite's environment. keyMark is in both keys and
 // nowhere else: the full keys are made when the suite runs, so they exist only in the
 // suite's environment while it runs.
@@ -154,12 +182,13 @@ const (
 )
 
 // What the run's model key is without the recorders: a fake key in the suite's
-// environment, with keyMark, a model key of the machine's whose endpoint is Claude
+// environment, with keyMark, a local model provider credential whose endpoint is Claude
 // Code's model host, sent as a bearer, so the session sets its placeholder in
-// ANTHROPIC_AUTH_TOKEN. A walled run whose gateway holds credentials needs a model
-// key. With the recorders, the API key is the run's one model key, since a run with no
-// control plane has no model_credential to choose between two. The allow list has the
-// host, as it must for a model key's endpoint host; the probe sends nothing to it.
+// ANTHROPIC_AUTH_TOKEN. A walled run whose gateway holds credentials needs a model key.
+// With the recorders, the API key is the run's one model key, since a run with no
+// control plane has no default_model_provider_credential_name to choose between two.
+// The allow list has the host, as it must for a model key's endpoint host; the probe
+// sends nothing to it.
 const (
 	modelKeyVar = "QORY_WALLTEST_MODEL_KEY"
 	modelHost   = "api.anthropic.com"
@@ -181,8 +210,9 @@ const hostOnly = "QORY_WALLTEST_HOST_ONLY"
 // forwarder, the setup runner, the run's setup command, the probe, the start of a Docker
 // daemon inside the agent's container, the probe in a container the agent started, the search for
 // neighbours in one, a recorder, the probe of a sealed credential, the hold of the setup
-// container, the service a setup command starts in it or the setup command that reaches
-// that service. It returns at once otherwise.
+// container, the service a setup command starts in it, the setup command that reaches
+// that service, or the setup's program that sends requests to the route to the caller.
+// It returns at once otherwise.
 func Main() {
 	if len(os.Args) < 2 {
 		return
@@ -238,6 +268,24 @@ func Main() {
 		os.Exit(reach(os.Args[2:]))
 	case modeAfterJoin:
 		os.Exit(afterJoin())
+	case modeSessionNumber:
+		os.Exit(sessionNumber())
+	case modeLeaveJob:
+		os.Exit(leaveJob())
+	case modeBlock:
+		os.Exit(block())
+	case modeForgeAfter:
+		os.Exit(forgeAfter(os.Args[2:]))
+	case modeAttackAfter:
+		os.Exit(attackAfter())
+	case modePlantPassword:
+		os.Exit(plantPassword())
+	case modeAfterRoute:
+		os.Exit(afterRoute())
+	case modeAfterInspect:
+		os.Exit(afterInspect())
+	case modeSetupRoute:
+		os.Exit(setupRoute())
 	case modeService:
 		err := http.ListenAndServe(":"+setupServicePort, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			io.WriteString(w, setupServiceLine)
@@ -272,6 +320,36 @@ func Helper(t *testing.T) string {
 	return exe
 }
 
+// InstallVersion is the version the suite's sessions pass for the runtime's installed
+// folder, and dev.qory.session.started reports.
+const InstallVersion = "2.1.316"
+
+// Install makes a runtime's installed folder with a copy of the helper at bin/claude,
+// others able to read and enter each folder and to read and run the copy, and returns
+// it.
+func Install(t *testing.T, helper string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "runtime")
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(helper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "claude"), b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The mode the files are made with passes through the umask.
+	for _, p := range []string{dir, bin, filepath.Join(bin, "claude")} {
+		if err := os.Chmod(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
 // Options are what the suite is told about the adapter under test.
 type Options struct {
 	// Wall is the adapter, built with [Helper] as its helper and [RelayArgs].
@@ -290,6 +368,10 @@ type Options struct {
 	Exec []string
 	// Probe is the helper's path inside the enclosure.
 	Probe string
+	// Install is a folder of this machine that others can read and enter, with a copy
+	// of the helper at bin/claude, as [Install] makes it: the runtime's installed
+	// folder, which each session of the suite starts the probe from.
+	Install string
 	// Hooks says the adapter carries the hook socket across on this machine. Where it
 	// does not, an engine in a virtual machine, the hook check is skipped and said so.
 	Hooks bool
@@ -447,6 +529,14 @@ func Run(t *testing.T, o Options) {
 	check("no way to this machine through the proxy unless the policy names it", p.OwnViaProxy == 403 && p.MetaViaProxy == 403 && own.Load() == 0, fmt.Sprintf("this machine's listener answered %d through the proxy and was reached %d times; the metadata address answered %d", p.OwnViaProxy, own.Load(), p.MetaViaProxy))
 	check("no way to the engine's host by the network's first address", len(p.HostByGateway) == 0, p.HostByGateway)
 	check("the record is read-only", p.RecordWrite != "", "the probe opened events.jsonl for writing")
+	check("the runtime's installed folder and the helper are read-only", len(p.RuntimeWrites) == 0 && p.RuntimeProgram, fmt.Sprintf("the attempts that succeeded: %q; the program is still there: %v", p.RuntimeWrites, p.RuntimeProgram))
+	started := map[string]any{}
+	for _, e := range r.events {
+		if e["type"] == "dev.qory.session.started" {
+			started = e["data"].(map[string]any)
+		}
+	}
+	check("the event shows the installed version", started["runtime_version"] == InstallVersion, fmt.Sprintf("session.started %v; want runtime_version %s", started, InstallVersion))
 	check("not root", p.UID != 0 && p.GID != 0, fmt.Sprintf("uid %d gid %d", p.UID, p.GID))
 	check("no capabilities and none to gain", zero(p.CapEff) && zero(p.CapPrm) && zero(p.CapBnd) && zero(p.CapInh) && zero(p.CapAmb) && p.NoNewPrivs == "1", fmt.Sprintf("CapEff %s CapPrm %s CapBnd %s CapInh %s CapAmb %s NoNewPrivs %s", p.CapEff, p.CapPrm, p.CapBnd, p.CapInh, p.CapAmb, p.NoNewPrivs))
 	// The helper's exec waits for the runtime as its parent: as the agent's user, with
@@ -500,6 +590,15 @@ func Run(t *testing.T, o Options) {
 		check("a container the agent's docker command starts reaches the origin by the proxy of the agent's configuration, and nothing else",
 			c.Err == "" && c.Proxy != "" && c.OutsideAddress != "" && c.OutsideName != "" && c.Metadata != "" && c.OriginDirect != "" && c.ViaProxy == 200,
 			fmt.Sprintf("%+v; the agent's configuration, as its user sees it: %v", c, n.Config))
+		for _, c := range []struct {
+			name string
+			w    innerWritten
+			priv bool
+		}{{"a container the agent starts", n.Runtime, false}, {"a privileged container the agent starts", n.Privileged, true}} {
+			check(c.name+" cannot write the runtime's installed folder",
+				c.w.Exit != 0 && strings.Contains(strings.ToLower(c.w.Output), "read-only file system") && (!c.priv || c.w.Remount != "" && c.w.Setattr != ""),
+				fmt.Sprintf("the write of %s exited %d with %q; the bind-remount %q, mount_setattr %q", path.Join(runtimeFolder, plantedName), c.w.Exit, c.w.Output, c.w.Remount, c.w.Setattr))
+		}
 		problem := n.Neighbours.problem()
 		check("on the inside network only the enclosure and the relay answer a container the agent starts, privileged on the enclosure's network with IPv6 on, and nothing connects",
 			problem == "", problem)
@@ -613,7 +712,11 @@ func Run(t *testing.T, o Options) {
 	setupRemoved(t, o, origin, outside)
 	setupRemovedAfterSession(t, o, origin, outside)
 	afterJoinFreshHome(t, o, origin, outside)
+	sessionNumbers(t, o, origin, outside)
+	afterStep(t, o, origin, outside)
 	runAPIThroughTheWall(t, o, origin, outside)
+	qoryHostThroughTheWall(t, o, origin, outside)
+	qoryHostFromTheSetup(t, o, origin, outside)
 	transcriptSent(t, o, origin, outside)
 	transcriptPlanted(t, o, origin, outside)
 	terminal(t, o, origin, outside)
@@ -1491,12 +1594,21 @@ type variant struct {
 	// runAPICheck, when set, is the check that the run sets with
 	// (*session.Run).SetRunAPICheck after the open.
 	runAPICheck func(ctx context.Context, req session.RunAPIRequest) (*session.RunAPIRefusal, error)
+	// qoryRoute, when set, is the run's route to link.QoryHost, OpenSpec.QoryRoute.
+	qoryRoute http.Handler
 	// mode is the helper's mode the runtime runs in; empty for the probe.
 	mode string
 	// stdin, when set, is the session's standard input in place of an empty one, and
 	// stdout gets the session's standard output too.
 	stdin  io.Reader
 	stdout io.Writer
+	// after and afterTimeout are the session's SessionSpec.After and AfterTimeout.
+	after        []string
+	afterTimeout time.Duration
+	// cancelAfter, when above zero, ends the join's context that long after the
+	// session's start, and cancelledAt, when set, gets the moment it ended.
+	cancelAfter time.Duration
+	cancelledAt *time.Time
 	// home, with Docker, defines the machine's image as Options.HomeImage in place of
 	// Options.Image.
 	home bool
@@ -1639,10 +1751,12 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 		RunID:          v.runID,
 		ForagerVersion: "walltest",
 		Report:         report,
+		QoryRoute:      v.qoryRoute,
 	},
 		SessionSpec: session.SessionSpec{
 			Runtime:           rt,
-			Command:           o.Probe,
+			RuntimeInstall:    &session.RuntimeInstall{Dir: o.Install, Version: InstallVersion},
+			Command:           filepath.Join(o.Install, "bin", "claude"),
 			Args:              []string{mode, "--settings", settings},
 			Env:               env,
 			Dir:               dir,
@@ -1654,6 +1768,8 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 			Exec:              o.Exec,
 			SetupRunner:       []string{o.Probe, modeSetupCommand},
 			WorkspaceReadOnly: v.readOnly,
+			After:             v.after,
+			AfterTimeout:      v.afterTimeout,
 		},
 		fetch: v.fetch, setup: v.setup, onSetup: v.onSetup, removeSetup: v.removeSetup, opened: v.opened,
 		runAPICheck: v.runAPICheck,
@@ -1665,6 +1781,15 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 	// the socket crosses into the enclosure.
 	if o.Hooks && !v.readOnly {
 		spec.SessionSpec.Setup = []session.SetupCommand{{Name: "install", Args: append([]string{o.Probe, modePrepare}, preparationWords...)}}
+	}
+	if v.cancelAfter > 0 {
+		timer := time.AfterFunc(v.cancelAfter, func() {
+			if v.cancelledAt != nil {
+				*v.cancelledAt = time.Now()
+			}
+			cancel()
+		})
+		defer timer.Stop()
 	}
 	if v.started != nil {
 		going, stop := context.WithCancel(ctx)

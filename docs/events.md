@@ -43,8 +43,11 @@ passes. `qory` keeps them under its state directory and prints the path:
   Claude Code's `settings.json` and `approve-key.sh`. A join that writes no
   `dev.qory.session.started`, such as one the gateway refuses, leaves no directory.
 - `transcripts/<n>/`: behind a wall, a directory per session whose runtime has
-  `resume`, such as Claude Code, bound writable at `~/.claude/projects/` inside. The
-  agent writes it, and the session reads the transcript from it.
+  `resume`, such as Claude Code or Codex, bound writable at the descriptor's
+  `resume.prefix` inside, `~/.claude/projects/` for Claude Code. The agent writes it,
+  and the session reads the transcript from it. A session whose `resume.prefix` is
+  absolute and lies in a writable mount's place inside has no such directory: the
+  session reads the transcript in that mount.
 
 The files the session writes for the runtime, these and `ca-bundle.pem`, are each
 written to a new file beside it and renamed, so a link at its path is replaced, not
@@ -105,7 +108,8 @@ of the run at its gateway, before any session. Each session then has a
 `dev.qory.session.started`, with its number from 1 in `session`, the runtime, the
 command and the image, and a `dev.qory.session.exited`, with how the session ended: the
 runtime's exit sets `succeeded` or `failed`, `cancelled` comes with `timeout` or
-`interrupted`, and `paused` with `model_key_limit`. A join that is refused has only a `dev.qory.session.exited`, `failed`
+`interrupted`, `paused` with `model_key_limit` or `model_key_switch`, and `failed` with
+`model_key_unauthorized`. A join that is refused has only a `dev.qory.session.exited`, `failed`
 with exit code -1 and the refusal's code, such as `mount_mode_conflict`, as its reason.
 A session whose wall fails to start has its `dev.qory.session.started`, then its
 `dev.qory.session.exited`, `failed` with exit code -1 and no reason, or the refusal's
@@ -131,31 +135,95 @@ exits still counts. The run stays open for its host work, such as a push, and it
 caller closes it `paused` with `model_key_limit`: a pause of the run, which a control
 plane can continue.
 
-A runtime whose descriptor has `resume`, such as Claude Code, writes the transcript of
-its session to a file, `~/.claude/projects/<working directory as a slug>/<session
-id>.jsonl` for Claude Code. The session sends that file as
-`dev.qory.session.transcript` events: whole lines as the runtime appends them, each
-masked as a `dev.qory.run.log` chunk is, in chunks of at most 32 KiB, with `session`,
-`session_id`, `path`, `offset` from 0 and `bytes`. The session reads the file once more
-to its end before the session's `dev.qory.session.exited`. Behind a wall the wall binds
-the session's transcript directory, `transcripts/<n>/` in the run directory, at
-`~/.claude/projects/` inside, and the session reads the file there: only
-`<slug>/<session id>.jsonl`, under a session id that is a UUID in lower case, and only a
-regular file with one link and at most 64 MiB, with no symbolic link on its path. For
-anything else it sends nothing and writes one line on `stderr` that starts with the fix
-and then shows the cause. When the
-run answer has `resume`, the run's first session whose runtime has `resume` reads the
-paused run's transcript over the gateway's link, `GET <run.url>/<run_id>/transcript`. In
-a run with no wall it writes it in the session's directory as `resume.jsonl`, and starts
-the runtime through `resume.sh`, which copies it under the runtime's home and adds the
+A model provider's `401` to a request with a model key on the model API's path takes
+the key out of use; a key with `expires_at` is renewed first. For `anthropic-messages`
+the proxy sends the request again with the next usable key, and the session goes on.
+Otherwise the gateway's answer to the session's next batch has `stop`, and the session
+stops the runtime:
+
+- `model_key_switch`, `paused`, when the key's format is `openai-responses` and
+  another key of the run is usable. The caller closes the run `paused` with
+  `model_key_switch`, and a control plane can continue it at once on another key.
+- `model_key_unauthorized`, `failed`, when every key of the run is out and a `401`
+  took at least one out. The caller closes the run `failed` with
+  `model_key_unauthorized`.
+
+When the runtime exits by itself, the session posts at least one batch after the exit,
+a `dev.qory.run.heartbeat` when it has nothing else to post, and reads the answer, so
+a stop that comes as the runtime exits still counts.
+
+A runtime whose descriptor has `resume`, such as Claude Code or Codex, writes the
+transcript of its session to a file, `~/.claude/projects/<working directory as a
+slug>/<session id>.jsonl` for Claude Code, and
+`${CODEX_HOME}/sessions/<year>/<month>/<day>/rollout-<time>-<session id>.jsonl` for
+Codex, with `CODEX_HOME` from the launch's environment. A `*` in the descriptor's
+`resume.path` matches inside one name, and the session reads the one file that matches;
+more than one writes one line and sends nothing. `path` in each event is the file's path
+as the runtime sees it: below `~/`, or absolute, such as
+`/var/lib/qory-codex-home/sessions/2026/11/13/rollout-<time>-<session id>.jsonl`. When
+the descriptor's `resume.home_var` has no usable value in the launch, the runtime starts
+without a resume, and the session writes one line on `stderr` that starts with the fix.
+The session sends that file as `dev.qory.session.transcript` events: whole lines as the
+runtime appends them, each masked as a `dev.qory.run.log` chunk is, in chunks of at most
+32 KiB, with `session`, `session_id`, `path`, `offset` from 0 and `bytes`. The session
+reads the file once more to its end before the session's `dev.qory.session.exited`.
+Behind a wall the wall binds the session's transcript directory, `transcripts/<n>/` in
+the run directory, at `resume.prefix` inside, and the session reads the file there: only
+the file of `resume.path`, such as `<slug>/<session id>.jsonl`, under a session id that
+is a UUID in lower case, and only a regular file with one link and at most 64 MiB, with
+no symbolic link on its path. For anything else it sends nothing and writes one line on
+`stderr` that starts with the fix and then shows the cause. When the run answer has
+`resume`, the run's first session whose runtime has `resume` reads the paused run's
+transcript over the gateway's link, `GET <run.url>/<run_id>/transcript`. In a run with
+no wall it writes it in the session's directory as `resume.jsonl`, and starts the
+runtime through `resume.sh`, which copies it under the runtime's home and adds the
 descriptor's arguments, such as `--resume <session id>`. Behind a wall it writes it in
 the transcript directory before the agent's container starts, and adds the arguments
-itself.
-When the read or the copy fails, the runtime starts without a resume, after one line
-on `stderr` that starts with the fix and then shows the cause, a `404` from the gateway among the
-causes. Behind a wall the same happens when the wall cannot bind the transcript
-directory where the agent's user writes it. See the
-contract's §The events, A session's transcript.
+itself. The arguments go at the end, or right after the argument that equals
+`resume.after`. With `resume.place: before_last` they go right before the first `--`
+after `resume.after`, or else right before the last argument: `codex exec --json
+"<prompt>"` resumes as `codex exec --json resume <session id> "<prompt>"`, and `codex
+exec --json -- "<prompt>"` as `codex exec --json resume <session id> -- "<prompt>"`. A
+session that resumes checks the launch's arguments again with the resume arguments at
+their place, and the join fails when the launch's arguments then set a setting the
+session passes. The runtime's first `dev.qory.runtime.started` then has `source`
+`resume` where its rule sets `startup`, when its `session_id` is the restored one. When
+the read or the copy fails, or the paused run's session id starts with `-`, the runtime
+starts without a resume, after one line on `stderr` that starts with the fix and then
+shows the cause, a `404` from the gateway among the causes. Behind a wall the same
+happens when the wall cannot bind the transcript directory where the agent's user writes
+it. See the contract's §The events, A session's transcript.
+
+Codex prints no result line, so the session writes the `dev.qory.runtime.result` of
+each launch of Codex itself, right before the session's `dev.qory.session.exited`, for
+a launch that wrote `dev.qory.runtime.started`. `outcome` is `success` for a launch whose
+session ended `succeeded`, and `error_during_execution` otherwise; `is_error` is false for `success` and
+for a launch paused with `model_key_limit` or `model_key_switch`, and true otherwise.
+`usage` is the launch's tokens, read from the rollouts below `resume.prefix` once Codex
+exited: for the launch's thread and each child agent's rollout, the children of
+children included, the total less what the file had before the launch started.
+`input` is Codex's `input_tokens` less its cached and cache-write tokens. The session
+reads the first 64 KiB of every other rollout that changed during the launch to find
+the child agents. When a changed file that it cannot read so, such as a symbolic link,
+a FIFO or a file with a broken first line, has in its name the id of a thread that a
+spawn started, the result has no `usage`; any other such file counts for nothing. The
+ids of spawned threads are in these lines of the thread's rollout and of each child
+agent's that changed: the `receiver_thread_ids` of an `item_completed` of a
+`CollabAgentToolCall` of `spawn_agent`; the `agent_thread_id` of an `item_completed` of
+a `SubAgentActivity`, or of a `sub_agent_activity`, of kind `started`; and the
+`agent_id` in the output of a `spawn_agent` call, in its `function_call_output` or in
+an `item_completed` of a `FunctionCallOutput`. The session takes no id from a child
+agent's rollout that did not change: when an agent's parent is such a child agent, a
+file of that agent that the session cannot read counts for nothing. It reads the
+first 64 KiB of a rollout that did not change only to link a child agent that changed
+to the thread. It reads the thread's rollout and the child agents' that changed with
+the same checks as the transcript, and at most 256 files and 256 MiB together. Past
+them, for a first line with no ids in its first 64 KiB, for a child agent's file that
+changed between the session's reads, for a baseline whose `fstatat` of a file failed
+with an error other than `ENOENT`, and for a count above 2^53, a count below -2^53, a
+count that is not an integer or a sum of a count above 2^53, the result has no
+`usage`, and the session writes one line on `stderr` with the fix first. See the
+contract's §The events, Codex's result.
 
 Behind a wall, the `dev.qory.session.exited` of a runtime that exited also has the
 enclosure's peak memory and CPU time, as measured inside the enclosure, to size machine
@@ -243,56 +311,74 @@ characters.
 `SessionSpec.Runtime` is nil, and no `bare` otherwise, also for a bare runtime the caller
 set. The command may still be an agent, because Forager does not inspect it.
 
-Every `dev.qory.run.exited` shows how the run ended in `state`: `succeeded`, `failed` or
-`cancelled`, stopped before it said how it went. The close of the run writes the
-outcome its caller gives. A run its starter ends with an outcome has that outcome. When
-the close's outcome has a reason, or the run ends without a close, or its starter gives
-a reason, `dev.qory.run.exited` contains why in `reason`: an open code, Forager's or the
-starter's, carried as given. The close writes `timeout`, `cancelled`, `interrupted`,
-`cancelled`, a run stopped from where it was started (a Ctrl-C), and `no_session`,
-`failed`, a run closed with no session after its host work failed, such as a fetch,
-and `model_key_limit`, `paused`, a run whose last session ended `paused` with
-`model_key_limit`, which a control plane reads as a pause of the run, and posts them. The close writes and posts `image_missing`, `failed` with exit code
-`-1`, when its caller gives it for a run with no session after the fetch of the run's
-image found that its registry, or the registry's mirror, does not have it, and the same
-for `image_user_root`, after the fetch found that the image's user is root, and for
+Every `dev.qory.run.exited` shows how the run ended in `state`: `succeeded`, `failed`,
+`cancelled`, stopped before it said how it went, or `paused`, stopped at the model key
+limit or to continue on another model key. The close of the run writes the outcome its
+caller gives. A run its starter ends with an outcome has that outcome. When the close's
+outcome has a reason, or the run ends without a close, or its starter gives a reason,
+`dev.qory.run.exited` contains why in `reason`: an open code, Forager's or the
+starter's, carried as given. A starter's code is none of Forager's reserved codes and
+none of the image, workflow, `read_needs_*` and `write_needs_wall` codes, which the
+close takes only before a join. The gateway accepts a starter's code in the close only
+`failed`, before or after the gateway numbered a join of the run. When qory knows the
+cause, it closes a failed run with one of its end codes, listed in `$defs/end_codes` of
+integrations' `contracts/run/v1/outcome.schema.json`, whether or not a session joined
+it. The close writes each of these reasons with its state, and posts them:
+
+- `timeout`, `cancelled`, with exit code `124`;
+- `interrupted`, `cancelled`, a run stopped from where it was started (a Ctrl-C);
+- `no_session`, `failed`, a run closed with no session and no reason after its host work
+  failed, such as a fetch;
+- `model_key_limit`, `paused`, a run whose last session ended `paused` with
+  `model_key_limit`, which a control plane reads as a pause of the run;
+- `model_key_switch`, `paused`, a run whose last session ended `paused` with
+  `model_key_switch`;
+- `model_key_unauthorized`, `failed`, a run whose last session ended `failed` with
+  `model_key_unauthorized`.
+
+The close writes and posts `image_missing`, `failed` with exit code `-1`, when its
+caller gives it for a run with no session after the fetch of the run's image found that
+its registry, or the registry's mirror, does not have it, and the same for
+`image_user_root`, after the fetch found that the image's user is root, and for
 `image_access_denied`, `image_rate_limited` and `image_registry_unreachable`, after the
 check of the image at its registry got 401 or 403, got 429, or did not reach the
-registry. qory closes
-a run with no session whose workflow is not in the harness with
+registry. qory closes a run with no session whose workflow is not in the harness with
 `workflow_not_in_harness`, `failed` with exit code `-1`. qory closes a read run (the
 contract's §The events, How a run ends) with no session that has no wall with
 `read_needs_wall`, a read run whose setup is set to run inside the agent's container
 with `read_needs_setup_outside`, a read run whose image runs nested Docker with
 `read_needs_no_nested_docker`, and a read run whose setup container could not be removed
-with `read_needs_setup_removed`, each `failed` with exit code `-1`. A run whose last
-session ended `paused` with `model_key_limit`, after the gateway's answer to a batch
-had `stop` because no model key of the run's key group was left out of cooldown, closes
-`paused` with `model_key_limit` after its host work; the gateway returns an error for that reason
-in a run with no join, after a last session that ended another way, and with another
-state; and for `paused` with no reason or another reason.
-The gateway writes the others: `session_lost`, `failed`, the session was silent;
-`batch_refused`, `failed`, the gateway refused a batch from the run's session
-(see the contract's §The gateway's link); `stopped`, `cancelled`, the starter ended the run and
-gave no outcome, or the starter's outcome and reason when it gave one; and sending a
-record again writes `gateway_lost`, `failed`. Forager's codes are reserved, and so are
-the old names `quiet`, `credential_expired`, `credential_check_unreachable` and
-`credential_check_invalid`, which Forager no longer writes: a starter's reason that
-equals one is dropped. When the gateway ends a session's run, the gateway writes the
-open session's `dev.qory.session.exited` and then the run's `dev.qory.run.exited`, and
-answers the session's next request with a `410`, a code, and the state and the reason
-of that end. Sending a record again writes the open session's `dev.qory.session.exited`
-the same way before its `gateway_lost`. The session records its
-`dev.qory.session.exited` and its `dev.qory.run.exited` in `session.jsonl` alone, with
-them and exit code -1, and posts nothing more:
-`stopped`, `run_closed`, `session_lost` or `batch_refused` as the gateway ended the
-run. A refusal of the run request with a
-code other than `wall_required` is recorded the same way: the session records
-`dev.qory.run.refused` only in the session's record, since the gateway opened no run. A
-code of the server's comes with its status, and is recorded as the server sent it,
-`not_found` among them, and one the contract does not list yet too. A run the gateway
-could not open for a reason without a code, a `5xx` `internal`, is recorded nowhere: the
-run returns the error the gateway's message says. The contract describes each.
+with `read_needs_setup_removed`, each `failed` with exit code `-1`. qory closes a run
+with no session whose access is not read and that has no wall with `write_needs_wall`,
+`failed` with exit code `-1`. A run whose last session ended `paused` with
+`model_key_limit`, after the gateway's answer to a batch had `stop` because no model key
+of the session's key group was left out of cooldown, closes `paused` with `model_key_limit`
+after its host work. The gateway returns an error for `model_key_limit`,
+`model_key_switch` and `model_key_unauthorized` in a run with no join, after a last
+session that ended another way, and with a state other than the one listed beside the
+reason; and for `paused` with no reason or with a reason other than `model_key_limit`
+and `model_key_switch`. The gateway writes the others: `session_lost`, `failed`, the
+session was silent; `batch_refused`, `failed`, the gateway refused a batch from the
+run's session (see the contract's §The gateway's link); `stopped`, `cancelled`, the
+starter ended the run and gave no outcome, or the starter's outcome and reason when it
+gave one; and sending a record again writes `gateway_lost`, `failed`. Forager's codes
+are reserved, and so are the old names `quiet`, `credential_expired`,
+`credential_check_unreachable` and `credential_check_invalid`, which Forager no longer
+writes: a starter's reason that equals one is dropped. When the gateway ends a session's
+run, the gateway writes the open session's `dev.qory.session.exited` and then the run's
+`dev.qory.run.exited`, and answers the session's next request with a `410`, a code, and
+the state and the reason of that end. Sending a record again writes the open session's
+`dev.qory.session.exited` the same way before its `gateway_lost`. The session records
+its `dev.qory.session.exited` and its `dev.qory.run.exited` in `session.jsonl` alone,
+with them and exit code -1, and posts nothing more: `stopped`, `run_closed`,
+`session_lost` or `batch_refused` as the gateway ended the run. A refusal of the run
+request with a code other than `wall_required` is recorded the same way: the session
+records `dev.qory.run.refused` only in the session's record, since the gateway opened no
+run. A code of the server's comes with its status, and is recorded as the server sent
+it, `not_found` among them, and one the contract does not list yet too. A run the
+gateway could not open for a reason without a code, a `5xx` `internal`, is recorded
+nowhere: the run returns the error the gateway's message says. The contract describes
+each.
 
 ## The runtime's events
 
@@ -317,7 +403,7 @@ records come from outside. A **descriptor** maps those reports to events:
 | `dev.qory.runtime.text`              | The runtime printed a text block      |
 | `dev.qory.runtime.notification`      | The runtime notified its user         |
 | `dev.qory.runtime.ended`             | The runtime closed its session        |
-| `dev.qory.runtime.result`            | A headless session printed its result |
+| `dev.qory.runtime.result`            | A headless session printed its result, or a launch of Codex ended |
 
 Forager ships the descriptor for Claude Code. A runtime that nothing describes still
 runs: its run, its log and its egress are recorded, with no runtime events. See

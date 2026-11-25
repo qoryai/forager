@@ -110,9 +110,9 @@
       "allOf": [{"pattern": "^[^@]{0,255}@"}]
     },
     "path": {
-      "description": "A path from the root, matched whole, or up to a final * matched as a prefix: /repos/acme/shop, /repos/acme/shop/*. No other wildcard, no query.",
+      "description": "A path from the root, matched whole, or up to a final * matched as a prefix: /repos/example-org/app, /repos/example-org/app/*. A segment written exactly {} matches one segment that is not empty, anywhere, the last included: /repos/example-org/app/pulls/{} matches /repos/example-org/app/pulls/12, and neither /repos/example-org/app/pulls/12/merge nor /repos/example-org/app/pulls/. With both, as in /a/{}/b*, the {} segments are matched first, then the prefix. A { or } anywhere else fails validation. No other wildcard, no query.",
       "type": "string",
-      "pattern": "^/[^*?#\\s]*\\*?$"
+      "pattern": "^/(?:\\{\\}|[^*?#\\s{}/]*)(?:/(?:\\{\\}|[^*?#\\s{}/]*))*\\*?$"
     }
   }
 }

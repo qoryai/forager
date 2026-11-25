@@ -174,7 +174,7 @@ and for each name the run takes the value of the highest that sets it:
   defaults. The list is the contract's
   [`denied-variables.json`](../contracts/forager/v1/denied-variables.json), the runtime's
   `denies`, and `SessionSpec.Variables.Deny`. It holds the session's names, the proxy's, the
-  trust store's, Docker's, `PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `BASH_ENV` and
+  trust store's, Docker's, `PATH`, `NODE_OPTIONS`, `BUN_OPTIONS`, `LD_PRELOAD`, `BASH_ENV` and
   `HOME`, and in `model_keys` and `forge_tokens` the model keys' variables, `ANTHROPIC_API_KEY`,
   `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`, and the forge tokens', `GH_TOKEN`,
   `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITLAB_TOKEN`,
@@ -227,12 +227,13 @@ checks every value the node passes: `Env`, `LaunchFixed`, `LaunchDefaults`,
 | a `QORY_` variable, or one the gateway sets, such as one a credential is read from | a walled run | `variable_reserved` |
 | a value for a placeholder | any run | `placeholder_conflict` |
 
-`QORY_RUN_ID` and `QORY_RUN_SOCKET` are exempt from the first. Without a wall, a
-`QORY_` value of the server, the run, the machine or the harness is denied instead. A
-server's `QORY_` value is denied in any run, apart from `QORY_RUN_SYSTEM` and
-`QORY_RUN_REPOSITORIES`, the system and the repositories a session's setup commands
-may use, which the server's variables may set and which reach the agent as any server variable
-does. Set by the node, they are `QORY_` names like any other.
+`QORY_RUN_ID` and `QORY_RUN_SOCKET` are exempt from the first; `QORY_SESSION`, which
+Forager sets to the session's number, is not. Without a wall, a `QORY_` value of the
+server, the run, the machine or the harness is denied instead. A server's `QORY_` value
+is denied in any run, apart from `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`, the
+system and the repositories a session's setup commands may use, which the server's
+variables may set and which reach the agent as any server variable does. Set by the
+node, they are `QORY_` names like any other.
 
 Before it resolves the variables, the session refuses a placeholder that goes into a
 variable for no credential, `run_configuration_invalid`: one of the run's placeholders,
@@ -241,10 +242,14 @@ that the runtime's descriptor lists in `denies` or in its model `overrides`, or 
 its model endpoint's variable; a variable the runtime declares or reserves that no
 credential has among its placeholders; and a placeholder of a host credential in a
 variable the runtime reads a model key from, its descriptor's `model.keys`. Only the
-start key, the model key the runtime starts with, gets that variable. The session sets
-the runtime's model endpoint variable, `ANTHROPIC_BASE_URL` for Claude Code, to the
-start key's endpoint, and leaves out every value of it from `Env`, `LaunchFixed`,
-`LaunchDefaults`, `Variables.Run` and `Variables.Machine`.
+default model provider credential, the model key the runtime starts with, gets that
+variable. The session sets the runtime's model endpoint variable, `ANTHROPIC_BASE_URL`
+for Claude Code, to the default model provider credential's endpoint, and leaves out
+every value of it from `Env`, `LaunchFixed`, `LaunchDefaults`, `Variables.Run` and
+`Variables.Machine`. For a runtime whose descriptor places the endpoint in a setting,
+such as Codex's `model_providers.qory.base_url`, the session sets no endpoint variable
+and passes the endpoint in that setting: for Codex as a `--config` pair right after the
+command.
 
 After it resolves the variables, the session refuses a run whose gateway holds
 credentials for it and that has no model key for its runtime, `model_key_missing`:

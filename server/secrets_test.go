@@ -6,10 +6,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
@@ -19,7 +23,7 @@ import (
 
 // credentialDoc is a run configuration with two credentials: an API credential and a
 // host credential.
-const credentialDoc = `{"version":1,"credentials":[{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer","oauth":true},"key_prefixes":["sk-ant-"]},{"name":"forge","apply":[{"hosts":["git.example"],"scheme":"basic","username":"x-access-token"}],"placeholders":["FORGE_TOKEN"]}],"model_credential":"model"}`
+const credentialDoc = `{"version":1,"credentials":[{"name":"model","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"bearer","oauth":true},"key_prefixes":["sk-ant-"]},{"name":"forge","apply":[{"hosts":["git.example"],"scheme":"basic","username":"x-access-token"}],"placeholders":["FORGE_TOKEN"]}],"default_model_provider_credential_name":"model"}`
 
 // TestARunConfigurationsCredentialsAndItsComputedDigest pins the reading of
 // credentials: each entry decoded, and Computed the SHA-256 of the bytes as they came,
@@ -33,11 +37,11 @@ func TestARunConfigurationsCredentialsAndItsComputedDigest(t *testing.T) {
 	}
 	sum := sha256.Sum256([]byte(credentialDoc))
 	want := []server.RunCredential{
-		{Name: "model", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: server.Auth{Scheme: "bearer", OAuth: true}, KeyPrefixes: []string{"sk-ant-"}},
+		{Name: "model", Group: "anthropic", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: server.Auth{Scheme: "bearer", OAuth: true}, KeyPrefixes: []string{"sk-ant-"}},
 		{Name: "forge", Apply: []server.Apply{{Hosts: []string{"git.example"}, Scheme: "basic", Username: "x-access-token"}}, Placeholders: []string{"FORGE_TOKEN"}},
 	}
-	if !reflect.DeepEqual(rc.Credentials, want) || rc.ModelCredential != "model" {
-		t.Errorf("credentials %+v, model_credential %q", rc.Credentials, rc.ModelCredential)
+	if !reflect.DeepEqual(rc.Credentials, want) || rc.DefaultModelProviderCredentialName != "model" {
+		t.Errorf("credentials %+v, default_model_provider_credential_name %q", rc.Credentials, rc.DefaultModelProviderCredentialName)
 	}
 	for i, w := range [][]server.Apply{
 		{{Hosts: []string{"api.model.example"}, Scheme: "bearer"}},
@@ -55,27 +59,28 @@ func TestARunConfigurationsCredentialsAndItsComputedDigest(t *testing.T) {
 	}
 }
 
-// TestARunConfigurationsCredentialsAreRefused pins what Forager refuses of
-// credentials, beside the schema, each run_configuration_invalid with the name: a name
-// twice, a header that frames the request or that the proxy sets, in any case and
-// with underscores for dashes, an endpoint whose host Forager does not read, and a
-// model_credential that names a host credential. Two API credentials without a
-// model_credential are refused with no name.
+// TestARunConfigurationsCredentialsAreRefused pins what Forager refuses of credentials,
+// beside the schema, each run_configuration_invalid with the name: a name twice, a
+// header that frames the request or that the proxy sets, in any case and with
+// underscores for dashes, an endpoint whose host Forager does not read, and a
+// default_model_provider_credential_name that names a host credential. Two API
+// credentials without a default_model_provider_credential_name are refused with no
+// name.
 func TestARunConfigurationsCredentialsAreRefused(t *testing.T) {
 	entry := func(name, header string) string {
 		return `{"name":"` + name + `","apply":[{"hosts":["api.model.example"],"scheme":"header","header":"` + header + `"}]}`
 	}
 	cases := map[string]struct{ doc, want string }{
-		"a name twice": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `,` + entry("model", "x-other-key") + `]}`, `list the credential "model" once; the document lists it twice`},
-		"an endpoint's host": {`{"version":1,"credentials":[{"name":"model","format":"openai-chat","endpoint":"https://bad_host.example/v1","auth":{"scheme":"bearer"}}]}`,
-			`give the credential "model" an endpoint whose host is a DNS name or an IP address, port 1 to 65535: Forager reads no host from its endpoint`},
-		"an endpoint's port": {`{"version":1,"credentials":[{"name":"model","format":"openai-chat","endpoint":"https://api.model.example:99999","auth":{"scheme":"bearer"}}]}`,
-			`give the credential "model" an endpoint whose host is a DNS name or an IP address, port 1 to 65535`},
-		"a host credential as the start key": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `],"model_credential":"model"}`,
-			`set model_credential to an API credential, one with format: the credential "model" has none, so it is no model key`},
+		"a name twice": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `,` + entry("model", "x-other-key") + `]}`, "List the credential \"model\" once.\nThe document lists it twice"},
+		"an endpoint's host": {`{"version":1,"credentials":[{"name":"model","group":"openai-chat","format":"openai-chat","endpoint":"https://bad_host.example/v1","auth":{"scheme":"bearer"}}]}`,
+			"Give the credential \"model\" an endpoint whose host is a DNS name or an IP address, port 1 to 65535.\nForager reads no host from its endpoint"},
+		"an endpoint's port": {`{"version":1,"credentials":[{"name":"model","group":"openai-chat","format":"openai-chat","endpoint":"https://api.model.example:99999","auth":{"scheme":"bearer"}}]}`,
+			"Give the credential \"model\" an endpoint whose host is a DNS name or an IP address, port 1 to 65535.\n"},
+		"a host credential as the default model provider credential": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `],"default_model_provider_credential_name":"model"}`,
+			"Set default_model_provider_credential_name to a credential that has a format.\nThe credential \"model\" has no format, so it is not a model key"},
 	}
 	for _, h := range []string{"Host", "content-length", "Transfer-Encoding", "Connection", "TE", "Trailer", "Upgrade", "Keep-Alive", "Cookie", "Proxy-Authorization", "proxy_authorization", "X-Qory-Credential-Set", "x_qory_credential_set", "Qory-Anything"} {
-		cases["the header "+h] = struct{ doc, want string }{`{"version":1,"credentials":[` + entry("model", h) + `]}`, `set the credential "model" in another header than "` + h + `"; that header frames the request, or the proxy sets it`}
+		cases["the header "+h] = struct{ doc, want string }{`{"version":1,"credentials":[` + entry("model", h) + `]}`, "Set the credential \"model\" in a header other than \"" + h + "\".\nThat header frames the request, or the proxy sets it"}
 	}
 	v := newVerified(t)
 	for name, c := range cases {
@@ -87,17 +92,17 @@ func TestARunConfigurationsCredentialsAreRefused(t *testing.T) {
 		}
 	}
 	api := func(name string) string {
-		return `{"name":"` + name + `","format":"anthropic-messages","endpoint":"https://api.model.example","auth":{"scheme":"header","header":"x-api-key"}}`
+		return `{"name":"` + name + `","group":"anthropic","format":"anthropic-messages","endpoint":"https://api.model.example","auth":{"scheme":"header","header":"x-api-key"}}`
 	}
 	v.runDoc = `{"version":1,"credentials":[` + api("model") + `,` + api("backup") + `]}`
 	_, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)
-	if want := "set model_credential to the model key the runtime starts with: the document lists the model keys model, backup"; code(err) != "run_configuration_invalid" || !strings.Contains(err.Error(), want) {
-		t.Errorf("two model keys without model_credential: %v; want %q", err, want)
+	if want := "Set default_model_provider_credential_name to the model provider credential the first session uses: the document lists model, backup."; code(err) != "run_configuration_invalid" || !strings.Contains(err.Error(), want) {
+		t.Errorf("two model keys without default_model_provider_credential_name: %v; want %q", err, want)
 	}
 	for _, doc := range []string{
-		`{"version":1,"credentials":[` + api("model") + `,` + api("backup") + `],"model_credential":"backup"}`,
+		`{"version":1,"credentials":[` + api("model") + `,` + api("backup") + `],"default_model_provider_credential_name":"backup"}`,
 		`{"version":1,"credentials":[` + api("model") + `]}`,
-		`{"version":1,"credentials":[` + api("model") + `],"model_credential":"machine-model"}`,
+		`{"version":1,"credentials":[` + api("model") + `],"default_model_provider_credential_name":"machine-model"}`,
 	} {
 		v.runDoc = doc
 		if _, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID); err != nil {
@@ -142,7 +147,8 @@ func TestTheSecretsRequestIsSignedAndItsAnswerVerified(t *testing.T) {
 	}
 }
 
-// TestASecretsRequestOutsideItsFormIsNotSent pins Body's checks.
+// TestASecretsRequestOutsideItsFormIsNotSent pins Body's checks, and that a request of
+// 16 credentials passes them.
 func TestASecretsRequestOutsideItsFormIsNotSent(t *testing.T) {
 	ok := server.SecretsRequest{Version: 1, RunID: runID, RunConfiguration: "sha256=" + strings.Repeat("a", 64), Credentials: []string{"model"}}
 	for name, c := range map[string]struct {
@@ -154,13 +160,26 @@ func TestASecretsRequestOutsideItsFormIsNotSent(t *testing.T) {
 		"another digest": {func(r *server.SecretsRequest) { r.RunConfiguration = "" },
 			"report this bug in the gateway's secrets request to the Forager maintainers; the digest is not sha256= and 64 hex digits"},
 		"no credential": {func(r *server.SecretsRequest) { r.Credentials = nil },
-			"report this bug in the gateway's secrets request to the Forager maintainers; the request lists 0 credentials, and a request lists 1 to 8"},
-		"nine": {func(r *server.SecretsRequest) { r.Credentials = []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"} },
-			"report this bug in the gateway's secrets request to the Forager maintainers; the request lists 9 credentials, and a request lists 1 to 8"},
+			"report this bug in the gateway's secrets request to the Forager maintainers; the request lists 0 credentials, and a request lists 1 to 16"},
+		"17": {func(r *server.SecretsRequest) { r.Credentials = credentialNames(17) },
+			"report this bug in the gateway's secrets request to the Forager maintainers; the request lists 17 credentials, and a request lists 1 to 16"},
 		"a name twice": {func(r *server.SecretsRequest) { r.Credentials = []string{"a", "a"} },
 			"report this bug in the gateway's secrets request to the Forager maintainers; the request lists a credential twice"},
 		"before 1970": {func(r *server.SecretsRequest) { r.Timestamp = -1 },
 			"the secrets request: set this machine's clock to the right time; the timestamp is before 1970"},
+		"seven unauthorized": {func(r *server.SecretsRequest) {
+			r.Credentials = []string{"a", "b", "c", "d", "e", "f", "g"}
+			r.Unauthorized = r.Credentials
+		}, "tell the Forager maintainers about this bug in the gateway's secrets request; the request lists 7 unauthorized keys, and a request lists at most 6"},
+		"an unauthorized key not in credentials": {func(r *server.SecretsRequest) { r.Unauthorized = []string{"other"} }, unauthorizedBug},
+		"an unauthorized key twice": {func(r *server.SecretsRequest) {
+			r.Credentials = []string{"model", "model-2"}
+			r.Unauthorized = []string{"model", "model"}
+		}, unauthorizedBug},
+		"unauthorized keys out of order": {func(r *server.SecretsRequest) {
+			r.Credentials = []string{"model", "model-2"}
+			r.Unauthorized = []string{"model-2", "model"}
+		}, unauthorizedBug},
 	} {
 		r := ok
 		c.change(&r)
@@ -171,6 +190,93 @@ func TestASecretsRequestOutsideItsFormIsNotSent(t *testing.T) {
 	if _, err := ok.Body(); err != nil {
 		t.Error(err)
 	}
+	// The unauthorized keys go in the body, in the order of credentials, and a request
+	// after no 401 has none; the schema takes both.
+	schema, err := contracts.Compile("secrets-request.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	with := ok
+	with.Credentials, with.Unauthorized = []string{"model", "forge", "model-2"}, []string{"model", "model-2"}
+	for _, r := range []server.SecretsRequest{ok, with} {
+		b, err := r.Body()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "unauthorized") != (r.Unauthorized != nil) {
+			t.Errorf("the body %s", b)
+		}
+		doc, _ := contracts.Decode("r.json", b)
+		if err := schema.Validate(doc); err != nil {
+			t.Errorf("the schema refuses %s: %v", b, err)
+		}
+	}
+	sixteen := ok
+	sixteen.Credentials = credentialNames(16)
+	if _, err := sixteen.Body(); err != nil {
+		t.Errorf("16 credentials: %v", err)
+	}
+}
+
+// unauthorizedBug is Body's error for an unauthorized list out of its form.
+const unauthorizedBug = "tell the Forager maintainers about this bug in the gateway's secrets request; an unauthorized key is not in credentials, is listed twice, or is out of the order of credentials"
+
+// deadlines records the deadline of each request's context, and answers 503.
+type deadlines struct {
+	mu  sync.Mutex
+	got []time.Duration
+}
+
+func (d *deadlines) RoundTrip(r *http.Request) (*http.Response, error) {
+	at, ok := r.Context().Deadline()
+	d.mu.Lock()
+	if ok {
+		d.got = append(d.got, time.Until(at))
+	} else {
+		d.got = append(d.got, 0)
+	}
+	d.mu.Unlock()
+	return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: http.NoBody, Header: http.Header{}, Request: r}, nil
+}
+
+// TestTheSecretsRequestWaits30Seconds pins the timeouts: a secrets request's answer
+// may take SecretsTimeout, 30 seconds, and every other request's Timeout, 10 seconds;
+// a client given with a Timeout that is not zero keeps it for both.
+func TestTheSecretsRequestWaits30Seconds(t *testing.T) {
+	if server.SecretsTimeout != 30*time.Second || server.Timeout != 10*time.Second {
+		t.Fatalf("SecretsTimeout %v, Timeout %v", server.SecretsTimeout, server.Timeout)
+	}
+	v := newVerified(t)
+	body, err := server.SecretsRequest{Version: 1, RunID: runID, RunConfiguration: "sha256=" + strings.Repeat("a", 64), Credentials: []string{"model"}, Timestamp: 1}.Body()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		timeout       time.Duration
+		secrets, rest time.Duration
+	}{{0, server.SecretsTimeout, server.Timeout}, {time.Minute, time.Minute, time.Minute}} {
+		d := &deadlines{}
+		cl := v.client()
+		cl.HTTP = &http.Client{Transport: d, Timeout: c.timeout}
+		cl.Secrets(context.Background(), v.srv.URL+"/v1/secrets", body)
+		cl.RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)
+		d.mu.Lock()
+		got := slices.Clone(d.got)
+		d.mu.Unlock()
+		near := func(have, want time.Duration) bool { return have <= want && have > want-5*time.Second }
+		if len(got) != 2 || !near(got[0], c.secrets) || !near(got[1], c.rest) {
+			t.Errorf("a client with Timeout %v: deadlines %v; want %v, then %v", c.timeout, got, c.secrets, c.rest)
+		}
+	}
+}
+
+// credentialNames returns n credential names in the grammar: cred-00, cred-01 and on.
+func credentialNames(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("cred-%02d", i)
+	}
+	return out
 }
 
 // TestARefusedCredentialShowsNoSecretInItsName pins a refusal of a credential whose
@@ -209,7 +315,7 @@ func TestAPlaceholderTheDenyListCoversIsRefused(t *testing.T) {
 	for _, p := range []string{"GIT_SSL_CAINFO", "git_ssl_cainfo", "HTTPS_PROXY", "no_proxy", "QORY_RUN_ID", "PATH", "NODE_OPTIONS", "ld_preload", "BASH_ENV", "HOME"} {
 		v.runDoc = doc(p)
 		_, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)
-		want := `the document is refused: give the credential "model" another placeholder than "` + p + `"; the built-in deny list, denied-variables.json, covers that variable`
+		want := "Give the credential \"model\" a placeholder other than \"" + p + "\".\nThe built-in deny list, denied-variables.json, covers that variable"
 		var r *accesskey.Refusal
 		if !errors.As(err, &r) || r.Code != "run_configuration_invalid" || len(r.Names) != 1 || r.Names[0] != "model" || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v", p, err)

@@ -1089,6 +1089,48 @@ func TestTheEndMember(t *testing.T) {
 	}
 }
 
+// TestQorysEndCodesPassTheReceiver pins the end codes qory sets in a failed run's
+// outcome, $defs/end_codes of integrations' contracts/run/v1/outcome.schema.json, and
+// push_window_closed, a code of the pattern outside that list, at the receiver: an
+// outcome failed with the code is kept as it came, and the end member of the next 2xx
+// to a batch is failed with the code, which ReadEnd reads unchanged. So is push_refused
+// with the state succeeded, since the rule that an end code goes only with failed is
+// the control plane's, not the receiver's. It pins each code unchanged at the control
+// plane, and does not reach the gateway's closeRule.
+func TestQorysEndCodesPassTheReceiver(t *testing.T) {
+	s := newStand(t)
+	s.now = time.Now().UTC().Truncate(time.Second)
+	for _, c := range []server.ServerEnd{
+		{State: "failed", Reason: "push_credential_missing"},
+		{State: "failed", Reason: "push_refused"},
+		{State: "failed", Reason: "prebuilt_image_too_large"},
+		{State: "failed", Reason: "push_not_recorded"},
+		{State: "failed", Reason: "environment_image_missing"},
+		{State: "failed", Reason: "push_head_changed"},
+		{State: "failed", Reason: "push_window_closed"},
+		{State: "succeeded", Reason: "push_refused"},
+	} {
+		id := event.NewRunID()
+		if _, rec := s.register(directKey, s.directBody(id)); rec.Code != http.StatusOK {
+			t.Fatal(rec.Code)
+		}
+		if _, rec := s.outcome(directKey, id, s.outcomeBody(c.State, c.Reason)); rec.Code != http.StatusOK {
+			t.Fatalf("the outcome %+v: %d %s", c, rec.Code, rec.Body.String())
+		}
+		_, rec := s.batch(directKey2, event.NewEmitter(id, nil), event.RunHeartbeat)
+		var got map[string]map[string]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("the answer to the batch after the outcome %+v: %v: %s", c, err, rec.Body.String())
+		}
+		if want := map[string]map[string]string{"end": {"state": c.State, "reason": c.Reason}}; rec.Code != http.StatusAccepted || !jsonEqual(got, want) {
+			t.Errorf("the end of the outcome %+v: %d %s", c, rec.Code, rec.Body.String())
+		}
+		if end := server.ReadEnd(rec.Body.Bytes()); end == nil || *end != c {
+			t.Errorf("the end of the outcome %+v, as Forager reads it: %+v", c, end)
+		}
+	}
+}
+
 // TestTheClientsAgainstTheReceiver runs Forager's client calls of a run through a
 // gateway against the receiver: a gateway-shape body from a direct node, or from a key
 // with no node, is node_is_direct and never a direct registration; a gateway's key is
@@ -1223,7 +1265,8 @@ func TestEachKeyDiscoversItsOwnNode(t *testing.T) {
 // TestABatchIsOfOneRun pins that a batch whose events are not all of one run is a
 // signed 400 invalid_request, before wrong_gateway and wrong_node and before
 // deduplication: from a key outside the run's node or from the run's own gateway, it
-// stores nothing and changes no run, whichever run its last event names.
+// stores nothing and changes no run, whichever run its last event names. A member
+// SUBJECT that differs from subject only in case names no run.
 func TestABatchIsOfOneRun(t *testing.T) {
 	s := newStand(t)
 	id, other := event.NewRunID(), event.NewRunID()
@@ -1251,6 +1294,12 @@ func TestABatchIsOfOneRun(t *testing.T) {
 	unknownID, unknown := lineOf(event.NewRunID(), event.RunStarted)
 	otherExitedID, otherExited := lineOf(other, event.RunExited)
 	beatID, beat := lineOf(id, event.RunHeartbeat)
+	var beatMembers map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(beat), &beatMembers); err != nil {
+		t.Fatal(err)
+	}
+	// Another run's event with SUBJECT, the run's subject, after its subject.
+	folded := strings.TrimSuffix(otherExited, "}") + `,"SUBJECT":` + string(beatMembers["subject"]) + `}`
 	for name, c := range map[string]struct {
 		keyID string
 		lines []string
@@ -1260,6 +1309,7 @@ func TestABatchIsOfOneRun(t *testing.T) {
 		"the pool's key, the gateway run's run.exited then an unknown run's event":     {key, []string{exited, unknown}},
 		"the run's gateway, another run's run.exited then a heartbeat of its run":      {gwKey, []string{otherExited, beat}},
 		"the run's gateway, its run's run.exited then another run's":                   {gwKey2, []string{exited, otherExited}},
+		"the run's gateway, a heartbeat of its run then another run's with SUBJECT":    {gwKey, []string{beat, folded}},
 	} {
 		req, rec := s.batchOf(c.keyID, []byte("["+strings.Join(c.lines, ",")+"]"))
 		s.expect(name, req, rec, http.StatusBadRequest, "invalid_request")

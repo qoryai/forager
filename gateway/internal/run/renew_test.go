@@ -19,7 +19,7 @@ import (
 // renewDoc is a run configuration with a model key and a host credential, forge, set
 // as basic on git.example and api.git.example, under a policy that allows them.
 const renewDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","git.example","api.git.example"]}},"credentials":[` +
-	`{"name":"model","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
+	`{"name":"model","group":"anthropic","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}},` +
 	`{"name":"forge","apply":[{"hosts":["git.example","api.git.example"],"scheme":"basic","username":"x-access-token"}]}]}`
 
 // start is the fake clock's time when a test's run opens.
@@ -112,10 +112,14 @@ type answer struct {
 }
 
 // controlPlane is a Config.Secrets that answers each name with answer, and records each
-// call's digest and names. answer gets the call's number, from 0, the start's.
+// call's digest and names, and its unauthorized names. answer gets the call's number,
+// from 0, the start's. fail, when set, is the error of each call after the start's that
+// it returns one for, before any name is answered.
 type controlPlane struct {
 	mu     sync.Mutex
 	calls  [][]string
+	unauth [][]string
+	fail   func(call int) error
 	answer func(name string, call int) (answer, error)
 	// opened are the Values of each call, so a test can see the bytes it handed out.
 	opened []sealed.Values
@@ -123,15 +127,22 @@ type controlPlane struct {
 	block bool
 }
 
-func (s *controlPlane) fetch(ctx context.Context, digest string, names []string) (sealed.Values, error) {
+func (s *controlPlane) fetch(ctx context.Context, digest string, names, unauthorized []string) (sealed.Values, error) {
 	s.mu.Lock()
 	call := len(s.calls)
 	s.calls = append(s.calls, append([]string{digest}, names...))
+	s.unauth = append(s.unauth, unauthorized)
 	block := s.block && call > 0
+	fail := s.fail
 	s.mu.Unlock()
 	if block {
 		<-ctx.Done()
 		return sealed.Values{}, ctx.Err()
+	}
+	if fail != nil && call > 0 {
+		if err := fail(call); err != nil {
+			return sealed.Values{}, err
+		}
 	}
 	sl := sealed.Sealing{AccessKeyID: "ak_0123456789abcdef", RunID: runID, RunConfiguration: digest, Credentials: names, Exp: 1}
 	var yearOne []string
@@ -475,6 +486,8 @@ func TestTheStartsAnswerIsCheckedAgainstItsEntry(t *testing.T) {
 	pathsDoc := strings.Replace(renewDoc, `"username":"x-access-token"}]}`, `"username":"x-access-token","paths":["/example-org/*"]}]}`, 1)
 	twoDoc := strings.Replace(renewDoc, `{"hosts":["git.example","api.git.example"],"scheme":"basic","username":"x-access-token"}`,
 		`{"hosts":["git.example"],"scheme":"basic","username":"x-access-token"},{"hosts":["api.git.example"],"scheme":"basic","username":"x-access-token"}`, 1)
+	// pushDoc has forge's item with the push_ref of the run's branch.
+	pushDoc := strings.Replace(renewDoc, `"username":"x-access-token"}]}`, `"username":"x-access-token","push_ref":"refs/heads/qory/wi_01"}]}`, 1)
 	item := func(hosts []string, scheme, username, header string, paths ...string) answer {
 		return answer{value: "forge-0", expires: start.Add(time.Hour), apply: []sealed.Apply{{Hosts: hosts, Scheme: scheme, Username: username, Header: header, Paths: paths}}}
 	}
@@ -497,6 +510,12 @@ func TestTheStartsAnswerIsCheckedAgainstItsEntry(t *testing.T) {
 			`Tell whoever runs the control plane: credential "forge" sets git.example on other paths`},
 		"every path": {pathsDoc, item(git, "basic", "x-access-token", ""),
 			`Tell whoever runs the control plane: credential "forge" sets git.example on other paths`},
+		"a push_ref the entry has not": {renewDoc, answer{value: "forge-0", expires: start.Add(time.Hour), apply: []sealed.Apply{{Hosts: git, Scheme: "basic", Username: "x-access-token", PushRef: "refs/heads/qory/wi_01"}}},
+			`Tell whoever runs the control plane: credential "forge" sets git.example with another push_ref`},
+		"no push_ref beside the entry's": {pushDoc, item(git, "basic", "x-access-token", ""),
+			`Tell whoever runs the control plane: credential "forge" sets git.example with another push_ref`},
+		"another push_ref": {pushDoc, answer{value: "forge-0", expires: start.Add(time.Hour), apply: []sealed.Apply{{Hosts: git, Scheme: "basic", Username: "x-access-token", PushRef: "refs/heads/main"}}},
+			`Tell whoever runs the control plane: credential "forge" sets git.example with another push_ref`},
 		"two items in one": {twoDoc, item([]string{"git.example", "api.git.example"}, "basic", "x-access-token", ""),
 			`Tell whoever runs the control plane: credential "forge" merges two apply items of its entry`},
 	} {

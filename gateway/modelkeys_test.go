@@ -5,11 +5,14 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,7 +40,9 @@ type groupRun struct {
 	// limited are the keys the provider returns a limit refusal for.
 	mu      sync.Mutex
 	limited map[string]bool
-	calls   []string
+	// unauthorized are the keys the provider returns 401 for.
+	unauthorized map[string]bool
+	calls        []string
 	// reports are the bodies of the model keys reports, and answer, when set, the
 	// status and body of the control's answer to each; a signed 200 with no key by
 	// default.
@@ -45,12 +50,43 @@ type groupRun struct {
 	answer  func() (int, string)
 	agent   *http.Client
 	url     string
+	// format is the API format of the keys.
+	format string
 }
 
-// startGroupRun opens the run and posts its first batch.
+// startGroupRun opens the run, with keys of the format anthropic-messages, and posts
+// its first batch.
 func startGroupRun(t *testing.T) *groupRun {
 	t.Helper()
-	g := &groupRun{limited: map[string]bool{}}
+	return startGroupRunOf(t, "anthropic-messages")
+}
+
+// startGroupRunOf opens the run, with keys of the format, and posts its first batch. A
+// key of anthropic-messages goes in the header x-api-key, and the provider's refusal is
+// Anthropic's; a key of openai-responses goes as a bearer, and the refusal is a ChatGPT
+// subscription's, its shape from the openai/codex source at 17a0e6f63f (to confirm
+// against the provider).
+func startGroupRunOf(t *testing.T, format string) *groupRun {
+	t.Helper()
+	return openGroupRun(t, format, false)
+}
+
+// forgeValue is the fake value of the host credential forge of startGroupRunWith.
+const forgeValue = "fake-forge-value-0001"
+
+// startGroupRunWith is startGroupRun, with, when forge is true, a host credential forge
+// for git.example whose placeholder is in GIT_TOKEN, so a join that passes GIT_TOKEN is
+// refused.
+func startGroupRunWith(t *testing.T, forge bool) *groupRun {
+	t.Helper()
+	return openGroupRun(t, "anthropic-messages", forge)
+}
+
+// openGroupRun opens the run, with keys of the format and, when forge is true, the host
+// credential forge, and posts its first batch.
+func openGroupRun(t *testing.T, format string, forge bool) *groupRun {
+	t.Helper()
+	g := &groupRun{limited: map[string]bool{}, unauthorized: map[string]bool{}, format: format}
 	certFile, keyFile, roots := testCertificate(t, t.TempDir())
 	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
@@ -60,14 +96,29 @@ func startGroupRun(t *testing.T) *groupRun {
 		io.Copy(io.Discard, r.Body)
 		key := ""
 		for name, v := range groupValues {
-			if r.Header.Get("X-Api-Key") == v {
+			if r.Header.Get("X-Api-Key") == v || r.Header.Get("Authorization") == "Bearer "+v {
 				key = name
 			}
 		}
 		g.mu.Lock()
 		g.calls = append(g.calls, key)
-		limited := g.limited[key]
+		limited, rejected := g.limited[key], g.unauthorized[key]
 		g.mu.Unlock()
+		if rejected {
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"type":"error","error":{"type":"authentication_error"}}`)
+			return
+		}
+		if limited && format == "openai-responses" {
+			reset := strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)
+			w.Header().Set("X-Codex-Primary-Used-Percent", "100")
+			w.Header().Set("X-Codex-Primary-Window-Minutes", "300")
+			w.Header().Set("X-Codex-Primary-Reset-At", reset)
+			w.Header().Set("X-Codex-Rate-Limit-Reached-Type", "rate_limit_reached")
+			w.WriteHeader(http.StatusTooManyRequests)
+			io.WriteString(w, `{"error":{"type":"usage_limit_reached","resets_at":`+reset+`}}`)
+			return
+		}
 		if limited {
 			w.Header().Set("Anthropic-Ratelimit-Unified-5h-Status", "rejected")
 			w.Header().Set("Anthropic-Ratelimit-Unified-5h-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
@@ -85,15 +136,25 @@ func startGroupRun(t *testing.T) *groupRun {
 	t.Cleanup(origin.Close)
 	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
 	g.url = "https://localhost:" + port + "/v1"
-	entry := func(name string) string {
-		return `{"name":"` + name + `","format":"anthropic-messages","endpoint":"` + g.url + `","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
+	auth := `{"scheme":"header","header":"x-api-key"}`
+	if format == "openai-responses" {
+		auth = `{"scheme":"bearer"}`
 	}
-	doc := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"model_credential":"model","credentials":[` +
-		entry("model") + `,` + entry("model-2") + `,` + entry("model-3") + `]}`
+	entry := func(name string) string {
+		return `{"name":"` + name + `","group":"` + format + `","format":"` + format + `","endpoint":"` + g.url + `","auth":` + auth + `,"pause_for_s":3600}`
+	}
+	allow, extra, secrets := `"localhost"`, "", maps.Clone(groupValues)
+	if forge {
+		allow += `,"git.example"`
+		extra = `,{"name":"forge","apply":[{"hosts":["git.example"],"scheme":"bearer"}],"placeholders":["GIT_TOKEN"]}`
+		secrets["forge"] = forgeValue
+	}
+	doc := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":[` + allow + `]}},"default_model_provider_credential_name":"model","credentials":[` +
+		entry("model") + `,` + entry("model-2") + `,` + entry("model-3") + extra + `]}`
 	g.c = newControl(t)
 	g.c.serveDocument(doc, 'a')
 	g.c.mu.Lock()
-	g.c.secrets = groupValues
+	g.c.secrets = secrets
 	g.c.mu.Unlock()
 	intercept := func(w http.ResponseWriter, r *http.Request) bool {
 		if !strings.HasSuffix(r.URL.Path, "/model-keys") {
@@ -114,17 +175,21 @@ func startGroupRun(t *testing.T) *groupRun {
 		return true
 	}
 	g.c.intercept.Store(&intercept)
-	node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost"}}}
+	nodeAllow := []string{"localhost"}
+	if forge {
+		nodeAllow = append(nodeAllow, "git.example")
+	}
+	node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: nodeAllow}}
 	cfg := gateway.Config{Server: g.c.server(), Policy: node}
 	gateway.SetUpstreamRoots(&cfg, roots)
 	g.h = start(t, cfg)
-	for _, v := range groupValues {
+	for _, v := range secrets {
 		g.h.secrets = append(g.h.secrets, v)
 	}
 	a := g.h.open(server.LinkRunRequest{Wall: true})
 	g.runID = a.RunID
-	if a.ModelCredential != "model" {
-		t.Fatalf("the run's start key %q", a.ModelCredential)
+	if a.DefaultModelProviderCredentialName != "model" {
+		t.Fatalf("the run's default model provider credential %q", a.DefaultModelProviderCredentialName)
 	}
 	if d := g.h.post(started(g.runID, nil), applied(g.runID, a.Applied)); !d.Accepted() {
 		t.Fatalf("the first batch: %+v", d)
@@ -136,12 +201,23 @@ func startGroupRun(t *testing.T) *groupRun {
 	return g
 }
 
-// send sends a model request with the start key's placeholder and returns its status
-// and the keys the provider received since the last send.
+// send sends a model request with the default model provider credential's placeholder
+// and returns its status and the keys the provider received since the last send.
 func (g *groupRun) send(t *testing.T) (int, []string) {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodPost, g.url+"/messages", strings.NewReader(`{"model":"m"}`))
+	return g.sendTo(t, "/messages")
+}
+
+// sendTo is send to path under the endpoint, for anthropic-messages; openai-responses
+// sends to /responses.
+func (g *groupRun) sendTo(t *testing.T, path string) (int, []string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, g.url+path, strings.NewReader(`{"model":"m"}`))
 	req.Header.Set("X-Api-Key", link.KeyPlaceholder("model"))
+	if g.format == "openai-responses" {
+		req, _ = http.NewRequest(http.MethodPost, g.url+"/responses", strings.NewReader(`{"model":"m"}`))
+		req.Header.Set("Authorization", "Bearer "+link.KeyPlaceholder("model"))
+	}
 	resp, err := g.agent.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -182,7 +258,7 @@ func (g *groupRun) batch(t *testing.T, evs ...map[string]any) (int, string) {
 func TestAKeyGroupResendsReportsAndStops(t *testing.T) {
 	g := startGroupRun(t)
 	one, err := g.h.join(g.runID)
-	if err != nil || one.ModelCredential != "model" {
+	if err != nil || one.ModelProviderCredentialName != "model" {
 		t.Fatalf("join 1: %+v, %v", one, err)
 	}
 	g.h.post(sessionStarted(g.runID, 1))
@@ -217,8 +293,8 @@ func TestAKeyGroupResendsReportsAndStops(t *testing.T) {
 	}
 	g.h.post(sessionExited(g.runID, 1))
 
-	two, err := g.h.linkOf(g.runID).Join(t.Context(), server.LocalOrigin+"/v1/run-configuration", g.runID, server.LinkJoinRequest{Passes: []string{}, ModelKey: true, ModelCredential: "model-3"})
-	if err != nil || two.ModelCredential != "model-2" {
+	two, err := g.h.linkOf(g.runID).Join(t.Context(), server.LocalOrigin+"/v1/run-configuration", g.runID, server.LinkJoinRequest{Passes: []string{}, ModelKey: true, ModelProviderCredentialName: "model-3"})
+	if err != nil || two.ModelProviderCredentialName != "model-2" {
 		t.Fatalf("join 2 naming model-3: %+v, %v; want the active key, model-2", two, err)
 	}
 	g.h.post(sessionStarted(g.runID, 2))
@@ -241,8 +317,80 @@ func TestAKeyGroupResendsReportsAndStops(t *testing.T) {
 	if status, body := g.batch(t, exitedWith(g.runID, map[string]any{"state": "paused", "exit_code": -1, "signal": "SIGTERM", "reason": "model_key_limit"})); status != http.StatusAccepted {
 		t.Errorf("the close: %d %q", status, body)
 	}
-	if lines := g.h.reportsWith("limit answer, status 429"); len(lines) != 3 {
-		t.Errorf("the log of limit answers: %q; want 3 lines", lines)
+	if lines := g.h.reportsWith("limit response, status 429"); len(lines) != 3 {
+		t.Errorf("the log of limit responses: %q; want 3 lines", lines)
+	}
+}
+
+// TestAnOpenAIKeyGroupStopsAtTheFirstRefusal pins the gateway side of a 429 for an
+// openai-responses group: the provider's first 429 reaches the session with no resend,
+// the next request gets the gateway's 429 and reaches no provider, and the answer to
+// the session's next batch has stop, model_key_limit, before any dev.qory.session.exited;
+// the run then closes paused with model_key_limit.
+func TestAnOpenAIKeyGroupStopsAtTheFirstRefusal(t *testing.T) {
+	g := startGroupRunOf(t, "openai-responses")
+	one, err := g.h.join(g.runID)
+	if err != nil || one.ModelProviderCredentialName != "model" {
+		t.Fatalf("join 1: %+v, %v", one, err)
+	}
+	g.h.post(sessionStarted(g.runID, 1))
+	if status, calls := g.send(t); status != http.StatusOK || strings.Join(calls, ",") != "model" {
+		t.Fatalf("the first request: %d, %v; want 200 from model", status, calls)
+	}
+	if status, body := g.batch(t, heartbeat(g.runID)); status != http.StatusAccepted || body != "" {
+		t.Errorf("a batch before the refusal: %d %q; want 202 with no body", status, body)
+	}
+	g.limit("model")
+	if status, calls := g.send(t); status != http.StatusTooManyRequests || strings.Join(calls, ",") != "model" {
+		t.Fatalf("the refused request: %d, %v; want the provider's 429 from model alone", status, calls)
+	}
+	if status, calls := g.send(t); status != http.StatusTooManyRequests || len(calls) != 0 {
+		t.Errorf("after the refusal: %d, %v; want the gateway's 429 and no call", status, calls)
+	}
+	if status, body := g.batch(t, heartbeat(g.runID)); status != http.StatusAccepted || body != `{"stop":{"reason":"model_key_limit"}}` {
+		t.Errorf("the next batch: %d %q; want 202 with stop", status, body)
+	}
+	paused := ev(g.runID, event.SessionExited, map[string]any{"session": 1, "state": "paused", "exit_code": -1, "signal": "SIGINT", "reason": "model_key_limit", "duration_ms": 5})
+	if status, body := g.batch(t, paused); status != http.StatusAccepted || body != "" {
+		t.Errorf("the session's end: %d %q; want 202 with no stop", status, body)
+	}
+	if status, body := g.batch(t, exitedWith(g.runID, map[string]any{"state": "paused", "exit_code": -1, "signal": "SIGINT", "reason": "model_key_limit"})); status != http.StatusAccepted {
+		t.Errorf("the close: %d %q", status, body)
+	}
+	if lines := g.h.reportsWith("limit response, status 429, error type usage_limit_reached"); len(lines) != 1 {
+		t.Errorf("the log of limit responses: %q; want 1 line", lines)
+	}
+}
+
+// TestAnOpenAIKeyCooledByAReportStopsTheSession pins an openai-responses group whose
+// active key goes into cooldown from the answer to a model keys report, during a
+// session: the proxy sets no other key, the next request gets the gateway's 429, the
+// provider gets no request with model-2, and the next batch's answer has stop,
+// model_key_limit.
+func TestAnOpenAIKeyCooledByAReportStopsTheSession(t *testing.T) {
+	g := startGroupRunOf(t, "openai-responses")
+	later := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+	g.mu.Lock()
+	g.answer = func() (int, string) {
+		return http.StatusOK, `{"version":1,"keys":[{"credential":"model","window":"five_hour","status":"rejected","cooldown_until":"` + later +
+			`","source":"provider","observed_at":"` + time.Now().Add(time.Minute).UTC().Format(time.RFC3339) + `"}]}`
+	}
+	g.mu.Unlock()
+	if one, err := g.h.join(g.runID); err != nil || one.ModelProviderCredentialName != "model" {
+		t.Fatalf("join 1: %+v, %v", one, err)
+	}
+	g.h.post(sessionStarted(g.runID, 1))
+	eventually(t, "the gateway's 429 after the report's answer", func() bool {
+		status, calls := g.send(t)
+		for _, c := range calls {
+			if c != "model" {
+				t.Fatalf("the provider got a request with %q; want model alone", c)
+			}
+		}
+		return status == http.StatusTooManyRequests && len(calls) == 0
+	})
+	if status, body := g.batch(t, heartbeat(g.runID)); status != http.StatusAccepted || body != `{"stop":{"reason":"model_key_limit"}}` {
+		t.Errorf("the next batch: %d %q; want 202 with stop", status, body)
 	}
 }
 
@@ -363,5 +511,475 @@ func TestARunExitedModelKeyLimitNeedsThePausedSession(t *testing.T) {
 	cancelled := ev(a.RunID, event.SessionExited, map[string]any{"session": n, "state": "cancelled", "exit_code": 1, "reason": "model_key_limit", "duration_ms": 5})
 	if d := h.post(sessionStarted(a.RunID, n), cancelled); d.Status != http.StatusBadRequest || d.End != "batch_refused" {
 		t.Errorf("a session.exited cancelled with model_key_limit: %+v", d)
+	}
+}
+
+// reject makes the provider return 401 for each key named.
+func (g *groupRun) reject(names ...string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, n := range names {
+		g.unauthorized[n] = true
+	}
+}
+
+// modelPath is the model API's path under the endpoint of anthropic-messages, the
+// endpoint's path, /v1, then /v1/messages.
+const modelPath = "/v1/messages"
+
+// TestAnAnthropicGroupEndsWhenEveryKeyGets401 pins the 401 of an anthropic-messages
+// group, whose keys have no expires_at: a 401 to a request to another path than the
+// model API's reaches the session and keeps the key; model's 401 on the model API's
+// path sends the request again with
+// model-2, and the session gets its 200 with no stop; the reports list model in
+// unauthorized, and the schema takes them. Once model-2 and model-3 get a 401 too, the
+// session gets the last 401, the next batch's answer has stop, model_key_unauthorized,
+// and the session and the run end failed with it.
+func TestAnAnthropicGroupEndsWhenEveryKeyGets401(t *testing.T) {
+	g := startGroupRun(t)
+	if one, err := g.h.join(g.runID); err != nil || one.ModelProviderCredentialName != "model" {
+		t.Fatalf("join 1: %+v, %v", one, err)
+	}
+	g.h.post(sessionStarted(g.runID, 1))
+	g.reject("model")
+	if status, calls := g.send(t); status != http.StatusUnauthorized || strings.Join(calls, ",") != "model" {
+		t.Fatalf("a request to another path: %d, %v; want the provider's 401 for model alone", status, calls)
+	}
+	if status, calls := g.sendTo(t, modelPath); status != http.StatusOK || strings.Join(calls, ",") != "model,model-2" {
+		t.Fatalf("the first request: %d, %v; want 200 after model and model-2", status, calls)
+	}
+	if status, body := g.batch(t, heartbeat(g.runID)); status != http.StatusAccepted || body != "" {
+		t.Errorf("a batch while keys are left: %d %q; want no stop", status, body)
+	}
+	eventually(t, "a report with model unauthorized", func() bool {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		for _, r := range g.reports {
+			if strings.Contains(string(r), `"unauthorized":[{"credential":"model","at":"`) {
+				return true
+			}
+		}
+		return false
+	})
+	schema, err := contracts.Compile("model-keys-report.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.mu.Lock()
+	for _, r := range g.reports {
+		doc, _ := contracts.Decode("r.json", r)
+		if err := schema.Validate(doc); err != nil {
+			t.Errorf("the report %s fails the schema: %v", r, err)
+		}
+	}
+	g.mu.Unlock()
+	g.reject("model-2", "model-3")
+	if status, calls := g.sendTo(t, modelPath); status != http.StatusUnauthorized || strings.Join(calls, ",") != "model-2,model-3" {
+		t.Fatalf("with no key left: %d, %v; want the 401 after model-2 and model-3", status, calls)
+	}
+	if status, calls := g.sendTo(t, modelPath); status != http.StatusTooManyRequests || len(calls) != 0 {
+		t.Errorf("after the stop: %d, %v; want the gateway's 429 and no call", status, calls)
+	}
+	const stop = `{"stop":{"reason":"model_key_unauthorized"}}`
+	for range 2 {
+		if status, body := g.batch(t, heartbeat(g.runID)); status != http.StatusAccepted || body != stop {
+			t.Errorf("a batch after the stop: %d %q; want %s", status, body, stop)
+		}
+	}
+	failed := ev(g.runID, event.SessionExited, map[string]any{"session": 1, "state": "failed", "exit_code": -1, "signal": "SIGTERM", "reason": "model_key_unauthorized", "duration_ms": 5})
+	if status, body := g.batch(t, failed); status != http.StatusAccepted || body != "" {
+		t.Errorf("the session's end: %d %q", status, body)
+	}
+	if status, body := g.batch(t, exitedWith(g.runID, map[string]any{"state": "failed", "exit_code": -1, "signal": "SIGTERM", "reason": "model_key_unauthorized"})); status != http.StatusAccepted {
+		t.Errorf("the close: %d %q", status, body)
+	}
+	if lines := g.h.reportsWith(`: the provider returned 401 (unauthorized); the key has no expires_at, so the gateway removes the key from its key group`); len(lines) != 3 {
+		t.Errorf("the log of 401 answers: %q; want 3 lines", lines)
+	}
+}
+
+// TestAnOpenAIGroupSwitchesAfterA401 pins the 401 of an openai-responses group: the
+// session gets the provider's 401 with no resend, the next request gets the gateway's
+// 429, the next batch's answer has stop, model_key_switch, and the session and the run
+// end paused with it. The next session joins with model-2.
+func TestAnOpenAIGroupSwitchesAfterA401(t *testing.T) {
+	g := startGroupRunOf(t, "openai-responses")
+	if one, err := g.h.join(g.runID); err != nil || one.ModelProviderCredentialName != "model" {
+		t.Fatalf("join 1: %+v, %v", one, err)
+	}
+	g.h.post(sessionStarted(g.runID, 1))
+	g.reject("model")
+	if status, calls := g.send(t); status != http.StatusUnauthorized || strings.Join(calls, ",") != "model" {
+		t.Fatalf("the first request: %d, %v; want the provider's 401 from model alone", status, calls)
+	}
+	if status, calls := g.send(t); status != http.StatusTooManyRequests || len(calls) != 0 {
+		t.Errorf("after the 401: %d, %v; want the gateway's 429 and no call", status, calls)
+	}
+	if status, body := g.batch(t, heartbeat(g.runID)); status != http.StatusAccepted || body != `{"stop":{"reason":"model_key_switch"}}` {
+		t.Errorf("the next batch: %d %q; want 202 with stop", status, body)
+	}
+	paused := ev(g.runID, event.SessionExited, map[string]any{"session": 1, "state": "paused", "exit_code": 1, "reason": "model_key_switch", "duration_ms": 5})
+	if status, body := g.batch(t, paused); status != http.StatusAccepted || body != "" {
+		t.Errorf("the session's end: %d %q", status, body)
+	}
+	two, err := g.h.join(g.runID)
+	if err != nil || two.ModelProviderCredentialName != "model-2" {
+		t.Fatalf("join 2: %+v, %v; want model-2", two, err)
+	}
+	g.h.post(sessionStarted(g.runID, 2))
+	if status, calls := g.send(t); status != http.StatusOK || strings.Join(calls, ",") != "model-2" {
+		t.Errorf("a request of session 2: %d, %v", status, calls)
+	}
+	g.h.post(ev(g.runID, event.SessionExited, map[string]any{"session": 2, "state": "paused", "exit_code": 1, "reason": "model_key_switch", "duration_ms": 5}))
+	if status, body := g.batch(t, exitedWith(g.runID, map[string]any{"state": "paused", "exit_code": 1, "reason": "model_key_switch"})); status != http.StatusAccepted {
+		t.Errorf("the close: %d %q", status, body)
+	}
+}
+
+// TestARunExitedOfAKeyStopNeedsItsSession pins the close after a 401: a
+// dev.qory.run.exited paused with model_key_switch, or failed with
+// model_key_unauthorized, is taken after a last dev.qory.session.exited with the same
+// reason, and refused after a last session.exited with another reason and in a run
+// with no join; the schema refuses each with another state.
+func TestARunExitedOfAKeyStopNeedsItsSession(t *testing.T) {
+	h := start(t, gateway.Config{})
+	ended := func(runID string, n int, state, reason string) map[string]any {
+		data := map[string]any{"session": n, "state": "succeeded", "exit_code": 0, "duration_ms": 5}
+		if reason != "" {
+			data = map[string]any{"session": n, "state": state, "exit_code": 1, "reason": reason, "duration_ms": 5}
+		}
+		return ev(runID, event.SessionExited, data)
+	}
+	type session struct{ state, reason string }
+	switched := session{"paused", "model_key_switch"}
+	revoked := session{"failed", "model_key_unauthorized"}
+	for _, c := range []struct {
+		what     string
+		sessions []session
+		data     map[string]any
+		why      string
+	}{
+		{"switch", []session{switched}, map[string]any{"state": "paused", "exit_code": 1, "reason": "model_key_switch"}, ""},
+		{"unauthorized", []session{revoked}, map[string]any{"state": "failed", "exit_code": 1, "reason": "model_key_unauthorized"}, ""},
+		{"switch after another session", []session{switched, {}}, map[string]any{"state": "paused", "exit_code": 1, "reason": "model_key_switch"},
+			"a run.exited model_key_switch after a last session.exited with another reason"},
+		{"unauthorized after a switch", []session{switched}, map[string]any{"state": "failed", "exit_code": 1, "reason": "model_key_unauthorized"},
+			"a run.exited model_key_unauthorized after a last session.exited with another reason"},
+		{"switch with no join", nil, map[string]any{"state": "paused", "exit_code": 1, "reason": "model_key_switch"}, "a run.exited model_key_switch of a run with no join"},
+		{"unauthorized with no join", nil, map[string]any{"state": "failed", "exit_code": 1, "reason": "model_key_unauthorized"}, "a run.exited model_key_unauthorized of a run with no join"},
+		{"unauthorized cancelled", []session{revoked}, map[string]any{"state": "cancelled", "exit_code": 1, "reason": "model_key_unauthorized"}, "one link-batch.schema.json refuses"},
+		{"switch failed", []session{switched}, map[string]any{"state": "failed", "exit_code": 1, "reason": "model_key_switch"}, "one link-batch.schema.json refuses"},
+	} {
+		a := h.open(server.LinkRunRequest{})
+		if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {
+			t.Fatalf("%s: the first batch: %+v", c.what, d)
+		}
+		for _, s := range c.sessions {
+			n := h.joined(a.RunID)
+			if d := h.post(sessionStarted(a.RunID, n), ended(a.RunID, n, s.state, s.reason)); !d.Accepted() {
+				t.Fatalf("%s: session %d: %+v", c.what, n, d)
+			}
+		}
+		d := h.post(exitedWith(a.RunID, c.data))
+		if c.why == "" {
+			if !d.Accepted() {
+				t.Errorf("%s: %+v", c.what, d)
+			}
+			continue
+		}
+		if d.Status != http.StatusBadRequest || d.End != "batch_refused" {
+			t.Errorf("%s: %+v", c.what, d)
+		}
+		if line := "run " + a.RunID + ": the gateway refused a batch from the run's session, " + c.why + "; the run ends: failed"; !h.reported(line) {
+			t.Errorf("%s: not reported: %s", c.what, line)
+		}
+	}
+}
+
+// TestReportsFollowTheSessions pins the session of each model keys report through the
+// gateway: a report made before the first join has none; the join's 200 makes the
+// start report of session 1, with the keys of the report before when nothing changed; a
+// change during the session has its number; and its numbered dev.qory.session.exited
+// makes its end report, with the keys of the report before when nothing changed. Each
+// report passes the schema, and each has a later time than the one before.
+func TestReportsFollowTheSessions(t *testing.T) {
+	g := startGroupRun(t)
+	type report struct {
+		Time    string            `json:"time"`
+		Session int               `json:"session"`
+		Keys    []json.RawMessage `json:"keys"`
+	}
+	reports := func(n int) []report {
+		t.Helper()
+		eventually(t, strconv.Itoa(n)+" reports", func() bool { g.mu.Lock(); defer g.mu.Unlock(); return len(g.reports) >= n })
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		var out []report
+		for _, b := range g.reports {
+			var r report
+			if err := json.Unmarshal(b, &r); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, r)
+		}
+		return out
+	}
+	if status, calls := g.send(t); status != http.StatusOK || strings.Join(calls, ",") != "model" {
+		t.Fatalf("the request before the join: %d, %v", status, calls)
+	}
+	reports(1)
+	n := g.h.joined(g.runID)
+	reports(2)
+	g.h.post(sessionStarted(g.runID, n))
+	g.limit("model")
+	if status, calls := g.send(t); status != http.StatusOK || strings.Join(calls, ",") != "model,model-2" {
+		t.Fatalf("the request in the session: %d, %v", status, calls)
+	}
+	eventually(t, "a report with model-2", func() bool {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		return strings.Contains(string(g.reports[len(g.reports)-1]), `"credential":"model-2"`)
+	})
+	inSession := len(reports(1))
+	g.h.post(sessionExited(g.runID, n))
+	all := reports(inSession + 1)
+	time.Sleep(1500 * time.Millisecond)
+	if after := reports(1); len(after) != len(all) {
+		t.Errorf("%d reports; want %d, none after the end report", len(after), len(all))
+	}
+	for i, r := range all {
+		want := 1
+		if i == 0 {
+			want = 0
+		}
+		if r.Session != want {
+			t.Errorf("report %d has session %d; want %d", i, r.Session, want)
+		}
+		if i > 0 && r.Time <= all[i-1].Time {
+			t.Errorf("report %d has the time %s, report %d %s; want a later time", i, r.Time, i-1, all[i-1].Time)
+		}
+	}
+	same := func(a, b report) bool {
+		x, _ := json.Marshal(a.Keys)
+		y, _ := json.Marshal(b.Keys)
+		return string(x) == string(y)
+	}
+	if !same(all[0], all[1]) {
+		t.Errorf("the start report's keys %s; want those of the report before", all[1].Keys)
+	}
+	if last := len(all) - 1; !same(all[last], all[last-1]) {
+		t.Errorf("the end report's keys %s; want those of the report before", all[last].Keys)
+	}
+	schema, err := contracts.Compile("model-keys-report.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, r := range g.reports {
+		doc, _ := contracts.Decode("r.json", r)
+		if err := schema.Validate(doc); err != nil {
+			t.Errorf("the report %s fails the schema: %v", r, err)
+		}
+	}
+}
+
+// TestAnEndReportHasTheKeysOutAfterA401 pins a report with both session and
+// unauthorized: a key the provider returns 401 for while session 1 is open goes in
+// unauthorized, and the session's end report, made at its numbered
+// dev.qory.session.exited, has the session's number and that key, and passes the schema.
+func TestAnEndReportHasTheKeysOutAfterA401(t *testing.T) {
+	g := startGroupRun(t)
+	n := g.h.joined(g.runID)
+	g.h.post(sessionStarted(g.runID, n))
+	g.reject("model")
+	if status, calls := g.sendTo(t, modelPath); status != http.StatusOK || strings.Join(calls, ",") != "model,model-2" {
+		t.Fatalf("the request: %d, %v; want 200 after model and model-2", status, calls)
+	}
+	const out = `"unauthorized":[{"credential":"model","at":"`
+	eventually(t, "a report with model unauthorized", func() bool {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		return len(g.reports) > 0 && strings.Contains(string(g.reports[len(g.reports)-1]), out)
+	})
+	// Past the gap of a second, no report of the changes before waits.
+	time.Sleep(1500 * time.Millisecond)
+	g.mu.Lock()
+	before := len(g.reports)
+	g.mu.Unlock()
+	g.h.post(sessionExited(g.runID, n))
+	eventually(t, "the end report", func() bool { g.mu.Lock(); defer g.mu.Unlock(); return len(g.reports) > before })
+	g.mu.Lock()
+	end := g.reports[before]
+	g.mu.Unlock()
+	if !strings.Contains(string(end), `"session":`+strconv.Itoa(n)+`,`) || !strings.Contains(string(end), out) {
+		t.Errorf("the end report %s; want session %d and model in unauthorized", end, n)
+	}
+	schema, err := contracts.Compile("model-keys-report.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, _ := contracts.Decode("r.json", end)
+	if err := schema.Validate(doc); err != nil {
+		t.Errorf("the end report %s fails the schema: %v", end, err)
+	}
+}
+
+// TestTheGatewaysSessionEndMakesAnEndReport pins the end report of a session the
+// gateway ends, with the reporter idle: a batch the link refuses ends the run, and the
+// session's end report goes after the run's end, with its number. A join with no
+// session.started that is open when the run ends gets its end report too, and no report
+// without a session follows.
+func TestTheGatewaysSessionEndMakesAnEndReport(t *testing.T) {
+	for _, startSession := range []bool{true, false} {
+		g := startGroupRun(t)
+		n := g.h.joined(g.runID)
+		if startSession {
+			g.h.post(sessionStarted(g.runID, n))
+		}
+		eventually(t, "the start report", func() bool { g.mu.Lock(); defer g.mu.Unlock(); return len(g.reports) == 1 })
+		// The start report's answer is in, and the reporter waits for a change.
+		time.Sleep(100 * time.Millisecond)
+		if d := g.h.post(ev(g.runID, event.RunRegistered, map[string]any{})); d.End != "batch_refused" {
+			t.Fatalf("the refused batch: %+v", d)
+		}
+		eventually(t, "the end report", func() bool { g.mu.Lock(); defer g.mu.Unlock(); return len(g.reports) == 2 })
+		time.Sleep(1200 * time.Millisecond)
+		g.mu.Lock()
+		if len(g.reports) != 2 {
+			t.Errorf("session started %v: %d reports; want the start and end reports", startSession, len(g.reports))
+		}
+		for i, b := range g.reports {
+			if !strings.Contains(string(b), `"session":1,`) {
+				t.Errorf("session started %v: report %d %s; want session 1", startSession, i, b)
+			}
+		}
+		g.mu.Unlock()
+	}
+}
+
+// TestARefusedJoinMakesNoReport pins a join the gateway refuses: it opens no session,
+// so neither the refusal nor its dev.qory.session.exited makes a report, and the next
+// join's start report is the first, with that join's number.
+func TestARefusedJoinMakesNoReport(t *testing.T) {
+	g := startGroupRunWith(t, true)
+	var r *accesskey.Refusal
+	if _, err := g.h.join(g.runID, "GIT_TOKEN"); !errors.As(err, &r) || r.Code != "placeholder_conflict" {
+		t.Fatalf("the conflicting join: %v", err)
+	}
+	refused := ev(g.runID, event.SessionExited, map[string]any{"session": 1, "state": "failed", "exit_code": -1, "reason": "placeholder_conflict", "duration_ms": 0})
+	if d := g.h.post(refused); !d.Accepted() {
+		t.Fatalf("the refused join's session.exited: %+v", d)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	g.mu.Lock()
+	n := len(g.reports)
+	g.mu.Unlock()
+	if n != 0 {
+		t.Errorf("%d reports after a refused join; want none", n)
+	}
+	if two := g.h.joined(g.runID); two != 2 {
+		t.Fatalf("the next join is session %d", two)
+	}
+	eventually(t, "the start report", func() bool { g.mu.Lock(); defer g.mu.Unlock(); return len(g.reports) == 1 })
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !strings.Contains(string(g.reports[0]), `"session":2,`) {
+		t.Errorf("the first report %s; want session 2", g.reports[0])
+	}
+}
+
+// TestTheOneAddressReportsReplayedAndReopenedJoins pins the reports of a run on the one
+// address: a join sent again, which gets its answer again, makes no second start
+// report; and after the gateway restarts with session 1 open, a change in the reopened
+// run makes a report with session 1, and no start report.
+func TestTheOneAddressReportsReplayedAndReopenedJoins(t *testing.T) {
+	certFile, keyFile, roots := testCertificate(t, t.TempDir())
+	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		w.Header().Set("Anthropic-Ratelimit-Unified-5h-Status", "allowed")
+		w.Header().Set("Anthropic-Ratelimit-Unified-5h-Utilization", "0.42")
+		io.WriteString(w, `{"type":"message"}`)
+	}))
+	origin.Config.ErrorLog = log.New(io.Discard, "", 0)
+	origin.TLS = &tls.Config{Certificates: []tls.Certificate{pair}}
+	origin.StartTLS()
+	t.Cleanup(origin.Close)
+	_, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+	url := "https://localhost:" + port + "/v1"
+	entry := func(name string) string {
+		return `{"name":"` + name + `","group":"anthropic","format":"anthropic-messages","endpoint":"` + url + `","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
+	}
+	c := gatewayControl(t)
+	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"default_model_provider_credential_name":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
+	c.mu.Lock()
+	c.secrets = map[string]string{"model": "fake-group-value-0001", "model-2": "fake-group-value-0002"}
+	c.mu.Unlock()
+	var mu sync.Mutex
+	var reports []string
+	f := func(w http.ResponseWriter, r *http.Request) bool {
+		if !strings.HasSuffix(r.URL.Path, "/model-keys") {
+			return false
+		}
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		reports = append(reports, string(body))
+		mu.Unlock()
+		out := `{"version":1,"keys":[]}`
+		w.Header().Set(server.HeaderSignature, c.signer.SignAnswer(accesskey.Answer{Status: http.StatusOK, RequestSignature: r.Header.Get(server.HeaderSignature), Body: []byte(out)}))
+		io.WriteString(w, out)
+		return true
+	}
+	c.intercept.Store(&f)
+	sent := func() []string { mu.Lock(); defer mu.Unlock(); return slices.Clone(reports) }
+	node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost"}}}
+	cfg := gateway.Config{Dir: t.TempDir(), Policy: node}
+	gateway.SetUpstreamRoots(&cfg, roots)
+	before := startRemote(t, c, cfg)
+	runID := event.NewRunID()
+	key := runKeyFor(t, runID, nil)
+	e := before.open(t, key, server.LinkRunRequest{Wall: true})
+	joinPath := "/qory-link/run-configuration/" + runID + "/sessions"
+	for i := range 2 {
+		if a := before.do(t, key, http.MethodPost, joinPath, []byte(`{"version":1,"passes":[],"model_key":true}`)); a.status != http.StatusOK {
+			t.Fatalf("join try %d: %d %s", i+1, a.status, a.body)
+		}
+	}
+	eventually(t, "the start report", func() bool { return len(sent()) == 1 })
+	time.Sleep(1200 * time.Millisecond)
+	if got := sent(); len(got) != 1 || !strings.Contains(got[0], `"session":1,`) {
+		t.Fatalf("reports %q; want the one start report of session 1", got)
+	}
+	if got := e.post(t, sessionStarted(runID, 1)); got.status != http.StatusAccepted {
+		t.Fatalf("session 1's session.started: %d %s", got.status, got.body)
+	}
+
+	after := before.restart(t, cfg)
+	e.r = after
+	if got := e.post(t, heartbeat(runID)); got.status != http.StatusAccepted {
+		t.Fatalf("the batch that reopens the run: %d %s", got.status, got.body)
+	}
+	trusted := x509.NewCertPool()
+	trusted.AppendCertsFromPEM([]byte(e.a.CertificateAuthority))
+	agent := after.relay(t, key)
+	agent.Transport.(*http.Transport).TLSClientConfig = &tls.Config{RootCAs: trusted}
+	req, _ := http.NewRequest(http.MethodPost, url+"/messages", strings.NewReader(`{"model":"m"}`))
+	req.Header.Set("X-Api-Key", link.KeyPlaceholder("model"))
+	resp, err := agent.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the request after the reopen: %d", resp.StatusCode)
+	}
+	eventually(t, "a report of the change", func() bool { return len(sent()) == 2 })
+	if got := sent(); !strings.Contains(got[1], `"session":1,`) || !strings.Contains(got[1], `"utilization":42`) {
+		t.Errorf("the report after the reopen %s; want session 1 and the change", got[1])
 	}
 }

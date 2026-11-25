@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/routine"
@@ -222,6 +223,9 @@ func (g *Gateway) handler(s *side) http.Handler {
 		case r.Method == http.MethodGet && isTranscript(r.URL.Path, runs):
 			id, _ := transcriptRun(r.URL.Path, runs)
 			g.transcript(s, w, r, id)
+		case isHostCall(r.Method, r.URL.Path, runs):
+			id, c, _ := hostCallOf(r.Method, r.URL.Path, runs)
+			g.serveHostCall(s, w, r, id, c)
 		case strings.HasPrefix(r.URL.Path, runs+"/") && r.Method == http.MethodGet:
 			g.reload(s, w, r, strings.TrimPrefix(r.URL.Path, runs+"/"))
 		case r.URL.Path == events && r.Method == http.MethodPost:
@@ -258,7 +262,13 @@ type linkRefusal struct {
 	From    string   `json:"from"`
 	State   string   `json:"state,omitempty"`
 	Reason  string   `json:"reason,omitempty"`
+	// RetryAfter is the seconds of the Retry-After of Qory Apiary's refusal, read by
+	// [server.ReadRetryAfter]; zero for none, and then the refusal has no retry_after.
+	RetryAfter int64 `json:"retry_after,omitempty"`
 }
+
+// seconds is d in whole seconds, as a link refusal's retry_after has it.
+func seconds(d time.Duration) int64 { return int64(d / time.Second) }
 
 // refuse answers a coded refusal: the code, its names, who refused, and text, the
 // error's text the session returns, as the message holds it.
@@ -293,6 +303,88 @@ func gone(w http.ResponseWriter, end runEnd) {
 		text += ": " + endWords(end)
 	}
 	answerRefusal(w, http.StatusGone, linkRefusal{Error: end.code, Message: message(text), From: end.from, State: end.state, Reason: end.reason})
+}
+
+// linkRunOf is the run runID of a link request for one run, the transcript request or a
+// host call, or nil once w has the refusal: on the local link a run id of no run here is
+// 400 invalid_request; on the one address the run id is the run key's, any other 400
+// run_key_invalid, and a run the gateway does not hold is reopened, or gets a 503 or a
+// 410 ([Gateway.heldRun]); and a run that ended at the gateway is 410.
+func (g *Gateway) linkRunOf(s *side, w http.ResponseWriter, r *http.Request, runID string) *linkRun {
+	if refusal := g.runIDRefusal(s, r, runID); refusal != nil {
+		refusal(w)
+		return nil
+	}
+	var lr *linkRun
+	if s.remote {
+		if lr = g.heldRun(w, r, runID); lr == nil {
+			return nil
+		}
+	} else if lr = g.localRun(runID); lr == nil {
+		invalid(w)
+		return nil
+	}
+	if end, ended := lr.gone(); ended {
+		gone(w, end)
+		return nil
+	}
+	return lr
+}
+
+// runIDRefusal returns the func that writes the refusal of the link request r when runID
+// is the id of no run that r is for, or nil: on the one address of any id but the run
+// key's, on the local link of the id of no run here. It opens and reopens no run.
+func (g *Gateway) runIDRefusal(s *side, r *http.Request, runID string) func(http.ResponseWriter) {
+	if s.remote {
+		p, _ := runKeyOf(r.Context())
+		if runID == p.key.RunID {
+			return nil
+		}
+		ref := runKeyInvalid()
+		return func(w http.ResponseWriter) { refuse(w, ref.Status, ref.Code, nil, ref.From, ref.Error()) }
+	}
+	if g.localRun(runID) != nil {
+		return nil
+	}
+	return invalid
+}
+
+// bodyRefusal returns the func that writes the refusal of the link request r of the run
+// runID that the gateway knows before it reads r's body, or nil: that of
+// [Gateway.runIDRefusal]; on the one address that of [Gateway.heldNow]; and the 410 of a
+// run that ended at the gateway. A run that the one address may reopen gets its answer
+// after the reopen.
+func (g *Gateway) bodyRefusal(s *side, r *http.Request, runID string) func(http.ResponseWriter) {
+	if refusal := g.runIDRefusal(s, r, runID); refusal != nil {
+		return refusal
+	}
+	var lr *linkRun
+	if s.remote {
+		var refusal func(http.ResponseWriter)
+		if lr, refusal = g.heldNow(runID); refusal != nil {
+			return refusal
+		}
+	} else {
+		lr = g.localRun(runID)
+	}
+	if lr == nil {
+		return nil
+	}
+	if end, ended := lr.gone(); ended {
+		return func(w http.ResponseWriter) { gone(w, end) }
+	}
+	return nil
+}
+
+// callContext is the context of a request of the run lr to the server for the link
+// request r: it ends after d, when the run's context ends, and when r's ends.
+func (lr *linkRun) callContext(r *http.Request, d time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(lr.ctx, d)
+	stop := context.AfterFunc(r.Context(), cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 // readBody reads at most max bytes of a request's body; a longer one is no body.

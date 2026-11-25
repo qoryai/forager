@@ -163,7 +163,7 @@ More: [docs/server.md](docs/server.md).
 ## Embed it in Go
 
 Forager is a Go module, and `qory` is one program built on it. Build it into your
-program to run an agent inside the same boundary. It needs Go 1.27.3 or above:
+program to run an agent inside the same boundary. It needs Go 1.27.4 or above:
 
 ```sh
 go get github.com/qoryai/forager
@@ -194,7 +194,11 @@ if err != nil {                                   // the run did not open
 }
 res, err := run.Join(ctx, session.SessionSpec{
 	Runtime:   rt,
-	Command:   "claude",
+	RuntimeInstall: &session.RuntimeInstall{      // where you installed the runtime
+		Dir:     "/opt/runtimes/claude/2.1.320",
+		Version: "2.1.320",
+	},
+	Command:   "/opt/runtimes/claude/2.1.320/bin/claude", // a file inside RuntimeInstall.Dir
 	Args:      []string{"-p", "Reply pong."},
 	Forwarder: []string{exe, "forward"},          // the hook command; it calls session.Forward
 })

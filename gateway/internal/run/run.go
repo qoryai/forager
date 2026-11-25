@@ -93,11 +93,21 @@ type Config struct {
 	// their names in the document's order, under digest, the digest Forager computed of
 	// that document's bytes, and opens them: the secrets request. The run sends it when
 	// it starts, for every credential, and again for each credential whose value has
-	// expires_at ([renewer]). Nil when the server's discovery lists no secrets endpoint;
-	// a run configuration with credentials is then refused.
-	Secrets func(ctx context.Context, digest string, credentials []string) (sealed.Values, error)
+	// expires_at ([renewer]). unauthorized are the model keys among credentials whose
+	// renewal follows a 401 of the model provider, in the same order; nil for none. Nil
+	// when the server's discovery lists no secrets endpoint; a run configuration with
+	// credentials is then refused.
+	Secrets func(ctx context.Context, digest string, credentials, unauthorized []string) (sealed.Values, error)
 	// Clock is the time renewals are judged by; nil is this machine's clock.
 	Clock Clock
+	// Revoked are the model keys a reopened run's record has out of the key group after
+	// a 401 ([modelkey.Group.Revoked]), and Pending those whose renewal after a 401 is
+	// pending ([modelkey.Group.Pending]). The secrets request leaves both out, since the
+	// server returns 409 with no value to a whole request that has a name it cannot
+	// seal. A revoked key gets no value and no renewal; a pending key gets its value
+	// from its renewal, once its key group has it pending ([renewer]). Nil for
+	// an open.
+	Revoked, Pending []string
 	// StackHosts are the gateway's gateway.stack_hosts, which the run's stack proxy
 	// allows beside the run configuration's stack_hosts: each host of a harness
 	// credential must be one of the two lists allows ([Run.StackAllows]).
@@ -159,16 +169,21 @@ type Run struct {
 	// each run configuration Read read that a reload has not decided yet.
 	computed     string
 	computedRead map[*policy.Loaded]string
-	// creds are the credentials and the model_credential of each run configuration Read
-	// read that a reload has not decided yet.
+	// creds are the credentials and the default_model_provider_credential_name of each
+	// run configuration Read read that a reload has not decided yet.
 	creds map[*policy.Loaded]storedSet
 
 	// stored are the credentials of the run configuration the run started with, and
 	// values their values, as they opened or as a renewal replaced them, cleared by
-	// Close. storedModel is its model_credential, empty when it names none.
-	stored      []server.RunCredential
-	storedModel string
-	values      sealed.Values
+	// Close. storedDefault is its default_model_provider_credential_name, empty when it
+	// names none.
+	stored        []server.RunCredential
+	storedDefault string
+	values        sealed.Values
+	// unopened is true while values is the zero Values of a reopened run that sent no
+	// secrets request, every credential being left out ([Run.leftOut]): the first
+	// value a renewal brings becomes values ([Run.replaceValue]).
+	unopened bool
 	// stack are the stack_hosts of the run configuration the run started with, nil
 	// when it has none, fixed for the run; stacks are those of each run configuration
 	// Read read that a reload has not decided yet.
@@ -184,13 +199,17 @@ type Run struct {
 	applies map[string][]credential.StoredApply
 	// renew fetches again the values with expires_at; nil when none has it.
 	renew *renewer
+	// keysOut are the model keys of stored with account_claim whose value opened with
+	// no string at it ([credential.AccountClaim]), fixed when the run opens: the proxy
+	// never sets them ([Run.KeysOut]).
+	keysOut []string
 }
 
 // storedSet is what a run configuration says of the run's credentials: its credentials
-// and its model_credential.
+// and its default_model_provider_credential_name.
 type storedSet struct {
-	creds []server.RunCredential
-	model string
+	creds       []server.RunCredential
+	defaultName string
 }
 
 // Decide is the policy a run starts under, and refuses a run that cannot have it: the
@@ -240,7 +259,7 @@ func Decide(cfg Config) (*Run, error) {
 		}
 		pol = fetched
 		set := r.takeCreds(fetched)
-		r.guard, r.named, r.stored, r.storedModel = r.takeGuard(fetched), r.takeNamed(fetched), set.creds, set.model
+		r.guard, r.named, r.stored, r.storedDefault = r.takeGuard(fetched), r.takeNamed(fetched), set.creds, set.defaultName
 		r.stack = r.takeStack(fetched)
 		if cfg.Fetched.Document != nil {
 			r.served = cfg.Fetched.Document.Values()
@@ -248,6 +267,12 @@ func Decide(cfg Config) (*Run, error) {
 			r.hidden = cfg.Fetched.Document.HarnessHidden
 		}
 		if err := r.checkHarness(); err != nil {
+			return nil, err
+		}
+		if err := r.checkPush(); err != nil {
+			return nil, err
+		}
+		if err := r.checkPushHosts(fetched); err != nil {
 			return nil, err
 		}
 		if err := r.checkKeyGroup(r.clock().Now()); err != nil {
@@ -379,19 +404,32 @@ func (r *Run) takeComputed(p *policy.Loaded) string {
 // under the digest Forager computed of the document's bytes, and refuses a value a
 // header cannot hold, a model key's value that starts with none of its key_prefixes,
 // a value that expired before the run started, and one whose apply is outside its
-// entry ([checkOpened]).
+// entry ([checkOpened]). A model key with account_claim whose value has no string at it
+// leaves the key group ([Run.KeysOut]), with a line in the run's record; when no key of
+// the group is left, the run is refused. The keys of [Config.Revoked] and
+// [Config.Pending] are left out of the request and of these checks.
 func (r *Run) open(ctx context.Context) error {
-	names := make([]string, len(r.stored))
-	for i, c := range r.stored {
-		names[i] = c.Name
+	var names []string
+	var entries []server.RunCredential
+	for _, c := range r.stored {
+		if r.leftOut(c.Name) {
+			continue
+		}
+		names = append(names, c.Name)
+		entries = append(entries, c)
 	}
 	digest := ""
 	if d := r.cfg.Fetched.Document; d != nil {
 		digest = d.Computed
 	}
-	values, err := r.cfg.Secrets(ctx, digest, names)
-	if err != nil {
-		return err
+	// The contract's request names at least one credential: a reopened run whose every
+	// credential is left out sends none, and gets its values from their renewals.
+	var values sealed.Values
+	if len(names) > 0 {
+		var err error
+		if values, err = r.cfg.Secrets(ctx, digest, names, nil); err != nil {
+			return err
+		}
 	}
 	now := r.clock().Now()
 	for i, name := range names {
@@ -401,7 +439,7 @@ func (r *Run) open(ctx context.Context) error {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
 				"run configuration %s: store another value of the credential %s in the control plane: its value has a control character, or a space or tab at its start or end, which a header value cannot have", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(name, true))
 		}
-		if prefixes := r.stored[i].KeyPrefixes; !credential.KeyMatches(prefixes, v) {
+		if prefixes := entries[i].KeyPrefixes; !credential.KeyMatches(prefixes, v) {
 			values.Clear()
 			shown := make([]string, len(prefixes))
 			for j, p := range prefixes {
@@ -410,21 +448,92 @@ func (r *Run) open(ctx context.Context) error {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
 				"run configuration %s: store in the control plane a value of the credential %s that starts with %s: the stored value starts with none of its key_prefixes", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(name, true), strings.Join(shown, " or "))
 		}
-		if err := checkOpened(r.stored[i], values, now); err != nil {
+		if err := checkOpened(entries[i], values, now); err != nil {
 			values.Clear()
 			return err
 		}
+	}
+	if err := r.checkClaims(values); err != nil {
+		values.Clear()
+		return err
 	}
 	r.applies = make(map[string][]credential.StoredApply, len(r.stored))
 	for _, c := range r.stored {
 		r.applies[c.Name] = effectiveApply(c, values)
 	}
-	r.renew = newRenewer(r, values, now)
+	r.renew = newRenewer(r, values, r.cfg.Pending, now)
 	r.mu.Lock()
-	r.values = values
+	r.values, r.unopened = values, len(names) == 0
 	r.mu.Unlock()
 	return nil
 }
+
+// checkClaims sets keysOut: each model key with account_claim whose opened value in
+// values has no string at it ([credential.AccountClaim]), with a line in the run's
+// record that contains why, never the value or the claim. It refuses the run,
+// run_configuration_invalid, when no key of a key group of the run is left and none of
+// that group's keys is out or pending after a 401 ([Config.Revoked], [Config.Pending]):
+// a reopened run whose keys a 401 took out stops with model_key_unauthorized. The
+// refusal contains the group's `group` value; its shown names are the default model
+// provider credential for the default model provider credential's group, and the
+// group's first key for another group.
+func (r *Run) checkClaims(values sealed.Values) error {
+	var out []string
+	for _, c := range r.stored {
+		if c.Auth.AccountClaim == "" || r.leftOut(c.Name) {
+			continue
+		}
+		v, _ := values.Value(c.Name)
+		_, err := credential.AccountClaim(v, c.Auth.AccountClaim)
+		if err == nil {
+			continue
+		}
+		out = append(out, c.Name)
+		if r.cfg.Log != nil {
+			r.cfg.Log(fmt.Sprintf("Store in the control plane a value of the model key %s with a string at its account_claim; the run does not set the key: %v",
+				accesskey.ShownName(c.Name, true), err))
+		}
+	}
+	left := func(c server.RunCredential) bool {
+		return !slices.Contains(out, c.Name) && !r.leftOut(c.Name)
+	}
+	refuse := func(group []server.RunCredential, name string) error {
+		after401 := slices.ContainsFunc(group, func(c server.RunCredential) bool { return r.leftOut(c.Name) })
+		if len(group) == 0 || after401 || slices.ContainsFunc(group, left) {
+			return nil
+		}
+		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
+			"Store in the control plane a value of a key of group %s with a string at its account_claim.\nNo key of the group has one in the run configuration %s", accesskey.ShownName(group[0].Group, true), accesskey.ShownValue(r.cfg.Fetched.URL, false))
+	}
+	// The default model provider credential's group first, by its default model
+	// provider credential, so its refusal is the one a run gets when another group has
+	// no key left too.
+	defaultKeys := defaultGroup(r.stored, r.storedDefault)
+	if err := refuse(defaultKeys, defaultName(defaultKeys, r.storedDefault)); err != nil {
+		return err
+	}
+	for _, group := range storedGroups(r.stored) {
+		if len(defaultKeys) > 0 && group[0].Name == defaultKeys[0].Name {
+			continue
+		}
+		if err := refuse(group, group[0].Name); err != nil {
+			return err
+		}
+	}
+	r.keysOut = out
+	return nil
+}
+
+// leftOut reports whether the credential name is left out of the start's secrets
+// request: a model key out or pending after a 401 ([Config.Revoked], [Config.Pending]).
+func (r *Run) leftOut(name string) bool {
+	return slices.Contains(r.cfg.Revoked, name) || slices.Contains(r.cfg.Pending, name)
+}
+
+// KeysOut are the model keys whose value opened with no string at their account_claim,
+// which leave the key group for the run ([modelkey.Group.Out]); none when every key
+// has one. Call it after [Run.Hold].
+func (r *Run) KeysOut() []string { return slices.Clone(r.keysOut) }
 
 // clearValues overwrites the opened values of the run configuration's credentials,
 // under r.mu, so it never overlaps the copy a request takes ([Run.storedUses]).
@@ -432,7 +541,7 @@ func (r *Run) clearValues() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.values.Clear()
-	r.values = sealed.Values{}
+	r.values, r.unopened = sealed.Values{}, false
 }
 
 // HeaderValue reports whether v, UTF-8, holds the contract's rule for a value set in a
@@ -671,7 +780,7 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		fetched.Source = "fetched"
 	}
 	if f.Document != nil {
-		if err := server.CheckCredentials(f.Document.Credentials, f.Document.ModelCredential); err != nil {
+		if err := server.CheckCredentials(f.Document.Credentials, f.Document.DefaultModelProviderCredentialName); err != nil {
 			return nil, fmt.Errorf("run configuration %s: %w", accesskey.ShownValue(f.URL, false), err)
 		}
 	}
@@ -693,11 +802,11 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		r.read = map[*policy.Loaded][]string{}
 	}
 	r.read[out] = GuardNames(r.node, pol, r.cfg.Narrowing)
-	if f.Document != nil && (len(f.Document.Credentials) > 0 || f.Document.ModelCredential != "") {
+	if f.Document != nil && (len(f.Document.Credentials) > 0 || f.Document.DefaultModelProviderCredentialName != "") {
 		if r.creds == nil {
 			r.creds = map[*policy.Loaded]storedSet{}
 		}
-		r.creds[out] = storedSet{f.Document.Credentials, f.Document.ModelCredential}
+		r.creds[out] = storedSet{f.Document.Credentials, f.Document.DefaultModelProviderCredentialName}
 	}
 	if f.Document != nil && f.Document.Computed != "" {
 		if r.computedRead == nil {
@@ -789,8 +898,9 @@ func (r *Run) takeGuard(p *policy.Loaded) []string {
 	return names
 }
 
-// takeCreds is the credentials and the model_credential of the run configuration of a
-// policy [Run.Read] made, empty when it has neither, and forgets them.
+// takeCreds is the credentials and the default_model_provider_credential_name of the
+// run configuration of a policy [Run.Read] made, empty when it has neither, and forgets
+// them.
 func (r *Run) takeCreds(p *policy.Loaded) storedSet {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -895,6 +1005,22 @@ func Narrow(pol *policy.Loaded, n *Narrowing) *policy.Loaded {
 	return out
 }
 
+// FixFirstError is a refusal whose report starts with its fix: Fix is the first line,
+// and Cause, after the context the caller puts before it, the second. [Run.Reload]
+// returns one whose Cause starts with "run configuration" and the URL, and ends with
+// "the policy in force stays". The error is returned unwrapped, because a wrapper's
+// text is not reported.
+type FixFirstError struct {
+	// Fix is a sentence the reader acts on, such as "Start a new run to use other
+	// credentials.".
+	Fix string
+	// Cause is why the reload is refused.
+	Cause string
+}
+
+// Error is Fix and Cause on two lines.
+func (e *FixFirstError) Error() string { return e.Fix + "\n" + e.Cause }
+
 // Settled reports whether a failed fetch of the run configuration is one the server
 // answered and Forager refused, which is not asked for again until the answered digest
 // changes: a document the client could not read, a policy the schema refuses, or a
@@ -955,10 +1081,16 @@ func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error
 		return &Decision{Unchanged: true, Policy: next}, nil
 	}
 	if !sameCredentials(creds.creds, r.stored) {
-		return nil, fmt.Errorf("run configuration %s: start a new run to use other credentials; a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays", accesskey.ShownValue(next.URL, false))
+		return nil, &FixFirstError{
+			Fix:   "Start a new run to use other credentials.",
+			Cause: fmt.Sprintf("run configuration %s: a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays", accesskey.ShownValue(next.URL, false)),
+		}
 	}
-	if creds.model != r.storedModel {
-		return nil, fmt.Errorf("run configuration %s: start a new run to start with another model key; a run's model_credential is fixed when it starts, and this run configuration names another; the policy in force stays", accesskey.ShownValue(next.URL, false))
+	if creds.defaultName != r.storedDefault {
+		return nil, &FixFirstError{
+			Fix:   "Start a new run to change default_model_provider_credential_name.",
+			Cause: fmt.Sprintf("run configuration %s: the run started with default_model_provider_credential_name %s, and this run configuration %s; the policy in force stays", accesskey.ShownValue(next.URL, false), shownField(r.storedDefault), setsTo(creds.defaultName)),
+		}
 	}
 	if !sameHosts(stack, r.stack) {
 		return nil, errors.New("start another run to use other stack hosts: a run's stack_hosts are fixed when it starts")
@@ -966,6 +1098,10 @@ func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error
 	d, err := r.decide(ctx, next, named)
 	if d != nil {
 		d.Guard, d.computed = guard, computed
+	}
+	var fix *FixFirstError
+	if errors.As(err, &fix) {
+		return nil, &FixFirstError{Fix: fix.Fix, Cause: fmt.Sprintf("run configuration %s: %s; the policy in force stays", accesskey.ShownValue(next.URL, false), fix.Cause)}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("run configuration %s: %w; the policy in force stays", accesskey.ShownValue(next.URL, false), err)
@@ -1000,12 +1136,27 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded, named string) (*D
 	if err != nil {
 		return nil, err
 	}
-	// Without model_credential the start key is the run's one model key, and a reload
-	// may select another: the runtime started with the first one's variable and
-	// endpoint, so the start key is fixed as well.
-	if started := startOf(r.Held()); fresh.Start != started {
+	// Without default_model_provider_credential_name the default model provider
+	// credential is the run configuration's one model key, or unset when it has none,
+	// and a reload may select another: the runtime started with the first one's
+	// variable and endpoint, so the default model provider credential is fixed as well.
+	// Only a run configuration without default_model_provider_credential_name reaches
+	// this check: Reload refuses a changed field, and with the field set on both sides
+	// hold gives the field's key.
+	if started := defaultOf(r.Held()); fresh.DefaultCredential != started {
 		fresh.Close()
-		return nil, fmt.Errorf("start a new run to change the model key it starts with: the run started with %s, and this run configuration selects %s", shownKey(started), shownKey(fresh.Start))
+		was := "the run started with no model key"
+		if started != "" {
+			was = "the run started with the model key " + accesskey.ShownName(started, true)
+		}
+		is := "this run configuration has no model key"
+		if fresh.DefaultCredential != "" {
+			is = "this run configuration has one model key, " + accesskey.ShownName(fresh.DefaultCredential, true) + ", and no default_model_provider_credential_name"
+		}
+		return nil, &FixFirstError{
+			Fix:   "Start a new run to change the default model provider credential.",
+			Cause: was + "; " + is,
+		}
 	}
 	if err := tool.Check(r.chosen, in.Policy.Egress.Mode, in.Policy.Egress.Listed(), claimedBy(fresh)); err != nil {
 		fresh.Close()
@@ -1056,7 +1207,10 @@ func (r *Run) Commit(d *Decision) {
 // credential that claims one of their hosts, and refuses a placeholder the run passes
 // a value for: at the start and at every reload alike.
 func (r *Run) hold(ctx context.Context, pol *policy.Loaded) (*credential.Held, error) {
-	held, err := credential.ResolveWith(ctx, r.defs, pol.Policy.Credentials, r.storedUses(), r.storedModel, pol.Policy.Egress.Mode, pol.Policy.Egress.Listed(), r.cfg.Report)
+	if err := r.checkPushHosts(pol); err != nil {
+		return nil, err
+	}
+	held, err := credential.ResolveWith(ctx, r.defs, pol.Policy.Credentials, r.storedUses(), r.storedDefault, pol.Policy.Egress.Mode, pol.Policy.Egress.Listed(), r.cfg.Report)
 	if err != nil {
 		return nil, err
 	}
@@ -1169,8 +1323,8 @@ func claimedBy(held *credential.Held) func(string) string {
 
 // storedUses are the run configuration's work credentials the run started with, as the
 // credential package holds them, each set where the start's answer says ([Run.open]).
-// The harness credentials are left out: the run's proxy never sets them
-// ([Run.StackUses]).
+// The harness and push credentials are left out: the run's proxy never sets them
+// ([Run.StackUses], [Run.PushUses]).
 // Each one's Value copies the value under r.mu, as [Run.clearValues] clears it and a
 // renewal replaces it, so a request that is still being served when the run ends copies
 // the value whole or gets none, and never reads bytes while they are overwritten. A
@@ -1178,12 +1332,12 @@ func claimedBy(held *credential.Held) func(string) string {
 func (r *Run) storedUses() []credential.Stored {
 	var out []credential.Stored
 	for _, c := range r.stored {
-		if c.Harness() {
+		if !c.Work() {
 			continue
 		}
 		name := c.Name
-		out = append(out, credential.Stored{Name: name, Apply: r.applies[name], Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint, OAuth: c.Auth.OAuth,
-			Entry: keyEntry(c), ExpiresAt: r.renew.expiresAt(name), Rejected: r.renew.rejected(name), Value: func() []byte {
+		out = append(out, credential.Stored{Name: name, Apply: r.applyOf(name), Placeholders: c.Placeholders, Format: c.Format, Endpoint: c.Endpoint, OAuth: c.Auth.OAuth,
+			AccountHeader: c.Auth.AccountHeader, AccountClaim: c.Auth.AccountClaim, Entry: keyEntry(c), Rejected: r.renew.rejected(name), Value: func() []byte {
 				r.mu.Lock()
 				defer r.mu.Unlock()
 				b, _ := r.values.Value(name)
@@ -1227,27 +1381,31 @@ func sameSelection(a, b []policy.Selected) bool {
 }
 
 // ProxyUses are held credentials as the proxy sets them, every model key among them
-// with its placeholder's value: the keys of the start key's key group,
-// [credential.Held.Group], share the start key's. The proxy sets one model key at a
-// time, the one the gateway sets with [proxy.Proxy.SetModelKey]: the start key,
-// [credential.Held.Start], or the key a session joined with; for a key of the group, the
-// group's active key.
+// with its placeholder's value, [link.GroupPlaceholder]: the keys of one key group,
+// [credential.Held.Groups], share the placeholder of the group's first key, and a local
+// model provider credential has the placeholder of its name. The proxy sets one model
+// key at a time, the one the gateway sets with [proxy.Proxy.SetModelKey]: the default
+// model provider credential, [credential.Held.DefaultCredential], or the key a session
+// joined with; for a key of a group, the group's active key.
 func ProxyUses(held *credential.Held) []proxy.Credential {
 	if held == nil {
 		return nil
 	}
+	keys := GroupKeys(held)
 	uses := make([]proxy.Credential, 0, len(held.Uses))
 	for _, u := range held.Uses {
-		c := proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths}
-		switch {
-		case slices.Contains(held.Group, u.Name):
-			c.Placeholder = link.KeyPlaceholder(held.Start)
-		case u.Format != "":
-			c.Placeholder = link.KeyPlaceholder(u.Name)
+		c := proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths, PushRef: u.PushRef}
+		if u.Format != "" {
+			c.Placeholder = link.GroupPlaceholder(keys, u.Name)
+		}
+		if u.AccountHeader != "" {
+			claim := u.AccountClaim
+			c.AccountHeader = u.AccountHeader
+			c.Account = func(v []byte) (string, error) { return credential.AccountClaim(v, claim) }
 		}
 		if u.Stored {
-			// The server's value has no Token, so it stays bytes. A host's 401 asks for it
-			// again only when it has expires_at.
+			// The server's value has no Token, so it stays bytes. A host's 401 requests it
+			// again only when the run renews it.
 			c.Value, c.Stored = u.Value, true
 			if u.Renewed {
 				c.Rejected = u.Rejected
@@ -1258,6 +1416,22 @@ func ProxyUses(held *credential.Held) []proxy.Credential {
 		uses = append(uses, c)
 	}
 	return uses
+}
+
+// GroupKeys are the model keys of held as [link.GroupPlaceholder] reads them, in the
+// order of [credential.Held.Credentials], the order of the run answer's
+// credential_hosts, each with its key group; none when held is nil.
+func GroupKeys(held *credential.Held) []link.GroupKey {
+	if held == nil {
+		return nil
+	}
+	var out []link.GroupKey
+	for _, c := range held.Credentials() {
+		if c.Format != "" {
+			out = append(out, link.GroupKey{Name: c.Name, Group: c.Group})
+		}
+	}
+	return out
 }
 
 // ProxyTools are running tools as the proxy reaches them.
@@ -1317,18 +1491,29 @@ func TargetWrite(w proxy.Write) map[string]any {
 	return data
 }
 
-// startOf is the start key of held, empty when held is nil or has none.
-func startOf(held *credential.Held) string {
+// defaultOf is the default model provider credential of held, empty when held is nil or
+// has none.
+func defaultOf(held *credential.Held) string {
 	if held == nil {
 		return ""
 	}
-	return held.Start
+	return held.DefaultCredential
 }
 
-// shownKey is a start key's name as a message shows it, or "no model key".
-func shownKey(name string) string {
+// shownField is a value of default_model_provider_credential_name as a message shows
+// it: the quoted name, or "unset" when there is none.
+func shownField(name string) string {
 	if name == "" {
-		return "no model key"
+		return "unset"
 	}
 	return accesskey.ShownName(name, true)
+}
+
+// setsTo is what a reload's run configuration does to a value a message compares:
+// "sets it to" and the quoted name, or "leaves it unset" when there is none.
+func setsTo(name string) string {
+	if name == "" {
+		return "leaves it unset"
+	}
+	return "sets it to " + shownField(name)
 }

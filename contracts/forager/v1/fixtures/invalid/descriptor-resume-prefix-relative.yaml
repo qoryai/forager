@@ -1,0 +1,17 @@
+# A descriptor's resume prefix starts with ~/, the runtime's home, or with /.
+version: 1
+runtime: claude
+sources:
+  output:
+    format: jsonl
+resume:
+  path_from: transcript_path
+  path: ~/.claude/projects/{cwd_slug}/{session_id}.jsonl
+  prefix: .claude/projects/
+  args: ["--resume", "{session_id}"]
+rules:
+  - source: output
+    match: {type: result}
+    type: dev.qory.runtime.result
+    data:
+      session_id: session_id

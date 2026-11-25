@@ -194,6 +194,9 @@ type Proxy struct {
 	// unlisted, when set, is the body of the 403 of a host no allow entry matches under
 	// enforce ([Proxy.Unlisted]).
 	unlisted atomic.Pointer[func(host string, port int) string]
+	// pathless, when set, is the body of the 403 of a request on a terminated host that
+	// no path rule covers ([Proxy.PathRefused]).
+	pathless atomic.Pointer[func(method, host, path string) string]
 	// admit, when set, decides each host an allow entry matches ([Proxy.Admit]).
 	admit atomic.Pointer[func(host, rule string) bool]
 	// guardBody, when set, is the body of the 403 of a host the guard refuses
@@ -201,8 +204,8 @@ type Proxy struct {
 	guardBody atomic.Pointer[func(host string, port int, never bool) string]
 	// runAPI, when set, is the route to the run API ([Proxy.SetRunAPI]).
 	runAPI atomic.Pointer[RunAPI]
-	// keys, when set, is the run's key group ([Proxy.SetKeyGroup]).
-	keys atomic.Pointer[keyGroup]
+	// keys, when set, are the run's key groups ([Proxy.SetKeyGroups]).
+	keys atomic.Pointer[keySet]
 	// writes, when set, gets each state of each git push the proxy reads
 	// ([Proxy.ObserveWrites]).
 	writes atomic.Pointer[func(Write)]
@@ -235,6 +238,11 @@ const HostForm = "wall:host-form"
 // sets the credential, and replaces it in answers, only inside a CONNECT it
 // terminates. A refusal of the proxy's, in either mode, before anything is sent.
 const PlainRequest = "wall:plain-request"
+
+// QoryHostRule is the rule of every denial of the host link.QoryHost, in either mode
+// and whatever the lists say: a session's forwarder serves that host's route, so no
+// request to it is the proxy's to send.
+const QoryHostRule = link.QoryHostRule
 
 // guardError is the guard's refusal at dial time, of a name that resolved to an
 // address the guard does not dial. never is true for a link-local or cloud metadata
@@ -540,6 +548,12 @@ func (p *Proxy) AllowFirst(entries []string) {
 // enforce: body's text for the host and the port, in place of the line with the
 // policy's mode. Every other refusal keeps its body.
 func (p *Proxy) Unlisted(body func(host string, port int) string) { p.unlisted.Store(&body) }
+
+// PathRefused sets the body of the 403 returned for a request on a terminated host
+// whose path no path rule covers: body's text for the request's method, host and
+// path, each as the proxy shows them, in place of the line with the policy's mode. Every
+// other refusal keeps its body.
+func (p *Proxy) PathRefused(body func(method, host, path string) string) { p.pathless.Store(&body) }
 
 // Admit sets a check of each host an allow entry matches, rule being the entry: a host
 // it returns false for is decided as one no allow entry matches, refused under enforce
@@ -914,6 +928,13 @@ func (p *Proxy) decide(method, host string, port int) Decision {
 		return d
 	}
 	d.Host = host
+	// The route's host never resolves, and no list opens it: a session's forwarder
+	// serves the requests to it, so whatever reaches the proxy, a CONNECT, a request of
+	// a host proxy or of a run with no route, is denied, in either mode.
+	if host == link.QoryHost {
+		d.Rule, d.Outcome = QoryHostRule, Refused
+		return d
+	}
 	rule, ok := policy.Match(r.allow, host)
 	first, lifted := policy.Exact(r.first, host)
 	if lifted {
@@ -1001,9 +1022,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// A plain request to a host that gets a credential is refused before its path is
 	// read, in either mode; one past the rate limit gets its 429 below.
 	if rated == nil && d.Allowed && len(term.credentials(d.Host)) > 0 {
-		clean, ok := policy.CleanPath(r.URL.EscapedPath())
+		clean, ok := policy.CleanPath(sentPath(r.URL))
 		if !ok {
-			clean = r.URL.EscapedPath()
+			clean = sentPath(r.URL)
 		}
 		d.Allowed, d.Rule, d.Outcome = false, PlainRequest, Refused
 		d.RequestMethod, d.Path = r.Method, clean
@@ -1014,7 +1035,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The path is decided under the mode the host was decided under, which the answer
 	// and the record give.
 	if d.Allowed {
-		if clean, rule, ok := term.plainPath(d.Host, r.URL.EscapedPath(), d.Mode); clean != "" {
+		if clean, rule, ok := term.plainPath(d.Host, sentPath(r.URL), d.Mode); clean != "" {
 			d.RequestMethod, d.Path, d.PathRule, d.Allowed = r.Method, clean, rule, ok
 			if !ok {
 				d.Outcome = Refused
@@ -1051,6 +1072,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	out := r.Clone(p.dialContext(r.Context(), d))
 	out.RequestURI = ""
+	out.Body = endAtEOF(out.Body)
 	// The host asked of upstream is the one decided on, in its form.
 	out.URL.Host = d.Host
 	if r.URL.Port() != "" {
@@ -1433,6 +1455,11 @@ func deny(w http.ResponseWriter, d Decision) {
 		fmt.Fprintf(w, "qory: send requests to this host as https:// through CONNECT.\n"+
 			"qory: %s %s%s denied by the gateway: the gateway sets this host's credential, and masks it in answers, only on https:// requests through CONNECT\n",
 			accesskey.ShownValue(d.RequestMethod, false), d.Host, accesskey.ShownValue(d.Path, false))
+		return
+	}
+	if d.Rule == QoryHostRule {
+		fmt.Fprintf(w, "qory: send requests for %s as plain http:// requests to QORY_HOST_URL.\n"+
+			"qory: the gateway's proxy sends no request to %s; a session of a run with a route reaches it through QORY_HOST_URL\n", link.QoryHost, link.QoryHost)
 		return
 	}
 	if d.Rule == GuardRule {

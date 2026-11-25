@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path"
@@ -93,6 +95,8 @@ type recorder struct {
 	// order, the last one again once the others are used: an empty output succeeds, any
 	// other fails with exit status 1.
 	rms []string
+	// agentAddrs is what the inspect of the agent's container's addresses prints.
+	agentAddrs string
 }
 
 // statPath is the path inside of a docker cp that checks one, of the form docker cp
@@ -209,6 +213,8 @@ func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
 		return []byte("true\n"), nil
 	case strings.Contains(line, " inspect --format {{.State"):
 		return []byte("true\n"), nil
+	case strings.Contains(line, ".NetworkSettings.Networks"):
+		return []byte(r.agentAddrs), nil
 	case strings.Contains(line, " logs ") && strings.HasSuffix(line, "-setup"):
 		return []byte("hold: told to stop\n"), nil
 	case strings.Contains(line, " logs "):
@@ -946,6 +952,238 @@ func TestDockerBindsTheWorkspaceThroughItsMount(t *testing.T) {
 	}
 }
 
+// TestDockerBindsMountsAtTheirTargets pins mounts with a Target: each is bound at its
+// Target, read-only where the launch says so, in the launch's order, so a read-only
+// file is bound over the writable directory listed before it; and the workspace stays
+// the working directory through the mount at its path.
+func TestDockerBindsMountsAtTheirTargets(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, sys: rec}
+	e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := launch()
+	l.Socket = ""
+	l.Mounts = []Mount{
+		{Path: "/work"},
+		{Path: "/runs/r1/codex-home", Target: "/var/lib/agent-home"},
+		{Path: "/runs/r1/files/hooks.json", ReadOnly: true, Target: "/var/lib/agent-home/hooks.json"},
+		{Path: "/runs/r1/files/skills", ReadOnly: true, Target: "/var/lib/agent-home/skills"},
+	}
+	wrapped, err := e.Wrap(context.Background(), l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var binds []string
+	workdir := ""
+	for i, a := range wrapped.Args {
+		switch {
+		case a == "--workdir":
+			workdir = wrapped.Args[i+1]
+		case a == "--mount" && (strings.Contains(wrapped.Args[i+1], "src=/work,") || strings.Contains(wrapped.Args[i+1], "src=/runs/r1/")):
+			binds = append(binds, wrapped.Args[i+1])
+		}
+	}
+	want := []string{
+		"type=bind,src=/work,dst=/work",
+		"type=bind,src=/runs/r1/codex-home,dst=/var/lib/agent-home",
+		"type=bind,src=/runs/r1/files/hooks.json,dst=/var/lib/agent-home/hooks.json,readonly",
+		"type=bind,src=/runs/r1/files/skills,dst=/var/lib/agent-home/skills,readonly",
+	}
+	if !slices.Equal(binds, want) || workdir != "/work" {
+		t.Errorf("binds %q, working directory %q\nwant %q", binds, workdir, want)
+	}
+}
+
+// TestATargetThroughALinkInTheImageIsRefused pins the check of the names from / down to
+// each Target in the image: a symbolic link among them, which the engine follows, fails
+// the wrap before the agent's container is made, at another mount's place too; a name
+// inside another mount's place inside is not read, nor one below a name the image does
+// not have.
+func TestATargetThroughALinkInTheImageIsRefused(t *testing.T) {
+	dir := tar.Header{Typeflag: tar.TypeDir, Mode: 0o755}
+	link := tar.Header{Typeflag: tar.TypeSymlink, Linkname: "lib", Mode: 0o777}
+	home := []Mount{{Path: "/runs/r1/home", Target: "/var/lib/agent-home"},
+		{Path: "/runs/r1/hooks.json", ReadOnly: true, Target: "/var/lib/agent-home/hooks.json"}}
+	for name, c := range map[string]struct {
+		heads  map[string]tar.Header
+		mounts []Mount
+		want   string
+		read   []string
+	}{
+		"a parent that is a link": {map[string]tar.Header{"/var": dir, "/var/lib": link}, home,
+			`wall docker: make "/var/lib" a directory or file in the image, not a symbolic link: "/var/lib" is a symbolic link in the ` +
+				"image, which the engine follows, so the bind could resolve over another mount or over /qory", []string{"/var", "/var/lib"}},
+		"the target is a link": {map[string]tar.Header{"/var": dir, "/var/lib": dir, "/var/lib/agent-home": link}, home,
+			`wall docker: make "/var/lib/agent-home" a directory or file in the image, not a symbolic link`, nil},
+		"a link inside another mount": {map[string]tar.Header{"/var": dir, "/var/lib": dir, "/var/lib/agent-home": dir,
+			"/var/lib/agent-home/hooks.json": link}, home, "", []string{"/var", "/var/lib", "/var/lib/agent-home"}},
+		"a link below a missing name": {map[string]tar.Header{"/var": dir, "/var/lib/agent-home": link}, home, "",
+			[]string{"/var", "/var/lib"}},
+		"a link at another mount's place": {map[string]tar.Header{"/work": link},
+			[]Mount{{Path: "/runs/r1/config", Target: "/work/.config"}},
+			`wall docker: make "/work" a directory or file in the image, not a symbolic link`, nil},
+		"a link inside the workspace": {map[string]tar.Header{"/work": dir, "/work/.config": link},
+			[]Mount{{Path: "/runs/r1/config", Target: "/work/.config"}}, "", []string{"/work"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, heads: c.heads}
+			d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, sys: rec}
+			e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer e.Close(context.Background())
+			l := launch()
+			l.Socket, l.Mounts = "", append([]Mount{{Path: "/work"}}, c.mounts...)
+			_, err = e.Wrap(context.Background(), l)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatal(err)
+			case c.want != "" && (err == nil || !strings.HasPrefix(err.Error(), c.want)):
+				t.Fatalf("the wrap: %v; want an error that starts with %q", err, c.want)
+			case c.want != "" && slices.ContainsFunc(rec.lines, func(l string) bool { return strings.Contains(l, " run --rm ") || strings.Contains(l, " create --rm ") }):
+				t.Errorf("the agent's container was made: %q", rec.lines)
+			}
+			if c.read == nil {
+				return
+			}
+			var read []string
+			for _, line := range rec.lines {
+				// A docker cp of a name the image does not have runs twice.
+				if q, ok := statPath(line); ok && (len(read) == 0 || read[len(read)-1] != q) {
+					read = append(read, q)
+				}
+			}
+			if !slices.Equal(read, c.read) {
+				t.Errorf("the names read out of the image %q; want %q", read, c.read)
+			}
+		})
+	}
+}
+
+// TestADirectoryTheAgentWritesAboveAReadOnlyTargetIsRefused pins the check of the
+// directories of the image on the way to the outermost mount whose place inside
+// contains a read-only mount's Target, the parent of that place left out: one in which
+// the agent can rename the next name fails the wrap before the agent's container is
+// made, since the bind would move. The agent can in a directory it owns, whatever the
+// mode, and in one its group or the others may write, unless it has the sticky bit and
+// the agent does not own the next name. Any group counts for a wall's user that is a uid
+// with no group. A name the image does not have, and the names below it, pass; and a
+// launch with no read-only mount with a Target reads nothing for it.
+func TestADirectoryTheAgentWritesAboveAReadOnlyTargetIsRefused(t *testing.T) {
+	root := tar.Header{Typeflag: tar.TypeDir, Mode: 0o755}
+	dir := func(mode int64, uid, gid int) tar.Header {
+		return tar.Header{Typeflag: tar.TypeDir, Mode: mode, Uid: uid, Gid: gid}
+	}
+	conf := []Mount{{Path: "/runs/r1/conf", ReadOnly: true, Target: "/x/y/conf"}}
+	refused := `wall docker: make "/x" in the image owned by root and writable by root alone, or show the mount ` +
+		`"/runs/r1/conf" at a place outside it: "/x" has mode %04o and owner %d:%d in the image, so the agent, 1000:1000, ` +
+		`can rename "/x/y" on the way to the read-only mount at "/x/y/conf", and the bind moves with it`
+	for name, c := range map[string]struct {
+		user   string
+		heads  map[string]tar.Header
+		mounts []Mount
+		want   string
+	}{
+		"owned by the agent": {"1000:1000", map[string]tar.Header{"/x": dir(0o755, 1000, 1000)}, conf,
+			fmt.Sprintf(refused, 0o755, 1000, 1000)},
+		"owned by the agent, read-only": {"1000:1000", map[string]tar.Header{"/x": dir(0o555, 1000, 1000)}, conf,
+			fmt.Sprintf(refused, 0o555, 1000, 1000)},
+		"owned by the agent, sticky": {"1000:1000", map[string]tar.Header{"/x": dir(0o1755, 1000, 1000), "/x/y": root}, conf,
+			fmt.Sprintf(refused, 0o1755, 1000, 1000)},
+		"the agent's group may write it": {"1000:1000", map[string]tar.Header{"/x": dir(0o775, 0, 1000)}, conf,
+			fmt.Sprintf(refused, 0o775, 0, 1000)},
+		"another group may write it": {"1000:1000", map[string]tar.Header{"/x": dir(0o775, 0, 50)}, conf, ""},
+		"a group may write it, no group given": {"1000", map[string]tar.Header{"/x": dir(0o775, 0, 50)}, conf,
+			`wall docker: make "/x" in the image owned by root and writable by root alone`},
+		"anyone may write it": {"1000:1000", map[string]tar.Header{"/x": dir(0o777, 0, 0)}, conf,
+			fmt.Sprintf(refused, 0o777, 0, 0)},
+		"a deeper one": {"1000:1000", map[string]tar.Header{"/x": root, "/x/y": dir(0o700, 1000, 0)},
+			[]Mount{{Path: "/runs/r1/conf", ReadOnly: true, Target: "/x/y/z/conf"}},
+			`wall docker: make "/x/y" in the image owned by root and writable by root alone, or show the mount ` +
+				`"/runs/r1/conf" at a place outside it: "/x/y" has mode 0700 and owner 1000:0 in the image, so the agent, ` +
+				`1000:1000, can rename "/x/y/z" on the way`},
+		"sticky, the next name the agent's": {"1000:1000", map[string]tar.Header{"/x": dir(0o1777, 0, 0),
+			"/x/y": dir(0o755, 1000, 0)}, conf, fmt.Sprintf(refused, 0o1777, 0, 0)},
+		"sticky, the next name root's":  {"1000:1000", map[string]tar.Header{"/x": dir(0o1777, 0, 0), "/x/y": root}, conf, ""},
+		"sticky, the next name missing": {"1000:1000", map[string]tar.Header{"/x": dir(0o1777, 0, 0)}, conf, ""},
+		"the parent of the place": {"1000:1000", map[string]tar.Header{"/x": dir(0o755, 1000, 1000)},
+			[]Mount{{Path: "/runs/r1/conf", ReadOnly: true, Target: "/x/conf"}}, ""},
+		"root's alone": {"1000:1000", map[string]tar.Header{"/x": root, "/x/y": root}, conf, ""},
+		"missing":      {"1000:1000", nil, conf, ""},
+		"above the outermost mount": {"1000:1000", map[string]tar.Header{"/x": root, "/x/y": dir(0o777, 0, 0)},
+			[]Mount{{Path: "/runs/r1/home", Target: "/x/y"}, {Path: "/runs/r1/conf", ReadOnly: true, Target: "/x/y/conf"}}, ""},
+		"a writable target": {"1000:1000", map[string]tar.Header{"/x": dir(0o777, 0, 0)},
+			[]Mount{{Path: "/runs/r1/conf", Target: "/x/y/conf"}}, ""},
+		// A wall's user that is a name has ids the check does not know.
+		"a name's, a user other than root's": {"agent", map[string]tar.Header{"/x": dir(0o555, 1000, 1000)}, conf,
+			`wall docker: make "/x" in the image owned by root and writable by root alone, or show the mount "/runs/r1/conf" ` +
+				`at a place outside it: the agent runs as "agent", whose ids are not checked, and "/x" has mode 0555 and owner ` +
+				`1000:1000 in the image, owned by a user other than root, so the agent can rename "/x/y" on the way to the ` +
+				`read-only mount at "/x/y/conf", and the bind moves with it`},
+		"a name's, a group may write it": {"agent", map[string]tar.Header{"/x": dir(0o775, 0, 50)}, conf,
+			`wall docker: make "/x" in the image owned by root and writable by root alone, or show the mount "/runs/r1/conf" ` +
+				`at a place outside it: the agent runs as "agent", whose ids are not checked, and "/x" has mode 0775 and owner ` +
+				`0:50 in the image, writable by its group or by other users, so the agent can rename "/x/y"`},
+		"a name's, sticky, the next name root's": {"agent", map[string]tar.Header{"/x": dir(0o1777, 0, 0), "/x/y": root}, conf, ""},
+		"a name's, sticky, the next name another's": {"agent", map[string]tar.Header{"/x": dir(0o1777, 0, 0),
+			"/x/y": dir(0o755, 1000, 0)}, conf, `wall docker: make "/x" in the image owned by root and writable by root alone`},
+		"a name's, root's alone": {"agent", map[string]tar.Header{"/x": root, "/x/y": root}, conf, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, heads: c.heads}
+			d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, User: c.user, sys: rec}
+			e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer e.Close(context.Background())
+			l := launch()
+			l.Socket, l.Mounts = "", append([]Mount{{Path: "/work"}}, c.mounts...)
+			_, err = e.Wrap(context.Background(), l)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatal(err)
+			case c.want != "" && (err == nil || !strings.HasPrefix(err.Error(), c.want)):
+				t.Fatalf("the wrap: %v; want an error that starts with %q", err, c.want)
+			case c.want != "" && agentCreate(rec) != "":
+				t.Errorf("the agent's container was made: %q", agentCreate(rec))
+			}
+		})
+	}
+}
+
+// TestADirectoryMadeForTheTranscriptAboveAReadOnlyTargetIsRefused pins a directory the
+// wall makes for the transcript bind, owned by the agent with mode 0700: the rename
+// check takes it as the agent's, where the image has no such name, and refuses a
+// read-only mount with a Target below it.
+func TestADirectoryMadeForTheTranscriptAboveAReadOnlyTargetIsRefused(t *testing.T) {
+	heads := map[string]tar.Header{"/home": {Typeflag: tar.TypeDir, Mode: 0o755}, "/home/agent": {Typeflag: tar.TypeDir, Mode: 0o755}}
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, heads: heads}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, User: "1000:1000", sys: rec}
+	e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close(context.Background())
+	l := transcriptLaunch("HOME=/home/agent")
+	l.Socket = ""
+	l.Mounts = append(l.Mounts, Mount{Path: "/runs/r1/skill.md", ReadOnly: true, Target: "/home/agent/.claude/skills/x/SKILL.md"})
+	_, err = e.Wrap(context.Background(), l)
+	want := `wall docker: show the mount "/runs/r1/skill.md" at a place outside "/home/agent/.claude": the wall makes ` +
+		`"/home/agent/.claude" for the transcript directory, mode 0700 and owned by the agent, 1000:1000, so the agent can ` +
+		`rename "/home/agent/.claude/skills" on the way to the read-only mount at "/home/agent/.claude/skills/x/SKILL.md", ` +
+		`and the bind moves with it`
+	if err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("the wrap: %v; want an error that starts with %q", err, want)
+	}
+	if agentCreate(rec) != "" {
+		t.Errorf("the agent's container was made: %q", agentCreate(rec))
+	}
+}
+
 // TestDockerListsItsOwnBinds pins the adapter's own binds: the helper, read-only, the
 // hook socket's directory, writable, and the private directory it writes the run's
 // files in, read-only, the one Wrap then writes them in.
@@ -1292,5 +1530,124 @@ func TestTheAdaptersCommandsRunWithTheRecordedSelection(t *testing.T) {
 	}
 	if !slices.Contains(wrapped.Env, "DOCKER_CONTEXT=orbstack") {
 		t.Errorf("the launch runs with %q", wrapped.Env)
+	}
+}
+
+// TestTheRelayURLHasTheLaunchsPassword pins the proxy URL the agent's container gets:
+// the relay alone, and with Launch.ProxyPassword the password under the user qory.
+func TestTheRelayURLHasTheLaunchsPassword(t *testing.T) {
+	if got := relayURL(""); got != "http://qory-proxy:3128" {
+		t.Errorf("without a password: %q", got)
+	}
+	if got := relayURL("pass-word"); got != "http://qory:pass-word@qory-proxy:3128" {
+		t.Errorf("with a password: %q", got)
+	}
+}
+
+// TestTheAgentsProxyVariablesHaveThePassword pins Wrap with Launch.ProxyPassword: each
+// of HTTP_PROXY, HTTPS_PROXY, http_proxy and https_proxy in the agent's environment file
+// is the relay's URL with the password, and the password is on no command line.
+func TestTheAgentsProxyVariablesHaveThePassword(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, sys: rec}
+	e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close(context.Background())
+	l := launch()
+	l.ProxyPassword = "pass-word"
+	wrapped, err := e.Wrap(context.Background(), l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.Index(wrapped.Args, "--env-file")
+	if i < 0 {
+		t.Fatalf("no environment file in %q", wrapped.Args)
+	}
+	b, err := os.ReadFile(wrapped.Args[i+1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{}
+	for _, line := range strings.Split(string(b), "\n") {
+		name, value, _ := strings.Cut(line, "=")
+		env[name] = value
+	}
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+		if got := env[name]; got != "http://qory:pass-word@qory-proxy:3128" {
+			t.Errorf("%s=%q", name, got)
+		}
+	}
+	if strings.Contains(strings.Join(rec.lines, "\n")+strings.Join(wrapped.Args, " "), "pass-word") {
+		t.Error("the password is on a command line")
+	}
+}
+
+// TestTheRelayWritesThePeerLineWhenTold pins Launch.ProxyPeer: the relay's environment
+// file has RelayPeerEnv=1 with it and not without it.
+func TestTheRelayWritesThePeerLineWhenTold(t *testing.T) {
+	for _, peer := range []bool{false, true} {
+		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+		d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, sys: rec}
+		e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.(*dockerEnclosure).StartRelay(context.Background(), Launch{Proxy: "127.0.0.1:50123", ProxyToken: "not-a-real-token", ProxyPeer: peer}); err != nil {
+			t.Fatal(err)
+		}
+		e.Close(context.Background())
+		if got := strings.Contains(rec.relayEnv, RelayPeerEnv+"=1\n"); got != peer {
+			t.Errorf("with ProxyPeer %v the relay's environment is %q", peer, rec.relayEnv)
+		}
+	}
+}
+
+// endpointIPv4 and endpointIPv6 are what docker inspect of Docker Engine 29.8 prints
+// for {{json (index .NetworkSettings.Networks NAME)}} of a running container, on a
+// network without IPv6 and on one with it. Docker 29 prints the unset
+// GlobalIPv6Address of endpointIPv4 as "invalid IP" in a template, and as "" in JSON.
+const (
+	endpointIPv4 = `{"IPAMConfig":null,"Links":null,"Aliases":null,"DriverOpts":null,"GwPriority":0,"NetworkID":"2b321507678f16dd0dbd68b0a9adb7c5501b0c61738df5597cca84f65108cdb6","EndpointID":"b19ebdd6a595b0df2ac7266f322cb393c3322720dde6d6f51d07ff7fdfb60201","Gateway":"10.89.0.1","IPAddress":"10.89.0.2","MacAddress":"7e:79:8c:41:6b:ac","IPPrefixLen":24,"IPv6Gateway":"","GlobalIPv6Address":"","GlobalIPv6PrefixLen":0,"DNSNames":["qory-run-agent","9879f8c2ce26"]}` + "\n"
+	endpointIPv6 = `{"IPAMConfig":null,"Links":null,"Aliases":null,"DriverOpts":null,"GwPriority":0,"NetworkID":"cb87d4ec8a4cc8378e9aeaf166bf40712bfddbfc29c9fc35c944b7a915638bc9","EndpointID":"10d7b888b4b084881cb129ba53ff1d34a7850ec0f53fac617f6babe31c475b7f","Gateway":"10.89.0.1","IPAddress":"10.89.0.2","MacAddress":"6e:3a:0c:77:c7:64","IPPrefixLen":24,"IPv6Gateway":"fd8a:1b2c:3d4e:5f60::1","GlobalIPv6Address":"fd8a:1b2c:3d4e:5f60::2","GlobalIPv6PrefixLen":64,"DNSNames":["qory-run-agent","7dfaae39045e"]}` + "\n"
+)
+
+// TestTheAgentsAddressesComeFromTheEngine pins AgentAddrs: the inspect of the agent's
+// container reads its endpoint on the inside network as JSON, with its IPv4 and IPv6
+// addresses; a container that does not run (no output) or is not on the network
+// (null), an endpoint with no address, an unreadable address or endpoint, and a failed
+// inspect are errors.
+func TestTheAgentsAddressesComeFromTheEngine(t *testing.T) {
+	for _, c := range []struct {
+		out, fail string
+		want      []netip.Addr
+	}{
+		{out: endpointIPv4, want: []netip.Addr{netip.MustParseAddr("10.89.0.2")}},
+		{out: endpointIPv6, want: []netip.Addr{netip.MustParseAddr("10.89.0.2"), netip.MustParseAddr("fd8a:1b2c:3d4e:5f60::2")}},
+		{out: `{"IPAddress":"::ffff:10.89.0.2","GlobalIPv6Address":""}`, want: []netip.Addr{netip.MustParseAddr("10.89.0.2")}},
+		{out: "\n"},
+		{out: "null\n"},
+		{out: `{"IPAddress":"","GlobalIPv6Address":""}`},
+		{out: `{"IPAddress":"not-an-address","GlobalIPv6Address":""}`},
+		{out: `{"IPAddress":"10.89.0.2","GlobalIPv6Address":"invalid IP"}`},
+		{out: "10.89.0.2 \n"},
+		{out: endpointIPv4, fail: "NetworkSettings"},
+	} {
+		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, agentAddrs: c.out, fail: c.fail}
+		d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, sys: rec}
+		e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := e.(AgentAddresser).AgentAddrs(context.Background())
+		e.Close(context.Background())
+		if !slices.Equal(got, c.want) || (err == nil) != (c.want != nil) {
+			t.Errorf("%q, failing %q: %v %v, want %v", c.out, c.fail, got, err, c.want)
+		}
+		i := slices.IndexFunc(rec.lines, func(l string) bool { return strings.Contains(l, "NetworkSettings") })
+		if i < 0 || !strings.HasSuffix(rec.lines[i], "-agent") || !strings.Contains(rec.lines[i], "-in") || !strings.Contains(rec.lines[i], "{{json (index .NetworkSettings.Networks") {
+			t.Errorf("the inspect does not read the JSON of the agent's container on the inside network: %q", rec.lines)
+		}
 	}
 }

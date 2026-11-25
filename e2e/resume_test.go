@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -40,7 +39,7 @@ import (
 // wall. The proxy verifies the stub against this machine's roots, which trustRecorders
 // sets through SSL_CERT_FILE; Go reads that variable on Linux alone, so the test is
 // skipped on other systems, on a machine with none of the CA bundles the session reads,
-// and without claude on PATH.
+// and without Claude Code's installed folder in QORY_WALL_CLAUDE_INSTALL.
 func TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		Skip(t, "Go reads this machine's roots from SSL_CERT_FILE on Linux alone, and the proxy verifies the stub against them")
@@ -48,9 +47,7 @@ func TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey(t *testing.T) {
 	if !slices.ContainsFunc(wall.BundleFiles(), func(p string) bool { fi, err := os.Stat(p); return err == nil && fi.Mode().IsRegular() }) {
 		Skip(t, fmt.Sprintf("none of %v is on this machine, and an unwalled run starts only with one", wall.BundleFiles()))
 	}
-	if _, err := exec.LookPath("claude"); err != nil {
-		Skip(t, "claude is not on PATH: the test runs Claude Code 2.1.316 without a wall")
-	}
+	claudeInstall(t)
 	if err := trustRecorders(t); err != nil {
 		t.Fatalf("this machine's roots are not the suite's authority: %v", err)
 	}

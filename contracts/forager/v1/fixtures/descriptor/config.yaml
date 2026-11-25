@@ -1,0 +1,40 @@
+# A descriptor whose runtime reads its settings as TOML from --config pairs: the model
+# endpoint is a setting, fixed settings go with every launch, and the transcript path
+# has a date in it, so the path has * and no hook input contains it. The transcript
+# lies under an absolute prefix, the runtime's home at a fixed place. The resume's
+# arguments follow exec: codex exec --json becomes codex exec resume <id> --json. An
+# agent's model id and effort value go in keys at the top of the agent's TOML file.
+version: 1
+runtime: codex
+sources:
+  output:
+    format: jsonl
+model:
+  formats: [openai-responses]
+  model: {flag: --model}
+  agent: {toml: model}
+  effort:
+    run: {setting: model_reasoning_effort, values: [low, medium, high]}
+    agent: {toml: model_reasoning_effort, values: [low, high]}
+  endpoint: {setting: model_providers.qory.base_url}
+  keys:
+    - {format: openai-responses, auth: {scheme: bearer}, variable: OPENAI_API_KEY}
+config:
+  flag: --config
+  fixed:
+    model_provider: qory
+    model_providers.qory.name: qory
+    model_providers.qory.wire_api: responses
+    features.plugins: false
+    stream_max_retries: 5
+resume:
+  path: /var/lib/qory-codex-home/sessions/*/*/*/rollout-*-{session_id}.jsonl
+  prefix: /var/lib/qory-codex-home/sessions/
+  args: [resume, "{session_id}"]
+  after: exec
+rules:
+  - source: output
+    match: {type: thread.started}
+    type: dev.qory.runtime.started
+    data:
+      session_id: thread_id

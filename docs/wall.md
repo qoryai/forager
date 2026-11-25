@@ -37,6 +37,12 @@ fails. Tools, path rules and images need a wall.
 - The relay copies a fixed port to the gateway's proxy, opening every connection with the
   run's proxy secret, and decides nothing. It forwards no packet between its networks.
 - Neither the relay nor the agent's container runs the image's health check.
+- With `SessionSpec.After`, once the runtime exits the session removes the agent's
+  container and starts After's: a container of the same image on the same inside
+  network, run as the same user with the same hardening and no health check, that
+  binds the mount that holds the workspace and a new socket directory, and has a proxy
+  URL with no password. It has no route to the caller. The session removes it when
+  After ends, and `Close` and `Reap` find it by the run's label.
 - The relay listens on the wall's inside network alone, on its one address in each of
   its subnets, and takes a connection only from an address in those subnets.
 - So every connection is the proxy's to decide and record.
@@ -44,6 +50,9 @@ fails. Tools, path rules and images need a wall.
   machine, except in an image a run's policy names by reference, where the checkout is
   at `/workspace` ([Images](#images)). The workspace is the working directory inside. The run's record is mounted
   read-only, from a runs directory outside every mount.
+- The runtime, such as Claude Code, does not come from the image. The node installs it,
+  and the wall mounts its folder read-only at `/qory/runtime/<runtime>`. See
+  [the runtime's folder](#the-runtimes-folder).
 - In a git worktree the repository's data lies in the main checkout; git inside the
   container works only with that directory mounted.
 - Nothing else of the node is visible inside.
@@ -71,7 +80,7 @@ In `qory`, turn it on with a `wall` section, or with
 ```yaml
 wall:
   adapter: docker
-  image: example.com/agent:1            # yours: the runtime and your toolchain
+  image: example.com/agent:1            # yours: your toolchain; the runtime is the node's
   env: [ANTHROPIC_API_KEY]              # names; nothing else of your environment goes in
 ```
 
@@ -82,14 +91,16 @@ You need:
 - the `docker` command, with an engine behind it; for [nested Docker](#nested-docker),
   Docker Engine 28 or later;
 - [`qory`](https://github.com/qoryai/qory) 0.7.0 or later;
-- an image of yours that contains the runtime and your toolchain. The wall builds none.
+- an image of yours that contains your toolchain. The wall builds none. The image does
+  not need the runtime: the wall mounts the folder the runtime is installed in on the
+  node, read-only ([the runtime's folder](#the-runtimes-folder)).
 
-A minimal image for Claude Code:
+A minimal image:
 
 ```dockerfile
-FROM node:22-slim
+FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
- && rm -rf /var/lib/apt/lists/* && npm install -g @anthropic-ai/claude-code
+ && rm -rf /var/lib/apt/lists/*
 # The container runs as the node's user, who has no home in the image.
 ENV HOME=/tmp
 ```
@@ -225,7 +236,7 @@ run, err := session.Open(ctx, session.OpenSpec{
 	RunsDir: runs,                                // the run directories, outside every mount
 	Image:   "base",                              // the default: a name of Images, or a reference
 	Images: []session.Image{                      // the machine's; a policy's image selects one by name
-		{Name: "base", Ref: "example.com/agent:1"},   // yours: the runtime and the toolchain
+		{Name: "base", Ref: "example.com/agent:1"},   // yours: the toolchain
 		{Name: "with-docker", Ref: "example.com/agent:1-docker", Runtime: "sysbox-runc", Docker: true},
 	},
 	Labels:  map[string]string{"issue": "77"},    // the caller's names for the run, in run.started and the run's registration
@@ -241,7 +252,11 @@ if err != nil {
 }
 res, err := run.Join(ctx, session.SessionSpec{
 	Runtime: rt,
-	Command: "claude",                            // a path inside the image
+	RuntimeInstall: &session.RuntimeInstall{      // the folder on this machine, read-only inside
+		Dir:     "/opt/runtimes/claude/2.1.320",
+		Version: "2.1.320",
+	},
+	Command: "/opt/runtimes/claude/2.1.320/bin/claude", // /qory/runtime/claude/bin/claude inside
 	Args:    []string{"-p", "Reply pong."},
 	Env:     []string{"ANTHROPIC_API_KEY=" + key}, // under a wall, nothing else goes in
 	Dir:     checkout,                            // the workspace and working directory
@@ -343,6 +358,9 @@ are the run's, and lie in Forager's files. Forager's files are:
   workspace, lies inside the workspace, so a walled run passes one outside it.
 - The session's registry of walled runs, `$XDG_STATE_HOME/qory-forager/walled`, else
   `~/.local/state/qory-forager/walled`.
+- The runtime's installed folder, `SessionSpec.RuntimeInstall.Dir`, which the enclosure
+  binds read-only at `/qory/runtime/<runtime>` and nowhere else
+  ([the runtime's folder](#the-runtimes-folder)).
 
 Both sides are resolved through symbolic links, a part that does not exist yet through
 its nearest parent that does, and a link whose target does not exist yet through that
@@ -377,16 +395,68 @@ up in its parent, so two binds of one root are allowed.
   every bind to the enclosure, each path clean, and the working directory lies in one of
   them, by its names, or the run fails; `wall.Docker` binds nothing of the caller's the
   launch does not list, and refuses a launch whose `Dir` no mount holds.
-- **Nested places.** A mount, or the workspace, inside another one of the same mode is
-  reached through the outer one, which alone is bound. One inside another of the other
-  mode is no run, `mount_mode_conflict`, and `Names` holds the inner path, then the
-  outer one. Its sentence reads: "the mount /work/vendor (read-only) lies inside the
-  mount /work (writable): a part of a writable mount can't be read-only". When the
-  outer place is the workspace, it says "place" for "mount".
+- **Nested places.** Each mount has a place inside: its `Target`, or else its path on
+  this machine. A mount, or the workspace, inside another one of the same mode, by
+  their paths on this machine, is reached through the outer one, which alone is bound,
+  when neither has a `Target`. One inside another of the other mode is no run,
+  `mount_mode_conflict`, and `Names` contains the inner path, then the outer one. Its
+  sentence reads: "the mount /work/vendor (read-only) lies inside the mount /work
+  (writable): a part of a writable mount can't be read-only". When the outer place is
+  the workspace, the sentence has "place" in place of "mount". A writable place inside a read-only one
+  is refused the same way, and so are two places of one path in both modes.
+- **Mounts at a target.** Set `SessionSpec.Mounts[].Target` to show a mount at another
+  place inside, such as a composed home at `/var/lib/agent-home`. A `Target` is an
+  absolute, clean path with no comma, double quote or newline. It is, contains and lies
+  inside none of `/qory`, `/var/lib/docker`, `/proc`, `/sys`, `/dev`, `/etc/hosts`,
+  `/etc/hostname`, `/etc/resolv.conf` and `/sbin/docker-init`, so it is neither `/`,
+  `/etc` nor `/sbin`. A `Target` that breaks these rules fails the join with an error
+  that starts with the fix. A mount with a `Target` is always bound, never reached
+  through another bind, and its path on this machine is, contains and
+  lies inside no other place's: of the other mode that is `mount_mode_conflict`,
+  otherwise `mount_target_conflict`.
 
-  A writable place inside a read-only one is refused the same way: a part of a
-  read-only mount can't be writable. Two places of one path in both modes are refused
-  too.
+  When one of two places has a `Target`, they nest by their places inside:
+  - A read-only place may lie one name inside a writable one, such as a read-only
+    `/var/lib/agent-home/hooks.json` in a writable `/var/lib/agent-home`. It may lie
+    deeper only when each directory between them is a read-only place. Otherwise it is
+    `mount_mode_conflict`: the agent could rename a directory of the writable place, and
+    the bind would move with it.
+  - A writable place inside a read-only one is `mount_mode_conflict`.
+  - Two places at one place inside, and a `Target` that is, contains or lies inside the
+    workspace inside or the session's directory, are `mount_target_conflict`. For a run
+    whose image is named by its reference, the workspace inside is `/workspace`.
+
+  Under nested Docker these rules are unverified: the enclosure's root, which the agent
+  reaches through the inner Docker daemon, may remount a read-only place writable.
+- **Links on the way to a target.** The engine follows a symbolic link when it binds,
+  so a link could move a bind over another mount or over `/qory`:
+  - A symbolic link on this machine among the names from a place's path down to a place
+    inside it, of either mode, is `mount_target_conflict`, at the join and again before
+    the wall step. Such a link can be one that an agent of an earlier session wrote,
+    such as `/srv/runs/r1/agent-home/hooks.json`. The names below a nearer place are
+    checked from that place's path.
+  - `wall.Docker` reads each name from `/` down to each `Target` in the image, and a
+    symbolic link fails the session before the agent's container is made, such as
+    `/lib64/agent-home` in an image where `/lib64` links to `lib`. A name inside another
+    mount's place inside is not read from the image.
+- **The image rename check.** For a read-only mount with a `Target`, `wall.Docker` fails
+  the session when the agent can rename a directory of the image on the way to the
+  outermost mount whose place inside contains the target, such as `/x` owned by uid
+  1000 above a read-only `/x/y/conf`: the agent could rename `/x/y`, and the bind moves
+  with it. The agent can rename in a directory it owns, whatever the mode, and in one
+  its group or the others may write, unless the directory has the sticky bit and the
+  agent does not own the next name. For a wall's user that is a uid with no group, the
+  engine adds the groups that the image's `/etc/group` lists for it, so a directory any group
+  may write counts. For a wall's user that is a name, or a uid other than the
+  session's, a directory that a user other than root owns, or that its group or the
+  others may write, counts. A directory the wall makes for the transcript directory,
+  such as `~/.claude`, counts too: it is the agent's, mode `0700`. The parent of the
+  outermost place is not checked, since its entry for the place is a mount point, which
+  no rename moves. The check does not read `/`, so an image whose `/` the agent's user
+  can write passes it.
+- **The order of binds.** The session lists the binds in the order of their places
+  inside, fewer names first, so a bind comes after the one whose place inside contains
+  it.
 - **Places through a link.** A mount, or the workspace, of either mode, whose path goes
   through a link inside a writable place of the run's, and that does not resolve into
   that place, is no run, `mount_through_link`: the agent that writes the link would
@@ -414,22 +484,30 @@ up in its parent, so two binds of one root are allowed.
 - **The run directory.** The runs directory is one of Forager's files, so the run
   directory lies inside no place the run lists. Of the run directory, only the
   directory of the session that runs, `sessions/<n>/`, is bound, read-only, to that
-  session's enclosure: the agent reads no record and no file of another session. For
-  Claude Code the session also makes `transcripts/<n>/`, mode `0700`, which is bound
-  writable at `~/.claude/projects/` inside, so the session reads the transcript and
-  restores a paused run's there. It reads only `<slug>/<session id>.jsonl`, under a
-  session id that is a UUID in lower case: a regular file with one link and at most 64
-  MiB, with no symbolic link on its path. For a planted link, FIFO, hard link or larger
+  session's enclosure: the agent reads no record and no file of another session. For a
+  runtime whose descriptor has `resume`, such as Claude Code or Codex, the session also
+  makes `transcripts/<n>/`, mode `0700`, which is bound writable at `resume.prefix`
+  inside, `~/.claude/projects/` for Claude Code, so the session reads the transcript
+  and restores a paused run's there. An absolute `resume.prefix`, such as
+  `${CODEX_HOME}/sessions/` with `CODEX_HOME` set in the launch, inside a writable
+  mount's place inside gets no bind: the session reads the transcript in that mount on
+  this machine. Inside a read-only mount's place, the runtime starts without a resume,
+  and the session writes one line on `stderr`. The session reads only the file of
+  `resume.path`, such as `<slug>/<session id>.jsonl`, or the one file its `*` pattern
+  matches, under a session id that is a UUID in lower case: a regular file with one
+  link and at most 64 MiB, with no symbolic link on its path. For a planted link, FIFO, hard link or larger
   file it reads nothing and writes one line on `stderr`. `~` is `HOME` of the launch,
   else of the image, else the home of the wall's user in the image's `/etc/passwd`, or
   root's with nested Docker, else `/`; a home where `~/.claude/projects` overlaps a
   mount fails the session. With nested Docker the agent runs as the wall's user under
   that home, so set `HOME` in an image whose root's home is mode `0700`, as in
   docker:dind. `wall.Docker` binds no transcript directory, and the session starts
-  Claude Code without `--resume` and writes one line on `stderr` that starts with the
-  fix, when the wall's user is not the session's uid, when `~`, `~/.claude` or
-  `~/.claude/projects` is a symbolic link or no directory in the image, or when the
-  agent's user cannot search a directory on the way. When the image has no
+  the runtime without the descriptor's `resume.args`, such as Claude Code without
+  `--resume`, and writes one line on `stderr` that starts with the fix, when the
+  transcript's place is or lies inside `/qory`, when the wall's user is not the
+  session's uid, when a directory from `/` down to the transcript's place, such as `~`,
+  `~/.claude` or `~/.claude/projects`, is a symbolic link or no directory in the image,
+  or when the agent's user cannot search a directory on the way. When the image has no
   `~/.claude`, `wall.Docker` creates the agent's container, writes `~/.claude` into it,
   mode `0700` and owned by the agent's user and group, and then starts it, so Claude
   Code can make `~/.claude/session-env` beside the bind. A `~/.claude` of the image's
@@ -499,11 +577,12 @@ up in its parent, so two binds of one root are allowed.
   0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is still going: a walled agent of that run
   can change it".
 
-  A run whose helper, or another directory of Forager's it binds, lies inside a writable
-  bind of another run's, or is reached through one, fails with a plain error: "Forager's
-  helper /work/bin/qory lies inside the writable bind /work of the walled run
-  0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is still going: a walled agent of that run
-  can change it", or "Forager's directory …" for a directory.
+  A run whose helper, another directory of Forager's it binds, or the runtime's installed
+  folder lies inside a writable bind of another run's, or is reached through one, fails
+  with a plain error: "Forager's helper /work/bin/qory lies inside the writable bind
+  /work of the walled run 0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is still going: a
+  walled agent of that run can change it", "Forager's directory …" for a directory, or
+  "the runtime's installed folder …" for the runtime's folder.
 
   The check of the run directory and of Forager's directories comes at the open, before
   the gateway is contacted, and the check of a session's places at its join. The run
@@ -745,6 +824,79 @@ The helper is the caller's binary:
 
 So the wall needs no separate image.
 
+### The runtime's folder
+
+Claude Code does not come from the image: the caller installs Claude Code on the node
+and passes the folder and the version as `SessionSpec.RuntimeInstall` (see
+[the spec](go.md#the-spec)). A runtime whose descriptor sets `install_required`, such as
+Claude Code, needs the folder; a session of another runtime, such as Codex, may pass
+none and then starts the program from the image, with nothing bound at
+`/qory/runtime`. The enclosure binds the folder `Dir` leads to read-only at
+`/qory/runtime/<runtime>`, such as `/qory/runtime/claude`, so the agent cannot change
+the program it runs. The session writes `Dir` as that path in `Command`, in each
+argument and in each variable value it prepares: `/opt/runtimes/claude/2.1.320/bin/claude`
+is `/qory/runtime/claude/bin/claude` inside. Claude Code's descriptor sets
+`DISABLE_AUTOUPDATER=1`, so Claude Code does not update itself in the read-only folder.
+
+- Let others read and enter the folder and read and execute the program
+  (`chmod o+rx`): behind a wall the runtime runs as a user that may not own them.
+  `Join` returns an error otherwise.
+- Give the folder, each folder down to the program, and the program to root or to the
+  user that runs Forager, with no write for the group or others (`chmod go-w`), and
+  give the program no second hard link. `Join` returns an error otherwise.
+- Install the folder under folders that only root or the user that runs Forager can
+  write. `Join` does not check the folders above `Dir`, so qory, or any other caller,
+  keeps them that way.
+- Behind a wall, keep `Dir` away from `/qory` on the node: a `Dir` that is, contains or
+  lies inside it is refused.
+- A `Dir` that is, contains or lies in a place a walled run can write fails the
+  session before the runtime starts: `SessionSpec.Written`, a writable bind of another
+  walled run still going, the workspace or a writable bind of this run's.
+- A mount, or the workspace, that is, contains or lies inside the folder is
+  `mount_contains_forager_files` ([Forager's files](#foragers-files)).
+- The wall keeps the helper, the bundle and the runtime's folder under `/qory`, so
+  `wall.Docker` refuses a mount whose path inside, its `Target` or else its `Path`, is,
+  contains or lies under `/qory`.
+- An image's symbolic link on a mount's target can still lead the mount there, and
+  one at `/qory` or `/qory/runtime` leads the folder's bind away. On Linux
+  `session.Exec` exits 125 before it starts the program when `/qory` or
+  `/qory/runtime` is a symbolic link. It reads `/proc/self/mountinfo` and exits 125
+  too when a mount lies at `/qory`, at `/qory/runtime`, or at or below
+  `/qory/runtime/<runtime>` beside the folder's bind and a shiftfs mount on that bind,
+  which Sysbox in shiftfs mode adds. And it exits 125 when the program lies below
+  `/qory/runtime/<runtime>` and no mount lies there.
+
+### Codex's hooks file
+
+`qory` passes a walled Codex run's hooks file as a read-only mount in
+`SessionSpec.Mounts`, with `Target: /etc/codex/hooks.json`. The wall binds the file as
+it is on the node: it copies nothing, and the file has the owner and mode it has on the
+node. The read-only bind is enough for two reasons:
+
+- Codex 0.167.2 reads `hooks.json` in `/etc/codex`, its system configuration folder,
+  as managed hooks because of that path, and runs them with no check against a stored
+  hash. Codex does not check the file's owner. In the source of Codex 0.167.2 this is
+  `hook_metadata_for_config_layer_source` and `hook_trusted_hash` in
+  `codex-rs/hooks/src/engine/discovery.rs`.
+- The agent cannot change the file. The bind is read-only, so a write, an append and a
+  `chmod` fail. The file is a mount point, so a remove, a rename and a replace with
+  another file fail. In an image with no `/etc/codex`, the engine makes `/etc/codex` as
+  root's with mode `0755`, so the agent, which is not root and has no capability,
+  cannot add a file or a link beside `hooks.json`. The
+  [image rename check](#no-bind-from-a-place-an-agent-can-change) fails the session
+  when the agent can rename names in `/etc`. With `/etc` root's at mode `0755`, a
+  rename of `/etc/codex` by the agent fails with `Permission denied`.
+
+If your image has `/etc/codex`, give it to root with no write for the group or others.
+The rename check does not read that folder, the parent of the mount, and an agent that
+can write it can add files beside `hooks.json`, such as `/etc/codex/config.toml`.
+
+The case "a read-only file at /etc/codex/hooks.json stays as it is" of the
+[conformance suite](../e2e/docker_test.go) checks this against Docker, with the file
+at mode `0666` on the node, so the read-only bind alone stops a write. Under nested
+Docker this is unverified, as for every mount at a target
+([Mounts at a target](#no-bind-from-a-place-an-agent-can-change)).
+
 ### The measure of the enclosure
 
 When the runtime exits, `session.Exec` reads the enclosure's peak memory and CPU time
@@ -872,8 +1024,8 @@ For a run with a certificate authority, the Docker wall writes the run's certifi
 `qory-run-<id>.crt` in the directory of the image's registry host and of each host of
 the run's credentials, and removes the files when the step ends, also when the pull
 fails. Each later join finds the image by its digest and writes no `image` step. The
-agent's container, the setup container, and the container the wall reads the image's
-files from, are created with `--pull=never`, so the engine pulls the image in the
+agent's container, After's container, the setup container, and the container the wall
+reads the image's files from, are created with `--pull=never`, so the engine pulls the image in the
 `image` step alone. Without
 `EngineProxy`, the engine pulls over the machine's network.
 
@@ -954,7 +1106,7 @@ if err := run.RemoveSetup(ctx); err != nil {
   container gets the agent's variables. The result has `QORY_RUN_SYSTEM` and
   `QORY_RUN_REPOSITORIES` when the server sets them, and `Setup` accepts both. `Setup`
   refuses, before any step, a value for one of the run's placeholders
-  (`placeholder_conflict`), any other `QORY_` name, `QORY_RUN_ID` and
+  (`placeholder_conflict`), any other `QORY_` name, `QORY_RUN_ID`, `QORY_SESSION` and
   `QORY_RUN_SOCKET` among them, or a name the machine's credentials are read from
   (`variable_reserved`), and a name of `denied-variables.json`, such as `LD_PRELOAD`; for
   a credential's name of that list, such as `GH_TOKEN`, the error starts with `Move
@@ -973,7 +1125,8 @@ if err := run.RemoveSetup(ctx); err != nil {
   setup container it returns nil and writes no step, so you need no condition around it.
   If the removal fails, close the run: the setup container may still run and change the
   working folder, so run no `push` step after this error. `run.ContainerKept()` is then
-  true, as it is after the agent's container of a session could not be removed. After a
+  true, as it is after the agent's container of a session, or After's container, could
+  not be removed. After a
   `Setup` whose start of the setup container failed, `RemoveSetup` still removes the
   container, which the engine may have started.
 - Run a `push` step before the close only after `Join` returned and `RemoveSetup`

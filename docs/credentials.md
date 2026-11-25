@@ -85,8 +85,34 @@ A credential's secret comes from one of three sources:
   fails `credential.schema.json`, the gateway reports `Fix the output of the adapter
   <PATH> to match credential.schema.json: /apply/0/header fails pattern; ...`: each
   failing location and keyword, at most 5 and then how many more, with no value, and no
-  member name other than the schema's. A tool's lines on standard error have `***` in place of
-  the shapes too.
+  member name other than the schema's. Two more errors print no value of the output:
+  - `Fix the adapter's output: one JSON object in UTF-8, each member name once`, for an
+    output with a member name twice or with invalid UTF-8;
+  - `Write expires_at as RFC 3339 with an upper-case T and Z, seconds 00 to 59`, for
+    an `expires_at` such as `2026-09-19t14:00:00z` or `2026-12-31T23:59:60Z`.
+
+  A tool's lines on standard error have `***` in place of the shapes too.
+- The gateway ignores a member of an adapter's output that the schema does not define,
+  in the output and in each `apply` item. If the output's `must_understand` lists that
+  member, such as `["/apply/0/methods"]`, or the item's does, such as `["/methods"]`,
+  the output fails the schema. A new member of an adapter's answer or of an `apply`
+  item that narrows where, when or with which token the secret is set must be listed in
+  `must_understand`.
+- Give an adapter's definition `hosts` and `paths` in `forager.yaml`, under
+  `gateway.credentials.<name>`. They are the most the adapter may claim: an output that
+  claims a host or a path outside them is no run. With `paths` set, an output with
+  `path` in place of `paths` claims every path, and the run does not start, where
+  without them the token goes on every path of the hosts.
+- The route to the caller, `http://host.qory.invalid` in `QORY_HOST_URL`, sets no
+  credential. The session's forwarder takes every header off a request but
+  `Content-Type`, `Proxy-Authorization` among them, adds `Qory-Session`, the number of
+  the session that sent the request, and passes the request only to the handler the
+  caller gave in `OpenSpec.QoryRoute`. Behind a wall, the agent's proxy URL then has a
+  password of the session's launch alone, which the run's masker replaces in the
+  output. The forwarder serves the route only to a request with that password from the
+  address of the session's agent container, which the wall's relay writes for each
+  connection. The setup container never reaches the handler, also with the password.
+  See [Forager from Go](go.md#the-route-to-the-caller).
 
 In `qory`, the `gateway.credentials` section of `forager.yaml` defines them. See
 [qory's docs][qory-credentials].
@@ -116,7 +142,8 @@ from a host that gets the credential, before the answer reaches the agent.
   itself. A base64 form with `+` or `/` differs percent-encoded, and a `/` differs in
   JSON whose encoder writes it as `\/`.
 - The request goes to the host with `Accept-Encoding: identity`, and without `Range`,
-  `If-Range` and `Upgrade`. If the host compresses its answer anyway, or switches
+  `If-Range`, `Upgrade` and any trailer: a trailer can contain a header the proxy sets,
+  such as a model key's account header, beside the proxy's value. If the host compresses its answer anyway, or switches
   protocols, the agent gets a `502` from the gateway.
 - An answer with a body has no `Content-Length` and comes chunked, since the
   placeholder and the value differ in length; an empty answer may have
@@ -178,13 +205,14 @@ Claude Code:
 The session also sets `ANTHROPIC_BASE_URL` to the endpoint. Every other value of
 `ANTHROPIC_BASE_URL`, from the server, `--env`, `wall.env`, the harness or the shell, is
 left out. Claude Code's other key variables get no value in its process environment
-either: with the start key in `ANTHROPIC_API_KEY`, a value of `ANTHROPIC_AUTH_TOKEN` or
-`CLAUDE_CODE_OAUTH_TOKEN` from any of these sources or the runtime's preparation is left
-out, and behind a wall the image's value is unset. One exception applies: when the run
-has an authority, a variable that points at the CA bundle is set to the bundle's path,
-even one of these. Without a wall these are the names the caller gives in
-`OpenSpec.CAEnv`; `qory` is to set it from `wall.ca_env`. Behind a wall they are the names
-in `CAEnv` of `wall.Docker`. A nil list means `wall.DefaultCAEnv`.
+either: with the default model provider credential in `ANTHROPIC_API_KEY`, a value of
+`ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN` from any of these sources or the
+runtime's preparation is left out, and behind a wall the image's value is unset. One
+exception applies: when the run has an authority, a variable that points at the CA
+bundle is set to the bundle's path, even one of these. Without a wall these are the
+names the caller gives in `OpenSpec.CAEnv`; `qory` is to set it from `wall.ca_env`.
+Behind a wall they are the names in `CAEnv` of `wall.Docker`. A nil list means
+`wall.DefaultCAEnv`.
 
 Claude Code also applies the `env` object of a settings file. The session copies the
 `env` of the `--settings` file into the run's `settings.json` without
@@ -205,16 +233,18 @@ If the runtime reads no key for the format or the `auth`, the run stops with
 `run_configuration_invalid`.
 
 A run may have several model keys, from `forager.yaml` and from the control plane. The
-gateway holds every one and sets only the start key, the one the runtime starts with.
-The proxy sets the start key only on a request to its endpoint's host that carries its
-placeholder. Under `enforce`, a request to a host that only model keys other than the running
-session's cover passes with no key set and needs no path rule, since a model provider
-is an integration that a policy cannot deny. The proxy sets no value of such a key, and
-replaces each model key's value in the answers from the key's host. With two or more model keys, the run configuration's `model_credential`
-names the start key; without it, the run stops with `run_configuration_invalid`. With
-one, that one is the start key. A session joined with no runtime,
-`session.SessionSpec.Runtime` nil, has no start key: its program gets no model key's
-variable, placeholder or endpoint.
+gateway holds every one and sets only the default model provider credential, the one the
+runtime starts with. The proxy sets the default model provider credential only on a
+request to its endpoint's host that carries its placeholder. Under `enforce`, a request
+to a host that only model keys other than the running session's cover passes with no key
+set and needs no path rule, since a model provider is an integration that a policy
+cannot deny. The proxy sets no value of such a key, and replaces each model key's value
+in the answers from the key's host. With two or more model keys, the run configuration's
+`default_model_provider_credential_name` names the default model provider credential;
+without it, the run stops with `run_configuration_invalid`. With one, that one is the
+default model provider credential. A session joined with no runtime,
+`session.SessionSpec.Runtime` nil, has no default model provider credential: its program
+gets no model key's variable, placeholder or endpoint.
 
 A credential without `format` whose `placeholders` list a model key's variable, such as
 `ANTHROPIC_API_KEY`, stops the run with `run_configuration_invalid`. Rewrite it as a
@@ -222,10 +252,25 @@ model key.
 
 ### Several keys of one provider
 
-A key group lets a run go on when the model provider returns a limit refusal for a key. When
-the start key comes from the control plane, its key group is the start key and every
-API credential of the run configuration with the same `format`, `auth` and `endpoint`,
-in the order of `credentials`. A key of `forager.yaml` is never in a key group.
+A key group lets a run go on when the model provider returns a limit refusal for a key.
+Each API credential of the run configuration has `group`, the public id of the provider
+of the run's model choice (its `con_` id), and the API credentials with one `group` value
+are one key group, in the order of `credentials`. A run can have several groups, such as
+one of Anthropic keys and one of OpenAI keys, and each group rotates, cools down and
+stops apart from the others. The keys of one group need one `format`, `endpoint` and
+`auth`: two that differ stop the run with `run_configuration_invalid`, such as `Give the
+keys of group "con_49cey7zrc2eb9qgn" one format, endpoint and auth.` A key of
+`forager.yaml` has no `group` and is never in a key group: a session on it gets that key
+alone.
+
+A session starts on the key in its join request's `model_provider_credential_name`, or
+on the default model provider credential when the request has none. For a key of a
+group, the session gets the group's active key. A group other than the default model
+provider credential's that no session used yet starts at the key in the request, or,
+when that key is in cooldown or out, at the key a `429` switches to, as below. When no
+key of that group is usable, the session starts at the key in the request: its first
+model request gets the gateway's `429` with no `Retry-After`, and the session stops at
+its next batch, as below.
 
 1. Optionally set `pause_for_s` on a key of the group: the cooldown in seconds after a
    refusal with no reset, 1 to 604800. A key without it has a cooldown of 60 seconds
@@ -240,16 +285,23 @@ in the order of `credentials`. A key of `forager.yaml` is never in a key group.
    Set both or neither: a percentage outside 1 to 99, or one of the two alone, stops
    the run with `run_configuration_invalid`.
 
-The keys share the start key's placeholder, and the proxy sets one of them, the active
-key. When the provider returns `429` for the active key, the proxy puts the key in
+The keys of a group share one placeholder, that of the group's first key, and while a
+session runs on the group, the proxy sets one of them, the group's active key, and no key
+of another group. When the provider returns `429` for the active key, the proxy puts the key in
 cooldown until the reset in the answer's headers, makes another key out of cooldown the
-active key, and sends the request again with it. The proxy takes the key with `chosen`
-first, then a key with no known reset, by the order, then the key whose limit resets
-soonest. A key with `cooldown_until` stays in cooldown until that time, until the
-provider returns a `2xx` for it, or until the answer to a later model keys report has
-an entry of the key that is not `rejected`. The session gets only the answer to that
-second request. The proxy keeps a copy of each request
-body up to 8 MiB for this; a larger body goes once.
+active key, and sends the request again with it. The proxy takes a key with no known
+reset first, by the order, then the key whose limit resets soonest. A key with
+`cooldown_until` stays in cooldown until that time, until the provider returns a `2xx`
+for it, or until the answer to a later model keys report has an entry of the key that is
+not `rejected`. The session gets only the answer to that second request. The proxy keeps
+a copy of each request body up to 8 MiB for this; a larger body goes once.
+
+Keys of the format `openai-responses` keep one key for each session, because Codex
+sends its reasoning encrypted for one account. The proxy sends no such request again:
+the provider's first `429` puts the key in cooldown and reaches Codex, and the run
+pauses as below, also when another key is out of cooldown. The active key changes only
+when a session joins: a key that goes into cooldown during a session for another
+reason, such as its Use up to percentage, pauses the run the same way.
 
 A key with `use_up_to_percent` is also in cooldown while a window in its
 `use_up_to_windows` is at or above the percentage, until that window resets. The
@@ -258,14 +310,16 @@ answers to its model keys reports, so a key that another run took to its percent
 in cooldown too. The response that took the key to its percentage reaches the session
 as the provider sent it, and the next request goes with the next key. A key can pass
 its percentage by the requests already in flight on it when that response arrives.
-When every key is in cooldown, the run pauses as below, also when no provider returned
-a `429`.
+When every key of the session's group is in cooldown, the run pauses as below, also
+when no provider returned a `429`.
 
-When no key is left out of cooldown, the session gets the `429`, and the proxy sends no
-more requests with the placeholder until the session's join ends: each gets a `429` from
-the gateway that starts `qory: the run pauses:`. The
-gateway's answer to the session's next batch has `stop`, `model_key_limit`, so the
-session stops the runtime and the run pauses. The next join gets the active key again.
+When no key of the session's group is left out of cooldown, the session gets the
+`429`, and the proxy sends no more requests with the group's placeholder until the
+session's join ends: each gets a `429` from the gateway that starts `The gateway sends
+no more model requests in this session:`. The gateway's answer to the session's next
+batch has `stop`, `model_key_limit`, so the session stops, and the run pauses at that
+session. A key of another group never takes the place of the session's group. The next
+join gets the group's active key again.
 
 The gateway reports each key's limit windows to the control plane, at most once a
 second, and takes the cooldowns other runs found from the answer. A cooldown from
@@ -275,7 +329,7 @@ arrives: until then, up to about a second after the other run's refusal and long
 while a report waits for a retry, the run can still send a request with that key and
 get the refusal itself. The contract's
 [§The server, The model keys](../contracts/forager/v1/README.md#the-server) lists the
-report and its answers. The gateway writes one log line for each limit answer, with the
+report and its answers. The gateway writes one log line for each limit response, with the
 status, the names of the limit headers and the error's type, and no value.
 
 ## From Qory Apiary
@@ -283,17 +337,18 @@ status, the names of the limit headers and the error's type, and no value.
 A run configuration may list `credentials`, with no value; the control plane stores the
 values. An entry is one of two kinds:
 
-- An API credential is a model key: `{name, format, endpoint, auth, key_prefixes}`, as
-  in [Model keys](#model-keys).
+- An API credential is a model key: `{name, format, endpoint, auth, paths,
+  key_prefixes}`, as in [Model keys](#model-keys), with `paths` and an account header
+  as in [Paths and an account header](#paths-and-an-account-header).
 - A host credential is any other secret: `{name, apply, placeholders}`. Each of its 1
   to 16 `apply` items is one place and way the value is set: `{hosts, scheme, username,
-  header, paths}`.
+  header, paths, push_ref}`.
 
 ```json
 {"version": 1,
- "model_credential": "model",
+ "default_model_provider_credential_name": "model",
  "credentials": [
-   {"name": "model", "format": "anthropic-messages",
+   {"name": "model", "group": "con_49cey7zrc2eb9qgn", "format": "anthropic-messages",
     "endpoint": "https://api.model.example/anthropic",
     "auth": {"scheme": "header", "header": "x-api-key"},
     "key_prefixes": ["sk-ant-"]},
@@ -305,6 +360,28 @@ values. An entry is one of two kinds:
     "placeholders": ["GIT_TOKEN"]}]}
 ```
 
+- A path in `paths` is matched whole, or up to a final `*` as a prefix. A segment
+  written `{}` matches any one segment: `/repos/example-org/app/pulls/{}` matches
+  `/repos/example-org/app/pulls/12`, and not `/repos/example-org/app/pulls/12/merge`.
+  So an item can allow a repository's pull requests and leave out their merge. Two
+  paths of one host overlap when one request can match both, and a `{}` overlaps
+  every segment that is not empty.
+- `push_ref` is the one branch a git push through the item may change, such as
+  `refs/heads/qory/wi_01`. The proxy reads every push to a host of a credential before
+  it sends a byte: each ref the push creates, updates or deletes must be `push_ref`.
+  A push through an item with no `push_ref`, a push to another branch or a tag, a
+  signed push, and a push with push options (`git push -o`) get a `403`, and the
+  record has the request `denied` with the rule `wall:push-ref`. Through such an item a push to another branch fails with:
+
+  ```text
+  qory: push only refs/heads/qory/wi_01.
+  The push of "refs/heads/main" to git.example/example-org/app.git/git-receive-pack was not sent: it creates, updates or deletes that ref.
+  ```
+
+  git itself prints only `The requested URL returned error: 403`. An adapter's output
+  may have `push_ref` on an item in the same form. A credential defined with `env` or
+  `file` has no `push_ref`, so no push goes through it.
+
 - The run needs no wall: the gateway sets these credentials with or without one.
   On an unwalled local run the agent can read the gateway's access key, which opens the
   sealed values. The program that starts the run must refuse stored credentials there,
@@ -314,13 +391,15 @@ values. An entry is one of two kinds:
   with none of its `key_prefixes` stops the run with `run_configuration_invalid`.
 - The control plane may send a value with `expires_at`, when it stops working, and
   `apply`, where it is set. `apply` may narrow the entry's items, such as to fewer hosts
-  or paths, and never widen them. A value that expired before the run started, or an
-  item outside its entry, stops the run with `run_configuration_invalid`.
+  or paths, with the same `push_ref`, and never widen them. A value that expired
+  before the run started, or an item outside its entry, stops the run with
+  `run_configuration_invalid`.
 - The gateway fetches a value with `expires_at` again 5 minutes before it expires, and
   after a host answers `401` to a request with the value, at most every 30 seconds per
   credential. The renewed value takes the old value's place, and the gateway overwrites the
-  old bytes with zeros. A value without `expires_at`, such as a model key's, is fetched
-  once.
+  old bytes with zeros. A value without `expires_at` is fetched once. A model key is
+  renewed in a request that names it alone, so a key the control plane cannot seal
+  blocks no other credential's renewal.
 - If a renewal fails, or its `expires_at` is not after the machine's clock, the run
   keeps the old value and the gateway reports `run <run id>: If this repeats, check the
   control plane: credential "forge" was not renewed:` with the cause, then tries again
@@ -329,18 +408,21 @@ values. An entry is one of two kinds:
   credential "forge" expired at 2026-10-24T13:00:00Z`, and the proxy sets the value no
   more.
 - On a host that one of these credentials is for, its value replaces the machine's
-  credential, such as the model key in `forager.yaml` for the same endpoint host,
+  credential, such as a local model provider credential for the same endpoint host,
   whatever its name.
-- `model_credential` names the start key: an API credential of the run configuration,
-  or a model key of `forager.yaml`.
+- `default_model_provider_credential_name` names the default model provider credential:
+  an API credential of the run configuration, or a local model provider credential, a
+  model key of `forager.yaml`.
 - A placeholder goes only into a variable for a credential. A host credential whose
   `placeholders` list a variable the runtime denies, a model override, the model
   endpoint's variable or a model key's variable stops the run
   (`run_configuration_invalid`). The same holds for the run's placeholders from this
   machine's credentials and tools. A tool's variable, such as `GITHUB_TOKEN`, is fine.
-- The credentials and `model_credential` are fixed for the run: a renewal changes only
-  a value. A reload that changes them fails, and the run keeps its policy. So does a reload that selects another
-  model key of this machine's as the start key, with or without `model_credential`.
+- The credentials and `default_model_provider_credential_name` are fixed for the run: a
+  renewal changes only a value. A reload that changes them fails, and the run keeps its
+  policy. So does a reload that selects another local model provider credential as the
+  default model provider credential, with or without
+  `default_model_provider_credential_name`.
 - Without `credentials`, the run gets the machine's credentials as before.
 
 A run configuration may also list `stack_hosts`, the hosts qory may fetch the run's
@@ -364,6 +446,66 @@ in `forager.yaml`:
   `gateway.stack_hosts` and the node's policy both list by name.
 - They are fixed for the run. A reload that lists other `stack_hosts` fails, and the run
   keeps its policy.
+
+### Paths and an account header
+
+A model key from the control plane may have `paths`, 1 to 32 paths of its endpoint's
+host, in a host credential's grammar. The proxy then sets the key only on those paths:
+a request to another path of the host gets `403` under `enforce`, unless the run
+policy's `egress.paths` match it, and then goes with no key. Such a key may share its
+host with a host credential whose paths overlap none of its paths. A path with a `.`
+or `..` segment, an empty segment, a backslash, or an encoded slash, backslash, dot or
+percent sign stops the run with `run_configuration_invalid`, and so does a segment that
+is one of those before its first `;` or `%3B`, such as `/a/..;/b`. The same rule applies
+to the paths of a host credential's `apply` items.
+
+A key whose `auth` has `oauth` may also have `account_header` and `account_claim`,
+both or neither. The proxy sets the header beside the token, to the string that
+`account_claim`, a JSON pointer, points at in the token's JWT payload. A ChatGPT
+subscription login is such a key:
+
+```json
+{"name": "subscription", "group": "con_8k2mxq0rt5vw7yzb", "format": "openai-responses",
+ "endpoint": "https://chatgpt.example/backend-api/codex",
+ "auth": {"scheme": "bearer", "oauth": true, "account_header": "chatgpt-account-id",
+          "account_claim": "/https:~1~1api.openai.com~1auth/chatgpt_account_id"},
+ "paths": ["/backend-api/codex/*"]}
+```
+
+- The proxy checks no signature, and decodes at most 8 KiB of payload.
+- The header the session sends under that name, in any letter case and with `_` for
+  `-`, never reaches the provider.
+- A key whose value has no such string when the run opens leaves its key group, and the
+  run's record gets one line that starts with the fix and contains neither the value nor
+  the claim. With no key left in a key group of the run, the default model provider
+  credential's group or another, the run stops with `run_configuration_invalid` at its
+  start.
+- An `account_header` that frames the request, is hop-by-hop, is one the proxy sets,
+  or is `Authorization` stops the run with `run_configuration_invalid`.
+
+### A key the provider returns 401 for
+
+A model provider's `401` to a request on the model API's path, `/v1/messages` under
+the endpoint for `anthropic-messages` and `/responses` for `openai-responses`, takes the
+key out of use:
+
+1. A key whose value has `expires_at` is renewed at once. A value puts it back; the
+   control plane's `409` takes it out for the run, and so do a first value the run
+   cannot set, for a key with no value yet, and `expires_at` with no renewal; any other
+   failure, including a renewed value the run cannot set, keeps it out of use, and the
+   gateway tries again after 30 seconds.
+   A key without `expires_at` leaves the key group for the run at once.
+2. For `anthropic-messages` the proxy sends the request again with the next usable key.
+   For `openai-responses`, and when no key is usable, the session gets the `401`, and
+   the run stops: `paused` with `model_key_switch` when another key is usable, `failed`
+   with `model_key_unauthorized` when every key is out and a `401` took at least one
+   out, and `paused` with `model_key_limit` otherwise.
+3. The gateway reports the keys out after a `401` to the control plane with its model
+   keys report.
+
+A `401` on another path of the host, such as an account check, reaches the session as
+the provider sent it, and the gateway renews a key with `expires_at` as for any
+credential.
 
 ### Harness credentials
 
@@ -414,6 +556,76 @@ not see, such as one of another organisation. Its open's `dev.qory.run.policy_ap
 lists each harness credential by `name` and `purpose` alone, and the stack proxy's
 `dev.qory.run.egress` records have no `path` and no `path_rule`. `harness_hidden` is
 fixed when the run starts: a reload ignores it.
+
+### Push credentials
+
+A host credential with `purpose: push` is for qory's push of the work item's branch.
+Qory Apiary lists only the repository's git paths, such as `/example-org/app.git/*`, in
+a push credential's items: the forge's adapter opens the pull request. Forager does not
+check which paths the items list; the push proxy sets the push value on every path an
+item covers. Forager has no access level: Qory Apiary sends a push credential only for
+a `write` run, beside a read work credential. A run with no push credential, such as a
+`write-no-push` run, which gets a read work credential alone, has no push proxy:
+`PushProxy` returns "Add a push credential to the run configuration: this run has no
+push proxy."
+
+```json
+{"version": 1,
+ "security_policy": {"version": 1, "egress": {"mode": "enforce", "allow": ["git.example"]}},
+ "credentials": [
+   {"name": "work-1",
+    "apply": [{"hosts": ["git.example"], "scheme": "basic",
+               "username": "x-access-token", "paths": ["/example-org/app.git/*"]}],
+    "placeholders": ["GIT_TOKEN"]},
+   {"name": "push-1", "purpose": "push",
+    "apply": [{"hosts": ["git.example"], "scheme": "basic", "username": "x-access-token",
+               "paths": ["/example-org/app.git/*"], "push_ref": "refs/heads/qory/wi_01"}]}]}
+```
+
+- Only the run's push proxy sets a push credential, on its items' hosts and paths, with
+  the branch guard of each item's `push_ref`. The run's proxy, which the sessions, the
+  setup step, After, the image step and `HostProxy` go through, never sets one, and the
+  run answer lists no host or placeholder for it. A push through the run's proxy gets
+  the branch guard's `403`, `wall:push-ref`, when no work credential there has a
+  `push_ref`. The branch guard covers a git push to a host of a work credential; a write
+  through the forge's API, such as a REST or GraphQL call, depends on the work
+  credential's scope at the forge.
+- qory reaches the push proxy through `(*session.Run).PushProxy`
+  ([the push proxy](go.md#the-push-proxy)). The push proxy allows the push credentials'
+  hosts alone. It sets the push value only on the paths of the push items, and returns
+  a `403` for a path that no item covers.
+- The push proxy checks paths, not methods. On a path an item covers, every method gets
+  the push value: under the item `/example-org/app.git/*`, a `GET` of
+  `/example-org/app.git/info/refs` and a `POST` of
+  `/example-org/app.git/git-receive-pack` pass, and `GET
+  /example-org/other.git/info/refs` gets a `403`. The branch guard limits each git push
+  to the item's `push_ref`.
+- The paths of the push items pin the repository. An item with no paths covers every
+  path on its hosts.
+- The push proxy stays open from the run's open until its close, through every join.
+  On one machine the run answer's `push_proxy_secret` opens it. Behind a separate
+  gateway `QORY-PUSH` and the run key open it. Neither enters a wall or a container.
+- The run gets a certificate authority. The gateway fetches and renews the value as any
+  other stored credential's.
+- The policy in force must allow each host of a push credential, and no path rule of
+  the node's may cover one, since the push proxy checks no path rule. At the start,
+  the run stops with `run_configuration_invalid` otherwise. At a reload, the reload
+  fails and the policy in force stays. The texts:
+  - a host under no allow entry in `enforce` mode: "Add each push credential's host to
+    the run's egress allow list.";
+  - a host a deny entry covers: "Remove each push credential's host from the egress
+    deny lists.";
+  - a host a node's path rule covers: "Remove the node's path rules for each push
+    credential's host: the push proxy checks none.".
+
+  Each has a second line with the credential and the host.
+- A push credential with `placeholders` stops the run with "Remove placeholders from
+  push credentials: no session gets a push credential.", with the credential on a
+  second line.
+- Two `apply` items of push credentials on one host need paths, and their paths must
+  not overlap. A work credential on the same host and paths is fine: no proxy sets both.
+- Every `dev.qory.run.policy_applied`, the open's and each join's, lists each item of a
+  push credential with `purpose: push`.
 
 ## Tools
 

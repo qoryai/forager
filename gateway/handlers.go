@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/gateway/internal/stream"
+	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
 )
@@ -98,11 +100,13 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 			refuse(w, ref.Status, ref.Code, nil, ref.From, ref.Error())
 			return
 		}
+		// link-run-request.schema.json has a closed root, so readRunRequest has refused a
+		// member such as LABELS already; labels and about are matched by exact case here.
 		var members struct {
 			Labels json.RawMessage `json:"labels"`
 			About  json.RawMessage `json:"about"`
 		}
-		if json.Unmarshal(body, &members) != nil || members.Labels != nil || members.About != nil {
+		if jsonv2.Unmarshal(body, &members) != nil || members.Labels != nil || members.About != nil {
 			invalid(w)
 			return
 		}
@@ -310,13 +314,16 @@ func (g *Gateway) discard(lr *linkRun) {
 }
 
 // refuseOpen answers a run that did not open. A refusal passes on with its code and
-// names, and who refused: the server's with its status, apiary, whatever its code; the
-// gateway's own, gateway, a 403 for a refusal of the run's configuration Forager
-// decides and for a run without a wall whose policy needs one, wall_required. Any
-// other failure is a 500 internal. Each carries the error's text as its message, which
-// the session returns as its error, the text today's session returned; the gateway
-// itself tells the user nothing of it. A server's 410 is no refusal: it is a failure
-// without a code, so no 410 crosses the link from here, signed or not.
+// names, and who refused: the server's, apiary, whatever its code, with its status and
+// the retry_after of the Retry-After of its last answer as the run opens, to the
+// registration or attach, the reload after the attach, or the secrets request; the
+// gateway's, gateway, a 403 for a refusal of the run's configuration Forager decides
+// and for a run without a wall whose policy needs one, wall_required. Any other failure
+// is a 500 internal. Each has the error's text as its message, which the session
+// returns as its error, the text today's session returned; the gateway writes none of
+// it to the user.
+// A server's 410 is no refusal: it is a failure without a code, so no 410 crosses the
+// link from here, signed or not.
 func refuseOpen(w http.ResponseWriter, err error) {
 	err = codeless(err)
 	var wall *refusal.NeedsWall
@@ -341,7 +348,7 @@ func refuseOpen(w http.ResponseWriter, err error) {
 		// A refusal of an answer that came without one, answer_unsigned to a 2xx say.
 		status = http.StatusBadGateway
 	}
-	refuse(w, status, ref.Code, accesskey.ShownNames(ref.Names), from, err.Error())
+	answerRefusal(w, status, linkRefusal{Error: ref.Code, Names: accesskey.ShownNames(ref.Names), Message: message(err.Error()), From: from, RetryAfter: seconds(ref.RetryAfter)})
 }
 
 // markOpening marks the run id as opening for the run request r, which the CA key sweep
@@ -549,12 +556,13 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	digest := lr.reloadDigest
 	lr.mu.Unlock()
 	g.answerHeaders(s, w, r, digest)
-	if lr.keys.Passed() {
-		// The proxy passed a model provider's limit refusal to the session: the session
-		// stops the runtime, and the run pauses.
+	if reason, ok := lr.sessionKeys().Stop(); ok {
+		// The proxy passed a model provider's limit refusal or 401 of the session's key
+		// group to the session: the session stops, and the run pauses at that session, or
+		// fails when every key of the session's group is out after a 401.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		w.Write(stopModelKeyLimit)
+		w.Write(stopBody(reason))
 	} else {
 		w.WriteHeader(http.StatusAccepted)
 	}
@@ -569,44 +577,63 @@ func closes(evs []event.Event) bool {
 	return slices.ContainsFunc(evs, func(ev event.Event) bool { return ev.Type == event.RunExited || ev.Type == event.RunRefused })
 }
 
-// stopModelKeyLimit is the body of the answer to a batch after the proxy passed a
-// limit refusal to the session, link-batch-answer.schema.json.
-var stopModelKeyLimit = []byte(`{"stop":{"reason":"` + event.ReasonModelKeyLimit + `"}}`)
+// stopBody is the body of the answer to a batch after the proxy passed a limit refusal
+// or a 401 to the session, link-batch-answer.schema.json, with the stop's reason, one
+// of [modelkey.Group.Stop]'s.
+func stopBody(reason string) []byte {
+	return []byte(`{"stop":{"reason":"` + reason + `"}}`)
+}
+
+// keyStops are the reasons of a stop in a batch's answer, each with the state of the
+// dev.qory.session.exited and dev.qory.run.exited that have it.
+var keyStops = map[string]string{
+	event.ReasonModelKeyLimit:        event.StatePaused,
+	event.ReasonModelKeySwitch:       event.StatePaused,
+	event.ReasonModelKeyUnauthorized: event.StateFailed,
+}
 
 // closeRule is why the link refuses a session's dev.qory.run.exited, its data, empty
 // when it accepts it: the close's, with no reason or with timeout, interrupted,
 // no_session, image_missing, image_user_root, image_access_denied, image_rate_limited,
 // image_registry_unreachable, workflow_not_in_harness, read_needs_wall,
-// read_needs_setup_outside, read_needs_no_nested_docker or read_needs_setup_removed, the
-// last eleven only for a run with no join the gateway numbered, and the last ten only
-// failed with exit_code -1: image_missing and image_user_root the close after a fetch of
-// the run's image that its registry did not have or whose user is root,
-// image_access_denied, image_rate_limited and image_registry_unreachable the close after
-// a check of the run's image that its registry refused, rate-limited or did not reach,
-// workflow_not_in_harness the close of a run whose workflow is not in the harness,
-// read_needs_wall the close of a read run (the contract's §The events, How a run ends)
-// that has no wall, read_needs_setup_outside the close of a read run whose setup is set
-// to run inside the agent's container, read_needs_no_nested_docker the close of a read
-// run whose image runs nested Docker, and read_needs_setup_removed the close of a read
-// run whose setup container could not be removed. It accepts model_key_limit, the pause
-// after a limit refusal, paused, only for a run with a join whose last
-// dev.qory.session.exited has that reason. The gateway writes the event of every other
-// end itself. joined is true when the gateway numbered a join of the run, and last is
-// the reason of the last dev.qory.session.exited the run's stream numbered, empty for
-// none.
+// read_needs_setup_outside, read_needs_no_nested_docker, read_needs_setup_removed or
+// write_needs_wall, the last twelve only for a run with no join the gateway numbered,
+// and the last eleven only failed with exit_code -1: image_missing and image_user_root
+// the close after a fetch of the run's image that its registry did not have or whose
+// user is root, image_access_denied, image_rate_limited and image_registry_unreachable
+// the close after a check of the run's image that its registry refused, rate-limited or
+// did not reach, workflow_not_in_harness the close of a run whose workflow is not in
+// the harness, read_needs_wall the close of a read run (the contract's §The events, How
+// a run ends) that has no wall, read_needs_setup_outside the close of a read run whose
+// setup is set to run inside the agent's container, read_needs_no_nested_docker the
+// close of a read run whose image runs nested Docker, read_needs_setup_removed the
+// close of a read run whose setup container could not be removed, and write_needs_wall
+// the close of a run whose access is not read and that has no wall. It accepts
+// model_key_limit, the pause after a limit refusal, and model_key_switch, the pause
+// after a 401 with another key usable, each paused, and model_key_unauthorized, the end
+// once a 401 took the last key out, failed ([keyStops]), each only for a run with a join
+// whose last dev.qory.session.exited has that reason. It accepts a starter's reason, a
+// code of the reason's pattern that is none of Forager's reserved codes and none of the
+// eleven codes from image_missing to write_needs_wall, only failed, before or after the
+// gateway numbered a join of the run. When qory knows the cause, it closes a failed run
+// with one of its end codes, listed in $defs/end_codes of integrations'
+// contracts/run/v1/outcome.schema.json, whether or not a session joined it. The gateway
+// writes the event of every other end itself. joined is true when the gateway numbered
+// a join of the run, and last is the reason of the last dev.qory.session.exited the
+// run's stream numbered, empty for none.
 func closeRule(data map[string]any, joined bool, last string) string {
 	given, hasReason := data["reason"]
 	why, _ := given.(string)
 	switch {
 	case !hasReason, why == event.ReasonTimeout, why == event.ReasonInterrupted:
-	case why == event.ReasonModelKeyLimit:
+	case keyStops[why] != "":
 		switch {
-		case data["state"] != event.StatePaused:
-			return "a run.exited model_key_limit that is not paused"
+		case data["state"] != keyStops[why]:
+			return "a run.exited " + why + " that is not " + keyStops[why]
 		case !joined:
-			return "a run.exited model_key_limit of a run with no join"
-		case last != event.ReasonModelKeyLimit:
-			return "a run.exited model_key_limit after a last session.exited with another reason"
+			return "a run.exited " + why + " of a run with no join"
+		case last != why:
+			return "a run.exited " + why + " after a last session.exited with another reason"
 		}
 	case why == event.ReasonNoSession:
 		if joined {
@@ -615,13 +642,17 @@ func closeRule(data map[string]any, joined bool, last string) string {
 	case why == refusal.ImageMissing, why == refusal.ImageUserRoot, why == refusal.ImageAccessDenied,
 		why == refusal.ImageRateLimited, why == refusal.ImageRegistryUnreachable, why == event.ReasonWorkflowNotInHarness,
 		why == event.ReasonReadNeedsWall, why == event.ReasonReadNeedsSetupOutside, why == event.ReasonReadNeedsNoNestedDocker,
-		why == event.ReasonReadNeedsSetupRemoved:
+		why == event.ReasonReadNeedsSetupRemoved, why == event.ReasonWriteNeedsWall:
 		code, _ := data["exit_code"].(float64)
 		switch {
 		case joined:
 			return "a run.exited " + why + " of a run with a join"
 		case data["state"] != event.StateFailed || code != -1:
 			return "a run.exited " + why + " that is not failed with exit_code -1"
+		}
+	case event.StarterReason(why):
+		if data["state"] != event.StateFailed {
+			return "a run.exited " + why + " that is not failed"
 		}
 	default:
 		return "a run.exited with a reason the gateway decides"
@@ -660,6 +691,57 @@ func otherOpen(joins map[int]join, n int) bool {
 		}
 	}
 	return false
+}
+
+// sessionEgress is why the link refuses a dev.qory.run.egress in a session's batch,
+// empty when it takes it: the gateway writes every other decision, so it takes only a
+// decision of the route to link.QoryHost, which the session's forwarder serves. Each
+// must hold: channel qory_host, rule wall:qory-host, host host.qory.invalid, port 80
+// and method HTTP, and no credential, tool or path_rule, which only the gateway's
+// decisions have. The text contains the first field that differs and the value it has.
+func sessionEgress(data map[string]any) string {
+	for _, f := range []struct {
+		name string
+		want any
+	}{
+		{"channel", link.QoryHostChannel},
+		{"rule", link.QoryHostRule},
+		{"host", link.QoryHost},
+		{"port", float64(80)},
+		{"method", "HTTP"},
+	} {
+		if got, ok := data[f.name]; !ok || got != f.want {
+			return fmt.Sprintf("a run.egress from the session whose %s is %s, not %v: the session writes only decisions of the route to %s", f.name, shownField(got, ok), f.want, link.QoryHost)
+		}
+	}
+	for _, name := range []string{"credential", "tool", "path_rule"} {
+		if got, ok := data[name]; ok {
+			return fmt.Sprintf("a run.egress from the session whose %s is %s, not absent: the session writes only decisions of the route to %s", name, shownField(got, ok), link.QoryHost)
+		}
+	}
+	return ""
+}
+
+// shownField is the value of a field of an event as a refusal's text shows it: absent,
+// a number, or text quoted, at most 64 bytes of it, with a phrase in place of a value
+// that contains a secret.
+func shownField(v any, ok bool) string {
+	switch s := v.(type) {
+	case nil:
+		if !ok {
+			return "absent"
+		}
+		return "null"
+	case string:
+		if len(s) > 64 {
+			s = strings.ToValidUTF8(s[:64], "") + "..."
+		}
+		return accesskey.ShownValue(s, true)
+	case float64:
+		return strconv.FormatFloat(s, 'f', -1, 64)
+	default:
+		return fmt.Sprintf("a JSON %T", v)
+	}
 }
 
 // gatewayName is a refusal's name of the form only a gateway's refusal carries.
@@ -706,8 +788,12 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 			}
 		}
 		switch ev.Type {
-		case event.RunRegistered, event.RunEgress, event.RunTargetWrite:
+		case event.RunRegistered, event.RunTargetWrite:
 			return "an event of a type the gateway writes"
+		case event.RunEgress:
+			if why := sessionEgress(data); why != "" {
+				return why
+			}
 		case event.RunStarted:
 			if data["opened_by"] != event.OpenedByRun {
 				return "a run.started not opened by the run"
@@ -825,14 +911,20 @@ func (lr *linkRun) joined(ev event.Event) {
 	}
 	j := lr.joins[n-1]
 	if ev.Type == event.SessionExited {
+		if j.open() && lr.reporter != nil && !lr.ended {
+			// After the run's end, [linkRun.end] has made the join's end report.
+			lr.reporter.closed(n)
+		}
 		j.exited = true
 		j.reason, _ = data["reason"].(string)
-		// The session's join ended: a stop after a limit refusal ends with it.
+		// The session's join ended: a stop after a limit refusal ends with it, in every
+		// group.
 		lr.keys.Resume()
-		if held := lr.r.Held(); j.accepted && (j.model != "" || j.noKey) && held != nil && held.Start != "" {
-			// The session ended: the proxy sets the start key again, after a session's
-			// model key or after none; of a key group, the group's active key.
-			lr.px.SetModelKey(held.Start)
+		if held := lr.r.Held(); j.accepted && (j.model != "" || j.noKey) && held != nil && held.DefaultCredential != "" {
+			// The session ended: the proxy sets the default model provider credential
+			// again, after a session's model key or after none; of a key group, the
+			// group's active key.
+			lr.px.SetModelKey(held.DefaultCredential)
 		}
 		return
 	}

@@ -28,7 +28,17 @@
         "CLAUDE_RELAUNCH_SESSION_ADD_DIRS",
         "CLAUDE_CODE_PLUGIN_SEED_DIR",
         "CLAUDE_CODE_PLUGIN_CACHE_DIR",
-        "CLAUDE_CODE_MANAGED_SETTINGS_PATH"
+        "CLAUDE_CODE_MANAGED_SETTINGS_PATH",
+        "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+        "ANTHROPIC_GOOGLE_CLOUD_BASE_URL",
+        "CLAUDE_CODE_USE_GATEWAY",
+        "CLAUDE_CODE_USE_MANTLE",
+        "CLAUDE_CODE_CUSTOM_OAUTH_URL",
+        "CLAUDE_CODE_CLIENT_DATA_URL",
+        "CLAUDE_CODE_REMOTE",
+        "CLAUDE_CODE_API_BASE_URL",
+        "CLAUDE_CODE_REMOTE_SETTINGS_PATH",
+        "BUN_OPTIONS"
       ],
       "credential_files": [
         "~/.claude/.credentials.json"
@@ -112,11 +122,130 @@
       "fixed": {
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL": "1",
-        "CLAUDE_CODE_MAX_RETRIES": "15"
+        "CLAUDE_CODE_MAX_RETRIES": "15",
+        "DISABLE_AUTOUPDATER": "1"
       },
       "egress_hosts": [
         "api.anthropic.com"
-      ]
+      ],
+      "install_required": true,
+      "resume": {
+        "prefix": "~/.claude/projects/",
+        "path": "~/.claude/projects/{cwd_slug}/{session_id}.jsonl"
+      }
+    },
+    {
+      "name": "codex",
+      "title": "Codex",
+      "reserves": [],
+      "denies": [
+        "OPENAI_BASE_URL",
+        "CODEX_AUTHAPI_BASE_URL",
+        "CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL",
+        "CODEX_AGENT_IDENTITY_JWKS_BASE_URL",
+        "CODEX_APP_SERVER_CHATGPT_BASE_URL",
+        "CODEX_CLOUD_TASKS_BASE_URL",
+        "CODEX_OSS_BASE_URL",
+        "CODEX_OSS_PORT",
+        "CODEX_REFRESH_TOKEN_URL_OVERRIDE",
+        "CODEX_REVOKE_TOKEN_URL_OVERRIDE",
+        "CODEX_EXEC_SERVER_URL",
+        "CODEX_EXEC_SERVER_NOISE_REGISTRY_URL",
+        "CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID",
+        "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN",
+        "CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID",
+        "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+        "CODEX_API_KEY",
+        "CODEX_ACCESS_TOKEN",
+        "CODEX_CA_CERTIFICATE",
+        "CODEX_HOME",
+        "CODEX_SQLITE_HOME"
+      ],
+      "credential_files": [],
+      "declares": [],
+      "one_of": [],
+      "model": {
+        "formats": [
+          "openai-responses"
+        ],
+        "model": {
+          "flag": "--model"
+        },
+        "agent": {
+          "toml": "model"
+        },
+        "effort": {
+          "run": {
+            "setting": "model_reasoning_effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "ultra"
+            ]
+          },
+          "agent": {
+            "toml": "model_reasoning_effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "ultra"
+            ]
+          }
+        },
+        "endpoint": {
+          "setting": "model_providers.qory.base_url"
+        },
+        "keys": [
+          {
+            "format": "openai-responses",
+            "auth": {
+              "scheme": "bearer"
+            },
+            "variable": "OPENAI_API_KEY"
+          },
+          {
+            "format": "openai-responses",
+            "auth": {
+              "scheme": "bearer",
+              "oauth": true
+            },
+            "variable": "OPENAI_API_KEY"
+          }
+        ]
+      },
+      "config": {
+        "flag": "--config",
+        "fixed": [
+          "model_provider",
+          "model_providers.qory.name",
+          "model_providers.qory.wire_api",
+          "model_providers.qory.env_key",
+          "features.plugins",
+          "features.apps",
+          "analytics.enabled",
+          "feedback.enabled",
+          "check_for_update_on_startup",
+          "otel.exporter",
+          "otel.trace_exporter",
+          "otel.metrics_exporter",
+          "web_search"
+        ]
+      },
+      "fixed": {},
+      "egress_hosts": [],
+      "install_required": false,
+      "resume": {
+        "prefix": "${CODEX_HOME}/sessions/",
+        "path": "${CODEX_HOME}/sessions/*/*/*/rollout-*-{session_id}.jsonl"
+      }
     }
   ]
 }

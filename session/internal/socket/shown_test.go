@@ -22,7 +22,7 @@ func TestALineThatIsNoRecordPrintsAPhraseForASecret(t *testing.T) {
 	}
 	var mu sync.Mutex
 	var bad []string
-	go l.Serve(func(descriptor.Record) {}, func(err error) { mu.Lock(); bad = append(bad, err.Error()); mu.Unlock() })
+	go l.Serve(func(descriptor.Record) error { return nil }, func(err error) { mu.Lock(); bad = append(bad, err.Error()); mu.Unlock() })
 	long := `{"source":"transcript","record":{"text":"` + strings.Repeat("x", 100) + `"}}`
 	conn, err := net.Dial("unix", l.Path())
 	if err != nil {

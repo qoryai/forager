@@ -1,0 +1,5 @@
+{"source":"output","record":{"type":"thread.started","thread_id":"01a1d1f8-0000-7000-8000-00000000f1a2"}}
+{"source":"output","record":{"type":"turn.started"}}
+{"source":"output","record":{"type":"error","message":"Reconnecting... 1/5 (stream disconnected before completion)"}}
+{"source":"output","record":{"type":"error","message":"unexpected status 401 Unauthorized"}}
+{"source":"output","record":{"type":"turn.failed","error":{"message":"unexpected status 401 Unauthorized"}}}

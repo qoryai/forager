@@ -13,6 +13,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"slices"
@@ -72,8 +73,13 @@ const (
 //
 // Behind a wall, a connection that shows the relay's preamble after [forwarder.setCheck]
 // set the run's check of its run API is read one request at a time, as without a wall,
-// and a POST to the run API goes on only once the check returns nil, nil. A connection
-// that shows it without the check passes on as it is, after the same preamble.
+// and a POST to the run API goes on only once the check returns nil, nil. With the run's
+// route to OpenSpec.QoryRoute, every connection is read one request at a time too,
+// walled or not, and a plain request to link.QoryHost from a session goes to the route's
+// handler, never to the proxy: behind a wall, one whose Proxy-Authorization carries the
+// password of a session's proxy URL and that comes from the agent's container, by the
+// address in the relay's peer line. A connection that shows the preamble with neither
+// passes on as it is, after the same preamble.
 //
 // The secrets are held in memory alone: never in a file or a report, and in an
 // environment only as that password, in the unwalled agent's proxy URL.
@@ -142,6 +148,18 @@ type forwarding struct {
 	// same preamble toward the proxy again, so without the check the proxy gets the bytes
 	// the relay sent, and with it the forwarder reads the request after the preamble.
 	checkRelay string
+	// route, when set, is the run's route to OpenSpec.QoryRoute: the forwarder serves
+	// a plain request to link.QoryHost with it, and nothing of such a request reaches
+	// the proxy. session is the session this forwarder serves alone, without a wall,
+	// and 0 for the run's wall forwarder. Without a password, behind a wall, it reads one
+	// request per connection, as with the check, takes every Proxy-Authorization off
+	// the head, and serves a request to link.QoryHost only when its one
+	// Proxy-Authorization carries the proxy password of one of the run's walled
+	// sessions and, for the session that runs, the relay's peer line, which it reads
+	// after the preamble, has an address of that session's agent container: any other,
+	// the setup container's among them, goes to the proxy, which denies the host.
+	route   *qoryRoute
+	session int
 }
 
 // listenForwarder listens on addr, host:port, and forwards to target, the gateway's
@@ -197,9 +215,9 @@ func (f *forwarder) URL() string {
 	return u.String()
 }
 
-// proxyUser is the user name of an unwalled agent's proxy URL, which the forwarder
-// ignores.
-const proxyUser = "qory"
+// proxyUser is the user name of an agent's proxy URL with a password, which the
+// forwarder ignores.
+const proxyUser = link.ProxyUser
 
 // newForwarderSecret makes a secret of this run's forwarder alone: 32 bytes from
 // crypto/rand, base64url without padding. Behind a wall and a separate gateway it is the
@@ -337,6 +355,8 @@ func (f *forwarder) serve(c net.Conn) {
 	// hop is the secret of the relay's preamble that the connection must open with:
 	// behind a separate gateway the hop, and on one machine the run's proxy secret.
 	hop, wait := f.way.hop, link.PreambleWait
+	// peer is the address the relay wrote for the connection, with the route.
+	var peer netip.Addr
 	if hop == "" && f.way.checkRelay != "" {
 		hop, wait = f.way.checkRelay, f.headWait()
 	}
@@ -345,6 +365,15 @@ func (f *forwarder) serve(c net.Conn) {
 		c.SetReadDeadline(time.Now().Add(wait))
 		if ok, err := link.ReadRelayPreamble(c, hop); !ok || err != nil {
 			return
+		}
+		// With the route, the relay writes the address the connection came from right
+		// after the preamble, which picks the agent's container from the others.
+		if f.way.route != nil {
+			p, err := link.ReadRelayPeer(c)
+			if err != nil {
+				return
+			}
+			peer = p
 		}
 		c.SetReadDeadline(time.Time{})
 		if f.way.password == "" && !f.admit(c) {
@@ -366,9 +395,24 @@ func (f *forwarder) serve(c net.Conn) {
 	// the agent sends after it.
 	var checked []byte
 	var from *bufio.Reader
-	if way.password == "" && way.check != nil {
+	if way.password == "" && (way.check != nil || way.route != nil) {
 		c.SetReadDeadline(time.Now().Add(f.headWait()))
-		head, rest, err := readHead(c, nil)
+		// With the route, the head's Proxy-Authorization is the walled session's
+		// password, which picks the session a request to the route comes from; it is
+		// taken off, so nothing of it reaches the proxy.
+		var header func([]byte) (bool, bool)
+		var logins []string
+		if way.route != nil {
+			header = func(l []byte) (keep, ok bool) {
+				name, value, found := bytes.Cut(l, []byte(":"))
+				if !found || !strings.EqualFold(string(name), "Proxy-Authorization") {
+					return true, true
+				}
+				logins = append(logins, string(bytes.TrimSpace(value)))
+				return false, true
+			}
+		}
+		head, rest, err := readHead(c, header)
 		if errors.Is(err, errHeadLimits) {
 			plainError(c, http.StatusRequestHeaderFieldsTooLarge, err)
 			return
@@ -383,10 +427,20 @@ func (f *forwarder) serve(c net.Conn) {
 			badRequest(c, err)
 			return
 		}
+		// A request to the route's host without a session's password, or from another
+		// address than the agent container's, such as one from the setup container, goes
+		// to the proxy, which denies the host.
+		routed := 0
+		if way.route != nil && !connectHead(head) && forQoryHost(head) {
+			routed = way.route.sessionOf(f.ctx, logins, peer)
+		}
 		switch {
 		case connectHead(head):
 			src = io.MultiReader(bytes.NewReader(closingHead(head)), rest)
-		case forRunAPIPost(head):
+		case routed != 0:
+			way.route.serve(c, head, rest, routed)
+			return
+		case way.check != nil && forRunAPIPost(head):
 			if checked, from = way.check.pass(f.ctx, c, head, rest), rest; checked == nil {
 				return
 			}
@@ -419,6 +473,9 @@ func (f *forwarder) serve(c net.Conn) {
 			// The tunnel goes on as it is; a proxy that refuses it closes the connection
 			// rather than reading a second request.
 			src = io.MultiReader(bytes.NewReader(closingHead(head)), rest)
+		} else if way.route != nil && forQoryHost(head) {
+			way.route.serve(c, head, rest, way.session)
+			return
 		} else if plain = plainRequest(head, rest); plain == nil {
 			return
 		}
@@ -456,7 +513,7 @@ func (f *forwarder) serve(c net.Conn) {
 		})
 		return
 	}
-	pipe(c, up, src, up, way.password != "" || way.check != nil)
+	pipe(c, up, src, up, way.password != "" || way.check != nil || way.route != nil)
 }
 
 // dialUp opens the connection to the proxy with way's dial, each try for [dialWait] at

@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/wall"
 	"golang.org/x/term"
 )
 
@@ -96,6 +98,11 @@ type report struct {
 	// and PreparedErr why there was nothing to read.
 	Prepared    *preparedReport `json:"prepared,omitempty"`
 	PreparedErr string          `json:"prepared_err"`
+	// RuntimeWrites are the attempts on the runtime's installed folder and on Forager's
+	// helper that succeeded, each by what it tried: empty when every one failed.
+	// RuntimeProgram says the probe found its program in the folder after them.
+	RuntimeWrites  []string `json:"runtime_writes"`
+	RuntimeProgram bool     `json:"runtime_program"`
 	// Workdir is the probe's working directory, and HostWorkspace whether the
 	// workspace's path on the machine exists inside.
 	Workdir       string `json:"workdir"`
@@ -113,12 +120,21 @@ type report struct {
 	// RunAPI is what the probe found of the run API, when PROBE_RUN_API is 1: the probe
 	// then tries nothing else.
 	RunAPI *runAPIReport `json:"run_api,omitempty"`
+	// QoryHost is what the probe found of the route to the caller's handler, when
+	// PROBE_QORY_HOST is 1: the probe then tries nothing else.
+	QoryHost *qoryHostReport `json:"qory_host,omitempty"`
+	// SetupRoute is what the setup container's requests to the route got, when
+	// PROBE_SETUP_ROUTE is 1, [probeSetupRoute]: the probe then tries nothing else.
+	SetupRoute string `json:"setup_route,omitempty"`
 	// Planted is what the probe planted in its HOME and the workspace, when
 	// PROBE_PLANT_HOME is 1: the probe then tries nothing else.
 	Planted *plantReport `json:"planted,omitempty"`
 	// Transcript is what the probe planted at its transcript's path, when
 	// PROBE_TRANSCRIPT is set.
 	Transcript *transcriptReport `json:"transcript,omitempty"`
+	// SessionNumber is the value of QORY_SESSION, or "unset", in the report of
+	// [modeSessionNumber].
+	SessionNumber string `json:"session_number,omitempty"`
 	// SessionEnv is how the probe's mkdir of ~/.claude/session-env failed, beside the
 	// transcript bind at ~/.claude/projects, as Claude Code makes it; empty when it did
 	// not, and "no HOME" when HOME is empty.
@@ -324,15 +340,14 @@ func probeReadOnly() *readOnlyReport {
 	r.WriteExit = exitCode(cmd.Run(), &stderr)
 	r.WriteStderr = strings.TrimSpace(stderr.String())
 	if os.Getenv("PROBE_DOCKER") == "1" {
-		r.InnerExit, r.InnerOutput = innerWrite(false)
-		r.PrivExit, r.PrivOutput = innerWrite(true)
-		for _, line := range strings.Split(r.PrivOutput, "\n") {
-			if rest, ok := strings.CutPrefix(line, remountPrefix); ok {
-				r.PrivRemount = rest
-			}
-			if rest, ok := strings.CutPrefix(line, setattrPrefix); ok {
-				r.PrivSetattr = rest
-			}
+		wd, err := os.Getwd()
+		if err != nil {
+			r.InnerExit, r.InnerOutput = -1, err.Error()
+			r.PrivExit, r.PrivOutput = -1, err.Error()
+		} else {
+			r.InnerExit, r.InnerOutput = innerWrite(false, wd, agentFile)
+			priv := writeInside(true, wd, agentFile)
+			r.PrivExit, r.PrivOutput, r.PrivRemount, r.PrivSetattr = priv.Exit, priv.Output, priv.Remount, priv.Setattr
 		}
 	}
 	if addr := os.Getenv("PROBE_SETUP_ADDR"); addr != "" {
@@ -445,6 +460,18 @@ func probe(args []string) int {
 	}
 	if os.Getenv("PROBE_PLANT_HOME") == "1" {
 		r.Planted = plantHome()
+		b, _ := json.Marshal(r)
+		fmt.Println(probePrefix + string(b))
+		return 0
+	}
+	if os.Getenv("PROBE_QORY_HOST") == "1" {
+		r.QoryHost = probeQoryHost()
+		b, _ := json.Marshal(r)
+		fmt.Println(probePrefix + string(b))
+		return 0
+	}
+	if os.Getenv("PROBE_SETUP_ROUTE") == "1" {
+		r.SetupRoute = probeSetupRoute()
 		b, _ := json.Marshal(r)
 		fmt.Println(probePrefix + string(b))
 		return 0
@@ -602,6 +629,8 @@ func probe(args []string) int {
 	if _, err := os.Stat("/sys/fs/cgroup/memory.max"); err == nil {
 		r.CgroupV2 = true
 	}
+
+	r.RuntimeWrites, r.RuntimeProgram = runtimeWrites()
 
 	for i, a := range args {
 		if a == "--settings" && i+1 < len(args) {
@@ -808,4 +837,50 @@ func hook(settings string) string {
 		}
 	}
 	return said.String()
+}
+
+// runtimeFolder is where the suite's session sees the runtime's installed folder: the
+// probe's program is bin/claude in it.
+var runtimeFolder = path.Join(wall.RuntimeDir, "claude")
+
+// plantedName is the file the probe tries to create in the runtime's installed folder.
+const plantedName = "planted-by-the-agent"
+
+// runtimeWrites tries, as the agent, to change the runtime's installed folder and
+// Forager's helper: to create a file in each folder, and to open, change the mode of,
+// rename and remove the probe's program. It returns the attempts that succeeded, and
+// whether the program is still there, a regular file.
+func runtimeWrites() ([]string, bool) {
+	program := path.Join(runtimeFolder, "bin", "claude")
+	var done []string
+	try := func(what string, err error) {
+		if err == nil {
+			done = append(done, what)
+		}
+	}
+	create := func(p string) error {
+		f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o755)
+		if err == nil {
+			f.Close()
+		}
+		return err
+	}
+	openWrite := func(p string) error {
+		f, err := os.OpenFile(p, os.O_WRONLY, 0)
+		if err == nil {
+			f.Close()
+		}
+		return err
+	}
+	try("create a file in "+runtimeFolder, create(path.Join(runtimeFolder, plantedName)))
+	try("create a file in "+path.Dir(program), create(path.Join(path.Dir(program), plantedName)))
+	try("open "+program+" for writing", openWrite(program))
+	try("change the mode of "+program, os.Chmod(program, 0o777))
+	try("rename "+program, os.Rename(program, program+".old"))
+	try("remove "+program, os.Remove(program))
+	try("create a file in "+path.Dir(wall.HelperPath), create(path.Join(path.Dir(wall.HelperPath), plantedName)))
+	try("open "+wall.HelperPath+" for writing", openWrite(wall.HelperPath))
+	try("change the mode of "+wall.HelperPath, os.Chmod(wall.HelperPath, 0o777))
+	info, err := os.Lstat(program)
+	return done, err == nil && info.Mode().IsRegular()
 }

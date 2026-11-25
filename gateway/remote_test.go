@@ -533,7 +533,7 @@ func TestStartRefusesAnAddressItCannotServe(t *testing.T) {
 	}
 }
 
-// TestASeparateGatewayRunsNoSessions pins D-4: a gateway with an address makes no link
+// TestASeparateGatewayRunsNoSessions pins that a gateway with an address makes no link
 // directory, no socket and no proxy on loopback; its local link has no socket and no
 // proxy, and every connection to it fails, saying why; its one address is its proxy's.
 func TestASeparateGatewayRunsNoSessions(t *testing.T) {
@@ -827,6 +827,8 @@ func TestEveryRequestCarriesAnAcceptedRunKey(t *testing.T) {
 		{http.MethodPost, "/qory-link/run-configuration"},
 		{http.MethodGet, "/qory-link/run-configuration/" + runID},
 		{http.MethodPost, "/qory-link/events"},
+		{http.MethodPost, "/qory-link/run-configuration/" + runID + "/next-session"},
+		{http.MethodPost, "/qory-link/run-configuration/" + runID + "/pushed-commits"},
 		{http.MethodGet, "/qory-link/nothing"},
 	}
 	send := func(header []string, method, path string) answer {
@@ -994,12 +996,15 @@ func TestTheGatewayAllowsTheSkewPastAttachBy(t *testing.T) {
 
 // TestTheServersRunKeyExpiredIsKept pins the server's run_key_expired refusal of an
 // attach within the skew: two run requests with a run key 10 s past its attach_by send
-// one attach, and both get the server's refusal, the same answer. Once the gateway
+// one attach, and both get the server's refusal, the same answer but for the first's
+// retry_after from the attach's Retry-After, which the second has not. Once the gateway
 // holds a record of the run, the kept refusal is not given: the run request is the 409
 // run_attached of a run the gateway has a record of.
 func TestTheServersRunKeyExpiredIsKept(t *testing.T) {
 	r := startRemote(t, nil, gateway.Config{})
 	r.c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusConflict, Code: "run_key_expired"})
+	wait := "7"
+	r.c.attachRetryAfter.Store(&wait)
 	runID := event.NewRunID()
 	key := runKeyFor(t, runID, func(k *runkey.Key) {
 		k.AttachBy = time.Now().Add(-10 * time.Second).Truncate(time.Second)
@@ -1009,8 +1014,13 @@ func TestTheServersRunKeyExpiredIsKept(t *testing.T) {
 	refused(t, "the first run request", first, http.StatusConflict, "run_key_expired", "apiary", r.attachLine(runID, "run_key_expired"))
 	second := r.tryOpen(t, key, server.LinkRunRequest{})
 	refused(t, "the second run request", second, http.StatusConflict, "run_key_expired", "apiary", r.attachLine(runID, "run_key_expired"))
-	if !bytes.Equal(first.body, second.body) {
-		t.Errorf("the second refusal %s; want the first's, %s", second.body, first.body)
+	firstRef, secondRef := first.refusal(), second.refusal()
+	if firstRef["retry_after"] != 7.0 {
+		t.Errorf("the first refusal %s; want retry_after 7", first.body)
+	}
+	delete(firstRef, "retry_after")
+	if !reflect.DeepEqual(firstRef, secondRef) {
+		t.Errorf("the second refusal %s; want the first's without retry_after, %s", second.body, first.body)
 	}
 	if n := len(r.c.attached()); n != 1 {
 		t.Errorf("%d attaches; want 1", n)
@@ -1045,7 +1055,8 @@ func mustRunID(t *testing.T, key string) string {
 
 // TestTheRunRequestBehindTheGateway pins what a run request may carry behind a separate
 // gateway: a run id other than its run key's is run_key_invalid; labels or about, the
-// starter's registration's, are invalid_request; a run the gateway holds, or holds a
+// starter's registration's, are invalid_request, and so are LABELS, Labels, ABOUT and
+// About; a run the gateway holds, or holds a
 // record of, is 409 run_attached, read as the server's refusal of the attach; and a
 // reload of another run id than the run key's is run_key_invalid.
 func TestTheRunRequestBehindTheGateway(t *testing.T) {
@@ -1055,6 +1066,13 @@ func TestTheRunRequestBehindTheGateway(t *testing.T) {
 	refused(t, "another run id", r.tryOpen(t, key, server.LinkRunRequest{RunID: event.NewRunID()}), http.StatusBadRequest, "run_key_invalid", "gateway", keyInvalid)
 	refused(t, "labels", r.tryOpen(t, key, server.LinkRunRequest{Labels: map[string]string{"repository": "example-namespace/project"}}), http.StatusBadRequest, "invalid_request", "gateway", "the gateway refused the run: invalid_request")
 	refused(t, "about", r.tryOpen(t, key, server.LinkRunRequest{About: &server.About{Title: "Fix the failing build"}}), http.StatusBadRequest, "invalid_request", "gateway", "the gateway refused the run: invalid_request")
+	r.mu.Lock()
+	r.keys = append(r.keys, key)
+	r.mu.Unlock()
+	for name, value := range map[string]string{"LABELS": `{"team":"x"}`, "Labels": `{"team":"x"}`, "ABOUT": `{"title":"x"}`, "About": `{"title":"x"}`} {
+		body := []byte(`{"version":1,"run_id":"` + runID + `","wall":false,"` + name + `":` + value + `}`)
+		refused(t, name, r.do(t, key, http.MethodPost, "/qory-link/run-configuration", body), http.StatusBadRequest, "invalid_request", "gateway", "the gateway refused the run: invalid_request")
+	}
 	if n := len(r.c.attached()); n != 0 {
 		t.Errorf("%d attaches", n)
 	}
@@ -1170,15 +1188,28 @@ func TestARunThroughTheGateway(t *testing.T) {
 
 // TestAnAttachRefusalReachesTheSession pins the server's refusal of the attach: the
 // session has it as the link's refusal, its status and code, from apiary, reading
-// attach <run.url>/<run_id>: <code> (status <status>); the run does not open, and the
-// gateway holds nothing of it.
+// attach <run.url>/<run_id>: <code> (status <status>), with retry_after only when the
+// refusal has a Retry-After; the run does not open, and the gateway holds nothing of it.
 func TestAnAttachRefusalReachesTheSession(t *testing.T) {
 	r := startRemote(t, nil, gateway.Config{})
 	for _, ref := range []receiver.Refusal{{Status: http.StatusConflict, Code: "run_attached"}, {Status: http.StatusConflict, Code: "run_key_expired"}, {Status: http.StatusConflict, Code: "not_a_gateway"}, {Status: http.StatusConflict, Code: "workspace_not_served"}} {
 		r.c.attachRefusal.Store(&ref)
 		runID := event.NewRunID()
-		refused(t, ref.Code, r.tryOpen(t, runKeyFor(t, runID, nil), server.LinkRunRequest{}), ref.Status, ref.Code, "apiary", r.attachLine(runID, ref.Code))
+		got := r.tryOpen(t, runKeyFor(t, runID, nil), server.LinkRunRequest{})
+		refused(t, ref.Code, got, ref.Status, ref.Code, "apiary", r.attachLine(runID, ref.Code))
+		if _, ok := got.refusal()["retry_after"]; ok {
+			t.Errorf("%s without Retry-After: %s", ref.Code, got.body)
+		}
 	}
+	wait := "7"
+	r.c.attachRetryAfter.Store(&wait)
+	r.c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusConflict, Code: "workspace_not_served"})
+	got := r.tryOpen(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{})
+	validDocument(t, "link-refusal.schema.json", got.body)
+	if got.status != http.StatusConflict || got.refusal()["retry_after"] != 7.0 {
+		t.Errorf("an attach refusal with Retry-After: 7: %d %s", got.status, got.body)
+	}
+	r.c.attachRetryAfter.Store(nil)
 	if runs, _ := gateway.Held(r.g); runs != 0 {
 		t.Errorf("%d runs held", runs)
 	}
@@ -1238,10 +1269,10 @@ func TestCloseStopsTheTriesOfARunThatOpens(t *testing.T) {
 // reopen fetches with a secrets request.
 func serveToolAndKeys(c *control) {
 	entry := func(name string) string {
-		return `{"name":"` + name + `","format":"anthropic-messages","endpoint":"https://localhost:9/v1","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
+		return `{"name":"` + name + `","group":"anthropic","format":"anthropic-messages","endpoint":"https://localhost:9/v1","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
 	}
 	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost","svc.example"]},"tools":[{"name":"svc"}]},`+
-		`"model_credential":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
+		`"default_model_provider_credential_name":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
 	c.mu.Lock()
 	c.secrets = map[string]string{"model": "fake-group-value-0001", "model-2": "fake-group-value-0002"}
 	c.mu.Unlock()
@@ -2298,9 +2329,9 @@ func TestEachFirstRequestReopensARun(t *testing.T) {
 // and model-2, at an endpoint on localhost, with fake values.
 func serveKeyGroup(c *control) {
 	entry := func(name string) string {
-		return `{"name":"` + name + `","format":"anthropic-messages","endpoint":"https://localhost:9/v1","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
+		return `{"name":"` + name + `","group":"anthropic","format":"anthropic-messages","endpoint":"https://localhost:9/v1","auth":{"scheme":"header","header":"x-api-key"},"pause_for_s":3600}`
 	}
-	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"model_credential":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
+	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}},"default_model_provider_credential_name":"model","credentials":[`+entry("model")+`,`+entry("model-2")+`]}`, 'a')
 	c.mu.Lock()
 	c.secrets = map[string]string{"model": "fake-group-value-0001", "model-2": "fake-group-value-0002"}
 	c.mu.Unlock()
@@ -2319,7 +2350,7 @@ func TestAReopenedRunKeepsItsStop(t *testing.T) {
 	m := before.open(t, runKeyFor(t, marked, nil), server.LinkRunRequest{Wall: true})
 	p := before.open(t, runKeyFor(t, plain, nil), server.LinkRunRequest{Wall: true})
 	// The mark as the key group's Pass makes it.
-	if err := os.WriteFile(filepath.Join(cfg.Dir, "runs", marked, "model-key-limit"), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(cfg.Dir, "runs", marked, "model-key-limit"), []byte(`{"version":1,"groups":[{"group":"anthropic"}]}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	after := before.restart(t, cfg)
@@ -2456,13 +2487,13 @@ func TestAReopenWhoseAttachFails(t *testing.T) {
 }
 
 // TestConnectionsThatWaitOnAReopenAreNotBounded pins the bound of 64 connections of one
-// source whose run key has not been admitted, for connections that wait on a reopen:
-// a connection counts against its source's bound only until its run key verifies (the
-// user's "547 (a)"), and against the bound in all until the run is live. With the
-// attach answered 503, 40 relay connections and 30 reloads from one address wait on the
-// reopen of one run; none of them is closed, the one address counts each of them in
-// all and none of its source, and each gets its answer once the attach is answered;
-// then the one address counts none of them.
+// source whose run key has not been admitted, for connections that wait on a reopen: a
+// connection counts against its source's bound only until its run key verifies, and
+// against the bound in all until the run is live. With the attach answered 503, 40 relay
+// connections and 30 reloads from one address wait on the reopen of one run; none of
+// them is closed, the one address counts each of them in all and none of its source, and
+// each gets its answer once the attach is answered; then the one address counts none of
+// them.
 func TestConnectionsThatWaitOnAReopenAreNotBounded(t *testing.T) {
 	const relays, reloads = 40, 30
 	if relays+reloads <= gateway.MaxSourceConns {

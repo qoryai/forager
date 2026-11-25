@@ -67,7 +67,7 @@ const (
 	MaxAnswer = 5 << 20
 	// MaxCredentials is how many credentials a request lists at most, and so how many
 	// values a plaintext has.
-	MaxCredentials = 8
+	MaxCredentials = 16
 	// MaxValueBytes is the largest value, in bytes of UTF-8.
 	MaxValueBytes = 16384
 	// Lifetime is how far after its clock the server sets exp, in seconds.
@@ -142,11 +142,13 @@ type store struct {
 }
 
 // Apply is one item of a value's apply, sealed-plaintext.schema.json: the hosts the
-// value is set on, how, and on which paths, nil for every path.
+// value is set on, how, on which paths, nil for every path, and the one ref a push
+// through it may change, empty for none.
 type Apply struct {
 	Hosts                    []string
 	Scheme, Username, Header string
 	Paths                    []string
+	PushRef                  string
 }
 
 // Value returns the value of a credential and whether the envelope had one. The bytes
@@ -182,7 +184,7 @@ func (v Values) Apply(credential string) ([]Apply, bool) {
 	}
 	out := make([]Apply, len(m.apply))
 	for i, a := range m.apply {
-		out[i] = Apply{Hosts: slices.Clone(a.Hosts), Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: slices.Clone(a.Paths)}
+		out[i] = Apply{Hosts: slices.Clone(a.Hosts), Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: slices.Clone(a.Paths), PushRef: a.PushRef}
 	}
 	return out, true
 }
@@ -190,13 +192,17 @@ func (v Values) Apply(credential string) ([]Apply, bool) {
 // Replace puts the value of a credential that from has, with its expires_at and apply,
 // in place of the one v has: the old bytes are overwritten with zeros, and from no
 // longer has the value, so clearing from leaves v's. It reports whether from had a value
-// for the credential; without one, v is as it was.
+// for the credential; without one, v is as it was. When from is v, the value is in
+// place already, and Replace changes nothing.
 func (v Values) Replace(credential string, from Values) bool {
 	b, ok := from.Value(credential)
 	if !ok || v.m == nil {
 		return false
 	}
 	src, dst := from.m(), v.m()
+	if src == dst {
+		return true
+	}
 	if old, ok := dst.values[credential]; ok {
 		clear(old)
 	}

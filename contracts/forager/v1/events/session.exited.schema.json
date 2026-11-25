@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/events/session.exited.schema.json",
   "title": "dev.qory.session.exited",
-  "description": "A session of the run ended: its runtime exited, the session stopped it, the join was refused, or the run ended while the session ran. One per join, the last event of the session's, after its dev.qory.session.started; a refused join has no dev.qory.session.started, and its dev.qory.session.exited is failed with exit_code -1 and the refusal's code as reason. A failure at the join after dev.qory.session.started and before the runtime starts, such as an image fetch or a wall's start that fails, is failed with exit_code -1 and no reason, or the refusal's code as reason when the wall refused with one, such as image_user_root. The run stays open after it: only dev.qory.run.exited ends the run. The runtime's exit decides the state: succeeded on exit status 0, with no reason and no signal; failed on any other exit status or a signal, with no reason; cancelled with timeout, the run's time limit, or interrupted, a stop from where the run was started; paused with model_key_limit, a stop after the gateway's answer to a batch had stop (link-batch-answer.schema.json); each whatever the exit status or signal. When the gateway ends the run while a join is open, the gateway writes that session's dev.qory.session.exited first, with the state, the reason and the exit_code of its dev.qory.run.exited, then the dev.qory.run.exited; the resend of a record that ends with gateway_lost does the same, failed with exit_code -1, and so does the session in its record of the gateway's 410. Such an event has exit_code -1 and no signal, as a refused join has: with no exit status of the runtime, the rules of the runtime's exit do not apply, and the reason is an open code, as dev.qory.run.exited's. So every dev.qory.session.started of a run's stream has its dev.qory.session.exited. A session's batch on the link contains only the session's reasons, link-batch.schema.json.",
+  "description": "A session of the run ended: its runtime exited, the session stopped it, the join was refused, or the run ended while the session ran. One per join, the last event of the session's, after its dev.qory.session.started; a refused join has no dev.qory.session.started, and its dev.qory.session.exited is failed with exit_code -1 and the refusal's code as reason. A failure at the join after dev.qory.session.started and before the runtime starts, such as an image fetch or a wall's start that fails, is failed with exit_code -1 and no reason, or the refusal's code as reason when the wall refused with one, such as image_user_root. The run stays open after it: only dev.qory.run.exited ends the run. The runtime's exit decides the state: succeeded on exit status 0, with no reason and no signal; failed on any other exit status or a signal, with no reason; cancelled with timeout, the run's time limit, or interrupted, a stop from where the run was started; paused with model_key_limit or model_key_switch, and failed with model_key_unauthorized, a stop after the gateway's answer to a batch had stop with that reason (link-batch-answer.schema.json); each whatever the exit status or signal. When the gateway ends the run while a join is open, the gateway writes that session's dev.qory.session.exited first, with the state, the reason and the exit_code of its dev.qory.run.exited, then the dev.qory.run.exited; the resend of a record that ends with gateway_lost does the same, failed with exit_code -1, and so does the session in its record of the gateway's 410. Such an event has exit_code -1 and no signal, as a refused join has: with no exit status of the runtime, the rules of the runtime's exit do not apply, and the reason is an open code, as dev.qory.run.exited's. So every dev.qory.session.started of a run's stream has its dev.qory.session.exited. A session's batch on the link contains only the session's reasons, link-batch.schema.json.",
   "type": "object",
   "additionalProperties": false,
   "required": ["session", "state", "exit_code", "duration_ms"],
@@ -10,7 +10,7 @@
     {
       "if": {"anyOf": [{"required": ["signal"]}, {"required": ["exit_code"], "properties": {"exit_code": {"not": {"const": -1}}}}]},
       "then": {
-        "properties": {"reason": {"enum": ["timeout", "interrupted", "model_key_limit"]}},
+        "properties": {"reason": {"enum": ["timeout", "interrupted", "model_key_limit", "model_key_switch", "model_key_unauthorized"]}},
         "allOf": [
           {
             "if": {"properties": {"state": {"const": "succeeded"}}, "required": ["state"]},
@@ -18,7 +18,10 @@
           },
           {
             "if": {"properties": {"state": {"const": "failed"}}, "required": ["state"]},
-            "then": {"not": {"required": ["reason"]}, "anyOf": [{"required": ["signal"]}, {"properties": {"exit_code": {"not": {"const": 0}}}}]}
+            "then": {"anyOf": [
+              {"required": ["reason"], "properties": {"reason": {"const": "model_key_unauthorized"}}},
+              {"not": {"required": ["reason"]}, "anyOf": [{"required": ["signal"]}, {"properties": {"exit_code": {"not": {"const": 0}}}}]}
+            ]}
           }
         ]
       }
@@ -32,12 +35,16 @@
       "then": {"properties": {"state": {"const": "cancelled"}}}
     },
     {
-      "if": {"properties": {"reason": {"const": "model_key_limit"}}, "required": ["reason"]},
+      "if": {"properties": {"reason": {"enum": ["model_key_limit", "model_key_switch"]}}, "required": ["reason"]},
       "then": {"properties": {"state": {"const": "paused"}}}
     },
     {
+      "if": {"properties": {"reason": {"const": "model_key_unauthorized"}}, "required": ["reason"]},
+      "then": {"properties": {"state": {"const": "failed"}}}
+    },
+    {
       "if": {"properties": {"state": {"const": "paused"}}, "required": ["state"]},
-      "then": {"required": ["reason"], "properties": {"reason": {"const": "model_key_limit"}}}
+      "then": {"required": ["reason"], "properties": {"reason": {"enum": ["model_key_limit", "model_key_switch"]}}}
     },
     {
       "if": {"properties": {"reason": {"const": "gateway_lost"}}, "required": ["reason"]},
@@ -53,7 +60,7 @@
     "state": {"description": "How the session ended: succeeded, failed, cancelled or paused, as the runtime's exit and the reason decide it.", "type": "string", "enum": ["succeeded", "failed", "cancelled", "paused"]},
     "exit_code": {"description": "The runtime's exit status, or -1 when a signal killed it; -1 for a refused join and for a failure at the join after dev.qory.session.started and before the runtime starts, such as an image fetch or a wall's start that fails, whose runtime never started; and -1 when the run ended while the session ran, as the run's dev.qory.run.exited has it.", "type": "integer", "minimum": -1},
     "signal": {"description": "The signal that killed the runtime, when one did: SIGKILL, SIGTERM.", "type": "string", "minLength": 1},
-    "reason": {"description": "Why the session ended, when it ended other than by the runtime exiting by itself: an open code, a lower-case letter, then lower-case letters, digits and _, up to 64 characters, as the reason of dev.qory.run.exited. The session writes timeout, the run's time limit was reached and the session stopped the runtime; model_key_limit, the gateway's proxy passed a model provider's limit refusal to the session, and the session stopped the runtime after the gateway's answer to a batch had stop with this reason; interrupted, the run was stopped from where it was started, a Ctrl-C or a signal to the program that runs the session, before the session observed the runtime's exit; and, for a refused join or a refusal of the wall after dev.qory.session.started, the refusal's code, one the session sets, those of refusal.Decides. When the run ends while the session runs, the reason is the run's: the dev.qory.run.exited reason of the gateway's ending, stopped, session_lost, batch_refused or the starter's, gateway_lost from the resend of a record, and in the session's record the reason of the gateway's 410, run_closed among them; absent when that dev.qory.run.exited has none. Absent when the runtime exited by itself.", "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+    "reason": {"description": "Why the session ended, when it ended other than by the runtime exiting by itself: an open code, a lower-case letter, then lower-case letters, digits and _, up to 64 characters, as the reason of dev.qory.run.exited. The session writes timeout, the run's time limit was reached and the session stopped the runtime; model_key_limit, the gateway's proxy passed a model provider's limit refusal to the session, and the session stopped the runtime after the gateway's answer to a batch had stop with this reason; model_key_switch, the model provider returned 401 for the session's key and another key of the key group is usable, and model_key_unauthorized, every key of the key group is out and a 401 took at least one out, each after a stop with this reason too; interrupted, the run was stopped from where it was started, a Ctrl-C or a signal to the program that runs the session, before the session observed the runtime's exit; and, for a refused join or a refusal of the wall after dev.qory.session.started, the refusal's code, one the session sets, those of refusal.Decides. When the run ends while the session runs, the reason is the run's: the dev.qory.run.exited reason of the gateway's ending, stopped, session_lost, batch_refused or the starter's, gateway_lost from the resend of a record, and in the session's record the reason of the gateway's 410, run_closed among them; absent when that dev.qory.run.exited has none. Absent when the runtime exited by itself.", "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
     "duration_ms": {"description": "Milliseconds from the session's dev.qory.session.started to its end, the run's end when the run ended while the session ran; 0 for a refused join, which has none.", "type": "integer", "minimum": 0},
     "peak_memory_bytes": {"description": "The enclosure's peak memory in bytes, from memory.peak of its cgroup v2, as measured inside the enclosure; not for limits or billing. Only behind a wall, and only when the runtime exited: absent for a refused join, a failure before the runtime starts and a run that ended while the session ran, and absent when the helper could not read it, never 0 in its place. With nested Docker it covers the daemon and the containers the agent starts. When the session's socket received more than one measure record, the last one received counts. At most 2^53-1, so every JSON reader reads it exactly.", "type": "integer", "minimum": 0, "maximum": 9007199254740991},
     "cpu_time_ms": {"description": "The enclosure's CPU time in milliseconds, usage_usec of cpu.stat of its cgroup v2 divided by 1000 and rounded down, as measured inside the enclosure; not for limits or billing. Present and absent as peak_memory_bytes is, each apart from the other. At most 2^53-1.", "type": "integer", "minimum": 0, "maximum": 9007199254740991}

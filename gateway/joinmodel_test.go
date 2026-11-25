@@ -18,11 +18,11 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// modelKeyRun opens a walled run with the model keys first, its start key, and second,
-// both on the endpoint's host of an origin that records the x-api-key it receives, and
-// posts the run's first batch. send sends a request with the placeholder of the model
-// key name through the run's proxy and returns the key the origin received; count is
-// the number of requests the origin received.
+// modelKeyRun opens a walled run with the model keys first, its default model provider
+// credential, and second, both on the endpoint's host of an origin that records the
+// x-api-key it receives, and posts the run's first batch. send sends a request with the
+// placeholder of the model key name through the run's proxy and returns the key the
+// origin received; count is the number of requests the origin received.
 func modelKeyRun(t *testing.T) (h *harness, runID string, send func(name string) string, count func() int) {
 	t.Setenv("GATEWAY_TEST_FIRST_KEY", "fake-first-value-0001")
 	t.Setenv("GATEWAY_TEST_SECOND_KEY", "fake-second-value-0002")
@@ -50,7 +50,7 @@ func modelKeyRun(t *testing.T) (h *harness, runID string, send func(name string)
 		{Name: "second", Env: "GATEWAY_TEST_SECOND_KEY", Format: "anthropic-messages", Endpoint: endpoint, Scheme: "header", Header: "x-api-key"},
 	}
 	c := newControl(t)
-	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]},"credentials":[{"name":"first"},{"name":"second"}]},"model_credential":"first"}`, 'a')
+	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["localhost"]},"credentials":[{"name":"first"},{"name":"second"}]},"default_model_provider_credential_name":"first"}`, 'a')
 	// The node's policy lists localhost itself, which the guard of a walled run's proxy
 	// reaches only then.
 	node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost"}}}
@@ -60,8 +60,8 @@ func modelKeyRun(t *testing.T) (h *harness, runID string, send func(name string)
 	h.secrets = append(h.secrets, "fake-first-value-0001", "fake-second-value-0002")
 	a := h.open(server.LinkRunRequest{Wall: true})
 	runID = a.RunID
-	if a.ModelCredential != "first" {
-		t.Fatalf("the run's start key %q", a.ModelCredential)
+	if a.DefaultModelProviderCredentialName != "first" {
+		t.Fatalf("the run's default model provider credential %q", a.DefaultModelProviderCredentialName)
 	}
 	if d := h.post(started(runID, nil), applied(runID, a.Applied)); !d.Accepted() {
 		t.Fatalf("the first batch: %+v", d)
@@ -93,17 +93,17 @@ func modelKeyRun(t *testing.T) (h *harness, runID string, send func(name string)
 }
 
 // TestAJoinSetsItsModelKey pins the model key the proxy sets for each session: a run
-// with the model keys first, its start key, and second, both on the endpoint's host.
-// Session 1 joins with none named and gets first; a join naming second while session 1
-// runs is a 400, and the proxy sets first until session 1's session.exited. Session 2
-// then joins naming second, and while it runs the proxy sets second alone, so a request
-// with first's placeholder gets no key; once session 2 exited the proxy sets first
-// again.
+// with the model keys first, its default model provider credential, and second, both on
+// the endpoint's host. Session 1 joins with none named and gets first; a join naming
+// second while session 1 runs is a 400, and the proxy sets first until session 1's
+// session.exited. Session 2 then joins naming second, and while it runs the proxy sets
+// second alone, so a request with first's placeholder gets no key; once session 2
+// exited the proxy sets first again.
 func TestAJoinSetsItsModelKey(t *testing.T) {
 	h, runID, send, count := modelKeyRun(t)
 
 	one, err := h.join(runID)
-	if err != nil || one.Session != 1 || one.ModelCredential != "first" {
+	if err != nil || one.Session != 1 || one.ModelProviderCredentialName != "first" {
 		t.Fatalf("join 1: %+v, %v", one, err)
 	}
 	h.post(sessionStarted(runID, 1))
@@ -111,7 +111,7 @@ func TestAJoinSetsItsModelKey(t *testing.T) {
 		t.Errorf("session 1, first's placeholder: %q", v)
 	}
 	var r *accesskey.Refusal
-	if _, err := h.linkOf(runID).Join(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID, server.LinkJoinRequest{Passes: []string{}, ModelKey: true, ModelCredential: "second"}); !errors.As(err, &r) || r.Status != http.StatusBadRequest || r.Code != "invalid_request" {
+	if _, err := h.linkOf(runID).Join(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID, server.LinkJoinRequest{Passes: []string{}, ModelKey: true, ModelProviderCredentialName: "second"}); !errors.As(err, &r) || r.Status != http.StatusBadRequest || r.Code != "invalid_request" {
 		t.Fatalf("join 2 while session 1 runs: %v", err)
 	}
 	if v := send("first"); v != "fake-first-value-0001" {
@@ -119,8 +119,8 @@ func TestAJoinSetsItsModelKey(t *testing.T) {
 	}
 	h.post(sessionExited(runID, 1))
 
-	two, err := h.linkOf(runID).Join(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID, server.LinkJoinRequest{Passes: []string{}, ModelKey: true, ModelCredential: "second"})
-	if err != nil || two.Session != 2 || two.ModelCredential != "second" {
+	two, err := h.linkOf(runID).Join(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID, server.LinkJoinRequest{Passes: []string{}, ModelKey: true, ModelProviderCredentialName: "second"})
+	if err != nil || two.Session != 2 || two.ModelProviderCredentialName != "second" {
 		t.Fatalf("join 2: %+v, %v", two, err)
 	}
 	h.post(sessionStarted(runID, 2))
@@ -140,19 +140,41 @@ func TestAJoinSetsItsModelKey(t *testing.T) {
 	if n := count(); n != 6 {
 		t.Errorf("the origin got %d requests", n)
 	}
-	if _, err := h.linkOf(runID).Join(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID, server.LinkJoinRequest{ModelKey: true, ModelCredential: "third"}); err == nil {
+	if _, err := h.linkOf(runID).Join(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID, server.LinkJoinRequest{ModelKey: true, ModelProviderCredentialName: "third"}); err == nil {
 		t.Error("a join naming no model key of the run was answered")
 	}
 	h.post(exited(runID))
 }
 
-// TestAJoinWithNoModelKeySetsNone pins a join whose model_key is false in a run with the
-// model keys first, its start key, and second: its answer has no model_credential, and
-// from its 200 until its session.exited the proxy sets no model key, so a request with
-// first's or second's placeholder reaches the origin with the placeholder unchanged. A
-// join with model_key false and a model_credential is a 400 invalid_request that
-// numbers no session. Once the session exited the proxy sets first again, and the next
-// join, with a model key, gets first.
+// TestAJoinWithTheOldModelCredentialIsRefused pins that a join request with
+// model_credential, the member's name before model_provider_credential_name, is a 400
+// invalid_request from the gateway that numbers no session, though the member's value,
+// second, is a model key of the run. The next join, with no name, is session 1 and gets
+// first.
+func TestAJoinWithTheOldModelCredentialIsRefused(t *testing.T) {
+	h, runID, _, _ := modelKeyRun(t)
+	c := raw(t, h.g.LocalLink())
+	status, got := rawPost(t, c, joinPath(runID), server.LinkContentType, `{"version":1,"passes":[],"model_key":true,"model_credential":"second"}`)
+	if r := refusalOf([]byte(got)); status != http.StatusBadRequest || r["error"] != "invalid_request" || r["from"] != "gateway" {
+		t.Errorf("a join with model_credential: %d %s", status, got)
+	}
+	one, err := h.join(runID)
+	if err != nil || one.Session != 1 || one.ModelProviderCredentialName != "first" {
+		t.Fatalf("the join after the refusal: %+v, %v", one, err)
+	}
+	h.post(sessionStarted(runID, 1))
+	h.post(sessionExited(runID, 1))
+	h.post(exited(runID))
+}
+
+// TestAJoinWithNoModelKeySetsNone pins a join whose model_key is false in a run with
+// the model keys first, its default model provider credential, and second: its answer
+// has no model_provider_credential_name, and from its 200 until its session.exited the
+// proxy sets no model key, so a request with first's or second's placeholder reaches
+// the origin with the placeholder unchanged. A join with model_key false and a
+// model_provider_credential_name is a 400 invalid_request that numbers no session. Once
+// the session exited the proxy sets first again, and the next join, with a model key,
+// gets first.
 func TestAJoinWithNoModelKeySetsNone(t *testing.T) {
 	h, runID, send, count := modelKeyRun(t)
 	lk := h.linkOf(runID)
@@ -160,11 +182,11 @@ func TestAJoinWithNoModelKeySetsNone(t *testing.T) {
 		return lk.Join(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID, req)
 	}
 	var r *accesskey.Refusal
-	if _, err := join(server.LinkJoinRequest{Passes: []string{}, ModelCredential: "second"}); !errors.As(err, &r) || r.Status != http.StatusBadRequest || r.Code != "invalid_request" {
-		t.Fatalf("a join with model_key false and a model_credential: %v", err)
+	if _, err := join(server.LinkJoinRequest{Passes: []string{}, ModelProviderCredentialName: "second"}); !errors.As(err, &r) || r.Status != http.StatusBadRequest || r.Code != "invalid_request" {
+		t.Fatalf("a join with model_key false and a model_provider_credential_name: %v", err)
 	}
 	one, err := join(server.LinkJoinRequest{Passes: []string{}})
-	if err != nil || one.Session != 1 || one.ModelCredential != "" {
+	if err != nil || one.Session != 1 || one.ModelProviderCredentialName != "" {
 		t.Fatalf("join 1, model_key false: %+v, %v", one, err)
 	}
 	h.post(sessionStarted(runID, 1))
@@ -178,7 +200,7 @@ func TestAJoinWithNoModelKeySetsNone(t *testing.T) {
 		t.Errorf("after session 1, first's placeholder: %q", v)
 	}
 	two, err := h.join(runID)
-	if err != nil || two.Session != 2 || two.ModelCredential != "first" {
+	if err != nil || two.Session != 2 || two.ModelProviderCredentialName != "first" {
 		t.Fatalf("join 2: %+v, %v", two, err)
 	}
 	h.post(sessionStarted(runID, 2))

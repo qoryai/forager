@@ -59,8 +59,11 @@ type Run struct {
 	caVars     []string
 	// bundleErr is why a walled run with an authority has no bundle, which
 	// [Run.HostProxy] returns; nil otherwise.
-	bundleErr  error
-	hosts      hostProxies
+	bundleErr error
+	hosts     hostProxies
+	// pushes are the run's open push proxy forwarders ([Run.PushProxy]), apart from
+	// hosts, since Setup closes them alone before the setup container starts.
+	pushes     hostProxies
 	engine     engineProxies
 	reserved   []string
 	listed     *registration
@@ -71,6 +74,8 @@ type Run struct {
 	posts      *sink.Server
 	reload     *reloader
 	stopBeat   func()
+	// beat writes one dev.qory.run.heartbeat at once, until stopBeat runs.
+	beat       func()
 	unlock     func()
 	startedAt  time.Time
 	closedBy   ended
@@ -150,6 +155,8 @@ type Run struct {
 	// setupUp is the run's setup container from the call of StartSetup until
 	// [Run.RemoveSetup] removes it, nil otherwise.
 	setupUp setupContainer
+	// route is the run's route to OpenSpec.QoryRoute, nil for a run with none.
+	route *qoryRoute
 }
 
 // Open opens a run at its gateway and returns it once dev.qory.run.started and the
@@ -243,6 +250,9 @@ func open(ctx context.Context, spec OpenSpec, masker *mask.Masker, made bool) (*
 	spec.Report = func(line string) { report(masker.Replace(line)) }
 	r := &Run{open: spec, local: local, remote: remote, id: runID, dir: filepath.Join(spec.RunsDir, runID), lastExit: -1, masker: masker, madeMasker: made, passwords: &mask.Masker{}}
 	r.closing, r.markClosed = context.WithCancelCause(context.Background())
+	if spec.QoryRoute != nil {
+		r.route = newQoryRoute(spec.QoryRoute, r.closing, r.writeRouteEgress, spec.Report)
+	}
 	if err := r.start(ctx); err != nil {
 		r.markClosed(nil)
 		return r, err
@@ -329,7 +339,7 @@ func (r *Run) start(ctx context.Context) (err error) {
 			engine = &v
 		}
 		docker, _ := spec.Wall.(*wall.Docker)
-		if r.listed, err = register(r.id, r.openBinds, engine, docker); err != nil {
+		if r.listed, err = register(r.id, r.openBinds, engine, docker, false); err != nil {
 			return err
 		}
 		undo = append(undo, r.listed.release)
@@ -402,7 +412,7 @@ func (r *Run) start(ctx context.Context) (err error) {
 	r.sinks = sink.Multi{r.files}
 	// The heartbeats run from the link's discovery, every interval it announces, until
 	// the run's final event, and end with the run being closed from outside.
-	r.stopBeat = heartbeat(r.closing, interval, discovered, r.write)
+	r.stopBeat, r.beat = heartbeat(r.closing, interval, discovered, r.write)
 	// quit ends a run that does not open: the heartbeats stop, and the sinks are closed,
 	// within closeWait.
 	quit := func(err error) error {
@@ -508,9 +518,11 @@ func (r *Run) start(ctx context.Context) (err error) {
 		}
 	}
 	// On one machine the proxy secret opens every connection to the gateway's proxy,
-	// written by a forwarder or by the wall's relay, and the stack proxy secret every
-	// connection of the stack proxy's forwarder: one no preamble contains is no run.
-	// Behind a separate gateway the run key opens them, and the answer has neither.
+	// written by a forwarder or by the wall's relay, the stack proxy secret every
+	// connection of the stack proxy's forwarder: one no preamble contains is no run. The
+	// push proxy secret, present for a run with a push credential, passes the schema's
+	// pattern, which is stricter than a preamble's. Behind a separate gateway the run key
+	// opens them, and the answer has none.
 	if r.remote == nil {
 		if err := link.CheckSecret(answer.ProxySecret); err != nil {
 			return fail2(fmt.Errorf("the gateway's proxy secret: %w", err))
@@ -665,9 +677,10 @@ func (r *Run) AgentEnv(spec SessionSpec) ([]string, error) {
 	}
 	// As in Join: without a wall the variables the machine's credentials are read from
 	// are left out of what the session inherits. The session starts with
-	// spec.ModelCredential, or with the run's start key when spec has none: the join
-	// answer's model_credential is one of the two, by link-join-answer.schema.json. A
-	// spec with no runtime starts with no key.
+	// spec.ModelProviderCredentialName, or with the run's default model provider
+	// credential when spec has none: the join answer's model_provider_credential_name
+	// is one of the two, by link-join-answer.schema.json. A spec with no runtime starts
+	// with no key.
 	if s.Wall == nil {
 		s.Env = withoutNames(s.Env, r.reserved)
 	}
@@ -686,9 +699,9 @@ func (r *Run) AgentEnv(spec SessionSpec) ([]string, error) {
 		}
 		s.LaunchFixed, s.LaunchDefaults = insideValues(s.LaunchFixed, inside), insideValues(s.LaunchDefaults, inside)
 	}
-	model := s.ModelCredential
+	model := s.ModelProviderCredentialName
 	if model == "" {
-		model = r.answer.ModelCredential
+		model = r.answer.DefaultModelProviderCredentialName
 	}
 	credentialHosts, placeholderNames, key, err := chosen(rt, s.Runtime == nil, r.answer.CredentialHosts, r.answer.Placeholders, model)
 	if err != nil {
@@ -757,6 +770,23 @@ func (r *Run) write(typ string, data any) {
 	r.emitMu.Lock()
 	defer r.emitMu.Unlock()
 	r.record(typ, data)
+}
+
+// writeRouteEgress writes data, a decision of the route to link.QoryHost, as a
+// dev.qory.run.egress, with the mode of the policy in force. The run's masker replaces
+// a secret of the run in the path, as in the runtime's events.
+func (r *Run) writeRouteEgress(data map[string]any) {
+	if p, ok := data["path"].(string); ok {
+		data["path"] = r.masker.Replace(p)
+	}
+	r.emitMu.Lock()
+	defer r.emitMu.Unlock()
+	mode, _ := r.members["mode"].(string)
+	if mode == "" {
+		mode = "enforce"
+	}
+	data["mode"] = mode
+	r.record(event.RunEgress, data)
 }
 
 // own writes an event to the session's record alone.
@@ -863,6 +893,7 @@ func (r *Run) close(ctx context.Context, out Outcome) (*Closed, error) {
 	r.shutCheck(errCheckClosedRun, true)
 	r.ending.Store(true)
 	r.hosts.closeAll()
+	r.pushes.closeAll()
 	r.closeEngine()
 	// A host step still open ends before run.exited, as one the caller stopped.
 	if r.hostStep != nil {

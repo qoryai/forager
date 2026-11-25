@@ -110,7 +110,7 @@ func TestAMarkWithNoKeyGroupIsIgnored(t *testing.T) {
 	before := startRemote(t, c, cfg)
 	runID := event.NewRunID()
 	e := before.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{})
-	if err := os.WriteFile(filepath.Join(cfg.Dir, "runs", runID, "model-key-limit"), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(cfg.Dir, "runs", runID, "model-key-limit"), []byte(`{"version":1,"groups":[{"group":"anthropic"}]}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	e.r = before.restart(t, cfg)
@@ -347,13 +347,12 @@ func TestCloseStopsAReopenPastItsAttach(t *testing.T) {
 	}
 }
 
-// TestCloseSuspendsBesideTheOpensItStops pins Close in its worst case, in real time:
-// a live run whose tool ignores SIGTERM and whose last batch the server has not
-// accepted, a reopen that resent an event the server does not accept and waits for its
-// tool to listen, and an open that waits for its tool to listen. Close returns within
-// the 40 seconds of the container's stop grace (the user's "543 (a)"), the waiting
-// requests get a 503 with no body, the live run and the reopened one keep their
-// records, and the open's record goes.
+// TestCloseSuspendsBesideTheOpensItStops pins Close in its worst case, in real time: a
+// live run whose tool ignores SIGTERM and whose last batch the server has not accepted,
+// a reopen that resent an event the server does not accept and waits for its tool to
+// listen, and an open that waits for its tool to listen. Close returns within the 40
+// seconds of the container's stop grace, the waiting requests get a 503 with no body,
+// the live run and the reopened one keep their records, and the open's record goes.
 //
 // The bounds, run side by side from the start of Close:
 //   - the live run: its two proxies close within 1 s each, its tool goes at its SIGKILL

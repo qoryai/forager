@@ -28,9 +28,6 @@ import (
 type Runtime interface {
 	// Name is the runtime's name as events report it: claude, codex.
 	Name() string
-	// Version is the version of the program the adapter expects, reported in
-	// session.started and not checked against what is installed. Empty when the adapter expects none.
-	Version() string
 	// Prepare makes a launch one the session can follow: it installs the forwarder as
 	// the program's hook, writes what that takes into the session's directory, and returns
 	// the launch to start in place of the one given, command and arguments. A program
@@ -90,19 +87,20 @@ type Attach struct {
 	// enclosure, and a tool's, whose host the tool serves outside it. The session sets
 	// them with or without a wall.
 	Placeholders []string
-	// ModelVariables, in a run with a start key, are the variables of the runtime's
-	// model keys, the start key's among them, and its model endpoint variable, from its
-	// descriptor's model section. The session sets the start key's variable and the
+	// ModelVariables, in a run with a default model provider credential, are the
+	// variables of the runtime's model keys, the default model provider credential's
+	// among them, and its model endpoint variable, from its descriptor's model section.
+	// The session sets the default model provider credential's variable and the
 	// endpoint's and leaves out the others; a runtime that copies a file whose values
 	// reach the program's environment leaves these names out of the copy. Empty when
-	// the run has no start key.
+	// the run has no default model provider credential.
 	ModelVariables []string
 	// DeniedVariables are the runtime's denies, the names of forge_tokens and
 	// model_keys of denied-variables.json and, behind a wall, the runtime's model
 	// overrides: names the session leaves out of the values of the server, the run, the
-	// machine and the harness's defaults, with or without a start key. A runtime that
-	// copies a file whose values reach the program's environment leaves these names out
-	// of the copy, regardless of case.
+	// machine and the harness's defaults, with or without a default model provider
+	// credential. A runtime that copies a file whose values reach the program's
+	// environment leaves these names out of the copy, regardless of case.
 	DeniedVariables []string
 	// Fixed is the variables of the runtime's descriptor's fixed, NAME=value, sorted by
 	// name, which the launch's Env sets too. A runtime that copies a file whose values
@@ -197,9 +195,9 @@ type Model interface {
 
 // ModelPlaces is a descriptor's model section: Formats, the model API formats the
 // runtime sends its requests in, from the contract's api-format.schema.json; Model,
-// where a run's model id goes; Effort, where an effort value goes, nil when the runtime
-// has no place for one; Endpoint, the variable the runtime reads the base URL of its
-// model API from; Keys, the variables it reads a model key from, one per API format
+// where a run's model id goes; Agent, where an agent's model id goes, nil when the
+// runtime has no place for one; Effort, where an effort value goes, nil when the runtime
+// has no place for one; Endpoint, where the base URL of its model API goes; Keys, the variables it reads a model key from, one per API format
 // and auth; and Overrides, the variables that would override the model id or effort
 // value a composer writes, which a walled run leaves out and unsets inside.
 type ModelPlaces = descriptor.Model
@@ -210,22 +208,43 @@ type Key = descriptor.Key
 
 // Place is where a value goes, exactly one of its fields set: Flag, an argument the
 // runtime is started with, which takes the value; Setting, a dotted key in the JSON
-// settings file the launch passes; Variable, an environment variable.
+// settings file the launch passes, or a key=value pair of the descriptor's config flag;
+// Variable, an environment variable.
 type Place = descriptor.Place
 
 // ValuedPlace is a [Place] and the values the runtime accepts there.
 type ValuedPlace = descriptor.ValuedPlace
 
-// AgentPlace is where a value goes in an agent's file: Frontmatter, a key of the file's
-// frontmatter, and the values the runtime accepts there.
+// AgentKey is where a value goes in an agent's file, exactly one of its fields set:
+// Frontmatter, a key of the file's frontmatter, for an agent file of Markdown; TOML, a
+// key at the top of the file, for an agent file of TOML.
+type AgentKey = descriptor.AgentKey
+
+// AgentPlace is where a value goes in an agent's file, exactly one of Frontmatter and
+// TOML set as in [AgentKey], and the values the runtime accepts there.
 type AgentPlace = descriptor.AgentPlace
 
 // Effort is where an effort value goes: Run, the run's; Agent, an agent's, nil when the
 // runtime has no place for an agent's effort.
 type Effort = descriptor.Effort
 
-// Endpoint is the variable a runtime reads the base URL of its model API from.
+// Endpoint is where the base URL of a runtime's model API goes: Variable, the variable
+// the runtime reads it from, or Setting, a dotted key of its settings.
 type Endpoint = descriptor.Endpoint
+
+// Configs is implemented by a runtime that reads its settings as TOML, a descriptor's
+// config. It is optional and checked by type assertion, so [Runtime] keeps its methods:
+// the session passes no setting to a runtime without it.
+type Configs interface {
+	// Config is the runtime's config, a copy, and true; the zero Config and false when
+	// the runtime has none.
+	Config() (Config, bool)
+}
+
+// Config is a descriptor's config: Flag, the argument that takes one key=value pair,
+// such as --config, and Fixed, the settings the session passes in every launch, each
+// dotted key with a string, a bool or an int64.
+type Config = descriptor.Config
 
 // Record is one unit of what a program reports.
 type Record = descriptor.Record
@@ -245,12 +264,30 @@ type Resumes interface {
 	Resume() (Resume, bool)
 }
 
-// Resume is a descriptor's resume: PathFrom, the member of a hook's input that contains
-// the transcript's path; Path, the path while no hook input contains it, a template
-// with {session_id} and {cwd_slug}; Prefix, the directory the transcript must lie
-// under; and Args, the arguments the session adds when it resumes, with {session_id}.
-// Each path starts with ~/, the runtime's home.
+// Resume is a descriptor's resume: PathFrom, optional, the member of a hook's input
+// that contains the transcript's path; Path, the path while no hook input contains it,
+// a template with {session_id} and {cwd_slug}, in which a * matches any characters
+// other than / inside one path name; Prefix, the directory the transcript must lie
+// under; Args, the arguments the session adds when it resumes, with {session_id};
+// After, optional, the argument Args follow, at the end when it is empty; and Place,
+// optional, PlaceBeforeLast for Args before the last argument after After. Each path
+// starts with ~/, the runtime's home, with /, an absolute path, or with
+// ${<HomeVar>}/.
 type Resume = descriptor.Resume
+
+// PlaceBeforeLast is the resume.place whose arguments go before the launch's last
+// argument after resume.after, or before the first -- after it.
+const PlaceBeforeLast = descriptor.PlaceBeforeLast
+
+// InstallRequired is implemented by a runtime that can say whether the session starts
+// it only from a folder the caller installed it in, a descriptor's install_required. It
+// is optional and checked by type assertion, so [Runtime] keeps its methods: a session
+// of a runtime without it may leave SessionSpec.RuntimeInstall unset.
+type InstallRequired interface {
+	// InstallRequired reports whether a session of the runtime needs
+	// SessionSpec.RuntimeInstall.
+	InstallRequired() bool
+}
 
 // Parents is implemented by a runtime that reports which tool call started a subagent.
 // It is optional and checked by type assertion, so [Runtime] keeps its methods: the
@@ -273,13 +310,14 @@ type Summaries interface {
 
 // The sources of a record. A runtime maps records of SourceOutput and SourceHooks;
 // the session reads the records of SourceSetup, a setup command's, and of
-// SourceMeasure, the helper's measure of the enclosure, and passes none of them to a
-// runtime.
+// SourceMeasure, the helper's measure of the enclosure, and of SourceAfter,
+// SessionSpec.After's, and passes none of them to a runtime.
 const (
 	SourceOutput  = descriptor.SourceOutput
 	SourceHooks   = descriptor.SourceHooks
 	SourceSetup   = descriptor.SourceSetup
 	SourceMeasure = descriptor.SourceMeasure
+	SourceAfter   = descriptor.SourceAfter
 )
 
 // Stop is how a program is asked to leave: Signal, one [CheckStopSignal] passes, and
@@ -304,9 +342,6 @@ type bare string
 // Name is the name it was given.
 func (b bare) Name() string { return string(b) }
 
-// Version is empty: a bare runtime expects no version.
-func (bare) Version() string { return "" }
-
 // Prepare returns the launch as it is.
 func (bare) Prepare(a Attach) (Launch, error) { return a.Launch, nil }
 
@@ -327,11 +362,18 @@ func (bare) Headless([]string) bool { return false }
 // the contract's schema. installers are the ones the descriptor may name; one it names
 // that is not among them is an error.
 func Described(name string, document []byte, installers map[string]Installer) (Runtime, error) {
+	return DescribedWithArgs(name, document, installers, nil)
+}
+
+// DescribedWithArgs is [Described] with check, a refusal of launch arguments that
+// override a setting the session passes through flags only this runtime has, which
+// CheckArgs runs after the check of the descriptor's config.flag; nil for none.
+func DescribedWithArgs(name string, document []byte, installers map[string]Installer, check ArgsCheck) (Runtime, error) {
 	d, err := descriptor.Parse(name, document)
 	if err != nil {
 		return nil, err
 	}
-	r := &described{d: d}
+	r := &described{d: d, check: check}
 	if h := d.Sources.Hooks; h != nil {
 		r.install = installers[h.Install]
 		if r.install == nil {
@@ -360,13 +402,11 @@ type described struct {
 	install  Installer
 	stop     Stop
 	headless []string
+	check    ArgsCheck
 }
 
 // Name is the descriptor's runtime.
 func (r *described) Name() string { return r.d.Runtime }
-
-// Version is the descriptor's runtime_version.
-func (r *described) Version() string { return r.d.RuntimeVersion }
 
 // ReadsOutput reports whether the descriptor has an output source.
 func (r *described) ReadsOutput() bool { return r.d.Sources.Output != nil }
@@ -471,6 +511,9 @@ func (r *described) Secrets() Declarations {
 	return out
 }
 
+// InstallRequired is the descriptor's install_required.
+func (r *described) InstallRequired() bool { return r.d.InstallRequired }
+
 // Resume is the descriptor's resume, a copy, and true; the zero Resume and false when
 // it has none.
 func (r *described) Resume() (Resume, bool) {
@@ -482,6 +525,15 @@ func (r *described) Resume() (Resume, bool) {
 	return out, true
 }
 
+// Config is the descriptor's config, a copy, and true; the zero Config and false when
+// it has none.
+func (r *described) Config() (Config, bool) {
+	if r.d.Config == nil {
+		return Config{}, false
+	}
+	return Config{Flag: r.d.Config.Flag, Fixed: maps.Clone(r.d.Config.Fixed)}, true
+}
+
 // Model is the descriptor's model section, a copy, and true; the zero ModelPlaces and
 // false when it has none.
 func (r *described) Model() (ModelPlaces, bool) {
@@ -490,11 +542,15 @@ func (r *described) Model() (ModelPlaces, bool) {
 		return ModelPlaces{}, false
 	}
 	out := ModelPlaces{Formats: slices.Clone(m.Formats), Model: m.Model, Endpoint: m.Endpoint, Keys: slices.Clone(m.Keys), Overrides: slices.Clone(m.Overrides)}
+	if a := m.Agent; a != nil {
+		agent := *a
+		out.Agent = &agent
+	}
 	if e := m.Effort; e != nil {
 		effort := Effort{Run: e.Run}
 		effort.Run.Values = slices.Clone(e.Run.Values)
 		if a := e.Agent; a != nil {
-			effort.Agent = &AgentPlace{Frontmatter: a.Frontmatter, Values: slices.Clone(a.Values)}
+			effort.Agent = &AgentPlace{Frontmatter: a.Frontmatter, TOML: a.TOML, Values: slices.Clone(a.Values)}
 		}
 		out.Effort = &effort
 	}

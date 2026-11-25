@@ -31,6 +31,23 @@ const ProxySecret = "fake-proxy-secret-0123456789abcdef"
 // contains on the local link.
 const StackProxySecret = "fake-stack-proxy-secret-0123456789abcdef"
 
+// PushProxySecret is the push proxy secret of a run answer [WithPush] makes on the
+// local link.
+const PushProxySecret = "fake-push-proxy-secret-0123456789abcdef"
+
+// WithPush makes a, a run answer of [RunAnswer] or [RemoteRunAnswer], the answer of a
+// run with a push credential: its applied lists push-1 on git.example with purpose
+// push, and on the local link it has the push proxy secret PushProxySecret.
+func WithPush(a map[string]any, local bool) map[string]any {
+	applied, _ := a["applied"].(map[string]any)
+	creds, _ := applied["credentials"].([]any)
+	applied["credentials"] = append(creds, map[string]any{"name": "push-1", "hosts": []string{"git.example"}, "scheme": "basic", "paths": []string{"/example-org/app.git/*"}, "purpose": "push"})
+	if local {
+		a["push_proxy_secret"] = PushProxySecret
+	}
+	return a
+}
+
 // Reply is one answer of the fake gateway: its status, its body, marshalled as JSON
 // unless it is a []byte, none when nil, and headers of its own beside the digest; and,
 // on a separate gateway, how it is signed.
@@ -105,7 +122,7 @@ type Fake struct {
 	joins     []Join
 	answered  int
 	// numbered counts the joins of each run answered 200 or 403, by run id; model is the
-	// model_credential of each run's run answer.
+	// default_model_provider_credential_name of each run's run answer.
 	numbered map[string]int
 	model    map[string]string
 }
@@ -186,10 +203,10 @@ func (f *Fake) OnRun(h func(server.LinkRunRequest) Reply) { f.mu.Lock(); f.onRun
 func (f *Fake) OnReload(h func(runID string) Reply) { f.mu.Lock(); f.onReload = h; f.mu.Unlock() }
 
 // OnJoin replaces the answer to a join request, which by default is 200 with the run's
-// next session number and the request's model_credential, else the run answer's, and
-// none for a request whose model_key is false. A request with model_key false and a
-// model_credential is 400 invalid_request, as the gateway's schema refuses it. A reply
-// of 200 or 403 numbers the join.
+// next session number and the request's model_provider_credential_name, else the run
+// answer's, and none for a request whose model_key is false. A request with model_key
+// false and a model_provider_credential_name is 400 invalid_request, as the gateway's
+// schema refuses it. A reply of 200 or 403 numbers the join.
 func (f *Fake) OnJoin(h func(Join) Reply) { f.mu.Lock(); f.onJoin = h; f.mu.Unlock() }
 
 // OnTranscript replaces the answer to a transcript request, by default a 404
@@ -467,7 +484,7 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 			if f.model == nil {
 				f.model = map[string]string{}
 			}
-			f.model[req.RunID], _ = body["model_credential"].(string)
+			f.model[req.RunID], _ = body["default_model_provider_credential_name"].(string)
 		}
 	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, runPath+"/") && strings.HasSuffix(r.URL.Path, "/sessions"):
 		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, runPath+"/"), "/sessions")
@@ -479,7 +496,7 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 			f.numbered = map[string]int{}
 		}
 		switch h := f.onJoin; {
-		case !req.ModelKey && req.ModelCredential != "":
+		case !req.ModelKey && req.ModelProviderCredentialName != "":
 			reply = Reply{Status: 400, Body: map[string]any{"error": "invalid_request", "from": "gateway", "message": "the gateway refused the run: invalid_request"}}
 		case h != nil:
 			f.mu.Unlock()
@@ -487,13 +504,13 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 			f.mu.Lock()
 		default:
 			// A join with no model key gets none, as the gateway answers it.
-			model := req.ModelCredential
+			model := req.ModelProviderCredentialName
 			if model == "" && req.ModelKey {
 				model = f.model[id]
 			}
 			a := map[string]any{"version": 1, "session": f.numbered[id] + 1}
 			if model != "" {
-				a["model_credential"] = model
+				a["model_provider_credential_name"] = model
 			}
 			reply = Reply{Status: 200, Body: a}
 		}

@@ -36,7 +36,10 @@ import (
 	"github.com/qoryai/forager/receiver"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/session/runtimes/catalog"
 	"github.com/qoryai/forager/session/runtimes/claude"
+	"github.com/qoryai/forager/session/runtimes/codex"
 	"github.com/qoryai/forager/wall"
 )
 
@@ -438,7 +441,7 @@ type keysWall struct {
 }
 
 // newKeysWall skips the test without an engine, without a Linux build of the test binary
-// off Linux, and without an image with Claude Code in QORY_WALL_CLAUDE_IMAGE; each skip
+// off Linux, and without an image for Claude Code in QORY_WALL_CLAUDE_IMAGE; each skip
 // fails under QORY_WALL_REQUIRE. It points this machine's roots at the suite's
 // authority.
 func newKeysWall(t *testing.T) keysWall {
@@ -453,7 +456,7 @@ func newKeysWall(t *testing.T) keysWall {
 	helper := Helper(t)
 	image := os.Getenv("QORY_WALL_CLAUDE_IMAGE")
 	if image == "" {
-		Skip(t, "QORY_WALL_CLAUDE_IMAGE is empty: it selects an image with Claude Code 2.1.316")
+		Skip(t, "QORY_WALL_CLAUDE_IMAGE is empty: it selects an image for Claude Code 2.1.316")
 	}
 	if err := trustRecorders(t); err != nil {
 		t.Fatalf("this machine's roots are not the suite's authority: %v", err)
@@ -520,20 +523,36 @@ type keysSession struct {
 	dir     string
 	walled  *keysWall
 	timeout time.Duration
-	// qory, when set, is a folder that [qoryFolder] makes: the launch starts Claude Code
-	// through qory run agent-env with CLAUDE_CONFIG_DIR at qory's agent home, as a
-	// dispatched walled run of qory does. link are the verb's words between the kept
-	// file and --.
-	qory string
+	// qory, when set, is what [qoryFolder] makes: the wall's helper is the qory build,
+	// and the launch starts Claude Code as a dispatched walled run of qory does,
+	// through the helper's qory run agent-env with CLAUDE_CONFIG_DIR at qory's agent
+	// home. link are the verb's words between the kept file and --.
+	qory *qoryRun
 	link []string
+	// joinFails, when set, expects the join to return an error: run returns it in
+	// keysOutcome.joined in place of failing the test.
+	joinFails bool
+	// codex, when set, is a folder that [codexFolder] makes: the launch starts Codex
+	// 0.167.2 through its codex-run script, as codex exec --json with the prompt last,
+	// in place of Claude Code, with CODEX_HOME at [codexHome] as a fixed value of the
+	// launch, as qory sets it.
+	codex string
+	// codexArgs, when set, replaces [codexArgs] for Codex.
+	codexArgs []string
 }
 
-// run opens the run, joins one session of Claude Code and closes the run as qory does:
-// paused with model_key_limit and the session's exit code after a session the
-// session stopped for that reason, else with the session's state and exit code.
+// run opens the run, joins one session of Claude Code, or of Codex, and closes the run
+// as qory does: paused with model_key_limit or model_key_switch, or failed with
+// model_key_unauthorized, and the session's exit code after a session the session
+// stopped for that reason, else with the session's state and exit code.
 func (s keysSession) run(t *testing.T) keysOutcome {
 	t.Helper()
-	rt, err := claude.New()
+	newRuntime := claude.New
+	if s.codex != "" {
+		// Codex comes by its name, as qory resolves a run's runtime.
+		newRuntime = func() (runtimes.Runtime, error) { return catalog.Lookup(codex.Name, "") }
+	}
+	rt, err := newRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -558,16 +577,32 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 	open := session.OpenSpec{RunsDir: runs, Gateway: g, RunID: s.runID, ForagerVersion: "walltest", Report: report}
 	join := session.SessionSpec{
 		Runtime: rt,
-		Command: "claude",
 		Args:    append([]string{"-p", s.prompt, "--output-format", "stream-json", "--verbose"}, s.args...),
 		Env:     s.env,
 		Dir:     dir,
 		Stdin:   strings.NewReader(""),
 	}
-	if s.qory != "" {
-		join.Args = append(append(append([]string{"run", "agent-env", filepath.Join(s.qory, "kept")}, s.link...), "--", join.Command), join.Args...)
-		join.Command = filepath.Join(s.qory, "qory")
-		join.Mounts = append(join.Mounts, wall.Mount{Path: s.qory, ReadOnly: true})
+	if s.codex != "" {
+		// Codex's descriptor sets no install_required: the session starts it as the
+		// launch names it, with no installed folder.
+		join.Command = filepath.Join(s.codex, codexRun)
+		launch := codexArgs
+		if s.codexArgs != nil {
+			launch = s.codexArgs
+		}
+		join.Args = slices.Concat(launch, s.args, []string{s.prompt})
+		join.Mounts = append(join.Mounts, wall.Mount{Path: s.codex, ReadOnly: true})
+		join.LaunchFixed = []string{"CODEX_HOME=" + codexHome}
+	} else {
+		join.RuntimeInstall = claudeInstall(t)
+		join.Command = claudeProgram(join.RuntimeInstall)
+	}
+	if s.qory != nil {
+		// qory starts the agent at the helper's path with the program after --, as
+		// qory's cmd/agentenv.go writes it: the session checks that program.
+		join.Args = slices.Concat(qoryAgentEnvArgs, []string{filepath.Join(s.qory.folder, "kept")}, s.link, []string{"--", join.Command}, join.Args)
+		join.Command = wall.HelperPath
+		join.Mounts = append(join.Mounts, wall.Mount{Path: s.qory.folder, ReadOnly: true})
 		join.LaunchFixed = slices.Clone(qoryLaunchFixed)
 	}
 	if s.walled != nil {
@@ -575,12 +610,21 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 		open.Image = s.walled.image
 		join.Forwarder = []string{wall.HelperPath, "forward"}
 		join.Exec = append([]string{wall.HelperPath}, ExecArgs...)
+		if s.qory != nil {
+			// The helper is the qory build, with qory's verbs, as qory run binds it.
+			open.Wall = &wall.Docker{Command: s.walled.command, Helper: s.qory.helper, RelayArgs: qoryRelayArgs, NestArgs: qoryNestArgs}
+			join.Forwarder = append([]string{wall.HelperPath}, qoryForwardArgs...)
+			join.Exec = append([]string{wall.HelperPath}, qoryExecArgs...)
+		}
 	} else {
 		exe, err := os.Executable()
 		if err != nil {
 			t.Fatal(err)
 		}
 		join.Forwarder = []string{exe, modeForward}
+	}
+	if join.Env == nil && s.codex != "" {
+		join.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
 	}
 	if join.Env == nil {
 		join.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "DISABLE_AUTOUPDATER=1",
@@ -597,16 +641,21 @@ func (s keysSession) run(t *testing.T) keysOutcome {
 	outcome := session.Outcome{State: event.StateFailed, ExitCode: -1}
 	switch {
 	case o.joined != nil || o.res.RunClosed:
-	case o.res.Reason == event.ReasonModelKeyLimit:
-		outcome = session.Outcome{State: event.StatePaused, Reason: event.ReasonModelKeyLimit, ExitCode: o.res.ExitCode}
+	case o.res.Reason == event.ReasonModelKeyLimit || o.res.Reason == event.ReasonModelKeySwitch:
+		outcome = session.Outcome{State: event.StatePaused, Reason: o.res.Reason, ExitCode: o.res.ExitCode}
+	case o.res.Reason == event.ReasonModelKeyUnauthorized:
+		outcome = session.Outcome{State: event.StateFailed, Reason: o.res.Reason, ExitCode: o.res.ExitCode}
 	default:
 		outcome = session.Outcome{State: o.res.State, ExitCode: o.res.ExitCode}
 	}
 	_, o.closed = r.Close(ctx, outcome)
 	closeGateway()
 	o.out, o.errs, o.lines = out.String(), errs.String(), lines.String()
-	if o.joined != nil {
-		t.Fatalf("the join: %v\nstdout:\n%s\nstderr:\n%s", o.joined, o.out, o.errs)
+	if o.joined != nil && s.joinFails {
+		return o
+	}
+	if o.joined != nil || s.joinFails {
+		t.Fatalf("the join: %v, want an error %v\nstdout:\n%s\nstderr:\n%s", o.joined, s.joinFails, o.out, o.errs)
 	}
 	f, err := os.Open(filepath.Join(o.res.Dir, "events.jsonl"))
 	if err != nil {
@@ -690,9 +739,11 @@ type keysControl struct {
 	// docs are the run configurations by run id; values the credentials' values by name.
 	docs   map[string][]byte
 	values map[string]string
-	// answer is the keys of the answer to every report; reports the bodies received,
-	// and invalid the schema's refusal of each that failed it.
+	// answer is the keys of the answer to every report, or, when answers is set, to
+	// each report it returns true for, the others getting no key; reports the bodies
+	// received, and invalid the schema's refusal of each that failed it.
 	answer  []server.ModelKeyState
+	answers func(report []byte) bool
 	reports [][]byte
 	invalid []string
 	// transcripts are the transcripts by the id of the run that reads them; asked the
@@ -770,6 +821,9 @@ func startKeysControl(t *testing.T) *keysControl {
 				c.invalid = append(c.invalid, err.Error())
 			}
 			keys := c.answer
+			if c.answers != nil && !c.answers(body) {
+				keys = nil
+			}
 			c.mu.Unlock()
 			if keys == nil {
 				keys = []server.ModelKeyState{}
@@ -809,18 +863,18 @@ func startKeysControl(t *testing.T) *keysControl {
 // token as a bearer, on the endpoint, with a cooldown of an hour after a refusal with no
 // reset.
 func keysCredential(name, endpoint string) map[string]any {
-	return map[string]any{"name": name, "format": "anthropic-messages", "endpoint": endpoint,
+	return map[string]any{"name": name, "group": "anthropic", "format": "anthropic-messages", "endpoint": endpoint,
 		"auth": map[string]any{"scheme": "bearer", "oauth": true}, "pause_for_s": 3600}
 }
 
 // configure sets the run configuration of the run runID: egress to host alone, the
-// credentials, each with its value, model_credential the first one's name, and resume
-// when it is not nil.
+// credentials, each with its value, default_model_provider_credential_name the first
+// one's name, and resume when it is not nil.
 func (c *keysControl) configure(t *testing.T, runID, host string, creds []map[string]any, values []string, resume map[string]any) {
 	t.Helper()
 	doc := map[string]any{"version": 1,
-		"security_policy":  map[string]any{"version": 1, "egress": map[string]any{"mode": "enforce", "allow": []string{host}}},
-		"model_credential": creds[0]["name"], "credentials": creds}
+		"security_policy":                        map[string]any{"version": 1, "egress": map[string]any{"mode": "enforce", "allow": []string{host}}},
+		"default_model_provider_credential_name": creds[0]["name"], "credentials": creds}
 	if resume != nil {
 		doc["resume"] = resume
 	}
@@ -952,7 +1006,7 @@ func TestDockerClaudeCodeHooksReachTheSessionBehindTheWall(t *testing.T) {
 // B. The proxy passes nothing of the refusal on: it puts model in cooldown and sends the
 // same body again with B. The session ends succeeded; the stub got the request with A,
 // then the same bytes with B; Claude Code printed no retry and no API error; the record
-// lists one request to the stub, with model-b and 200; the gateway's log of limit answers
+// lists one request to the stub, with model-b and 200; the gateway's log of limit responses
 // has model's 429; and no file of the run and no output contains a key's value.
 func TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain(t *testing.T) {
 	k := newKeysWall(t)
@@ -973,8 +1027,8 @@ func TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain(t *testing.T) {
 	if got := o.egress(host); !slices.Equal(got, []string{"model-b 200"}) {
 		t.Errorf("the record lists %q to the stub; want one request with model-b and 200", got)
 	}
-	if !strings.Contains(o.lines, `model key "model": limit answer, status 429`) {
-		t.Errorf("the gateway's log has no limit answer of model:\n%s", o.lines)
+	if !strings.Contains(o.lines, `model key "model": limit response, status 429`) {
+		t.Errorf("the gateway's log has no limit response of model:\n%s", o.lines)
 	}
 	noKeyValue(t, o, s.dir)
 }
@@ -1084,8 +1138,8 @@ func TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun(t *testing.T) {
 	if got := o.egress(host); len(got) < 2 || got[0] != "model 200" || got[1] != "model-b 200" {
 		t.Errorf("the record lists %q to the stub; want a request with model and 200, then one with model-b and 200", got)
 	}
-	if strings.Contains(o.lines, "limit answer, status 429") {
-		t.Errorf("the gateway's log has a limit answer of the provider:\n%s", o.lines)
+	if strings.Contains(o.lines, "limit response, status 429") {
+		t.Errorf("the gateway's log has a limit response of the provider:\n%s", o.lines)
 	}
 	noKeyValue(t, o, s.dir)
 }
@@ -1095,9 +1149,10 @@ func TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun(t *testing.T) {
 // stub caps A, and serves B's first request with a Bash call after 3 seconds. The
 // gateway reports A's refusal with POST <run.url>/<run_id>/model-keys, and the fake
 // control plane returns that model-b is rejected in its five_hour window until an hour
-// from now. Every report is valid against model-keys-report.schema.json, and one has
-// model's five_hour window rejected, from the provider, with cooldown_until. After the
-// Bash call Claude Code's next request goes with C: the answer's cooldown keeps the
+// from now; to the session's start report, made at the join before A's refusal, it
+// returns no key. Every report is valid against model-keys-report.schema.json, and one
+// has model's five_hour window rejected, from the provider, with cooldown_until. After
+// the Bash call Claude Code's next request goes with C: the answer's cooldown keeps the
 // proxy from setting B.
 func TestDockerModelKeysReportAndTakeTheControlPlanesCooldown(t *testing.T) {
 	k := newKeysWall(t)
@@ -1109,6 +1164,7 @@ func TestDockerModelKeysReportAndTakeTheControlPlanesCooldown(t *testing.T) {
 	ctl.answer = []server.ModelKeyState{{Credential: "model-b", Window: "five_hour", Status: "rejected",
 		ResetsAt: server.RegistrationTime(now.Add(time.Hour)), CooldownUntil: server.RegistrationTime(now.Add(time.Hour)),
 		Source: "provider", ObservedAt: server.RegistrationTime(now)}}
+	ctl.answers = func(report []byte) bool { return bytes.Contains(report, []byte(`"status":"rejected"`)) }
 	ctl.mu.Unlock()
 	o := s.run(t)
 	log := k.stubLog(t, name)

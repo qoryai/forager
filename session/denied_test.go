@@ -114,26 +114,30 @@ func TestAWalledLaunchStartsThroughTheHelpersExec(t *testing.T) {
 
 // TestADeniedNameIsUnsetBehindAWall pins that behind a wall a name the runtime denies
 // or the node's deny list removes, which nothing sets, is unset inside, so an image's
-// value for it does not show through; that a pattern of the deny list unsets nothing;
-// and that a name a source sets and wins with, or one the session or the wall sets for
-// the run, keeps its value and is never unset.
+// value for it does not show through: among them Claude Code's BUN_OPTIONS, which
+// loads code into its native binary, and CLAUDE_CODE_API_BASE_URL and
+// CLAUDE_CODE_REMOTE_SETTINGS_PATH, which move its API host and its remote settings;
+// that a pattern of the deny list unsets nothing; and that a name a source sets and
+// wins with, or one the session or the wall sets for the run, keeps its value and is
+// never unset.
 func TestADeniedNameIsUnsetBehindAWall(t *testing.T) {
 	w := &openWall{}
 	sp, g := specGateway(t, "INHERITED_DENIED=from-the-shell")
 	hasRunAPI(g)
 	sp.Wall, sp.Image = w, "example.com/agent:1"
-	sp.Variables.Deny = []string{"APP_SECRET", "APP_*", "INHERITED_DENIED", "HTTPS_PROXY", session.EnvRunID, session.EnvRunAPI}
+	sp.Variables.Deny = []string{"APP_SECRET", "APP_*", "INHERITED_DENIED", "HTTPS_PROXY", session.EnvRunID, session.EnvSession, session.EnvRunAPI}
 	sp.Variables.Machine = []string{"APP_SECRET=the-machines"}
 	if _, err := run(context.Background(), sp); err != nil {
 		t.Fatal(err)
 	}
 	names, _ := unsetIn(t, w.got)
-	for _, name := range []string{"APP_SECRET", "CLAUDE_ENV_FILE", "CLAUDE_CODE_SHELL"} {
+	for _, name := range []string{"APP_SECRET", "CLAUDE_ENV_FILE", "CLAUDE_CODE_SHELL", "BUN_OPTIONS",
+		"CLAUDE_CODE_API_BASE_URL", "CLAUDE_CODE_REMOTE_SETTINGS_PATH"} {
 		if !slices.Contains(names, name) || len(entriesOf(w.got.Env, name)) != 0 {
 			t.Errorf("%s: unset %q, the wall's environment %q; want it unset alone", name, names, entriesOf(w.got.Env, name))
 		}
 	}
-	for _, name := range []string{"APP_*", "INHERITED_DENIED", "HTTPS_PROXY", session.EnvRunID, session.EnvRunAPI} {
+	for _, name := range []string{"APP_*", "INHERITED_DENIED", "HTTPS_PROXY", session.EnvRunID, session.EnvSession, session.EnvRunAPI} {
 		if slices.Contains(names, name) {
 			t.Errorf("%s is unset: %q", name, names)
 		}
@@ -141,7 +145,7 @@ func TestADeniedNameIsUnsetBehindAWall(t *testing.T) {
 	if got := entriesOf(w.got.Env, "INHERITED_DENIED"); !slices.Equal(got, []string{"INHERITED_DENIED=from-the-shell"}) {
 		t.Errorf("the wall's environment has %q for INHERITED_DENIED, want the inherited value once", got)
 	}
-	for _, name := range []string{session.EnvRunID, session.EnvRunAPI} {
+	for _, name := range []string{session.EnvRunID, session.EnvSession, session.EnvRunAPI} {
 		if got := entriesOf(w.got.Env, name); len(got) != 1 || strings.HasSuffix(got[0], "=") {
 			t.Errorf("the wall's environment has %q for %s, want the session's value once", got, name)
 		}

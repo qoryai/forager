@@ -81,7 +81,7 @@ func harnessRun(t *testing.T, hidden bool) (*session.Result, string, []string) {
 	sp := spec(t)
 	sp.Forwarder = nil
 	sp.HarnessHome, sp.HarnessHidden = harnessHome(t), hidden
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", harnessScript}
+	sp.Command, sp.Args = installedShell, []string{"-c", harnessScript}
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +183,7 @@ func TestAHiddenHarnessWithALinkFailsTheJoin(t *testing.T) {
 	sp.Forwarder = nil
 	sp.HarnessHome, sp.HarnessHidden = harnessWithALink(t), true
 	marker := filepath.Join(t.TempDir(), "started")
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", `touch "$0"`, marker}
+	sp.Command, sp.Args = installedShell, []string{"-c", `touch "$0"`, marker}
 	_, err := run(context.Background(), sp)
 	if want := "Replace the link skills/review in the harness home with a copy; the mask reads only files there."; err == nil || err.Error() != want {
 		t.Fatalf("the join's error %v, want %q", err, want)
@@ -200,7 +200,7 @@ func TestAHarnessNotHiddenWithALinkIsShown(t *testing.T) {
 	sp := spec(t)
 	sp.Forwarder = nil
 	sp.HarnessHome = harnessWithALink(t)
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", `cat "$QORY_HARNESS_HOME/skills/review/SKILL.md"`}
+	sp.Command, sp.Args = installedShell, []string{"-c", `cat "$QORY_HARNESS_HOME/skills/review/SKILL.md"`}
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
@@ -217,7 +217,7 @@ func TestAHiddenHarnessWhoseHomeCannotBeReadFailsTheJoin(t *testing.T) {
 	sp.Forwarder = nil
 	sp.HarnessHome, sp.HarnessHidden = filepath.Join(t.TempDir(), "missing"), true
 	marker := filepath.Join(t.TempDir(), "started")
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", `touch "$0"`, marker}
+	sp.Command, sp.Args = installedShell, []string{"-c", `touch "$0"`, marker}
 	_, err := run(context.Background(), sp)
 	if err == nil || !strings.HasPrefix(err.Error(), "give the session a harness home it can read: ") {
 		t.Fatalf("the join's error %v", err)

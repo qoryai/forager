@@ -78,7 +78,7 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 			return nil, refusal.New(refusal.RunConfigurationInvalid, []string{accesskey.ShownName(name, false)}, "the document is refused: the variable %s holds more than %d bytes", accesskey.ShownName(name, false), MaxVariableValue)
 		}
 	}
-	if err := CheckCredentials(rc.Credentials, rc.ModelCredential); err != nil {
+	if err := CheckCredentials(rc.Credentials, rc.DefaultModelProviderCredentialName); err != nil {
 		return nil, err
 	}
 	if r := rc.Resume; r != nil && len(r.Runs) > 0 && r.Runs[len(r.Runs)-1] != r.RunID {
@@ -90,37 +90,80 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 	return &rc, nil
 }
 
+// maxAPICredentials is the most API credentials a run configuration has, across every
+// key group: the schema's limit, which a document not read from bytes is held to too.
+const maxAPICredentials = 6
+
 // CheckCredentials refuses what the schema cannot state of a run configuration's
 // credentials, each [refusal.RunConfigurationInvalid] with the credential's name, a
 // name that contains a secret as its phrase ([refusal.Shown]): a name twice, a header
-// [ReservedHeader] reports, a placeholder [DeniedPlaceholder] reports, and an API
-// credential's endpoint from which [policy.EndpointHost] reads no host. Of model, the
-// document's model_credential, it refuses a name of a host credential, and an empty
-// one beside two or more API credentials; a name of none of creds may be a model key
-// of the machine's, which the gateway checks. The reader of a document calls it, and so
-// does whoever holds a document not read from bytes.
+// [ReservedHeader] reports, a placeholder [DeniedPlaceholder] reports, an API
+// credential's endpoint from which [policy.EndpointHost] reads no host, an API
+// credential's path or a host credential's apply path whose fixed part
+// [policy.CleanPath] refuses ([policy.UnclearPath]), and, as the schema does for a
+// document read from bytes, an API credential's account_header without account_claim,
+// the reverse, either without oauth, and an account_header that [ReservedHeader]
+// reports or that is Authorization. Of model, the document's
+// default_model_provider_credential_name, it refuses a name of a host credential, and
+// an empty one beside two or more API credentials; a name of none of creds may be a
+// local model provider credential, which the gateway checks. Of the key groups it
+// refuses what [checkKeyGroups] refuses, and more than [maxAPICredentials] API
+// credentials across every group, as the schema does for a document read from bytes.
+// The reader of a document calls it, and so does whoever holds a document not read from
+// bytes.
 func CheckCredentials(creds []RunCredential, model string) error {
+	api := 0
+	for _, c := range creds {
+		if c.Format != "" {
+			api++
+		}
+	}
+	if api > maxAPICredentials {
+		return refusal.New(refusal.RunConfigurationInvalid, nil,
+			"Remove API credentials until the run has %d at most.\nThe document lists %d", maxAPICredentials, api)
+	}
 	for i, c := range creds {
 		name := accesskey.ShownName(c.Name, true)
 		if slices.ContainsFunc(creds[:i], func(o RunCredential) bool { return o.Name == c.Name }) {
-			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name), "the document is refused: list the credential %s once; the document lists it twice", name)
+			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name), "List the credential %s once.\nThe document lists it twice", name)
 		}
 		if _, ok := policy.EndpointHost(c.Endpoint); c.Format != "" && !ok {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"the document is refused: give the credential %s an endpoint whose host is a DNS name or an IP address, port 1 to 65535: Forager reads no host from its endpoint", name)
+				"Give the credential %s an endpoint whose host is a DNS name or an IP address, port 1 to 65535.\nForager reads no host from its endpoint", name)
+		}
+		if a := c.Auth; (a.AccountHeader != "") != (a.AccountClaim != "") || (a.AccountHeader != "" && !a.OAuth) {
+			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+				"Give the credential %s both account_header and account_claim, with oauth, or neither.\nThe credential has one of them, or both without oauth", name)
+		}
+		if h := c.Auth.AccountHeader; h != "" && (ReservedHeader(h) || strings.EqualFold(h, "authorization")) {
+			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+				"Set account_header of the credential %s to a header other than %s.\nThat header frames the request, contains the token, or the proxy sets it", name, accesskey.ShownName(h, true))
+		}
+		for _, a := range c.Applies() {
+			for _, p := range a.Paths {
+				if policy.UnclearPath(p) {
+					return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+						"Remove the unclear parts from path %s of the credential %s.\n"+
+							"A path may have no empty, . or .. segment, backslash, %%2F, %%5C, %%2E or %%25; the proxy reads each segment up to its first ; or %%3B, takes each %%-code in either case, such as %%2f, and denies a control character too. "+
+							"It denies every request whose path has one of these parts, so the path matches no request", accesskey.ShownValue(p, true), name)
+				}
+			}
 		}
 		for _, a := range c.Applies() {
 			if a.Scheme == "header" && ReservedHeader(a.Header) {
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-					"the document is refused: set the credential %s in another header than %s; that header frames the request, or the proxy sets it", name, accesskey.ShownName(a.Header, true))
+					"Set the credential %s in a header other than %s.\nThat header frames the request, or the proxy sets it", name, accesskey.ShownName(a.Header, true))
 			}
 		}
 		for _, p := range c.Placeholders {
 			if DeniedPlaceholder(p) {
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-					"the document is refused: give the credential %s another placeholder than %s; the built-in deny list, denied-variables.json, covers that variable", name, accesskey.ShownName(p, true))
+					"Give the credential %s a placeholder other than %s.\nThe built-in deny list, denied-variables.json, covers that variable", name, accesskey.ShownName(p, true))
 			}
 		}
+	}
+	if err := checkKeyGroups(creds); err != nil {
+		return err
 	}
 	var keys []string
 	for _, c := range creds {
@@ -131,12 +174,71 @@ func CheckCredentials(creds []RunCredential, model string) error {
 	switch i := slices.IndexFunc(creds, func(c RunCredential) bool { return c.Name == model }); {
 	case model == "" && len(keys) > 1:
 		return refusal.New(refusal.RunConfigurationInvalid, nil,
-			"the document is refused: set model_credential to the model key the runtime starts with: the document lists the model keys %s", strings.Join(keys, ", "))
+			"Set default_model_provider_credential_name to the model provider credential the first session uses: the document lists %s.", strings.Join(keys, ", "))
 	case i >= 0 && creds[i].Format == "":
 		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(model),
-			"the document is refused: set model_credential to an API credential, one with format: the credential %s has none, so it is no model key", accesskey.ShownName(model, true))
+			"Set default_model_provider_credential_name to a credential that has a format.\nThe credential %s has no format, so it is not a model key", accesskey.ShownName(model, true))
 	}
 	return nil
+}
+
+// checkKeyGroups refuses what the schema cannot state of the key groups of creds, each
+// [refusal.RunConfigurationInvalid] with the credential's name: an API credential with
+// no group and a host credential with one, as the schema does for a document read from
+// bytes; a key whose format, endpoint or auth differ from those of the first key of its
+// group ([KeyGroupDiffers]).
+func checkKeyGroups(creds []RunCredential) error {
+	for i, c := range creds {
+		name := accesskey.ShownName(c.Name, true)
+		switch {
+		case c.Format != "" && c.Group == "":
+			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+				"Give each API credential a group, the public id of its provider.\nThe credential %s has no group", name)
+		case c.Format == "" && c.Group != "":
+			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+				"Remove group from the credential %s.\nOnly an API credential, one with format, has a group", name)
+		case c.Format == "":
+			continue
+		}
+		group := accesskey.ShownName(c.Group, true)
+		same := func(o RunCredential) bool { return o.Format != "" && o.Group == c.Group }
+		first := slices.IndexFunc(creds[:i], same)
+		if first < 0 {
+			continue
+		}
+		if member := KeyGroupDiffers(creds[first], c); member != "" {
+			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+				"Give the keys of group %s one format, endpoint and auth.\nThe credentials %s and %s differ in %s", group, accesskey.ShownName(creds[first].Name, true), name, member)
+		}
+	}
+	return nil
+}
+
+// KeyGroupDiffers is the first member, of format, endpoint, auth.scheme, auth.username,
+// auth.header, auth.oauth, auth.account_header and auth.account_claim, in which the API
+// credentials a and b differ, the case of a header's name ignored; empty when they
+// differ in none, as two keys of one key group must. The server's check of a run
+// configuration and the gateway's call it alike.
+func KeyGroupDiffers(a, b RunCredential) string {
+	switch {
+	case a.Format != b.Format:
+		return "format"
+	case a.Endpoint != b.Endpoint:
+		return "endpoint"
+	case a.Auth.Scheme != b.Auth.Scheme:
+		return "auth.scheme"
+	case a.Auth.Username != b.Auth.Username:
+		return "auth.username"
+	case !strings.EqualFold(a.Auth.Header, b.Auth.Header):
+		return "auth.header"
+	case a.Auth.OAuth != b.Auth.OAuth:
+		return "auth.oauth"
+	case !strings.EqualFold(a.Auth.AccountHeader, b.Auth.AccountHeader):
+		return "auth.account_header"
+	case a.Auth.AccountClaim != b.Auth.AccountClaim:
+		return "auth.account_claim"
+	}
+	return ""
 }
 
 // denied is the contract's built-in deny list, denied-variables.json: its names and

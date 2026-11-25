@@ -28,32 +28,32 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// The run configuration of these tests: the server's policy selects the machine's
-// credential machine-model, and its credentials have model, on the same host, whose
-// value Qory Apiary seals.
+// The run configuration of these tests: the server's policy selects the local model
+// provider credential local-model, and its credentials have model, on the same host,
+// whose value Qory Apiary seals.
 const (
-	sealedPolicy = `{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"credentials":[{"name":"machine-model"}]}`
-	modelEntry   = `{"name":"model","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`
+	sealedPolicy = `{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"credentials":[{"name":"local-model"}]}`
+	modelEntry   = `{"name":"model","group":"anthropic","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"}}`
 	sealedDoc    = `{"version":1,"security_policy":` + sealedPolicy + `,"credentials":[` + modelEntry + `]}`
 	sealedValue  = "sealed-value-of-the-test"
-	machineValue = "machine-value-of-the-test"
+	localValue   = "local-value-of-the-test"
 )
 
-// machineModel is the machine's credential, forager.yaml's key, for the same host.
-var machineModel = gateway.Credential{Name: "machine-model", Env: "GATEWAY_TEST_MODEL_KEY", Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key", Placeholders: []string{"MACHINE_KEY"}}
+// localModel is the local model provider credential, for the same host.
+var localModel = gateway.Credential{Name: "local-model", Env: "GATEWAY_TEST_MODEL_KEY", Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key", Placeholders: []string{"LOCAL_MODEL_PROVIDER_CREDENTIAL"}}
 
 // sealedGateway is a gateway on the local link whose control serves doc and seals the
 // values, values nil leaving the secrets endpoint out of discovery.
 func sealedGateway(t *testing.T, doc string, values map[string]string) (*control, *harness) {
 	t.Helper()
-	t.Setenv("GATEWAY_TEST_MODEL_KEY", machineValue)
+	t.Setenv("GATEWAY_TEST_MODEL_KEY", localValue)
 	c := newControl(t)
 	c.serveDocument(doc, 'a')
 	c.mu.Lock()
 	c.secrets = values
 	c.mu.Unlock()
-	h := start(t, gateway.Config{Server: c.server(), Credentials: []gateway.Credential{machineModel}})
-	h.secrets = append(h.secrets, sealedValue, machineValue)
+	h := start(t, gateway.Config{Server: c.server(), Credentials: []gateway.Credential{localModel}})
+	h.secrets = append(h.secrets, sealedValue, localValue)
 	return c, h
 }
 
@@ -79,14 +79,15 @@ func (c *control) requests(t *testing.T) []server.SecretsRequest {
 	return out
 }
 
-// TestASealedCredentialTakesThePlaceOfTheMachinesKey pins the start of a walled run
-// whose run configuration has credentials: the gateway sends one secrets request, for
-// the run, the digest it computed of the document's bytes, not the header's, and the
-// credentials' names; the proxy sets the opened value in place of forager.yaml's key,
-// whose credential claims the same host; and the run answer has model's endpoint host,
-// no placeholder, its format, endpoint and auth, model_credential model, and
-// applied.credentials its host and scheme.
-func TestASealedCredentialTakesThePlaceOfTheMachinesKey(t *testing.T) {
+// TestASealedCredentialTakesThePlaceOfTheLocalModelProviderCredential pins the start of
+// a walled run whose run configuration has credentials: the gateway sends one secrets
+// request, for the run, the digest it computed of the document's bytes, not the
+// header's, and the credentials' names; the proxy sets the opened value in place of the
+// local model provider credential, which claims the same host; and the run answer has
+// model's endpoint host, no placeholder, its format, endpoint and auth,
+// default_model_provider_credential_name model, and applied.credentials its host and
+// scheme.
+func TestASealedCredentialTakesThePlaceOfTheLocalModelProviderCredential(t *testing.T) {
 	c, h := sealedGateway(t, sealedDoc, map[string]string{"model": sealedValue})
 	a := h.open(server.LinkRunRequest{Wall: true})
 	if got, want := gateway.Tokens(h.g, a.RunID), map[string]string{"model": sealedValue}; !reflect.DeepEqual(got, want) {
@@ -104,9 +105,9 @@ func TestASealedCredentialTakesThePlaceOfTheMachinesKey(t *testing.T) {
 		t.Errorf("the secrets request %+v; want the run, %s and model", r, digestOf(sealedDoc))
 	}
 	want := []server.LinkCredentialHosts{{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{},
-		Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: &server.Auth{Scheme: "header", Header: "x-api-key"}}}
-	if !reflect.DeepEqual(a.CredentialHosts, want) || len(a.Placeholders) != 0 || a.ModelCredential != "model" {
-		t.Errorf("credential hosts %+v, placeholders %v, model_credential %q; want %+v and model", a.CredentialHosts, a.Placeholders, a.ModelCredential, want)
+		Group: "anthropic", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: &server.Auth{Scheme: "header", Header: "x-api-key"}}}
+	if !reflect.DeepEqual(a.CredentialHosts, want) || len(a.Placeholders) != 0 || a.DefaultModelProviderCredentialName != "model" {
+		t.Errorf("credential hosts %+v, placeholders %v, default_model_provider_credential_name %q; want %+v and model", a.CredentialHosts, a.Placeholders, a.DefaultModelProviderCredentialName, want)
 	}
 	if got := members(a.Applied)["credentials"]; !reflect.DeepEqual(got, []any{map[string]any{"name": "model", "hosts": []any{"api.model.example"}, "scheme": "header"}}) {
 		t.Errorf("applied credentials %v", got)
@@ -133,11 +134,11 @@ func TestTheSessionsCredentialVariablesAreItsOwn(t *testing.T) {
 
 // TestARunConfigurationWithoutCredentialsIsUnchanged pins a run configuration with no
 // credentials on a server that offers stored secrets: no secrets request, and the
-// proxy sets forager.yaml's key as before.
+// proxy sets the local model provider credential as before.
 func TestARunConfigurationWithoutCredentialsIsUnchanged(t *testing.T) {
 	c, h := sealedGateway(t, `{"version":1,"security_policy":`+sealedPolicy+`}`, map[string]string{"model": sealedValue})
 	a := h.open(server.LinkRunRequest{Wall: true})
-	if got, want := gateway.Tokens(h.g, a.RunID), map[string]string{"machine-model": machineValue}; !reflect.DeepEqual(got, want) {
+	if got, want := gateway.Tokens(h.g, a.RunID), map[string]string{"local-model": localValue}; !reflect.DeepEqual(got, want) {
 		t.Errorf("the proxy sets %v, want %v", got, want)
 	}
 	if reqs := c.requests(t); len(reqs) != 0 {
@@ -150,7 +151,8 @@ func TestARunConfigurationWithoutCredentialsIsUnchanged(t *testing.T) {
 // TestAnUnwalledRunGetsTheServersCredentials pins an unwalled run whose run
 // configuration has credentials: it starts, brokered as a walled run is. The gateway
 // sends one secrets request, the proxy sets the opened value, and the run answer has
-// the run's authority and the model key as its model_credential, and no image.
+// the run's authority and the model key as its default_model_provider_credential_name,
+// and no image.
 func TestAnUnwalledRunGetsTheServersCredentials(t *testing.T) {
 	c, h := sealedGateway(t, sealedDoc, map[string]string{"model": sealedValue})
 	a := h.open(server.LinkRunRequest{})
@@ -160,7 +162,7 @@ func TestAnUnwalledRunGetsTheServersCredentials(t *testing.T) {
 	if reqs := c.requests(t); len(reqs) != 1 || reqs[0].RunID != a.RunID || !slices.Equal(reqs[0].Credentials, []string{"model"}) {
 		t.Errorf("the secrets requests %+v; want one for the run and model", reqs)
 	}
-	if !strings.HasPrefix(a.CertificateAuthority, "-----BEGIN CERTIFICATE-----") || len(a.Placeholders) != 0 || a.ModelCredential != "model" || a.Image != nil {
+	if !strings.HasPrefix(a.CertificateAuthority, "-----BEGIN CERTIFICATE-----") || len(a.Placeholders) != 0 || a.DefaultModelProviderCredentialName != "model" || a.Image != nil {
 		t.Errorf("the answer: authority %q, placeholders %v, image %+v", a.CertificateAuthority, a.Placeholders, a.Image)
 	}
 	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID))
@@ -193,11 +195,11 @@ func TestCredentialsNeedTheSecretsEndpoint(t *testing.T) {
 func TestARefusedDocumentOpensNoRun(t *testing.T) {
 	for name, c := range map[string]struct{ doc, message string }{
 		"a name twice": {`{"version":1,"credentials":[` + modelEntry + `,` + modelEntry + `]}`,
-			`the document is refused: list the credential "model" once; the document lists it twice`},
+			"List the credential \"model\" once.\nThe document lists it twice"},
 		"Host": {`{"version":1,"credentials":[{"name":"model","apply":[{"hosts":["api.model.example"],"scheme":"header","header":"Host"}]}]}`,
-			`the document is refused: set the credential "model" in another header than "Host"; that header frames the request, or the proxy sets it`},
+			"Set the credential \"model\" in a header other than \"Host\".\nThat header frames the request, or the proxy sets it"},
 		"X-Qory-": {`{"version":1,"credentials":[{"name":"model","apply":[{"hosts":["api.model.example"],"scheme":"header","header":"x_qory_credential_set"}]}]}`,
-			`the document is refused: set the credential "model" in another header than "x_qory_credential_set"; that header frames the request, or the proxy sets it`},
+			"Set the credential \"model\" in a header other than \"x_qory_credential_set\".\nThat header frames the request, or the proxy sets it"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctl, h := sealedGateway(t, c.doc, map[string]string{"model": sealedValue})
@@ -282,13 +284,29 @@ func TestASealedAnswerThatDoesNotOpenIsNoRun(t *testing.T) {
 	}
 }
 
+// TestASecretsRefusalHasItsRetryAfter pins the wait of the secrets request, the last
+// answer of Qory Apiary as a run opens: a signed 409 secrets_not_allowed with
+// Retry-After: 7 is a link refusal with retry_after 7.
+func TestASecretsRefusalHasItsRetryAfter(t *testing.T) {
+	ctl, h := sealedGateway(t, sealedDoc, map[string]string{"model": sealedValue})
+	ctl.mu.Lock()
+	ctl.secretsAnswer = func(server.SecretsRequest, string) (int, []byte) {
+		return http.StatusConflict, []byte(`{"error":"secrets_not_allowed"}`)
+	}
+	ctl.secretsRetryAfter = "7"
+	ctl.mu.Unlock()
+	if status, got := h.refusalOf("/v1/run-configuration", walledBody()); status != http.StatusConflict || got["error"] != "secrets_not_allowed" || got["retry_after"] != 7.0 {
+		t.Errorf("%d %v; want 409 secrets_not_allowed with retry_after 7", status, got)
+	}
+}
+
 // TestASealedModelKeyWithoutItsPrefixIsNoRun pins a model key from the server with
 // key_prefixes: a stored value that starts with none of them is run_configuration_invalid,
 // a 403 from the gateway with the credential's name and the text word for word, opens
 // no run and has no value in the message; a value that starts with one opens the run,
 // and the proxy sets it.
 func TestASealedModelKeyWithoutItsPrefixIsNoRun(t *testing.T) {
-	entry := `{"name":"model","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"},"key_prefixes":["sk-ant-"]}`
+	entry := `{"name":"model","group":"anthropic","format":"anthropic-messages","pause_for_s":18000,"endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"},"key_prefixes":["sk-ant-"]}`
 	doc := `{"version":1,"security_policy":` + sealedPolicy + `,"credentials":[` + entry + `]}`
 	const other, matching = "other-fake-value", "sk-ant-fake-value"
 	ctl, h := sealedGateway(t, doc, map[string]string{"model": other})
@@ -334,8 +352,8 @@ func TestAFixtureKeyGetsNoValue(t *testing.T) {
 			ctl.mu.Lock()
 			ctl.secrets = map[string]string{"model": sealedValue}
 			ctl.mu.Unlock()
-			t.Setenv("GATEWAY_TEST_MODEL_KEY", machineValue)
-			h := start(t, gateway.Config{Server: ctl.server(), Credentials: []gateway.Credential{machineModel}})
+			t.Setenv("GATEWAY_TEST_MODEL_KEY", localValue)
+			h := start(t, gateway.Config{Server: ctl.server(), Credentials: []gateway.Credential{localModel}})
 			status, got := h.refusalOf("/v1/run-configuration", walledBody())
 			if msg, _ := got["message"].(string); status != http.StatusForbidden || got["error"] != "run_configuration_invalid" || !strings.Contains(msg, c.message) {
 				t.Errorf("%d %v", status, got)
@@ -417,10 +435,10 @@ func TestAReloadKeepsTheCredentialsFixed(t *testing.T) {
 	// Other credentials: the hosts differ.
 	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","c.example"]}},"credentials":[{"name":"model","apply":[{"hosts":["c.example"],"scheme":"bearer"}]}]}`, 'c')
 	h.post(logged(runID))
-	line := "start a new run to use other credentials; a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays"
+	line := reloadRefused(t, c, "Start a new run to use other credentials.", "a run's credentials from the control plane are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays")
 	eventually(t, "the failed reload's report", func() bool {
 		h.post(heartbeat(runID))
-		return h.reported(line)
+		return h.reportedWhole(line)
 	})
 	again, err := h.linkOf(runID).Reload(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID)
 	if err != nil || again.Digest != reloaded.Digest {
@@ -436,18 +454,78 @@ func TestAReloadKeepsTheCredentialsFixed(t *testing.T) {
 	h.close()
 }
 
+// TestAReloadKeepsTheDefaultModelProviderCredentialFixed pins the reports of the two
+// reloads that change a run's default model provider credential, each with the fix on
+// the first line and the policy in force staying. The run starts with the local model
+// key first and no default_model_provider_credential_name: a reload that selects the
+// model key second in its place, and one that sets
+// default_model_provider_credential_name to first, are refused.
+func TestAReloadKeepsTheDefaultModelProviderCredentialFixed(t *testing.T) {
+	t.Setenv("GATEWAY_TEST_FIRST_KEY", "fake-first-value-0001")
+	t.Setenv("GATEWAY_TEST_SECOND_KEY", "fake-second-value-0002")
+	creds := []gateway.Credential{
+		{Name: "first", Env: "GATEWAY_TEST_FIRST_KEY", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Scheme: "header", Header: "x-api-key"},
+		{Name: "second", Env: "GATEWAY_TEST_SECOND_KEY", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Scheme: "header", Header: "x-api-key"},
+	}
+	// doc selects the model key key, with default_model_provider_credential_name set to
+	// field, or unset when field is empty.
+	doc := func(key, field string) string {
+		out := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"credentials":[{"name":"` + key + `"}]}`
+		if field != "" {
+			out += `,"default_model_provider_credential_name":"` + field + `"`
+		}
+		return out + "}"
+	}
+	c := newControl(t)
+	c.serveDocument(doc("first", ""), 'a')
+	h := start(t, gateway.Config{Server: c.server(), Credentials: creds})
+	h.secrets = append(h.secrets, "fake-first-value-0001", "fake-second-value-0002")
+	a := h.open(server.LinkRunRequest{Wall: true})
+	runID, first := a.RunID, a.Digest
+	if a.DefaultModelProviderCredentialName != "first" {
+		t.Fatalf("the run's default model provider credential %q", a.DefaultModelProviderCredentialName)
+	}
+	if d := h.post(started(runID, nil), applied(runID, a.Applied)); !d.Accepted() {
+		t.Fatalf("the first batch: %+v", d)
+	}
+	for _, step := range []struct {
+		digest     byte
+		doc        string
+		fix, cause string
+	}{
+		{'b', doc("second", ""), "Start a new run to change the default model provider credential.",
+			`the run started with the model key "first"; this run configuration has one model key, "second", and no default_model_provider_credential_name; the policy in force stays`},
+		{'c', doc("first", "first"), "Start a new run to change default_model_provider_credential_name.",
+			`the run started with default_model_provider_credential_name unset, and this run configuration sets it to "first"; the policy in force stays`},
+	} {
+		c.serveDocument(step.doc, step.digest)
+		h.post(logged(runID))
+		line := reloadRefused(t, c, step.fix, step.cause)
+		eventually(t, "the failed reload's report "+line, func() bool {
+			h.post(heartbeat(runID))
+			return h.reportedWhole(line)
+		})
+		again, err := h.linkOf(runID).Reload(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID)
+		if err != nil || again.Digest != first {
+			t.Errorf("after the refused reload %c: %v %+v, want the digest %s", step.digest, err, again, first)
+		}
+	}
+	h.post(exited(runID))
+	h.close()
+}
+
 // TestAnAttachedRunTakesItsCredentialsFromAReload pins a run behind a separate gateway:
 // the attach answer's body has labels, so the gateway reloads the run configuration
 // and sends the digest of the reload's bytes, and the proxy sets the opened value.
 func TestAnAttachedRunTakesItsCredentialsFromAReload(t *testing.T) {
-	t.Setenv("GATEWAY_TEST_MODEL_KEY", machineValue)
+	t.Setenv("GATEWAY_TEST_MODEL_KEY", localValue)
 	c := gatewayControl(t)
 	c.serveDocument(sealedDoc, 'a')
 	c.mu.Lock()
 	c.secrets = map[string]string{"model": sealedValue}
 	c.attachLabels = map[string]string{"repository": "example/repo"}
 	c.mu.Unlock()
-	r := startRemote(t, c, gateway.Config{Credentials: []gateway.Credential{machineModel}})
+	r := startRemote(t, c, gateway.Config{Credentials: []gateway.Credential{localModel}})
 	runID := event.NewRunID()
 	before := c.fetches.Load()
 	e := r.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{Wall: true})
@@ -584,7 +662,7 @@ func TestARefusalAnswerShowsNoSecretInAName(t *testing.T) {
 // the run configuration has its own model on the same host. The run opens, and the
 // proxy sets the sealed value under the name model.
 func TestASealedModelReplacesForagerYamlsModel(t *testing.T) {
-	t.Setenv("GATEWAY_TEST_MODEL_KEY", machineValue)
+	t.Setenv("GATEWAY_TEST_MODEL_KEY", localValue)
 	doc := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.anthropic.com"]},"credentials":[{"name":"model"}]},` +
 		`"credentials":[{"name":"model","apply":[{"hosts":["api.anthropic.com"],"scheme":"header","header":"x-api-key"}],"placeholders":["ANTHROPIC_API_KEY"]}]}`
 	c := newControl(t)
@@ -592,9 +670,9 @@ func TestASealedModelReplacesForagerYamlsModel(t *testing.T) {
 	c.mu.Lock()
 	c.secrets = map[string]string{"model": sealedValue}
 	c.mu.Unlock()
-	machine := gateway.Credential{Name: "model", Env: "GATEWAY_TEST_MODEL_KEY", Hosts: []string{"api.anthropic.com"}, Scheme: "header", Header: "x-api-key", Placeholders: []string{"ANTHROPIC_API_KEY"}}
-	h := start(t, gateway.Config{Server: c.server(), Credentials: []gateway.Credential{machine}})
-	h.secrets = append(h.secrets, sealedValue, machineValue)
+	local := gateway.Credential{Name: "model", Env: "GATEWAY_TEST_MODEL_KEY", Hosts: []string{"api.anthropic.com"}, Scheme: "header", Header: "x-api-key", Placeholders: []string{"ANTHROPIC_API_KEY"}}
+	h := start(t, gateway.Config{Server: c.server(), Credentials: []gateway.Credential{local}})
+	h.secrets = append(h.secrets, sealedValue, localValue)
 	a := h.open(server.LinkRunRequest{Wall: true})
 	if got, want := gateway.Tokens(h.g, a.RunID), map[string]string{"model": sealedValue}; !reflect.DeepEqual(got, want) {
 		t.Errorf("the proxy sets %v, want %v", got, want)
@@ -639,8 +717,8 @@ func TestASecretsURLWithASecretIsAPhrase(t *testing.T) {
 				ctl.secretsAnswer = c.answer(ctl)
 			}
 			ctl.mu.Unlock()
-			t.Setenv("GATEWAY_TEST_MODEL_KEY", machineValue)
-			h := start(t, gateway.Config{Server: ctl.server(), Credentials: []gateway.Credential{machineModel}})
+			t.Setenv("GATEWAY_TEST_MODEL_KEY", localValue)
+			h := start(t, gateway.Config{Server: ctl.server(), Credentials: []gateway.Credential{localModel}})
 			_, got := h.refusalOf("/v1/run-configuration", walledBody())
 			b, _ := json.Marshal(got)
 			msg, _ := got["message"].(string)
@@ -658,13 +736,13 @@ func TestASecretsURLWithASecretIsAPhrase(t *testing.T) {
 func TestEachApplyItemIsACredentialHostsEntry(t *testing.T) {
 	forge := `{"name":"forge","apply":[{"hosts":["git.example"],"scheme":"basic","username":"x-access-token","paths":["/example-org/app.git/*"]},` +
 		`{"hosts":["api.git.example"],"scheme":"bearer","paths":["/repos/example-org/app/*"]}],"placeholders":["GIT_TOKEN"]}`
-	policy := `{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","git.example","api.git.example"]},"credentials":[{"name":"machine-model"}]}`
+	policy := `{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","git.example","api.git.example"]},"credentials":[{"name":"local-model"}]}`
 	doc := `{"version":1,"security_policy":` + policy + `,"credentials":[` + modelEntry + `,` + forge + `]}`
 	_, h := sealedGateway(t, doc, map[string]string{"model": sealedValue, "forge": sealedValue})
 	a := h.open(server.LinkRunRequest{Wall: true})
 	want := []server.LinkCredentialHosts{
 		{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{},
-			Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: &server.Auth{Scheme: "header", Header: "x-api-key"}},
+			Group: "anthropic", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Auth: &server.Auth{Scheme: "header", Header: "x-api-key"}},
 		{Name: "forge", Hosts: []string{"git.example"}, Placeholders: []string{"GIT_TOKEN"}, Auth: &server.Auth{Scheme: "basic", Username: "x-access-token"}},
 		{Name: "forge", Hosts: []string{"api.git.example"}, Placeholders: []string{}, Auth: &server.Auth{Scheme: "bearer"}},
 	}

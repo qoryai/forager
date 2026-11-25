@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qoryai/forager/gateway/internal/modelkey"
 	"github.com/qoryai/forager/gateway/internal/stream"
 	"github.com/qoryai/forager/server"
 )
@@ -19,7 +20,7 @@ import (
 // the kept files that failed: the files to remove by hand and where come first.
 func TestTheReportOfKeptFilesNotRemovedStartsWithTheFix(t *testing.T) {
 	got := keptNotRemoved("run-1", "/var/lib/forager/runs/run-1", errors.New("permission denied"))
-	want := "run run-1: remove request.json, ca.pem, ca.key, given.jsonl, joins.jsonl, model-key-limit and held.jsonl from /var/lib/forager/runs/run-1 by hand: removing them failed: permission denied"
+	want := "run run-1: remove request.json, ca.pem, ca.key, given.jsonl, joins.jsonl, model-key-limit, model-key-limit.tmp, model-keys-unauthorized.json, model-keys-unauthorized.json.tmp and held.jsonl from /var/lib/forager/runs/run-1 by hand: removing them failed: permission denied"
 	if got != want {
 		t.Errorf("the report: %q; want %q", got, want)
 	}
@@ -92,13 +93,98 @@ func TestTheKeptFilesReadBack(t *testing.T) {
 		t.Errorf("given.jsonl: %v %d %v", got, torn, err)
 	}
 
-	for _, passed := range []bool{true, true, false, false} {
-		if err := markLimit(dir, passed); err != nil {
+	// The mark of the key groups: written whole and read back with each group and its
+	// reason, mode 0600, and removed with no group left. A reason that is none of
+	// Stop's reads as none. A temporary file a crash left is replaced, and none is left
+	// after the write.
+	if err := os.WriteFile(filepath.Join(dir, limitMarkTemp), []byte(`{"version":1,"gr`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, groups := range [][]markedGroup{
+		{{Group: "anthropic"}},
+		{{Group: "anthropic", Reason: "model_key_limit"}, {Group: "openai", Reason: "model_key_switch"}},
+		{{Group: "openai", Reason: "model_key_unauthorized"}},
+	} {
+		if err := markKeys(dir, groups); err != nil {
 			t.Fatal(err)
 		}
-		if marked, err := limitMarked(dir); err != nil || marked != passed {
-			t.Errorf("after markLimit(%v): marked %v, %v", passed, marked, err)
+		if got, torn, err := limitMarked(dir); err != nil || torn || !reflect.DeepEqual(got, groups) {
+			t.Errorf("after markKeys(%+v): groups %+v, torn %v, %v", groups, got, torn, err)
 		}
+		if _, err := os.Lstat(filepath.Join(dir, limitMarkTemp)); !os.IsNotExist(err) {
+			t.Errorf("the temporary file of the mark is left: %v", err)
+		}
+	}
+	if fi, err := os.Lstat(filepath.Join(dir, limitMark)); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("the mark: %v, %v; want mode 0600", fi, err)
+	}
+	if err := writeKept(dir, limitMark, []byte(`{"version":1,"groups":[{"group":"openai","reason":"model_key_lim"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got, torn, err := limitMarked(dir); err != nil || torn || !reflect.DeepEqual(got, []markedGroup{{Group: "openai"}}) {
+		t.Errorf("a group with no reason of Stop's: groups %+v, torn %v, %v", got, torn, err)
+	}
+	// A file that is no version 1 mark with a group, or is longer than maxMark, has no
+	// group: a reason and a newline, a cut mark, and a valid mark padded with spaces to
+	// maxMark+1 bytes among them.
+	valid := `{"version":1,"groups":[{"group":"openai"}]}`
+	for _, content := range []string{
+		"",
+		"model_key_limit\n",
+		"model_key_switch\n",
+		"model_key_unauthorized\n",
+		"model_key_lim",
+		`{"version":1,"groups":[{"gr`,
+		`{"version":1,"groups":[]}`,
+		`{"version":2,"groups":[{"group":"openai"}]}`,
+		valid + strings.Repeat(" ", maxMark+1-len(valid)),
+	} {
+		if err := writeKept(dir, limitMark, []byte(content)); err != nil {
+			t.Fatal(err)
+		}
+		if got, torn, err := limitMarked(dir); err != nil || !torn || got != nil {
+			t.Errorf("the mark %q: groups %+v, torn %v, %v; want torn with no group", content, got, torn, err)
+		}
+	}
+	for range 2 {
+		if err := markKeys(dir, nil); err != nil {
+			t.Fatal(err)
+		}
+		if got, torn, err := limitMarked(dir); err != nil || torn || got != nil {
+			t.Errorf("after the Resume: groups %+v, torn %v, %v", got, torn, err)
+		}
+	}
+
+	// The keys out of use after a 401: written and read back, and removed when none is left.
+	at := time.Date(2026, 11, 13, 12, 0, 4, 0, time.UTC)
+	keys := []modelkey.Unauthorized{{Credential: "model", At: at, Out: true}, {Credential: "model-2", At: at.Add(time.Second)}}
+	// A temporary file a crash left is replaced, and none is left after the write.
+	if err := os.WriteFile(filepath.Join(dir, unauthorizedTemp), []byte(`{"version":1,"ke`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeUnauthorized(dir, keys); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, unauthorizedTemp)); !os.IsNotExist(err) {
+		t.Errorf("the temporary file is left: %v", err)
+	}
+	if got, err := readUnauthorized(dir); err != nil || !reflect.DeepEqual(got, keys) {
+		t.Errorf("model-keys-unauthorized.json read back as %+v, %v; want %+v", got, err, keys)
+	}
+	if info, err := os.Stat(filepath.Join(dir, unauthorizedFile)); err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("%s: %v %v", unauthorizedFile, info, err)
+	}
+	if err := writeUnauthorized(dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readUnauthorized(dir); err != nil || got != nil {
+		t.Errorf("after every key came back: %+v, %v; want none", got, err)
+	}
+	if err := writeKept(dir, unauthorizedFile, []byte(`{"version":1,"keys":[`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readUnauthorized(dir); err == nil {
+		t.Error("a torn model-keys-unauthorized.json reads with no error")
 	}
 	for _, name := range []string{requestFile, joinsFile, givenFile} {
 		info, err := os.Stat(filepath.Join(dir, name))

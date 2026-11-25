@@ -127,8 +127,9 @@ type control struct {
 	// starter gave, signed with the answer.
 	end atomic.Pointer[server.ServerEnd]
 	// attachRefusal, when set, answers every attach a signed refusal with its status
-	// and code.
-	attachRefusal atomic.Pointer[receiver.Refusal]
+	// and code, and with attachRetryAfter as its Retry-After when that is set.
+	attachRefusal    atomic.Pointer[receiver.Refusal]
+	attachRetryAfter atomic.Pointer[string]
 
 	mu sync.Mutex
 	// node and workspaces are what the configuration document lists: the test node and
@@ -165,6 +166,9 @@ type control struct {
 	secrets         map[string]string
 	secretsAnswer   func(req server.SecretsRequest, sig string) (int, []byte)
 	secretsRequests [][]byte
+	// secretsRetryAfter, when set, is the Retry-After of an answer to a secrets request
+	// other than a 200.
+	secretsRetryAfter string
 	// secretsURL, when set, is the secrets endpoint's URL discovery lists, in place of
 	// the control's secretsPath; a query after the path still reaches answerSecrets.
 	secretsURL string
@@ -190,7 +194,7 @@ func (c *control) answerSecrets(w http.ResponseWriter, r *http.Request) {
 	json.Unmarshal(body, &req)
 	c.mu.Lock()
 	c.secretsRequests = append(c.secretsRequests, body)
-	values, answer := maps.Clone(c.secrets), c.secretsAnswer
+	values, answer, wait := maps.Clone(c.secrets), c.secretsAnswer, c.secretsRetryAfter
 	c.mu.Unlock()
 	status, out := http.StatusOK, []byte(nil)
 	if answer != nil {
@@ -199,6 +203,9 @@ func (c *control) answerSecrets(w http.ResponseWriter, r *http.Request) {
 		out = c.seal(req, values, sealed.Expiry(time.Now()))
 	}
 	w.Header().Set("Content-Type", "application/json")
+	if wait != "" && status != http.StatusOK {
+		w.Header().Set("Retry-After", wait)
+	}
 	w.Header().Set(server.HeaderSignature, c.signer.SignAnswer(accesskey.Answer{Status: status, RequestSignature: sig, Body: out}))
 	w.WriteHeader(status)
 	w.Write(out)
@@ -404,6 +411,9 @@ func (c *control) attach(w http.ResponseWriter, r *http.Request) {
 	}
 	if ref := c.attachRefusal.Load(); ref != nil {
 		body := []byte(`{"error":"` + ref.Code + `"}`)
+		if v := c.attachRetryAfter.Load(); v != nil {
+			w.Header().Set("Retry-After", *v)
+		}
 		w.Header().Set(server.HeaderConfiguration, conf)
 		w.Header().Set(server.HeaderSignature, c.signer.SignAnswer(accesskey.Answer{Status: ref.Status, RequestSignature: sig, Body: body, Configuration: conf}))
 		w.WriteHeader(ref.Status)
@@ -759,6 +769,24 @@ func (h *harness) record(runID string) []recorded {
 
 func (h *harness) reported(part string) bool {
 	return len(h.reportsWith(part)) > 0
+}
+
+// reportedWhole reports whether the gateway reported line, the whole report.
+func (h *harness) reportedWhole(line string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Contains(h.reports, line)
+}
+
+// reloadRefused is the report of a reload of c's run configuration that the gateway
+// refuses, with its fix first: fix, at most 100 characters, on the first line, and on
+// the second "the reload failed: ", the run configuration's URL and cause.
+func reloadRefused(t *testing.T, c *control, fix, cause string) string {
+	t.Helper()
+	if len(fix) > 100 {
+		t.Errorf("the fix line has %d characters, over 100: %s", len(fix), fix)
+	}
+	return fix + "\nthe reload failed: run configuration " + c.srv.URL + runsPath + ": " + cause
 }
 
 // reportsWith are the lines the gateway reported that hold part.

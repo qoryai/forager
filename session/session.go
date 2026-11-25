@@ -33,13 +33,18 @@ import (
 // and never a value. errors.As finds one in what [Open] or [Run.Join] returns.
 type Refusal = accesskey.Refusal
 
-// The environment variables the session gets from Forager. EnvHarnessHome is set
-// when the spec has a HarnessHome, and EnvRunAPI when the run has a control plane.
+// The environment variables the session gets from Forager. EnvSession is the number the
+// gateway assigns to the session's join, counted from 1 in the run; the gateway also
+// numbers a join that it refuses. EnvHarnessHome is set when the spec has a
+// HarnessHome, EnvRunAPI when the run has a control plane, and EnvQoryHost when the run
+// has OpenSpec.QoryRoute.
 const (
 	EnvRunID       = "QORY_RUN_ID"
+	EnvSession     = "QORY_SESSION"
 	EnvSocket      = link.EnvRunSocket
 	EnvHarnessHome = "QORY_HARNESS_HOME"
 	EnvRunAPI      = link.EnvRunAPI
+	EnvQoryHost    = link.EnvQoryHost
 )
 
 // MaxLabels is how many labels a run may carry.
@@ -96,8 +101,7 @@ var closeWait = 15 * time.Second
 // take plus the link sink's longest wait between two tries of a batch, 60 seconds
 // (sink.MaxBackoff), so a batch whose try failed just before the gateway came back is
 // tried once more. The flush ends as soon as the gateway accepts the last batch, or the
-// batch gets a 410. The user approved the value ("545 (a)", 2026-11-13). Tests set it
-// shorter.
+// batch gets a 410. Tests set it shorter.
 var finalWait = 180 * time.Second
 
 // joinWindow is how long a join request behind a separate gateway is sent again after
@@ -250,8 +254,9 @@ func withoutNames(env, names []string) []string {
 }
 
 // placeholders are the variables a program wants set before it starts, with a value
-// that is no credential: [link.Placeholder], and the start key's variable its
-// placeholder, [link.KeyPlaceholder].
+// that is no credential: [link.Placeholder], and the default model provider
+// credential's variable its placeholder, the placeholder of its key group,
+// [link.GroupPlaceholder].
 func placeholders(names []string, key keyed) []string {
 	variable, _, _ := strings.Cut(key.Variable, "=")
 	out := make([]string, len(names))
@@ -288,10 +293,15 @@ func environment(base []string, sets ...[]string) []string {
 }
 
 // heartbeat emits run.heartbeat every interval, its elapsed seconds counted from
-// start, until the returned function is called; calling it again does nothing.
-func heartbeat(ctx context.Context, interval time.Duration, start time.Time, write func(string, any)) func() {
+// start, until stop is called; calling stop again does nothing. beat emits one
+// run.heartbeat at once, the same as the interval's, for a batch that must go out
+// before the next interval; after stop it emits nothing.
+func heartbeat(ctx context.Context, interval time.Duration, start time.Time, write func(string, any)) (stop, beat func()) {
 	done := make(chan struct{})
 	stopped := make(chan struct{})
+	one := func() {
+		write(event.RunHeartbeat, map[string]any{"elapsed_seconds": int(time.Since(start).Seconds()), "interval_seconds": int(math.Ceil(interval.Seconds()))})
+	}
 	go func() {
 		defer close(stopped)
 		t := time.NewTicker(interval)
@@ -299,7 +309,7 @@ func heartbeat(ctx context.Context, interval time.Duration, start time.Time, wri
 		for {
 			select {
 			case <-t.C:
-				write(event.RunHeartbeat, map[string]any{"elapsed_seconds": int(time.Since(start).Seconds()), "interval_seconds": int(math.Ceil(interval.Seconds()))})
+				one()
 			case <-done:
 				return
 			case <-ctx.Done():
@@ -307,7 +317,23 @@ func heartbeat(ctx context.Context, interval time.Duration, start time.Time, wri
 			}
 		}
 	}()
-	return sync.OnceFunc(func() { close(done); <-stopped })
+	var mu sync.Mutex
+	ended := false
+	stop = sync.OnceFunc(func() {
+		mu.Lock()
+		ended = true
+		mu.Unlock()
+		close(done)
+		<-stopped
+	})
+	beat = func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if !ended && ctx.Err() == nil {
+			one()
+		}
+	}
+	return stop, beat
 }
 
 func hostname() string {

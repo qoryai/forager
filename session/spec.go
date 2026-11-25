@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -180,6 +181,64 @@ type OpenSpec struct {
 	// QORY_RUN_REPOSITORIES', and the forwarders' passwords, and which [Run.Close]
 	// overwrites.
 	Masker *mask.Masker
+	// QoryRoute, when not nil, serves the plain HTTP requests that a session's programs
+	// send to http://host.qory.invalid/ (link.QoryHostURL), any method and any path,
+	// while the launch of a session with a runtime runs: the runtime, and the setup
+	// commands of SessionSpec.Setup, which run in the launch. Each such launch gets
+	// QORY_HOST_URL (link.EnvQoryHost); a session with no runtime, such as a host
+	// step's, and [Run.Setup] do not, and the route is closed to them, before the first
+	// session, between sessions and after the last. The session's forwarder serves the
+	// route in this process, walled or not, with a gateway on this machine or a separate
+	// one: nothing of a request reaches the gateway, and the route sets no credential
+	// and reaches nothing of the machine but the handler.
+	//
+	// Behind a wall, each session's launch gets a proxy URL with a password of that
+	// session alone, which the wall writes into the proxy variables inside
+	// (wall.Launch.ProxyPassword), and the wall's relay writes the address each
+	// connection comes from (wall.Launch.ProxyPeer). The forwarder serves a request to
+	// the route only with the password and from the address of the session's agent
+	// container, which the enclosure reports (wall.AgentAddresser); Open fails for a
+	// wall whose enclosure does not. Any other request, such as one from the setup
+	// container, which shares the wall's relay, goes to the gateway, which denies it
+	// with 403, also when it carries the session's password. A container of an earlier
+	// session that a wall without Unwrap leaves running has that session's password,
+	// and gets 503 session_not_running while a later session runs: it never reaches the
+	// handler as the later session.
+	//
+	// The handler gets the method, the path, the query, Content-Type, the body, read
+	// whole first, and Qory-Session (link.QorySessionHeader), the number of the session
+	// that sent the request. The forwarder takes every other header off,
+	// Proxy-Authorization among them. The request's context ends after 30 seconds, at
+	// the session's end or at the run's close; a program that goes away does not end
+	// it. The program gets the answer's status, 200 to 599 but 407, its Content-Type and
+	// its body after the handler returns, with Connection: close; a HEAD's answer, a 204
+	// and a 304 have no body, and a 1xx other than 101 that the handler writes first is
+	// dropped.
+	//
+	// The forwarder answers itself, with a JSON body {"error":<code>,"message":<text>},
+	// and does not call the handler, for a request not sent over HTTP/1.1 to
+	// http://host.qory.invalid/ with one Host header of that host and its body with at
+	// most one Content-Length and no Transfer-Encoding, or whose body does not arrive
+	// whole within 30 seconds (400 bad_request); while the request's session does not
+	// run, also when it ends while the body arrives (503 session_not_running); for a
+	// request over 10 of the run in a second, or while 4 calls of the handler have not
+	// returned, those that outlast their context among them (429 rate_limited); and for
+	// a body over 1 MiB (413 payload_too_large). It answers 504 timeout when the handler
+	// does not return within 30 seconds, 503 session_not_running when the session or
+	// the run ends first, and 502 bad_answer for an answer over 1 MiB, a status outside
+	// the range, or a handler that panics, which is a Report line too. Each request is
+	// one dev.qory.run.egress with channel qory_host and rule wall:qory-host, but of the
+	// refusals with 400, 429 and 503 at most one each a second is recorded. If this
+	// process ends during a request, the program's connection closes with no answer.
+	//
+	// Behind a wall, with QoryRoute set, the run's forwarder reads one request per
+	// connection, as it does once [Run.SetRunAPICheck] sets a check: plain-HTTP
+	// keep-alive ends after each request, and the program opens a new connection for
+	// the next one. A CONNECT tunnel does not change. Every request to the host that no
+	// session's forwarder serves, a CONNECT to it, one through a [HostProxy], the stack
+	// proxy or the engine proxy, and any request in a run with no QoryRoute, gets the
+	// gateway's 403 with rule wall:qory-host.
+	QoryRoute http.Handler
 }
 
 // EngineProxy is the proxy setting the machine's container engine reads when it
@@ -241,10 +300,27 @@ type SessionSpec struct {
 	// Runtime is the program that is run: what is prepared before it starts, what its
 	// records mean and how it is asked to leave. The catalog package resolves a name to
 	// one. Nil means a bare runtime named after the Command: the session is recorded,
-	// the runtime's session inside it is not. A session with no runtime has no start
-	// key: the program gets no model key's variable, placeholder or endpoint. Only a nil
-	// Runtime sets bare in dev.qory.session.started.
+	// the runtime's session inside it is not. A session with no runtime has no default
+	// model provider credential: the program gets no model key's variable, placeholder
+	// or endpoint. Only a nil Runtime sets bare in dev.qory.session.started.
 	Runtime runtimes.Runtime
+	// RuntimeInstall is the folder the caller installed the runtime's program in, and
+	// the version it installed. A session of a Runtime that is
+	// [runtimes.InstallRequired] and reports true, such as Claude Code, requires it, and
+	// a session with no Runtime leaves it nil: [Run.Join] returns an error for either
+	// mistake. A session of
+	// another Runtime, such as Codex, may leave it nil: the session starts Command as
+	// the caller names it, from the Image behind a Wall, binds no folder and reports no
+	// runtime_version. A RuntimeInstall that is set has every check of
+	// [RuntimeInstall], for any Runtime. The program is a file inside
+	// Dir: Command, or, behind a Wall, the argument after the first -- in Args when
+	// Command is [wall.HelperPath], Forager's helper, which the caller starts the
+	// program through; the words before that -- are the caller's and are not checked.
+	// Behind a Wall the enclosure sees Dir read-only at
+	// /qory/runtime/<runtime>, the Runtime's name, and the session writes Dir as that
+	// path in Command, in each argument and in each variable value it prepares.
+	// dev.qory.session.started reports Version as runtime_version.
+	RuntimeInstall *RuntimeInstall
 	// Command, Args and Dir are what to start; an empty Dir is the working directory.
 	Command string
 	Args    []string
@@ -287,11 +363,12 @@ type SessionSpec struct {
 	// Harness are the harness sources the session's compose used, each with the commit
 	// compose used, reported in dev.qory.session.started as harness; nil reports none.
 	Harness []HarnessSource
-	// ModelCredential is the name of the model key the session starts with, one of the
-	// model keys the gateway holds for the run; empty means the run's start key. The join
-	// request contains it. A session with no Runtime starts with no model key: Join and
-	// AgentEnv refuse ModelCredential beside a nil Runtime before any request.
-	ModelCredential string
+	// ModelProviderCredentialName is the name of the model key the session starts with,
+	// one of the model keys the gateway holds for the run; empty means the run's
+	// default model provider credential. The join request contains it. A session with
+	// no Runtime starts with no model key: Join and AgentEnv refuse
+	// ModelProviderCredentialName beside a nil Runtime before any request.
+	ModelProviderCredentialName string
 	// OnVariables, when not nil, is called once the session's variables are resolved,
 	// before the wall and the agent start, with each name, its source and the values
 	// that lost, as dev.qory.run.policy_applied records them: qory prints a line for an
@@ -335,10 +412,18 @@ type SessionSpec struct {
 	// starts it as SetupRunner, then the command's number from 1, then --, then the
 	// command's Args. Setup needs it; without Setup it is not used.
 	SetupRunner []string
-	// Mounts are what the enclosure shows of this machine, each at its path: the
-	// checkout around Dir, a composed home outside it. A mount, or Dir, inside another
-	// one of the same mode is reached through the outer one, which alone is bound; one of
-	// the other mode is a refused join, mount_mode_conflict. One whose path goes through a
+	// Mounts are what the enclosure shows of this machine, each at its path, or at its
+	// Target: the checkout around Dir, a composed home outside it. A mount, or Dir,
+	// inside another one of the same mode, by their paths on this machine, is reached
+	// through the outer one, which alone is bound; one of the other mode is a refused
+	// join, mount_mode_conflict. A mount with a Target, absolute, clean, apart from
+	// /qory and with no comma, double quote or newline, is bound by itself, and its path
+	// on this machine overlaps no other place's: mount_mode_conflict for the other mode,
+	// else mount_target_conflict. Inside, a read-only place may lie inside a writable
+	// one, such as a read-only file at /var/lib/agent-home/hooks.json in a writable
+	// directory at /var/lib/agent-home; a writable one inside a read-only one is
+	// mount_mode_conflict, and two at one place, or a Target that overlaps Dir or the
+	// session's directory, mount_target_conflict. One whose path goes through a
 	// link inside a writable one, and that does not resolve into it, is a refused join,
 	// whatever its mode, mount_through_link. Dir is writable, or read-only with
 	// WorkspaceReadOnly, and is bound at its path when no mount contains it. The session adds the session's directory in the run
@@ -400,6 +485,66 @@ type SessionSpec struct {
 	// dev.qory.session.exited. dev.qory.session.started reports the launch without it.
 	// The run's Wall needs one.
 	Exec []string
+	// After is a command, its program and arguments, that runs in a new container of the
+	// wall once the runtime exits, such as a commit of what the agent left in the
+	// workspace. The session removes the agent's container first, which ends every
+	// process in it, with nested Docker the inner containers too, and then starts After's
+	// container: the run's image under the run's container runtime, as the wall's user
+	// with no capability and no nested Docker, on the wall's network with the run's proxy,
+	// with the mount that holds Dir and a socket in a directory that no other container
+	// binds, and none of the run's variables, and no installed runtime folder, so a path into
+	// it in After stays as written. Its proxy URL has no password, so it has
+	// no route to the caller: a request to the route gets 403 from the gateway's proxy,
+	// and one with the agent's password 503, since that session ended. The session does
+	// not narrow the run's proxy for After: it applies the credentials the run's
+	// configuration holds, and the push guard as it is. Exec starts After there, with the option
+	// --after-only. After runs in Dir, with no input, in a new process group, with the
+	// container's environment but GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_EXEC_PATH,
+	// GIT_CONFIG*, GIT_SSH*, GIT_ASKPASS, BASH_ENV, ENV, LD_PRELOAD, LD_LIBRARY_PATH,
+	// XDG_* and QORY_RUN_SOCKET, with HOME a new, empty directory that nothing writes
+	// to, and with variables that keep git from reading the system's and the user's
+	// configuration, from running a hook, an fsmonitor, a credential helper or a signing
+	// program, and from reaching a remote other than over HTTPS. Programs that git starts
+	// from the workspace's .git/config still run as After's user: a filter, textconv or
+	// merge driver, and on git 2.54.0, which has no setting that turns off every
+	// hook.<name>.command, such a hook. The caller's check of .git/config must fail on such keys. PATH
+	// keeps only absolute directories that the agent's user does not own, nor any
+	// directory above them, and that no group or other user may write, but a directory
+	// with the sticky bit; a directory on a read-only mount counts as unchanged. So a
+	// write into the workspace by that user, also while After runs, cannot change which
+	// program After's command finds in PATH. After does not run a program, and exits with status 126, when it or a directory
+	// above it fails the same check. It is the session's after step, of kind
+	// event.StepAfter and name after: its lines are the command's output, and its exit
+	// status the command's. Its records reach the session over the one connection that
+	// Exec opens before After starts, and the session reads that connection alone: a
+	// process After starts cannot write the step. At AfterTimeout Exec sends SIGTERM to
+	// the command's process group and SIGKILL 5 s later: the step ends cancelled with
+	// reason timeout. When the kernel kills a process of the container for lack of
+	// memory while After runs, the step ends failed with reason out_of_memory. When the
+	// agent's container cannot be removed, or After's cannot start, the step ends failed
+	// with -1 and the reason as its line. A removal that the context's end cuts is tried
+	// again as the session ends. The step ends before the session's
+	// dev.qory.session.exited, whose state and exit status stay the runtime's;
+	// Result.After is the step's outcome. A runtime stopped at the Timeout, a pause and
+	// a runtime stopped by the context's end all get After. The step, the agent's
+	// container's removal and After's start included, is cut off at AfterTimeout, 5 s
+	// from SIGTERM to SIGKILL, 1 s for After's last output and 1 minute for the removal
+	// and the start; after the context's end it gets StopGrace from that moment, and its
+	// step then ends cancelled with -1. A run closed from outside before After starts gets
+	// none, and one closed while After runs ends the step cancelled with -1. After runs
+	// after every other exit, 125 included: when the launch failed before any container
+	// existed, such as a docker run that exited 125 with no container, After still starts
+	// on the unchanged workspace, and when its container cannot start for the same cause,
+	// the after step ends failed with -1 after the launch's error line. The
+	// session first removes the setup container, when the run has one, as Run.RemoveSetup
+	// does, with its wall step before the after step, since it shares the workspace and
+	// the network with After's container; when that fails, After does not run and its step
+	// ends failed with -1. Empty
+	// means none. After needs the run's Wall, an enclosure that is a wall.AfterWrapper
+	// with an Unwrap, Exec and an AfterTimeout above zero, and its words no NUL.
+	After []string
+	// AfterTimeout is how long After may run: above zero with After, unused without.
+	AfterTimeout time.Duration
 	// Timeout is how long the runtime may run, the session's setup commands included; zero
 	// means no limit. At the limit the runtime is stopped the way the context ending
 	// stops it, and dev.qory.session.exited contains the reason. qory passes the time
@@ -425,6 +570,27 @@ type SessionSpec struct {
 	// transcriptPoll is how often the session reads the runtime's transcript; zero
 	// means [transcriptPoll]. A test sets it.
 	transcriptPoll time.Duration
+}
+
+// RuntimeInstall is a runtime's program as the caller installed it on this machine.
+// [Run.Join] returns an error, before the join request, for a Dir that is not
+// absolute and clean, missing, not a folder, or a folder others cannot read and
+// enter, and behind a Wall for one that is, contains or lies inside /qory; for a
+// program, as [SessionSpec.RuntimeInstall] says which, whose path is not clean, that
+// is not inside Dir, that is reached through a symbolic link below Dir, that is not a
+// regular file others can read and execute, or that has a second hard link; for Dir,
+// a folder on the way to the program or the program when its group or others may
+// write it, or its owner is neither root nor the user of this process; and for an
+// empty Version, one over 64 bytes, or one that does not start with a letter or a
+// digit or has a character outside [0-9A-Za-z.+-]. Dir may itself be a symbolic link:
+// the session uses the folder it leads to. The folders above Dir are not checked:
+// the caller installs Dir under folders only root or this process's user can write,
+// and keeps the folder unchanged until the run ends.
+type RuntimeInstall struct {
+	// Dir is the folder, an absolute path of this machine: /opt/runtimes/claude/2.1.320.
+	Dir string
+	// Version is the runtime's version as its publisher numbers it: 2.1.320.
+	Version string
 }
 
 // HarnessSource is one harness source a session's compose used: Source as it is
@@ -472,8 +638,8 @@ func checkMachine(spec OpenSpec) error {
 // Outcome is how the caller says the run ended, which [Run.Close] writes in
 // dev.qory.run.exited: State, succeeded, failed, cancelled or paused; Reason, empty
 // for none, timeout or interrupted with cancelled, timeout with ExitCode 124,
-// model_key_limit with paused, the one reason paused takes, after a join whose last
-// session ended paused with model_key_limit, image_missing,
+// model_key_limit or model_key_switch with paused, the two reasons paused takes, after
+// a join whose last session ended paused with that reason, image_missing,
 // image_user_root, image_access_denied, image_rate_limited or
 // image_registry_unreachable, failed with -1 for a run no session joined, after
 // [Run.FetchImage] returned that refusal, workflow_not_in_harness, failed with -1 for a run no session
@@ -481,11 +647,14 @@ func checkMachine(spec OpenSpec) error {
 // read_needs_setup_outside, read_needs_no_nested_docker and read_needs_setup_removed,
 // failed with -1 for a read run (the contract's §The events, How a run ends) no session
 // joined that has no wall, whose setup is set to run inside the agent's container, whose image runs nested
-// Docker, or whose setup container could not be removed, or a code of the caller's,
-// which is none of Forager's reserved codes; and
+// Docker, or whose setup container could not be removed, write_needs_wall, failed with
+// -1 for a run no session joined whose access is not read and that has no wall, or a
+// code of the caller's, which is none of Forager's reserved codes; and
 // ExitCode, the run's exit code: the last session's, 124 at the run's time limit, -1
 // when no session ran. A failed run with no reason that no session joined is closed as
-// failed with no_session and -1.
+// failed with no_session and -1. The gateway accepts a code of the caller's only with
+// State failed, before or after a join, and ends any other close with such a code as
+// failed with batch_refused.
 type Outcome struct {
 	State    string
 	Reason   string
@@ -494,13 +663,15 @@ type Outcome struct {
 
 // checkOutcome refuses an outcome the close cannot write: a state outside the four, an
 // exit code under -1, a reason outside the pattern or one of Forager's reserved codes
-// other than timeout, interrupted, no_session and model_key_limit, those four with
-// another state or exit code than they take, paused with any reason other than
-// model_key_limit, model_key_limit in a run with no join or
-// after a last session that ended with another reason, lastReason, and image_missing, image_user_root, image_access_denied,
+// other than timeout, interrupted, no_session, model_key_limit, model_key_switch and
+// model_key_unauthorized, those six with another state or exit code than they take,
+// paused with any reason other than model_key_limit and model_key_switch; one of the
+// three model key reasons in a run with no join or after a last session that ended
+// with another reason, lastReason; and image_missing, image_user_root, image_access_denied,
 // image_rate_limited, image_registry_unreachable, workflow_not_in_harness, read_needs_wall, read_needs_setup_outside,
-// read_needs_no_nested_docker and read_needs_setup_removed other than failed with -1 for
-// a run no session joined, the one outcome with each of them that the gateway accepts.
+// read_needs_no_nested_docker, read_needs_setup_removed and write_needs_wall other than
+// failed with -1 for a run no session joined, the one outcome with each of them that the
+// gateway accepts.
 // joined is true when a join of the run was numbered, or may have been.
 func checkOutcome(o Outcome, joined bool, lastReason string) error {
 	switch {
@@ -508,12 +679,13 @@ func checkOutcome(o Outcome, joined bool, lastReason string) error {
 		return fmt.Errorf("the outcome's state %q is none of succeeded, failed, cancelled and paused", o.State)
 	case o.ExitCode < -1:
 		return fmt.Errorf("the outcome's exit code %d is under -1", o.ExitCode)
-	case o.State == event.StatePaused && o.Reason != event.ReasonModelKeyLimit:
-		return errors.New("close a paused run with the reason model_key_limit: the close writes paused with no other reason")
+	case o.State == event.StatePaused && o.Reason != event.ReasonModelKeyLimit && o.Reason != event.ReasonModelKeySwitch:
+		return errors.New("close a paused run with the reason model_key_limit or model_key_switch: the close writes paused with no other reason")
 	case o.Reason == refusal.ImageMissing, o.Reason == refusal.ImageUserRoot, o.Reason == refusal.ImageAccessDenied,
 		o.Reason == refusal.ImageRateLimited, o.Reason == refusal.ImageRegistryUnreachable, o.Reason == event.ReasonWorkflowNotInHarness,
 		o.Reason == event.ReasonReadNeedsWall, o.Reason == event.ReasonReadNeedsSetupOutside,
-		o.Reason == event.ReasonReadNeedsNoNestedDocker, o.Reason == event.ReasonReadNeedsSetupRemoved:
+		o.Reason == event.ReasonReadNeedsNoNestedDocker, o.Reason == event.ReasonReadNeedsSetupRemoved,
+		o.Reason == event.ReasonWriteNeedsWall:
 		if o.State != event.StateFailed || o.ExitCode != -1 || joined {
 			return fmt.Errorf("an outcome with the reason %s is failed with the exit code -1, of a run no session joined", o.Reason)
 		}
@@ -527,9 +699,9 @@ func checkOutcome(o Outcome, joined bool, lastReason string) error {
 		if o.State != event.StateCancelled {
 			return errors.New("an outcome with the reason interrupted is cancelled")
 		}
-	case o.Reason == event.ReasonModelKeyLimit:
-		if o.State != event.StatePaused || !joined || lastReason != event.ReasonModelKeyLimit {
-			return errors.New("close with model_key_limit only as paused, after a last session that ended with model_key_limit")
+	case stopReasons[o.Reason] != "":
+		if o.State != stopReasons[o.Reason] || !joined || lastReason != o.Reason {
+			return fmt.Errorf("close with %s only as %s, after a last session that ended with %s", o.Reason, stopReasons[o.Reason], o.Reason)
 		}
 	case o.Reason == event.ReasonNoSession:
 		if o.State != event.StateFailed || o.ExitCode != -1 || joined {
@@ -598,6 +770,38 @@ type Result struct {
 	// session_lost when it heard nothing from the session for three heartbeat
 	// intervals, and batch_refused when it refused a batch from the run's session.
 	ClosedReason string
+	// After is the outcome of the session's after step, SessionSpec.After's: nil when
+	// the spec has no After, and when the run was closed from outside before After
+	// started; a run closed while After runs has it cancelled with ExitCode -1. Join
+	// returns an error and no Result, and runs no After, when the wall's Wrap fails (with
+	// the Docker wall, a missing image fails there), when the launch does not start
+	// (ErrNotStarted), and when the wait for the launch returns an error that is no exit
+	// status: the runtime exited 0 and a write of its output failed (Stdout, Stderr or the
+	// run's log), or Wait failed; the runtime may have changed the workspace then. A
+	// launch that failed before any container existed, such as a docker run that exited
+	// 125, still gets After, on the unchanged workspace; if After's container cannot start
+	// for the same cause, After is failed with ExitCode -1.
+	// A caller that sets After treats nil as an After that did not run.
+	After *AfterResult
+}
+
+// AfterResult is the outcome of a session's after step.
+type AfterResult struct {
+	// Step is the step's number in the run.
+	Step int
+	// State is the state of the step's dev.qory.run.step_exited: succeeded when the
+	// command exited 0, cancelled at AfterTimeout or at a stop from outside, and failed
+	// otherwise.
+	State string
+	// ExitCode is the command's exit status, 128 and the signal's number for a command a
+	// signal ended, 127 for a program Exec did not find, 126 for one it could not start
+	// or that does not run, 125 when Exec could not make After's HOME, and -1 when the step ended
+	// with no status: the agent's container could not be removed, After's container did
+	// not start, no record of After's exit arrived, or the step was cut off.
+	ExitCode int
+	// Reason is event.ReasonTimeout at AfterTimeout, event.ReasonOutOfMemory for a
+	// container short of memory, and empty otherwise.
+	Reason string
 }
 
 // Closed is what the close of a run came to.
@@ -605,10 +809,10 @@ type Closed struct {
 	RunID string
 	// Dir is the run directory.
 	Dir string
-	// State, Reason and ExitCode are those of the run's dev.qory.run.exited: the
-	// caller's outcome, failed with no_session and -1 for a failed run no session joined,
-	// or, when RunClosed, the state and the reason the gateway's 410 says, with the exit
-	// code of the last session, -1 when a session was open at the 410.
+	// State, Reason and ExitCode are those of the run's dev.qory.run.exited: the caller's
+	// outcome, failed with no_session and -1 for a failed run with no reason that no
+	// session joined, or, when RunClosed, the state and the reason the gateway's 410 says,
+	// with the exit code of the last session, -1 when a session was open at the 410.
 	State    string
 	Reason   string
 	ExitCode int
@@ -620,7 +824,7 @@ type Closed struct {
 	// ClosedReason is the 410's code when RunClosed, as [Result.ClosedReason] is.
 	ClosedReason string
 	// WallKept is true when removing a container of the run's wall failed at some point
-	// of the run: a session's Unwrap, RemoveSetup, or the close. A process may have kept
+	// of the run: a session's Unwrap or UnwrapAfter, RemoveSetup, or the close. A process may have kept
 	// writing the run's binds after its session ended, so do not trust what is in them.
 	// WallKept stays true when a later removal succeeded. A close whose every failure
 	// matches [wall.ErrNoContainerKept], such as the Docker wall's on a network or the
@@ -634,6 +838,9 @@ type Closed struct {
 type runSpec struct {
 	OpenSpec
 	SessionSpec
+	// install is SessionSpec.RuntimeInstall as Join checked it; nil for a session
+	// with no runtime.
+	install *installed
 }
 
 // openDefaults fills what the open's spec left empty.

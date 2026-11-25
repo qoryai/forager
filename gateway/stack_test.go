@@ -598,14 +598,14 @@ func TestTheRunConfigurationsStackHostsOpenNoPrivateAddress(t *testing.T) {
 	}
 }
 
-// TestTheNodesPolicyDecidesEachStackHost pins Tom's rule that the node only takes
-// away, decided per host: a host of the run configuration's stack_hosts passes when the
-// node's policy allows it under its mode and has no path rule for it, which the stack
-// proxy cannot check; otherwise it is refused with the body of the check that refused
-// it, and the report line ends with that check's cause. A *. entry is decided for each host below it, so
-// a deny entry under it takes away that host alone. gateway.stack_hosts is not decided
-// by the node's policy. Hosts under .invalid resolve nowhere, so a host that passes
-// gets the stack proxy's 502 for its dial.
+// TestTheNodesPolicyDecidesEachStackHost pins the rule that the node's policy only takes
+// stack hosts away, host by host: a host of the run configuration's stack_hosts passes
+// when the node's policy allows it under its mode and has no path rule for it, which the
+// stack proxy cannot check; otherwise a request to it gets the body of the check it
+// fails, and the report line ends with that check's cause. A *. entry is decided for each
+// host below it, so a deny entry under it takes away that host alone.
+// gateway.stack_hosts is not decided by the node's policy. Hosts under .invalid resolve
+// nowhere, so a host that passes gets the stack proxy's 502 for its dial.
 func TestTheNodesPolicyDecidesEachStackHost(t *testing.T) {
 	for _, c := range []struct {
 		name    string
@@ -656,7 +656,7 @@ func TestTheNodesPolicyDecidesEachStackHost(t *testing.T) {
 
 // TestAReloadKeepsTheStackHostsFixed pins that a run's stack_hosts are fixed when it
 // starts: a reload whose run configuration lists others fails, the user is told with
-// the fix first, and the policy in force stays.
+// the fix first, on the one line the report has, and the policy in force stays.
 func TestAReloadKeepsTheStackHostsFixed(t *testing.T) {
 	c, h := stackGateway(t, `{"version":1,"stack_hosts":["git.example"]}`, nil, nil)
 	a := h.open(server.LinkRunRequest{})
@@ -668,7 +668,7 @@ func TestAReloadKeepsTheStackHostsFixed(t *testing.T) {
 	line := "the reload failed: start another run to use other stack hosts: a run's stack_hosts are fixed when it starts"
 	eventually(t, "the failed reload's report", func() bool {
 		h.post(heartbeat(runID))
-		return h.reported(line)
+		return h.reportedWhole(line)
 	})
 	again, err := h.linkOf(runID).Reload(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID)
 	if err != nil || again.Digest != first {

@@ -36,6 +36,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -77,7 +78,8 @@ const Revision = contracts.Revision
 // WellKnown is the path of the configuration document under the server's URL.
 const WellKnown = "/.well-known/qory-configuration"
 
-// Timeout is how long a server has to answer one request.
+// Timeout is how long a server has to answer one request, a secrets request aside
+// ([SecretsTimeout]).
 const Timeout = 10 * time.Second
 
 // OpenWait is how long a session waits for the answer to its run request, on the local
@@ -85,10 +87,10 @@ const Timeout = 10 * time.Second
 // attach, for up to 120 seconds of the request's arrival; the last try, which may start
 // just before 120 seconds, has [Timeout] for its answer; and 10 seconds are left for
 // the rest of the open. They do not cover the slowest opens: behind a separate gateway,
-// a run with credentials whose attach ends late, then reloads and requests its
-// secrets, [Timeout] each, may take about 150 seconds and the start of its tools; on
-// the local link, a run that requests its secrets after a late registration may take
-// 140 seconds and the start of its tools.
+// a run with credentials whose attach ends late, then reloads, with [Timeout], and
+// requests its secrets, with [SecretsTimeout], 30 seconds, may take about 170 seconds
+// and the start of its tools; on the local link, a run that requests its secrets after
+// a late registration may take 160 seconds and the start of its tools.
 const OpenWait = 140 * time.Second
 
 // Window is how far a signed GET's timestamp may be from the receiver's clock,
@@ -237,7 +239,19 @@ func decode(name, schemaName string, b []byte, out any) error {
 	if err != nil {
 		return err
 	}
-	return accesskey.ShownError(json.Unmarshal(j, out))
+	// encoding/json/v2 matches member names by exact case: a member name that differs
+	// only in case sets no field. Past the schema, which takes 1.0 and 1e0 as an
+	// integer, only such a number fails to decode. The structs that decode documents
+	// have no map, so the error's pointer contains only member names that they define.
+	if err := jsonv2.Unmarshal(j, out); err != nil {
+		var se *jsonv2.SemanticError
+		if errors.As(err, &se) && se.JSONPointer != "" {
+			return fmt.Errorf("Write %s as a whole number, such as 1, with no fraction or exponent\n"+
+				"it does not decode as %s defines it", accesskey.ShownValue(string(se.JSONPointer), false), schemaName)
+		}
+		return fmt.Errorf("it does not decode as %s defines it", schemaName)
+	}
+	return nil
 }
 
 // Configuration is the configuration document the server answers discovery with:
@@ -311,10 +325,10 @@ type RunConfiguration struct {
 	// the document's order, each name once; nil when the document has none. The
 	// gateway fetches their values with the secrets request.
 	Credentials []RunCredential `json:"credentials,omitzero"`
-	// ModelCredential is the name of the model key the runtime starts with, an API
-	// credential of Credentials or a model key of the machine's; empty when the document
-	// names none, which a run with one model key may.
-	ModelCredential string `json:"model_credential,omitzero"`
+	// DefaultModelProviderCredentialName is the name of the model key the runtime
+	// starts with, an API credential of Credentials or a local model provider credential;
+	// empty when the document names none, which a run with one model key may.
+	DefaultModelProviderCredentialName string `json:"default_model_provider_credential_name,omitzero"`
 	// StackHosts are the hosts the run's stack proxy allows beside the gateway's
 	// gateway.stack_hosts, each a lower-case host name, an IPv4 address or a *. suffix,
 	// in the document's order; nil when the document has none.
@@ -335,15 +349,22 @@ type RunConfiguration struct {
 }
 
 // RunCredential is one entry of a run configuration's credentials, with no value. An
-// API credential, a model key, has Format, Endpoint, Auth and KeyPrefixes; a host
-// credential has Apply, Placeholders and Purpose.
+// API credential, a model key, has Format, Endpoint, Auth, Paths and KeyPrefixes; a
+// host credential has Apply, Placeholders and Purpose.
 type RunCredential struct {
 	Name string `json:"name"`
+	// Group is an API credential's key group, the public id of the provider of the
+	// run's model choice (its con_ id): the API credentials with one group are one key
+	// group. Empty for a host credential.
+	Group string `json:"group,omitzero"`
 	// Format is the API format of an API credential, one of api-format.schema.json;
 	// empty for a host credential.
 	Format string `json:"format,omitzero"`
 	// Endpoint is the base URL of an API credential's model API.
 	Endpoint string `json:"endpoint,omitzero"`
+	// Paths are the paths of an API credential's endpoint host the gateway sets its
+	// value on; nil for every path.
+	Paths []string `json:"paths,omitzero"`
 	// KeyPrefixes are the prefixes an API credential's value must start with; nil for
 	// any value.
 	KeyPrefixes []string `json:"key_prefixes,omitzero"`
@@ -357,9 +378,8 @@ type RunCredential struct {
 	ScheduleResetsAt string `json:"schedule_resets_at,omitzero"`
 	PauseForS        *int   `json:"pause_for_s,omitzero"`
 	// CooldownUntil is the end of an API credential's cooldown at the claim, RFC 3339,
-	// empty for a key out of cooldown; Chosen is true for the key of the model choice.
+	// empty for a key out of cooldown.
 	CooldownUntil string `json:"cooldown_until,omitzero"`
-	Chosen        bool   `json:"chosen,omitzero"`
 	// UseUpToPercent is an API credential's Use up to percentage, 1 to 99, nil when the
 	// document has none; UseUpToWindows are the limit windows it applies to, such as
 	// five_hour and seven_day, nil when the document has none.
@@ -370,9 +390,9 @@ type RunCredential struct {
 	Apply        []Apply  `json:"apply,omitzero"`
 	Placeholders []string `json:"placeholders,omitzero"`
 	// Purpose is a host credential's purpose: [PurposeHarness] for one the stack proxy
-	// sets for the fetch of the harness definition, and [PurposeWork] or empty for one
-	// the run's proxy sets for the run's sessions, host work and setup. Empty for an API
-	// credential.
+	// sets for the fetch of the harness definition, [PurposePush] for one the push proxy
+	// sets for qory's push, and [PurposeWork] or empty for one the run's proxy sets for
+	// the run's sessions, host work and setup. Empty for an API credential.
 	Purpose string `json:"purpose,omitzero"`
 }
 
@@ -380,27 +400,37 @@ type RunCredential struct {
 const (
 	PurposeHarness = "harness"
 	PurposeWork    = "work"
+	PurposePush    = "push"
 )
 
 // Harness reports whether the credential is for the fetch of the harness definition
 // alone, purpose harness: the stack proxy sets it, and the run's proxy never does.
 func (c RunCredential) Harness() bool { return c.Purpose == PurposeHarness }
 
+// Push reports whether the credential is for qory's push alone, purpose push: the push
+// proxy sets it, and the run's proxy never does.
+func (c RunCredential) Push() bool { return c.Purpose == PurposePush }
+
+// Work reports whether the run's proxy sets the credential: purpose work or none.
+func (c RunCredential) Work() bool { return !c.Harness() && !c.Push() }
+
 // Apply is one item of a host credential's apply, run-configuration.schema.json: the
-// hosts its value is set on, the scheme with its username or header, and the paths,
-// nil for every path.
+// hosts its value is set on, the scheme with its username or header, the paths, nil
+// for every path, and PushRef, the one ref a git push through it may create, update or
+// delete, empty when it may push none.
 type Apply struct {
 	Hosts    []string `json:"hosts"`
 	Scheme   string   `json:"scheme"`
 	Username string   `json:"username,omitzero"`
 	Header   string   `json:"header,omitzero"`
 	Paths    []string `json:"paths,omitzero"`
+	PushRef  string   `json:"push_ref,omitzero"`
 }
 
 // Applies are where and how the credential's value is set: for an API credential one
-// item, the host [policy.EndpointHost] reads from its endpoint with its auth and every
-// path; for a host credential its Apply. An API credential whose endpoint has no host
-// applies to none.
+// item, the host [policy.EndpointHost] reads from its endpoint with its auth and its
+// Paths, every path without them; for a host credential its Apply. An API credential
+// whose endpoint has no host applies to none.
 func (c RunCredential) Applies() []Apply {
 	if c.Format == "" {
 		return c.Apply
@@ -409,16 +439,21 @@ func (c RunCredential) Applies() []Apply {
 	if !ok {
 		return nil
 	}
-	return []Apply{{Hosts: []string{host}, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header}}
+	return []Apply{{Hosts: []string{host}, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header, Paths: slices.Clone(c.Paths)}}
 }
 
 // Auth is how a value is set on a request, auth.schema.json: Scheme is bearer, basic
 // with Username, or header with Header. OAuth marks a bearer as an OAuth token.
+// AccountHeader and AccountClaim, both or neither and only with OAuth, are the header
+// the proxy sets beside the token and the JSON pointer, RFC 6901, of its value in the
+// token's JWT payload; empty for none.
 type Auth struct {
-	Scheme   string `json:"scheme"`
-	Header   string `json:"header,omitzero"`
-	Username string `json:"username,omitzero"`
-	OAuth    bool   `json:"oauth,omitzero"`
+	Scheme        string `json:"scheme"`
+	Header        string `json:"header,omitzero"`
+	Username      string `json:"username,omitzero"`
+	OAuth         bool   `json:"oauth,omitzero"`
+	AccountHeader string `json:"account_header,omitzero"`
+	AccountClaim  string `json:"account_claim,omitzero"`
 }
 
 // Variable is one of a run configuration's variables: its value. A member beside it is
@@ -458,8 +493,9 @@ type Client struct {
 	InstanceID, InstanceName string
 	// UserAgent is sent as User-Agent: qory-forager/<version>.
 	UserAgent string
-	// HTTP is the client used; nil means one with Timeout. Its redirect policy is
-	// not used: the client follows no redirect.
+	// HTTP is the client used; nil means one with Timeout, or SecretsTimeout for a
+	// secrets request. A client whose Timeout is zero gets the same. Its redirect
+	// policy is not used: the client follows no redirect.
 	HTTP *http.Client
 }
 
@@ -500,15 +536,19 @@ func (c *Client) Check() error {
 }
 
 // http is the client every request goes through: the caller's, copied, or one with
-// Timeout, and in either case one that follows no redirect and keeps no cookie. Go
-// copies a request's headers to wherever a redirect points, so a followed 3xx would
-// hand the access key id, the signature and the timestamp to another host and take the
-// answer from it. A 3xx is a status like any other. With Via set, its transport is the
-// caller's, or Go's default, with Via's trust in place of its TLS ([Via.Transport]).
-func (c *Client) http() (*http.Client, error) {
-	hc := &http.Client{Timeout: Timeout}
+// timeout, which also replaces a copied client's Timeout of zero; and in either case
+// one that follows no redirect and keeps no cookie. Go copies a request's headers to
+// wherever a redirect points, so a followed 3xx would hand the access key id, the
+// signature and the timestamp to another host and take the answer from it. A 3xx is a
+// status like any other. With Via set, its transport is the caller's, or Go's default,
+// with Via's trust in place of its TLS ([Via.Transport]).
+func (c *Client) http(timeout time.Duration) (*http.Client, error) {
+	hc := &http.Client{Timeout: timeout}
 	if c.HTTP != nil {
 		cp := *c.HTTP
+		if cp.Timeout == 0 {
+			cp.Timeout = timeout
+		}
 		hc = &cp
 	}
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -542,7 +582,12 @@ type answer struct {
 // unsigned. An error is a transport failure: no answer. With Via set, the request goes
 // to Via's origin with its target, and so its signature, unchanged.
 func (c *Client) send(ctx context.Context, method, u string, body []byte, max int, set func(http.Header)) (*answer, error) {
-	hc, req, sig, err := c.signed(ctx, method, u, body, set)
+	return c.sendWithin(ctx, Timeout, method, u, body, max, set)
+}
+
+// sendWithin is [Client.send] with timeout for the server's answer.
+func (c *Client) sendWithin(ctx context.Context, timeout time.Duration, method, u string, body []byte, max int, set func(http.Header)) (*answer, error) {
+	hc, req, sig, err := c.signedWithin(ctx, timeout, method, u, body, set)
 	if err != nil {
 		return nil, err
 	}
@@ -579,13 +624,18 @@ func (c *Client) read(resp *http.Response, sig string, max int) (*answer, error)
 // its signature. With Via set, the request goes to Via's origin with its target
 // unchanged.
 func (c *Client) signed(ctx context.Context, method, u string, body []byte, set func(http.Header)) (*http.Client, *http.Request, string, error) {
+	return c.signedWithin(ctx, Timeout, method, u, body, set)
+}
+
+// signedWithin is [Client.signed] with a client whose timeout is timeout.
+func (c *Client) signedWithin(ctx context.Context, timeout time.Duration, method, u string, body []byte, set func(http.Header)) (*http.Client, *http.Request, string, error) {
 	if v := c.Config.Via; v != nil {
 		var err error
 		if u, err = v.rebase(u); err != nil {
 			return nil, nil, "", accesskey.ShownError(err)
 		}
 	}
-	hc, err := c.http()
+	hc, err := c.http(timeout)
 	if err != nil {
 		return nil, nil, "", accesskey.ShownError(err)
 	}
@@ -639,7 +689,8 @@ func (c *Client) verifies(resp *http.Response, sig string, a accesskey.Answer) b
 // refusal is the error of an answer at run start that is not the one wanted: a 401 is
 // unauthorized, the server's refusal though unsigned; an answer that did not verify is
 // answer_unsigned, which Forager decides; a signed answer is the code its body
-// contains, or, without one, an error naming its status.
+// contains, with the wait of its Retry-After, or, without one, an error with its
+// status.
 func (a *answer) refusal(what string) error {
 	switch {
 	case a.status == http.StatusUnauthorized:
@@ -648,7 +699,7 @@ func (a *answer) refusal(what string) error {
 		return &accesskey.Refusal{Code: accesskey.CodeAnswerUnsigned, Status: a.status, Detail: what}
 	}
 	if r := accesskey.ReadRefusal(a.status, a.body); r != nil {
-		r.Detail = what
+		r.Detail, r.RetryAfter = what, ReadRetryAfter(a.header)
 		return r
 	}
 	return &AnswerError{What: what, Status: a.status}
@@ -938,9 +989,10 @@ type Delivery struct {
 	// and always toward the server.
 	Refusal *accesskey.Refusal
 	// StopReason is, on the link, the reason of stop in the body of a 2xx,
-	// link-batch-answer.schema.json: model_key_limit, after which the session stops its
-	// runtime and the run stays open. Empty for a body without stop, for any other
-	// answer, and always toward the server.
+	// link-batch-answer.schema.json: model_key_limit, model_key_switch or
+	// model_key_unauthorized, after which the session stops its runtime and the run
+	// stays open. Empty for a body without stop, for any other answer, and always
+	// toward the server.
 	StopReason string
 	// ServerEnd is, toward the server, the end member of a signed 2xx: the outcome the
 	// run's starter gave, which the server sends on every 2xx for the run once it has

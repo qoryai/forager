@@ -178,6 +178,8 @@ type held struct {
 	answered, used bool
 	// tool makes it a tool, forge, that serves hosts, in place of a credential.
 	tool bool
+	// purpose is the purpose of its use in the applied credentials, none when empty.
+	purpose string
 }
 
 // byReferenceHolding is byReference with the credentials creds in the run's answer.
@@ -202,6 +204,12 @@ func byReferenceHolding(g *linktest.Fake, creds []held) {
 				use := map[string]any{"name": name, "hosts": c.hosts, "scheme": "bearer"}
 				if c.paths != nil {
 					use["paths"] = c.paths
+				}
+				if c.purpose != "" {
+					use["purpose"] = c.purpose
+				}
+				if c.purpose == "push" {
+					a["push_proxy_secret"] = linktest.PushProxySecret
 				}
 				uses = append(uses, use)
 			}
@@ -229,7 +237,8 @@ func byReferenceHolding(g *linktest.Fake, creds []held) {
 // certificate the check does not trust, a 500, a realm over http on a host off
 // loopback, a realm on a host with no ASCII form, a realm on another host than the
 // registry's that a tool of the run serves, where a credential of the run applies on
-// every path or on other paths, or that the answer lists a credential for with no use
+// every path or on other paths (a push credential, which the run's proxy never sets, is
+// no such credential), or that the answer lists a credential for with no use
 // or a use with masked hosts, a digest the registry did not ask for and a host the
 // run's proxy denies each fail the image step before the wall pulls, each error
 // starting with what to fix. A 404 is image_missing; a 401 or 403 image_access_denied,
@@ -275,6 +284,9 @@ func TestTheImageIsCheckedAtItsRegistryBeforeThePull(t *testing.T) {
 			heads: []string{head, head + "Bearer " + registryToken}, realm: []string{"scope=repository%3Aagents%2Fapp%3Apull&service=registry.example "}},
 		{name: "a realm no credential applies to", reg: &scripted{status: 401, withToken: 200, challenge: bearer},
 			creds: []held{{hosts: []string{"api.git.example"}, answered: true, used: true}},
+			heads: []string{head, head + "Bearer " + registryToken}, realm: []string{"scope=repository%3Aagents%2Fapp%3Apull&service=registry.example "}},
+		{name: "a realm only a push credential covers", reg: &scripted{status: 401, withToken: 200, challenge: bearer},
+			creds: []held{{hosts: []string{"auth.registry.example"}, used: true, purpose: "push"}},
 			heads: []string{head, head + "Bearer " + registryToken}, realm: []string{"scope=repository%3Aagents%2Fapp%3Apull&service=registry.example "}},
 		{name: "a realm a credential covers on every path", reg: &scripted{status: 401, withToken: 200, challenge: bearer},
 			creds: []held{{hosts: []string{"auth.registry.example"}, answered: true, used: true}}, heads: []string{head},
@@ -444,6 +456,12 @@ func TestTheImageIsCheckedAtItsRegistryBeforeThePull(t *testing.T) {
 				}
 				if !slices.Contains(g.Connects(), "registry.example:443") {
 					t.Errorf("the run's proxy got the CONNECTs %q", g.Connects())
+				}
+				// The image step's dial goes to the run's proxy, never the push proxy.
+				if got := g.Preambles(); slices.ContainsFunc(got, func(p string) bool {
+					return strings.Contains(p, linktest.PushProxySecret) || strings.HasPrefix(p, "QORY-PUSH ")
+				}) {
+					t.Errorf("the image step's connections opened with %q", got)
 				}
 				closed, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded})
 				if err != nil {

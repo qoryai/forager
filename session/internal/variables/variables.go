@@ -17,7 +17,7 @@
 // credential. What loses never stops the run, and [Resolved.Applied] lists each name
 // with its source and its losses, as dev.qory.run.policy_applied reports them.
 //
-// The deny list is the contract's denied-variables.json, the run's runtime's denies
+// The deny list is the contract's denied-variables.json, the session's runtime's denies
 // and the node's own entries. An entry is a name or a pattern in which * matches any
 // run of characters, the empty run included; it matches a whole name, regardless of
 // case, because programs read http_proxy and HTTP_PROXY alike. Every other comparison
@@ -46,8 +46,7 @@ const (
 	Accept = "accept"
 )
 
-// The variables Forager sets for the session itself, the one QORY_ names a run's
-// environment may contain.
+// The two names Forager sets that a walled run may also pass.
 const (
 	envRunID  = "QORY_RUN_ID"
 	envSocket = "QORY_RUN_SOCKET"
@@ -112,13 +111,13 @@ type Inputs struct {
 	Unwalled string
 	// Deny is the node's own entries for the deny list.
 	Deny []string
-	// RuntimeDenies is the run's runtime's denies.
+	// RuntimeDenies is the session's runtime's denies.
 	RuntimeDenies []string
-	// Overrides is the run's runtime's model overrides: the variables that would
+	// Overrides is the session's runtime's model overrides: the variables that would
 	// override the model id or effort value a composer writes. Only a walled run
 	// applies them.
 	Overrides []string
-	// Runtime is the variables the run's runtime declares or reserves.
+	// Runtime is the variables the session's runtime declares or reserves.
 	Runtime []string
 	// Placeholders is the names of the run's placeholders.
 	Placeholders []string
@@ -127,17 +126,18 @@ type Inputs struct {
 	// Own is the names Forager, the wall and the runtime's preparation set: with
 	// the placeholders and Fixed, the run's fixed names.
 	Own []string
-	// Endpoint is the variable the run's runtime reads the base URL of its model API
+	// Endpoint is the variable the session's runtime reads the base URL of its model API
 	// from, its descriptor's model.endpoint.variable; empty when it has none. A walled
 	// run applies the endpoint rule to it, and an unwalled one with Credentials.
 	Endpoint string
-	// EndpointFixed says the run's start key sets Endpoint, and Own lists it: every
-	// value of it is left out as [WhyFixed], the harness's computed ones included, and
-	// the endpoint rule does not apply.
+	// EndpointFixed says the run's default model provider credential sets Endpoint, and
+	// Own lists it: every value of it is left out as [WhyFixed], the harness's computed
+	// ones included, and the endpoint rule does not apply.
 	EndpointFixed bool
-	// KeysFixed is the variables the run's runtime reads a model key from other than
-	// the one the start key sets: a value of each, from every source the inherited
-	// environment included, is left out as [WhyFixed], and none of them is set.
+	// KeysFixed is the variables the session's runtime reads a model key from other
+	// than the one the default model provider credential sets: a value of each, from
+	// every source the inherited environment included, is left out as [WhyFixed], and
+	// none of them is set.
 	KeysFixed []string
 	// Credentials is each credential the gateway holds for the run, as the run
 	// answer's credential_hosts lists them. A model credential is one with a
@@ -212,21 +212,21 @@ type Loss struct {
 // not matched against the deny list.
 //
 // Behind a wall, and without one when in.Credentials is not empty, the endpoint rule
-// applies to each value of in.Endpoint of the server,
-// the run, the machine, the harness's defaults and the harness's computed ones, in
-// place of the runtime's denies. The other entries of the deny list that cover the
-// source, and the rules for the server's value, apply first, as for any name. Every
-// computed value of the name is checked: when one is left out, all of them are, with
-// the first one's reason, and when none is, the last one alone stays in Fixed. A value
-// from which [policy.EndpointHost] reads no host is left out as
-// [WhyEndpointUnreadable], and one whose host is in no model credential's hosts by
-// [policy.CredentialFor] as [WhyEndpointUncovered]; another is not left out, and when
-// it applies, the entry's Kept has the first model credential whose hosts include it.
-// A value left out lets the next source's value apply, as a denied one does. With
-// in.EndpointFixed, the start key's endpoint is in.Endpoint's one value: every other
-// value of it, the harness's computed ones included, is left out as [WhyFixed]. Every
-// value of a name of in.KeysFixed is left out as [WhyFixed] too, the inherited one
-// included, and the entry has no from: the caller sets none of them.
+// applies to each value of in.Endpoint of the server, the run, the machine, the
+// harness's defaults and the harness's computed ones, in place of the runtime's denies.
+// The other entries of the deny list that cover the source, and the rules for the
+// server's value, apply first, as for any name. Every computed value of the name is
+// checked: when one is left out, all of them are, with the first one's reason, and when
+// none is, the last one alone stays in Fixed. A value from which [policy.EndpointHost]
+// reads no host is left out as [WhyEndpointUnreadable], and one whose host is in no
+// model credential's hosts by [policy.CredentialFor] as [WhyEndpointUncovered]; another
+// is not left out, and when it applies, the entry's Kept has the first model credential
+// whose hosts include it. A value left out lets the next source's value apply, as a
+// denied one does. With in.EndpointFixed, the default model provider credential's
+// endpoint is in.Endpoint's one value: every other value of it, the harness's computed
+// ones included, is left out as [WhyFixed]. Every value of a name of in.KeysFixed is
+// left out as [WhyFixed] too, the inherited one included, and the entry has no from:
+// the caller sets none of them.
 func Resolve(in Inputs) (Resolved, error) {
 	if err := CheckDeny(in.Deny); err != nil {
 		return Resolved{}, err

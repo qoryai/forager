@@ -19,13 +19,17 @@ package credential
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/base64"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -88,18 +92,25 @@ type Use struct {
 	Hosts                    []string
 	Scheme, Username, Header string
 	Paths                    []string
+	// PushRef is the one ref a git push through the use may create, update or delete;
+	// empty means every push gets a 403 (the proxy's branch guard).
+	PushRef string
 	// Stored says the credential is the server's, a run configuration's credentials
 	// entry, whose value Qory Apiary sealed to the access key.
 	Stored bool
 	// Renewed is true when the server's value is fetched again before it expires and
-	// after a host refuses it: a value with expires_at, whose rejected asks for it again.
+	// after a host refuses it: a value the run renews, whose rejected requests it again.
 	Renewed bool
-	// Format, Endpoint and OAuth are a model key's, from the server or the machine;
-	// empty for every other credential.
-	Format, Endpoint string
-	OAuth            bool
-	held             *held
-	index            int
+	// Format, Endpoint and OAuth are a model key's, whether stored in the control plane or
+	// a local model provider credential; empty for every other credential. AccountHeader
+	// and AccountClaim, of a model key stored in the control plane alone, are the header
+	// the proxy sets beside the value and the JSON pointer of its value in the value's JWT
+	// payload ([AccountClaim]); empty for none.
+	Format, Endpoint            string
+	OAuth                       bool
+	AccountHeader, AccountClaim string
+	held                        *held
+	index                       int
 }
 
 // Stored is a credential whose value Qory Apiary stores for the run: an entry of the
@@ -112,28 +123,31 @@ type Stored struct {
 	Apply        []StoredApply
 	Placeholders []string
 	// Format, Endpoint and OAuth are an API credential's; empty for a host credential.
-	Format, Endpoint string
-	OAuth            bool
-	// Entry is the part of the credential's entry that [KeyGroup] reads; its Format is
-	// empty for a host credential.
+	// AccountHeader and AccountClaim are an API credential's auth's account_header and
+	// account_claim; empty for none.
+	Format, Endpoint            string
+	OAuth                       bool
+	AccountHeader, AccountClaim string
+	// Entry is the part of the credential's entry that [KeyGroups] reads; its Format
+	// and Group are empty for a host credential.
 	Entry KeyEntry
 	// Value returns a copy of the opened value's bytes, which the caller clears once it
 	// has set them; empty once the run has ended, and once the value expired.
 	Value func() []byte
-	// ExpiresAt is when the value stops working, zero when it does not expire. Rejected,
-	// for a value with ExpiresAt, is called when a host answers 401 to a request the
-	// value was set on: the caller fetches the value again. A value without ExpiresAt is never
-	// fetched again, so Rejected is not called for it.
-	ExpiresAt time.Time
-	Rejected  func()
+	// Rejected, for a value that is fetched again, such as one with expires_at, is
+	// called when a host returns 401 for a request the value was set on: the caller
+	// fetches the value again. Nil for a value that is never fetched again.
+	Rejected func()
 }
 
 // StoredApply is one way a [Stored] value is set: the hosts, the scheme with its
-// username or header, and the paths, nil for every path.
+// username or header, the paths, nil for every path, and the one ref a push through it
+// may change, empty for none.
 type StoredApply struct {
 	Hosts                    []string
 	Scheme, Username, Header string
 	Paths                    []string
+	PushRef                  string
 }
 
 // Token is the token as it is now, of a credential of the machine's; empty for a
@@ -171,18 +185,19 @@ const (
 	RetryWait = 30 * time.Second
 )
 
-// Held are a run's credentials, resolved. Start is the name of the model key the
-// runtime starts with, the one model key the proxy sets; empty when the run has none.
+// Held are a run's credentials, resolved. DefaultCredential is the name of the model
+// key the runtime starts with, which the proxy sets before the first session and
+// between sessions; empty when the run has none.
 type Held struct {
-	Uses         []*Use
-	Placeholders []string
-	Start        string
-	// Group are the names of the start key's key group, in the order of the run
-	// configuration's credentials: the start key and every credential from the server
-	// with its format, auth and endpoint. Empty when the start key is the machine's, or
-	// the run has none.
-	Group []string
-	all   []*held
+	Uses              []*Use
+	Placeholders      []string
+	DefaultCredential string
+	// Groups are the key groups of the run configuration's API credentials, one per
+	// group value, in the order of each group's first key, [KeyGroups]. Empty when the
+	// run has no API credential from the server. A local model provider credential is in
+	// none.
+	Groups []KeyGroup
+	all    []*held
 	// panics, when set, gets a panic of the renewals' goroutines ([Held.ReportPanics]).
 	panics atomic.Pointer[func(string)]
 }
@@ -202,12 +217,13 @@ func (h *Held) reportPanic(line string) {
 }
 
 // Credential is one credential a run holds: its name, the hosts of its uses in their
-// order, as the proxy matches them, and the variables the enclosure gets a placeholder in
-// for it, each once. Of a credential from the server, Stored is true. Of a model key,
-// from the server or the machine, Format, Endpoint and OAuth are set. Of both, Scheme,
-// Username and Header are how its value is set on its first use's hosts. Items, of a
-// credential from the server, are its uses in order: each one's hosts with how the value
-// is set there.
+// order, as the proxy matches them, and the variables the enclosure gets a placeholder
+// in for it, each once. Of a credential from the server, Stored is true. Of a model
+// key, whether stored in the control plane or a local model provider credential,
+// Format, Endpoint and OAuth are set; of a model key stored in the control plane,
+// Group, its key group. Of both, Scheme, Username and Header are how its value is set
+// on its first use's hosts. Items, of a credential from the server, are its uses in
+// order: each one's hosts with how the value is set there.
 type Credential struct {
 	Name                     string
 	Hosts                    []string
@@ -216,6 +232,7 @@ type Credential struct {
 	Scheme, Username, Header string
 	Format, Endpoint         string
 	OAuth                    bool
+	Group                    string
 	Items                    []Item
 }
 
@@ -233,7 +250,7 @@ type Item struct {
 func (h *Held) Credentials() []Credential {
 	out := make([]Credential, 0, len(h.all))
 	for _, c := range h.all {
-		cred := Credential{Name: c.def.Name, Placeholders: append([]string{}, c.placeholders...)}
+		cred := Credential{Name: c.def.Name, Placeholders: append([]string{}, c.placeholders...), Group: c.group}
 		for _, u := range h.Uses {
 			if u.held == c {
 				cred.Hosts = append(cred.Hosts, u.Hosts...)
@@ -275,11 +292,11 @@ func Resolve(ctx context.Context, defs []Definition, selected []policy.Selected,
 // whose env or file use claims one is not read, and an adapter's answer that claims one
 // is dropped, with no renewal; the adapter has run all the same. A credential of the
 // machine's that it replaces may have its name. A credential from the server with the
-// name of a credential of the machine's that stays is refused, so the record lists
-// each once. The checks of Resolve then cover all of them. start is the run
-// configuration's model_credential, the name of the model key the runtime starts with,
-// empty when it names none ([Held.startKey]).
-func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selected, stored []Stored, start string, mode policy.Mode, allow []string, report func(string)) (*Held, error) {
+// name of a credential of the machine's that stays is refused, so the record lists each
+// once. The checks of Resolve then cover all of them. defaultName is the run
+// configuration's default_model_provider_credential_name, the name of the model key the
+// runtime starts with, empty when it names none ([Held.setDefaultCredential]).
+func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selected, stored []Stored, defaultName string, mode policy.Mode, allow []string, report func(string)) (*Held, error) {
 	out := &Held{}
 	replaced := func(hosts []string) bool {
 		for _, s := range stored {
@@ -327,7 +344,7 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 		h.set(answer)
 		h.shape = answer.shape()
 		for i, a := range answer.Apply {
-			out.Uses = append(out.Uses, &Use{Name: def.Name, Argument: sel.Argument, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths,
+			out.Uses = append(out.Uses, &Use{Name: def.Name, Argument: sel.Argument, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths, PushRef: a.PushRef,
 				Format: def.Format, Endpoint: def.Endpoint, OAuth: def.OAuth, held: h, index: i})
 		}
 		for _, p := range slices.Concat(def.Placeholders, answer.Placeholders) {
@@ -349,14 +366,14 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 		}
 	}
 	for _, s := range stored {
-		h := &held{def: Definition{Name: s.Name}, value: s.Value, done: make(chan struct{})}
-		renewed := !s.ExpiresAt.IsZero() && s.Rejected != nil
+		h := &held{def: Definition{Name: s.Name}, value: s.Value, group: s.Entry.Group, done: make(chan struct{})}
+		renewed := s.Rejected != nil
 		if renewed {
 			h.onRejected = s.Rejected
 		}
 		for _, a := range s.Apply {
-			out.Uses = append(out.Uses, &Use{Name: s.Name, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths, Stored: true,
-				Renewed: renewed, Format: s.Format, Endpoint: s.Endpoint, OAuth: s.OAuth, held: h})
+			out.Uses = append(out.Uses, &Use{Name: s.Name, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths, PushRef: a.PushRef, Stored: true,
+				Renewed: renewed, Format: s.Format, Endpoint: s.Endpoint, OAuth: s.OAuth, AccountHeader: s.AccountHeader, AccountClaim: s.AccountClaim, held: h})
 		}
 		for _, p := range s.Placeholders {
 			if !slices.Contains(h.placeholders, p) {
@@ -372,11 +389,11 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 		out.Close()
 		return nil, err
 	}
-	if err := out.startKey(start); err != nil {
+	if err := out.setDefaultCredential(defaultName); err != nil {
 		out.Close()
 		return nil, err
 	}
-	out.Group = keyGroup(stored, out.Start)
+	out.Groups = keyGroups(stored)
 	for _, h := range out.all {
 		h.panics = out.reportPanic
 		routine.Go(h.panics, h.renew)
@@ -384,10 +401,11 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 	return out, nil
 }
 
-// startKey sets Start: start when it names a model key of the run, or the run's one
-// model key when start is empty. It refuses a start that names no model key of the
-// run, and an empty one beside two or more model keys, each run_configuration_invalid.
-func (h *Held) startKey(start string) error {
+// setDefaultCredential sets DefaultCredential: defaultName when it names a model key of
+// the run, or the run's one model key when defaultName is empty. It refuses a
+// defaultName that names no model key of the run, and an empty one beside two or more
+// model keys, each run_configuration_invalid.
+func (h *Held) setDefaultCredential(defaultName string) error {
 	var keys []string
 	for _, c := range h.Credentials() {
 		if c.Format != "" {
@@ -399,66 +417,74 @@ func (h *Held) startKey(start string) error {
 		shown[i] = accesskey.ShownName(k, false)
 	}
 	switch {
-	case start == "" && len(keys) == 0:
-	case start == "" && len(keys) == 1:
-		h.Start = keys[0]
-	case start == "" && len(keys) > 1:
+	case defaultName == "" && len(keys) == 0:
+	case defaultName == "" && len(keys) == 1:
+		h.DefaultCredential = keys[0]
+	case defaultName == "" && len(keys) > 1:
 		return refusal.New(refusal.RunConfigurationInvalid, nil,
-			"set model_credential in the run configuration, or give the run one model key: the run has the model keys %s", strings.Join(shown, ", "))
-	case slices.Contains(keys, start):
-		h.Start = start
+			"Set default_model_provider_credential_name, or give the run one model key.\nThe run has the model keys %s", strings.Join(shown, ", "))
+	case slices.Contains(keys, defaultName):
+		h.DefaultCredential = defaultName
 	case len(keys) == 0:
-		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(start),
-			"remove model_credential from the run configuration, or give the run a model key %s: the run has no model key", accesskey.ShownName(start, true))
+		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(defaultName),
+			"Remove default_model_provider_credential_name, or give the run a model key %s.\nThe run has no model key", accesskey.ShownName(defaultName, true))
 	default:
-		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(start),
-			"set model_credential in the run configuration to one of the run's model keys, %s: the run has no model key %s", strings.Join(shown, ", "), accesskey.ShownName(start, true))
+		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(defaultName),
+			"Set default_model_provider_credential_name to one of the run's model keys.\nThe run has the model keys %s, and no model key %s", strings.Join(shown, ", "), accesskey.ShownName(defaultName, true))
 	}
 	return nil
 }
 
 // KeyEntry is the part of an entry of the run configuration's credentials that
-// [KeyGroup] reads: its name, and an API credential's format, endpoint and auth.
-// Format is empty for a host credential.
+// [KeyGroups] reads: its name, and an API credential's format and group. Format and
+// Group are empty for a host credential.
 type KeyEntry struct {
-	Name, Format, Endpoint   string
-	Scheme, Username, Header string
-	OAuth                    bool
+	Name, Format, Group string
 }
 
-// KeyGroup is the key group of the start key start: the names of entries, in their
-// order, whose format, endpoint and auth are the start key's, the header's case
-// ignored; none when start is no API credential of entries. The gateway sets the key
-// group by it alone: the check of the run configuration and the proxy's group.
-func KeyGroup(entries []KeyEntry, start string) []string {
-	i := slices.IndexFunc(entries, func(e KeyEntry) bool { return e.Name == start })
-	if i < 0 || entries[i].Format == "" {
-		return nil
-	}
-	first := entries[i]
-	var out []string
+// KeyGroup is one key group of a run: its group value, Name, and the names of its keys,
+// the API credentials with that group, in the order of the run configuration's
+// credentials.
+type KeyGroup struct {
+	Name string
+	Keys []string
+}
+
+// KeyGroups are the key groups of entries, one per group value of the API credentials,
+// those with a format, in the order of each group's first key. The server's check of
+// the run configuration and the gateway's refuse a group whose keys differ in format,
+// endpoint or auth ([server.KeyGroupDiffers]) before the groups are read.
+func KeyGroups(entries []KeyEntry) []KeyGroup {
+	var out []KeyGroup
 	for _, e := range entries {
-		if e.Format == first.Format && e.Endpoint == first.Endpoint && e.OAuth == first.OAuth &&
-			e.Scheme == first.Scheme && e.Username == first.Username && strings.EqualFold(e.Header, first.Header) {
-			out = append(out, e.Name)
+		if e.Format == "" {
+			continue
 		}
+		i := slices.IndexFunc(out, func(g KeyGroup) bool { return g.Name == e.Group })
+		if i < 0 {
+			out = append(out, KeyGroup{Name: e.Group})
+			i = len(out) - 1
+		}
+		out[i].Keys = append(out[i].Keys, e.Name)
 	}
 	return out
 }
 
-// keyGroup is [KeyGroup] of stored.
-func keyGroup(stored []Stored, start string) []string {
+// keyGroups is [KeyGroups] of stored.
+func keyGroups(stored []Stored) []KeyGroup {
 	entries := make([]KeyEntry, len(stored))
 	for i, s := range stored {
 		entries[i] = s.Entry
 		entries[i].Name = s.Name
 	}
-	return KeyGroup(entries, start)
+	return KeyGroups(entries)
 }
 
 // check refuses two uses that claim a host together, unless both are model keys, which
 // the proxy tells apart by their placeholders, or both have paths and no path of one
-// overlaps a path of the other, so the proxy sets the use whose paths match a request.
+// overlaps a path of the other, so the proxy sets the use whose paths match a request:
+// a model key stored in the control plane with paths, such as /backend-api/codex/*,
+// beside a host credential with other paths of its host.
 // Under enforce it refuses a host the run's allow list does not cover, a model key's
 // host being its endpoint's: a credential for a host the run never reaches is a
 // mistake to hear of before the run, not during it.
@@ -495,13 +521,30 @@ func (h *Held) check(mode policy.Mode, allow []string) error {
 	return nil
 }
 
+// checkPaths returns an error for a path of a credential's that is not in the policy's path grammar,
+// a { or a } outside a segment {} among them, and for one [policy.UnclearPath] reports,
+// which matches no request, as the server refuses it in a run configuration.
+func checkPaths(name string, paths []string) error {
+	for _, p := range paths {
+		if !policy.ValidPath(p) {
+			return fmt.Errorf("Write each credential path from /, with { and } only as the segment {} and * only at the end.\nThe path %s of credential %s is not in that form.", accesskey.ShownValue(p, true), accesskey.ShownName(name, false))
+		}
+		if policy.UnclearPath(p) {
+			return fmt.Errorf("Remove the unclear parts from path %s of credential %s.\n"+
+				"A path may have no empty, . or .. segment, backslash, %%2F, %%5C, %%2E or %%25; the proxy reads each segment up to its first ; or %%3B, takes each %%-code in either case, such as %%2f, and denies a control character too. "+
+				"It denies every request whose path has one of these parts, so the path matches no request.", accesskey.ShownValue(p, true), accesskey.ShownName(name, false))
+		}
+	}
+	return nil
+}
+
 // overlap returns a path of a and a path of b that one request path can match both of,
-// such as /example-org/* and /example-org/harness.git/*, and whether there are any. A
-// path is a prefix ending in * or an exact path, the policy's path grammar.
+// such as /example-org/* and /example-org/harness.git/*, and whether there are any, as
+// [policy.OverlapPaths] decides it in the policy's path grammar.
 func overlap(a, b []string) (string, string, bool) {
 	for _, x := range a {
 		for _, y := range b {
-			if policy.CoversPath(x, y) || policy.CoversPath(y, x) {
+			if policy.OverlapPaths(x, y) {
 				return x, y, true
 			}
 		}
@@ -534,6 +577,159 @@ func (d Definition) hosts() []string {
 // prefixes is empty.
 func KeyMatches(prefixes []string, value []byte) bool {
 	return len(prefixes) == 0 || slices.ContainsFunc(prefixes, func(p string) bool { return bytes.HasPrefix(value, []byte(p)) })
+}
+
+// MaxClaimPayload is the most bytes of a JWT payload [AccountClaim] decodes, once
+// decoded: it bounds what the gateway decodes of a model key's value each time it
+// loads one. The claims of a subscription's token under the member account_claim points
+// into were 8 members in a measured token.
+const MaxClaimPayload = 8 << 10
+
+// AccountClaim is the string at pointer, a JSON pointer (RFC 6901), in the JWT payload
+// of value: the value of a model key's account header. The payload is the second of
+// the value's three parts separated by dots, base64url with or without padding.
+// AccountClaim checks no signature: the value comes from the control plane, and the
+// model provider checks the token. It reads the syntax of the whole payload, and
+// decodes the member names of each object and the elements of each list on the
+// pointer's way alone, each object with each member name once: a number out of range,
+// invalid UTF-8 or a member name twice elsewhere in the payload does not count. Its
+// error contains neither the value nor the claim: a value that is not three parts, a
+// payload over [MaxClaimPayload] bytes once decoded, one that is no base64url or no JSON
+// object, an object on the way with a member name twice, a pointer that reaches no
+// string, and a string that is empty, is not UTF-8, starts or ends with a space or a
+// tab, or has a control character, which a header value cannot have.
+func AccountClaim(value []byte, pointer string) (string, error) {
+	parts := bytes.SplitN(value, []byte("."), 4)
+	if len(parts) != 3 {
+		return "", errors.New("the value is not a JWT: it is not three parts separated by dots")
+	}
+	enc := bytes.TrimRight(parts[1], "=")
+	if base64.RawURLEncoding.DecodedLen(len(enc)) > MaxClaimPayload {
+		return "", fmt.Errorf("the value's JWT payload is over %d bytes", MaxClaimPayload)
+	}
+	payload := make([]byte, base64.RawURLEncoding.DecodedLen(len(enc)))
+	defer clear(payload)
+	n, err := base64.RawURLEncoding.Decode(payload, enc)
+	if err != nil {
+		return "", errors.New("the value's JWT payload is not base64url")
+	}
+	shown := accesskey.ShownValue(pointer, true)
+	if !strings.HasPrefix(pointer, "/") {
+		return "", fmt.Errorf("account_claim %s is not a JSON pointer", shown)
+	}
+	at := jsontext.Value(payload[:n])
+	if _, ok := members(at, "", true); !ok {
+		return "", errors.New("the value's JWT payload is not one JSON object with each member name once")
+	}
+	missing := fmt.Errorf("the value's JWT payload has no string at account_claim %s", shown)
+	for _, token := range strings.Split(pointer[1:], "/") {
+		token = strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")
+		switch at.Kind() {
+		case '{':
+			next, ok := members(at, token, false)
+			if !ok {
+				return "", fmt.Errorf("the value's JWT payload has an object with a member name twice on the way to account_claim %s", shown)
+			}
+			if next == nil {
+				return "", missing
+			}
+			at = next
+		case '[':
+			j, ok := arrayIndex(token)
+			if !ok {
+				return "", missing
+			}
+			if at = element(at, j); at == nil {
+				return "", missing
+			}
+		default:
+			return "", missing
+		}
+	}
+	if at.Kind() != '"' {
+		return "", missing
+	}
+	var claim string
+	if err := jsonv2.Unmarshal(at, &claim); err != nil || claim == "" ||
+		strings.HasPrefix(claim, " ") || strings.HasPrefix(claim, "\t") || strings.HasSuffix(claim, " ") || strings.HasSuffix(claim, "\t") ||
+		strings.ContainsFunc(claim, func(r rune) bool { return r != '\t' && (r < 0x20 || (r >= 0x7f && r <= 0x9f)) }) {
+		return "", fmt.Errorf("the string at account_claim %s in the value's JWT payload is empty, is not UTF-8, starts or ends with a space or a tab, or has a control character, which a header value cannot have", shown)
+	}
+	return claim, nil
+}
+
+// members reads the JSON object v, whose syntax is checked, its member names each once,
+// and returns the value of its member name, nil when it has none, a slice of v. The
+// values of the other members are read for their syntax alone, with invalid UTF-8 and
+// a member name twice inside them taken. ok is false for v that is no object, has a
+// member name twice, or, with whole, has anything after the object.
+func members(v jsontext.Value, name string, whole bool) (jsontext.Value, bool) {
+	d := jsontext.NewDecoder(bytes.NewReader(v), jsontext.AllowInvalidUTF8(true), jsontext.AllowDuplicateNames(true))
+	if t, err := d.ReadToken(); err != nil || t.Kind() != '{' {
+		return nil, false
+	}
+	seen := map[string]bool{}
+	var found jsontext.Value
+	for d.PeekKind() == '"' {
+		t, err := d.ReadToken()
+		if err != nil {
+			return nil, false
+		}
+		// The token is valid until the next read.
+		member := t.String()
+		if seen[member] {
+			return nil, false
+		}
+		seen[member] = true
+		value, err := d.ReadValue()
+		if err != nil {
+			return nil, false
+		}
+		if member == name {
+			end := int(d.InputOffset())
+			found = v[end-len(value) : end]
+		}
+	}
+	if t, err := d.ReadToken(); err != nil || t.Kind() != '}' {
+		return nil, false
+	}
+	if whole {
+		if _, err := d.ReadToken(); err != io.EOF {
+			return nil, false
+		}
+		return v, true
+	}
+	return found, true
+}
+
+// element is the element i of the JSON list v, a slice of v; nil when v has fewer
+// elements or does not read as a list.
+func element(v jsontext.Value, i int) jsontext.Value {
+	d := jsontext.NewDecoder(bytes.NewReader(v), jsontext.AllowInvalidUTF8(true), jsontext.AllowDuplicateNames(true))
+	if t, err := d.ReadToken(); err != nil || t.Kind() != '[' {
+		return nil
+	}
+	for j := 0; d.PeekKind() != ']' && d.PeekKind() != 0; j++ {
+		value, err := d.ReadValue()
+		if err != nil {
+			return nil
+		}
+		if j == i {
+			end := int(d.InputOffset())
+			return v[end-len(value) : end]
+		}
+	}
+	return nil
+}
+
+// arrayIndex is a JSON pointer's token read as an index of an array, RFC 6901: 0, or
+// decimal digits that do not start with 0. ok is false for any other token.
+func arrayIndex(token string) (int, bool) {
+	if token == "" || len(token) > 9 || (len(token) > 1 && token[0] == '0') || strings.Trim(token, "0123456789") != "" {
+		return 0, false
+	}
+	i, err := strconv.Atoi(token)
+	return i, err == nil
 }
 
 // checkModelKey refuses a model key's definition that cannot be one: a format outside
@@ -618,6 +814,9 @@ func (d Definition) Check() error {
 		}
 	}
 	if len(d.Adapter) > 0 {
+		if err := checkPaths(d.Name, d.Paths); err != nil {
+			return err
+		}
 		if d.Scheme != "" || d.Username != "" || d.Header != "" {
 			return fmt.Errorf("credential %s: an adapter says how its token is used; the scheme is not the definition's to give", accesskey.ShownName(d.Name, false))
 		}
@@ -628,6 +827,9 @@ func (d Definition) Check() error {
 	}
 	if len(d.Hosts) == 0 {
 		return fmt.Errorf("credential %s: a token from env or file needs the hosts it is for", accesskey.ShownName(d.Name, false))
+	}
+	if err := checkPaths(d.Name, d.Paths); err != nil {
+		return err
 	}
 	return apply{Hosts: d.Hosts, Scheme: d.Scheme, Username: d.Username, Header: d.Header}.check()
 }
@@ -679,6 +881,7 @@ type apply struct {
 	Header   string   `json:"header"`
 	Token    string   `json:"token"`
 	Paths    []string `json:"paths"`
+	PushRef  string   `json:"push_ref"`
 }
 
 func (a apply) check() error {
@@ -703,7 +906,7 @@ func (a apply) check() error {
 func (a *answer) shape() string {
 	var b strings.Builder
 	for _, u := range a.Apply {
-		fmt.Fprintf(&b, "%q %s %s %s %q\n", u.Hosts, u.Scheme, u.Username, u.Header, u.Paths)
+		fmt.Fprintf(&b, "%q %s %s %s %q %q\n", u.Hosts, u.Scheme, u.Username, u.Header, u.Paths, u.PushRef)
 	}
 	return b.String()
 }
@@ -718,6 +921,9 @@ type held struct {
 	shape  string
 	// placeholders are the definition's placeholders and then the adapter's, each once.
 	placeholders []string
+	// group is the key group of an API credential from the server; empty for every
+	// other credential.
+	group string
 	// value, for a credential from the server, returns its opened value; nil for the
 	// machine's. onRejected, for a value from the server with expires_at, is called on a
 	// host's 401; nil for every other.
@@ -877,9 +1083,9 @@ func (h *held) masked(s string) string {
 // which can be the token, so none of it is printed. The keyword is the first of the
 // error kind's KeywordPath, a keyword of the schema such as pattern, never a value.
 // A location has only array indexes and the member names the schema defines: it stops
-// before any other name, which the answer chose and which can be a token. A
-// failure of additionalProperties is at the object, so the name it refused is never
-// in the location.
+// before any other name, which the answer chose and which can be a token. A pointer
+// of must_understand that fails is at its index, such as /must_understand/0, so the
+// pointer is never in the location.
 func schemaFailures(err error, schema any) string {
 	known := map[string]bool{}
 	var names func(any)
@@ -1027,9 +1233,20 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 		document, _ := contracts.Document("credential.schema.json")
 		return nil, fmt.Errorf("Fix the output of the adapter %s to match credential.schema.json: %s", path, schemaFailures(err, document))
 	}
+	// encoding/json/v2 matches member names by exact case: a member such as TOKEN is
+	// one the schema does not define, and sets no field. Its error can quote a member
+	// name in the adapter's output, which can be the token, so none of it is printed.
+	// Past the schema, only expires_at can fail to decode: a time the schema's
+	// date-time takes and time.Time does not, such as a lower-case t or a second of 60.
 	var a answer
-	if err := json.Unmarshal(stdout.Bytes(), &a); err != nil {
-		return nil, accesskey.ShownError(err)
+	if err := jsonv2.Unmarshal(stdout.Bytes(), &a); err != nil {
+		var syn *jsontext.SyntacticError
+		if errors.As(err, &syn) {
+			return nil, fmt.Errorf("Fix the adapter's output: one JSON object in UTF-8, each member name once\n"+
+				"the output of the adapter %s does not decode", path)
+		}
+		return nil, fmt.Errorf("Write expires_at as RFC 3339 with an upper-case T and Z, seconds 00 to 59\n"+
+			"the output of the adapter %s has an expires_at that is no time", path)
 	}
 	if d.Format != "" && len(a.Placeholders) > 0 {
 		return nil, fmt.Errorf("remove placeholders from the output of the adapter %s: the model key %s takes none, since the session gives the runtime the key's variable", path, accesskey.ShownName(d.Name, false))

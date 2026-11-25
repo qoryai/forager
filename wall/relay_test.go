@@ -8,11 +8,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/qoryai/forager/link"
 )
 
 // syncBuffer is a buffer the relay writes and the test reads.
@@ -93,53 +96,72 @@ func TestRelayRefusesWhatIsNotAForward(t *testing.T) {
 }
 
 // TestRelayOpensEveryConnectionWithTheRunsToken pins the relay's half of the proxy's
-// gate: with the token in its environment, what it forwards starts with the preamble.
+// gate: with the token in its environment, what it forwards starts with the preamble,
+// and with RelayPeerEnv set to 1 the peer line with the client's address follows it.
+// RelayPeerEnv without the token is refused.
 func TestRelayOpensEveryConnectionWithTheRunsToken(t *testing.T) {
-	t.Setenv(RelayTokenEnv, "the-runs-token")
-	t.Setenv(RelayInsideEnv, "127.0.0.0/8")
-	target, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	for _, peer := range []bool{false, true} {
+		t.Run(fmt.Sprint("peer ", peer), func(t *testing.T) {
+			t.Setenv(RelayTokenEnv, "the-runs-token")
+			t.Setenv(RelayInsideEnv, "127.0.0.0/8")
+			want := "QORY-RELAY the-runs-token\nhello"
+			if peer {
+				t.Setenv(RelayPeerEnv, "1")
+				want = "QORY-RELAY the-runs-token\n" + link.RelayPeerLine(netip.MustParseAddr("127.0.0.1")) + "hello"
+			}
+			target, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer target.Close()
+			got := make(chan string, 1)
+			go func() {
+				c, err := target.Accept()
+				if err != nil {
+					return
+				}
+				defer c.Close()
+				b, _ := io.ReadAll(c)
+				got <- string(b)
+			}()
+			free, _ := net.Listen("tcp", "127.0.0.1:0")
+			port := free.Addr().(*net.TCPAddr).Port
+			free.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ready := &syncBuffer{}
+			go Relay(ctx, []string{fmt.Sprintf("%d=%s", port, target.Addr())}, ready)
+			for range 200 {
+				if strings.Contains(ready.String(), RelayReady) {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+			if err != nil {
+				t.Fatal(err)
+			}
+			io.WriteString(c, "hello")
+			c.(*net.TCPConn).CloseWrite()
+			select {
+			case s := <-got:
+				if s != want {
+					t.Errorf("the target read %q, want %q", s, want)
+				}
+			case <-time.After(5 * time.Second):
+				t.Error("the target read nothing")
+			}
+			c.Close()
+		})
 	}
-	defer target.Close()
-	got := make(chan string, 1)
-	go func() {
-		c, err := target.Accept()
-		if err != nil {
-			return
+	t.Run("peer without the token", func(t *testing.T) {
+		t.Setenv(RelayTokenEnv, "")
+		t.Setenv(RelayInsideEnv, "127.0.0.0/8")
+		t.Setenv(RelayPeerEnv, "1")
+		if err := Relay(context.Background(), []string{"3128=127.0.0.1:1"}, io.Discard); err == nil || !strings.Contains(err.Error(), RelayPeerEnv) {
+			t.Errorf("the relay started: %v", err)
 		}
-		defer c.Close()
-		b, _ := io.ReadAll(c)
-		got <- string(b)
-	}()
-	free, _ := net.Listen("tcp", "127.0.0.1:0")
-	port := free.Addr().(*net.TCPAddr).Port
-	free.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ready := &syncBuffer{}
-	go Relay(ctx, []string{fmt.Sprintf("%d=%s", port, target.Addr())}, ready)
-	for range 200 {
-		if strings.Contains(ready.String(), RelayReady) {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		t.Fatal(err)
-	}
-	io.WriteString(c, "hello")
-	c.(*net.TCPConn).CloseWrite()
-	select {
-	case s := <-got:
-		if s != "QORY-RELAY the-runs-token\nhello" {
-			t.Errorf("the target read %q", s)
-		}
-	case <-time.After(5 * time.Second):
-		t.Error("the target read nothing")
-	}
-	c.Close()
+	})
 }
 
 // TestRelayListensOnItsInsideAddressAlone pins that the relay given a subnet listens on
@@ -263,7 +285,7 @@ func TestRelayTakesConnectionsFromItsSubnetsAlone(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			served := make(chan struct{})
 			go func() {
-				serve(ctx, ln, target.Addr().String(), "", []*net.IPNet{subnet})
+				serve(ctx, ln, target.Addr().String(), "", false, []*net.IPNet{subnet})
 				close(served)
 			}()
 			defer func() {

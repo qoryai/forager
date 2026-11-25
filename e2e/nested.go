@@ -58,6 +58,36 @@ type nested struct {
 	// Neighbours is what a container the agent started, privileged on the enclosure's
 	// network with IPv6 turned on, found on the inside network.
 	Neighbours neighbours `json:"neighbours"`
+	// Runtime is what a container the agent started got when it wrote a file in the
+	// runtime's installed folder, bound at the same path, and Privileged what a
+	// privileged one got after it tried to make the folder writable.
+	Runtime    innerWritten `json:"runtime"`
+	Privileged innerWritten `json:"privileged"`
+}
+
+// innerWritten is the exit status and output of a container the agent started to
+// write a file, and the results of the remount calls a privileged one printed.
+type innerWritten struct {
+	Exit    int    `json:"exit"`
+	Output  string `json:"output"`
+	Remount string `json:"remount"`
+	Setattr string `json:"setattr"`
+}
+
+// writeInside is innerWrite of the file name in the folder dir, with the results of
+// the remount calls taken from the output.
+func writeInside(privileged bool, dir, name string) innerWritten {
+	var w innerWritten
+	w.Exit, w.Output = innerWrite(privileged, dir, name)
+	for _, line := range strings.Split(w.Output, "\n") {
+		if rest, ok := strings.CutPrefix(line, remountPrefix); ok {
+			w.Remount = rest
+		}
+		if rest, ok := strings.CutPrefix(line, setattrPrefix); ok {
+			w.Setattr = rest
+		}
+	}
+	return w
 }
 
 // inner is what a container the agent started found. An attempt that must fail
@@ -140,6 +170,8 @@ func probeNested() *nested {
 	}
 	n.Config = configModes(os.Getenv("DOCKER_CONFIG"))
 	n.Command = commandInner(os.Getenv("PROBE_ALLOWED"))
+	n.Runtime = writeInside(false, runtimeFolder, plantedName)
+	n.Privileged = writeInside(true, runtimeFolder, plantedName)
 	// Last, since it turns IPv6 on for the enclosure's network.
 	n.Neighbours = runNeighbours(c, relay)
 	return n
@@ -250,10 +282,10 @@ func post(c *http.Client, u string, body io.Reader, contentType string) ([]byte,
 const probeImage = "walltest-probe:inner"
 
 // innerWrite starts a container of the probe with the image's docker command, as the
-// agent does, with the agent's working directory bound at the same path, and has it
-// write agentFile there. A privileged container first bind-remounts the directory
+// agent does, with the folder dir of the enclosure bound at the same path, and has it
+// write the file name there. A privileged container first bind-remounts the folder
 // writable, as its root can try. It returns the container's exit status and output.
-func innerWrite(privileged bool) (int, string) {
+func innerWrite(privileged bool, dir, name string) (int, string) {
 	if err := importSelf(dockerClient(30 * time.Second)); err != nil {
 		return -1, "the probe's image: " + err.Error()
 	}
@@ -261,19 +293,15 @@ func innerWrite(privileged bool) (int, string) {
 	if err != nil {
 		return -1, "the image contains no docker command: " + err.Error()
 	}
-	wd, err := os.Getwd()
-	if err != nil {
-		return -1, err.Error()
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	var out bytes.Buffer
-	args := []string{"run", "--rm", "--mount", "type=bind,src=" + wd + ",dst=" + wd, probeImage, "/probe", modeWrite}
+	args := []string{"run", "--rm", "--mount", "type=bind,src=" + dir + ",dst=" + dir, probeImage, "/probe", modeWrite}
 	if privileged {
 		args = append([]string{"run", "--rm", "--privileged"}, args[2:]...)
 		args = append(args, "--remount")
 	}
-	cmd := exec.CommandContext(ctx, docker, append(args, filepath.Join(wd, agentFile))...)
+	cmd := exec.CommandContext(ctx, docker, append(args, filepath.Join(dir, name))...)
 	cmd.Stdout, cmd.Stderr = &out, &out
 	code := exitCode(cmd.Run(), &out)
 	return code, strings.TrimSpace(out.String())

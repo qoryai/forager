@@ -79,7 +79,7 @@ func prepareWalled(t *testing.T, dir string, interactive, walled bool, placehold
 }
 
 // fixedEnv is what the Claude Code descriptor's fixed sets in every launch.
-var fixedEnv = []string{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1", "CLAUDE_CODE_MAX_RETRIES=15"}
+var fixedEnv = []string{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1", "CLAUDE_CODE_MAX_RETRIES=15", "DISABLE_AUTOUPDATER=1"}
 
 // TestPrepareApprovesTheAPIKeyStandInAlone pins when the launch goes through the
 // script: interactive, walled, with ANTHROPIC_API_KEY among the stand-ins. With the
@@ -362,5 +362,16 @@ func TestAModelKeysPlaceholderIsApprovedAsTheStandIn(t *testing.T) {
 		if !strings.HasSuffix(v, approvedEntry) || !strings.Contains(v, name) || v == link.Placeholder {
 			t.Errorf("the placeholder of %s is %q; want one that contains the name and ends in %q", name, v, approvedEntry)
 		}
+	}
+}
+
+// TestApprovedKeyIsTheEntryClaudeCodeKeeps pins ApprovedKey to the entry Claude Code
+// 2.1.316 keeps for the stand-in, the value approve-key.sh writes.
+func TestApprovedKeyIsTheEntryClaudeCodeKeeps(t *testing.T) {
+	if got := claude.ApprovedKey(); got != approvedEntry {
+		t.Fatalf("ApprovedKey() = %q; want %q", got, approvedEntry)
+	}
+	if want := strings.TrimSpace(runtimes.Placeholder); !strings.HasSuffix(want, claude.ApprovedKey()) {
+		t.Fatalf("ApprovedKey() = %q is not the end of the stand-in %q", claude.ApprovedKey(), want)
 	}
 }

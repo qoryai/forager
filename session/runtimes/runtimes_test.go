@@ -14,7 +14,6 @@ import (
 // lines, takes no hooks, and leaves on SIGINT.
 const other = `version: 1
 runtime: other-agent
-runtime_version: "0.3"
 sources:
   output: {format: jsonl}
 stop: {signal: SIGINT, grace: 45s}
@@ -31,8 +30,8 @@ func TestARuntimeWrittenAsDataAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtimetest.Conforms(t, rt)
-	if rt.Name() != "other-agent" || rt.Version() != "0.3" || !rt.ReadsOutput() {
-		t.Errorf("%s %s %v", rt.Name(), rt.Version(), rt.ReadsOutput())
+	if rt.Name() != "other-agent" || !rt.ReadsOutput() {
+		t.Errorf("%s %v", rt.Name(), rt.ReadsOutput())
 	}
 	if s := rt.Stop(); s.Signal != "SIGINT" || s.Grace != 45*time.Second {
 		t.Errorf("stop %+v", s)
@@ -77,11 +76,14 @@ func TestADescriptorNamesAnInstallerAndNeverBringsOne(t *testing.T) {
 func TestABareRuntimeIsRunAndNotRead(t *testing.T) {
 	rt := runtimes.Bare("codex")
 	runtimetest.Conforms(t, rt)
-	if rt.Name() != "codex" || rt.Version() != "" || rt.ReadsOutput() || rt.Stop() != (runtimes.Stop{}) {
+	if rt.Name() != "codex" || rt.ReadsOutput() || rt.Stop() != (runtimes.Stop{}) {
 		t.Errorf("%+v", rt)
 	}
 	if rt.Headless([]string{"-p", "hi"}) {
 		t.Error("a bare runtime knows nothing of its arguments, so none is headless")
+	}
+	if _, ok := rt.(runtimes.InstallRequired); ok {
+		t.Error("a bare runtime requires an installed folder")
 	}
 }
 
@@ -200,9 +202,10 @@ func TestADescriptorSaysWhereItsModelGoesThroughTheOptionalInterface(t *testing.
 	doc := other + `model:
   formats: [openai-responses, openai-chat]
   model: {setting: agent.model}
+  agent: {toml: model}
   effort:
     run: {flag: --effort, values: [low, high]}
-    agent: {frontmatter: effort, values: [low, high, max]}
+    agent: {toml: model_reasoning_effort, values: [low, high, max]}
   endpoint: {variable: OTHER_BASE_URL}
   overrides: [OTHER_MODEL]
 `
@@ -217,9 +220,10 @@ func TestADescriptorSaysWhereItsModelGoesThroughTheOptionalInterface(t *testing.
 	want := runtimes.ModelPlaces{
 		Formats: []string{"openai-responses", "openai-chat"},
 		Model:   runtimes.Place{Setting: "agent.model"},
+		Agent:   &runtimes.AgentKey{TOML: "model"},
 		Effort: &runtimes.Effort{
 			Run:   runtimes.ValuedPlace{Place: runtimes.Place{Flag: "--effort"}, Values: []string{"low", "high"}},
-			Agent: &runtimes.AgentPlace{Frontmatter: "effort", Values: []string{"low", "high", "max"}},
+			Agent: &runtimes.AgentPlace{TOML: "model_reasoning_effort", Values: []string{"low", "high", "max"}},
 		},
 		Endpoint:  runtimes.Endpoint{Variable: "OTHER_BASE_URL"},
 		Overrides: []string{"OTHER_MODEL"},
@@ -231,7 +235,8 @@ func TestADescriptorSaysWhereItsModelGoesThroughTheOptionalInterface(t *testing.
 	got.Formats[0] = "gemini"
 	got.Effort.Run.Values[0] = "changed"
 	got.Effort.Agent.Values[0] = "changed"
-	got.Effort.Agent.Frontmatter = "changed"
+	got.Effort.Agent.TOML = "changed"
+	got.Agent.TOML = "changed"
 	got.Overrides[0] = "CHANGED"
 	if again, _ := m.Model(); !reflect.DeepEqual(again, want) {
 		t.Errorf("a change to what Model returned reached the runtime: %+v", again)

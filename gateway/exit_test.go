@@ -63,14 +63,19 @@ func TestTheLinkRefusesARunExitedBeyondItsSchema(t *testing.T) {
 	}
 }
 
-// TestTheRunExitedIsTheClosesOutcome pins a session's dev.qory.run.exited, the
-// close's: any state, with no reason, timeout or interrupted, no_session only in a run
-// with no join, and image_missing, image_user_root, image_access_denied,
-// image_rate_limited, image_registry_unreachable, workflow_not_in_harness,
-// read_needs_wall, read_needs_setup_outside, read_needs_no_nested_docker and
-// read_needs_setup_removed only failed with exit_code -1 in a run with no join, are
-// taken; a reason the gateway decides, or a starter's, is refused, and the run ends
-// failed, batch_refused, its reason in the report.
+// TestTheRunExitedIsTheClosesOutcome pins a session's dev.qory.run.exited, the close's:
+// any state, with no reason, timeout or interrupted, no_session only in a run with no
+// join, and image_missing, image_user_root, image_access_denied, image_rate_limited,
+// image_registry_unreachable, workflow_not_in_harness, read_needs_wall,
+// read_needs_setup_outside, read_needs_no_nested_docker, read_needs_setup_removed and
+// write_needs_wall only failed with exit_code -1 in a run with no join, and a starter's
+// reason only failed, such as push_refused, one of qory's end codes, before or after
+// the gateway numbered a join of the run, are taken; a reason the gateway decides, a
+// reserved reason out of its place, a reason that is no code, and a starter's reason
+// with another state are refused, and the run ends failed, batch_refused, its reason in
+// the report. environment_image_missing is none of the image codes, which the gateway
+// takes only in a run with no join. A member that the schema does not define is
+// ignored, and one that must_understand lists is refused.
 func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 	h := start(t, gateway.Config{})
 	for _, c := range []struct {
@@ -133,11 +138,44 @@ func TestTheRunExitedIsTheClosesOutcome(t *testing.T) {
 		{map[string]any{"state": "failed", "exit_code": 0, "reason": "read_needs_setup_removed"}, false, "a run.exited read_needs_setup_removed that is not failed with exit_code -1"},
 		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "read_needs_setup_removed"}, false, "a run.exited read_needs_setup_removed that is not failed with exit_code -1"},
 		{map[string]any{"state": "failed", "reason": "read_needs_setup_removed"}, false, "a run.exited read_needs_setup_removed that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "write_needs_wall"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "write_needs_wall"}, true, "a run.exited write_needs_wall of a run with a join"},
+		{map[string]any{"state": "failed", "exit_code": 0, "reason": "write_needs_wall"}, false, "a run.exited write_needs_wall that is not failed with exit_code -1"},
+		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "write_needs_wall"}, false, "a run.exited write_needs_wall that is not failed with exit_code -1"},
+		{map[string]any{"state": "failed", "reason": "write_needs_wall"}, false, "a run.exited write_needs_wall that is not failed with exit_code -1"},
 		{map[string]any{"state": "failed", "exit_code": 130, "reason": "interrupted"}, false, "one link-batch.schema.json refuses"},
 		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "timeout"}, false, "one link-batch.schema.json refuses"},
 		{map[string]any{"state": "failed", "exit_code": -1, "reason": "session_lost"}, false, "one link-batch.schema.json refuses"},
-		{map[string]any{"state": "succeeded", "exit_code": 0, "reason": "all_checks_passed"}, false, "a run.exited with a reason the gateway decides"},
-		{map[string]any{"state": "failed", "exit_code": 1, "reason": "checks_failed"}, false, "a run.exited with a reason the gateway decides"},
+		// The schema refuses stopped, failed model_key_limit and Checks_Failed after a
+		// join before closeRule runs; TestCloseRuleRefusesAReservedReasonAfterAJoin
+		// calls closeRule with stopped.
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "stopped"}, true, "one link-batch.schema.json refuses"},
+		{map[string]any{"state": "failed", "exit_code": 0, "reason": "model_key_limit"}, true, "one link-batch.schema.json refuses"},
+		{map[string]any{"state": "failed", "exit_code": 1, "reason": "Checks_Failed"}, true, "one link-batch.schema.json refuses"},
+		{map[string]any{"state": "failed", "exit_code": 1, "reason": "checks_failed"}, true, ""},
+		{map[string]any{"state": "failed", "exit_code": 0, "reason": "push_refused"}, true, ""},
+		{map[string]any{"state": "failed", "exit_code": 1, "reason": "push_refused"}, true, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "prebuilt_image_too_large"}, true, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "environment_image_missing"}, true, ""},
+		{map[string]any{"state": "succeeded", "exit_code": 0, "reason": "all_checks_passed"}, true, "a run.exited all_checks_passed that is not failed"},
+		{map[string]any{"state": "cancelled", "exit_code": 0, "reason": "push_refused"}, true, "a run.exited push_refused that is not failed"},
+		{map[string]any{"state": "succeeded", "exit_code": 0, "reason": "all_checks_passed"}, false, "a run.exited all_checks_passed that is not failed"},
+		{map[string]any{"state": "cancelled", "exit_code": -1, "reason": "push_credential_missing"}, false, "a run.exited push_credential_missing that is not failed"},
+		{map[string]any{"state": "failed", "exit_code": 1, "reason": "checks_failed"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "push_credential_missing"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "environment_image_missing"}, false, ""},
+		// No exit_code condition for a starter's reason, with or without a join.
+		{map[string]any{"state": "failed", "exit_code": 0, "reason": "push_refused"}, false, ""},
+		{map[string]any{"state": "failed", "reason": "push_refused"}, false, ""},
+		{map[string]any{"state": "failed", "reason": "push_refused"}, true, ""},
+		// A member the schema does not define is ignored, unless must_understand lists
+		// it; a member that differs from a defined one only in case is such a member.
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "no_session", "summary": map[string]any{"lines": 3}}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "no_session", "must_understand": []string{"/reason", "/state"}}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "no_session", "summary": 3, "must_understand": []string{"/summary"}}, false, "one link-batch.schema.json refuses"},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "no_session", "must_understand": []string{"/must_understand"}}, false, "one link-batch.schema.json refuses"},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "no_session", "REASON": "timeout", "State": "cancelled"}, false, ""},
+		{map[string]any{"state": "failed", "exit_code": -1, "reason": "no_session", "REASON": "timeout"}, true, "a run.exited no_session of a run with a join"},
 	} {
 		a := h.open(server.LinkRunRequest{})
 		if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {

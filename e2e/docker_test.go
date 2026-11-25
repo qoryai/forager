@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"slices"
@@ -43,6 +44,10 @@ func TestDockerConforms(t *testing.T) {
 	t.Run("the relay runs no health check", relayRunsNoHealthCheck)
 	t.Run("the relay listens on the inside network alone", relayListensInsideAlone)
 	t.Run("the relay takes a connection from the inside network alone", relayTakesInsideAlone)
+	t.Run("a read-only file over a writable target stays", readOnlyFileOverWritableTarget)
+	t.Run("a target through a link in the image is refused", targetThroughImageLink)
+	t.Run("a read-only target below a sticky directory of the image is bound", readOnlyTargetBelowSticky)
+	t.Run("a read-only file at /etc/codex/hooks.json stays as it is", codexHooksFileStays)
 }
 
 // TestDockerNestedConforms runs the suite against an image with a Docker of the agent's
@@ -183,6 +188,7 @@ func conform(t *testing.T, image, rt string, docker bool) {
 		Forwarder:     []string{wall.HelperPath, "forward"},
 		Exec:          append([]string{wall.HelperPath}, e2e.ExecArgs...),
 		Probe:         wall.HelperPath,
+		Install:       e2e.Install(t, helper),
 		// A socket crosses a bind mount on a Linux host and not a virtual machine's file
 		// share.
 		Hooks: runtime.GOOS == "linux",
@@ -638,6 +644,14 @@ func startRelay(t *testing.T, command, helper, image string, args ...string) rel
 // agent's own; the request's run id is the test's own.
 func startEnclosure(t *testing.T, command, helper string, req wall.Request, args ...string) relayRun {
 	t.Helper()
+	dir := t.TempDir()
+	return startEnclosureWith(t, command, helper, req, dir, []wall.Mount{{Path: dir}}, args...)
+}
+
+// startEnclosureWith is startEnclosure with the workspace dir and the launch's mounts,
+// one of which holds dir.
+func startEnclosureWith(t *testing.T, command, helper string, req wall.Request, dir string, mounts []wall.Mount, args ...string) relayRun {
+	t.Helper()
 	w := &wall.Docker{Command: command, Helper: helper, RelayArgs: e2e.RelayArgs, NestArgs: e2e.NestArgs}
 	runID := fmt.Sprintf("walltest-relay-%d-%d", os.Getpid(), time.Now().UnixNano())
 	req.RunID = runID
@@ -652,8 +666,7 @@ func startEnclosure(t *testing.T, command, helper string, req wall.Request, args
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { proxy.Close() })
-	dir := t.TempDir()
-	agent, err := e.Wrap(ctx, wall.Launch{Command: "sh", Args: args, Dir: dir, Mounts: []wall.Mount{{Path: dir}},
+	agent, err := e.Wrap(ctx, wall.Launch{Command: "sh", Args: args, Dir: dir, Mounts: mounts,
 		Proxy: proxy.Addr().String(), ProxyToken: relaySecret})
 	if err != nil {
 		t.Fatal(err)
@@ -701,6 +714,173 @@ func (r relayRun) start(ctx context.Context, t *testing.T) func() string {
 	return func() string {
 		agent.Wait()
 		return out.String()
+	}
+}
+
+// readOnlyFileOverWritableTarget binds a writable directory at a target and a read-only
+// file at a target inside it, from a path on this machine apart from the directory, as a
+// session lists them for a runtime's home at a fixed place, and requires that the agent
+// writes the directory but cannot delete, replace or change the file, inside or on this
+// machine.
+func readOnlyFileOverWritableTarget(t *testing.T) {
+	command, helper := relayEngine(t)
+	home, files := t.TempDir(), t.TempDir()
+	if err := os.Chmod(home, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	hooks := filepath.Join(files, "hooks.json")
+	if err := os.WriteFile(hooks, []byte("{\"hooks\":{}}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const inside = "/var/lib/agent-home"
+	script := `cd ` + inside + `
+echo x > other.json && echo wrote other.json
+rm -f hooks.json 2>/dev/null && echo removed hooks.json
+mv -f other.json hooks.json 2>/dev/null && echo replaced hooks.json
+{ echo changed > hooks.json; } 2>/dev/null && echo changed hooks.json
+cat hooks.json`
+	dir := t.TempDir()
+	r := startEnclosureWith(t, command, helper, wall.Request{Image: busybox}, dir, []wall.Mount{
+		{Path: dir},
+		{Path: home, Target: inside},
+		{Path: hooks, ReadOnly: true, Target: inside + "/hooks.json"},
+	}, "-c", script)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	out := r.start(ctx, t)()
+	if want := "wrote other.json\n{\"hooks\":{}}\n"; !strings.HasSuffix(out, want) || strings.Contains(out, "removed") ||
+		strings.Contains(out, "replaced") || strings.Contains(out, "changed") {
+		t.Errorf("the agent printed %q; want it to end with %q", out, want)
+	}
+	if b, err := os.ReadFile(hooks); err != nil || string(b) != "{\"hooks\":{}}\n" {
+		t.Errorf("the file on this machine is %q, %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "other.json")); err != nil {
+		t.Errorf("the writable directory on this machine: %v", err)
+	}
+}
+
+// readOnlyTargetBelowSticky binds a read-only file at /tmp/a/conf in busybox, whose /tmp
+// is root's with mode 1777 and has no a, and requires that the agent reads it: the
+// headers docker cp writes carry the sticky bit and the owner, so the check of the
+// directories above the mount passes /tmp.
+func readOnlyTargetBelowSticky(t *testing.T) {
+	command, helper := relayEngine(t)
+	conf := filepath.Join(t.TempDir(), "conf")
+	if err := os.WriteFile(conf, []byte("read-only\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	r := startEnclosureWith(t, command, helper, wall.Request{Image: busybox}, dir,
+		[]wall.Mount{{Path: dir}, {Path: conf, ReadOnly: true, Target: "/tmp/a/conf"}}, "-c", "cat /tmp/a/conf")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if out := r.start(ctx, t)(); !strings.HasSuffix(out, "read-only\n") {
+		t.Errorf("the agent printed %q; want it to end with the file", out)
+	}
+}
+
+// codexHooksFileStays binds a read-only file at /etc/codex/hooks.json in busybox, which
+// has no /etc/codex, as qory passes a Codex run's hooks file, and requires that the agent
+// reads it but cannot write, chmod, remove, rename or replace it, add a file or a link
+// beside it, or rename /etc/codex, which the engine makes as root's with mode 0755. The
+// file on this machine has mode 0666, so the bind's mode alone stops a write. /etc is
+// root's with mode 0755, and the agent's uid is not 0, so a rename of /etc/codex fails
+// with EACCES: the test requires busybox's "Permission denied" for it.
+func codexHooksFileStays(t *testing.T) {
+	command, helper := relayEngine(t)
+	const content = "{\"hooks\":{\"Stop\":[]}}\n"
+	hooks := filepath.Join(t.TempDir(), "hooks.json")
+	if err := os.WriteFile(hooks, []byte(content), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(hooks, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	// Each attempt prints a line with "did" only when it succeeds. The write into the
+	// workspace shows that the shell runs its commands. The step that sets up an
+	// attempt prints a line with "set up" when it succeeds, so the attempt cannot fail
+	// for a step that did not run: the file to move over hooks.json.
+	script := `f=/etc/codex/hooks.json
+cat "$f"
+echo x > ` + dir + `/written && echo wrote the workspace
+id -u
+stat -c '%u %a' /etc/codex
+stat -c '%u %a' /etc
+{ echo x > "$f"; } 2>/dev/null && echo did write the file
+{ echo x >> "$f"; } 2>/dev/null && echo did append to the file
+chmod 600 "$f" 2>/dev/null && echo did chmod the file
+rm -f "$f" 2>/dev/null && echo did remove the file
+mv -f "$f" /etc/codex/moved.json 2>/dev/null && echo did rename the file
+mv -f "$f" /tmp/moved.json 2>/dev/null && echo did move the file out
+echo x > /tmp/other.json && echo set up /tmp/other.json
+mv -f /tmp/other.json "$f" 2>/dev/null && echo did replace the file
+{ echo x > /etc/codex/new.json; } 2>/dev/null && echo did create a file beside it
+ln -s /tmp/other.json /etc/codex/link.json 2>/dev/null && echo did link beside it
+mv /etc/codex /etc/codex-moved 2>&1 && echo did rename the directory
+ls -A /etc/codex
+cat "$f"`
+	r := startEnclosureWith(t, command, helper, wall.Request{Image: busybox}, dir,
+		[]wall.Mount{{Path: dir}, {Path: hooks, ReadOnly: true, Target: "/etc/codex/hooks.json"}}, "-c", script)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	out := r.start(ctx, t)()
+	setUp := []string{"set up /tmp/other.json"}
+	for _, l := range setUp {
+		if !strings.Contains(out, l+"\n") {
+			t.Errorf("the agent printed %q; want the line %q: a step that sets up an attempt failed", out, l)
+		}
+	}
+	want := regexp.MustCompile(`(?s)` + regexp.QuoteMeta(content) + "wrote the workspace\n([0-9]+)\n0 755\n0 755\n" +
+		regexp.QuoteMeta(strings.Join(setUp, "\n")) + "\nmv: can't rename '/etc/codex': Permission denied\nhooks\\.json\n" + regexp.QuoteMeta(content) + `$`)
+	m := want.FindStringSubmatch(out)
+	if m == nil || m[1] == "0" || strings.Contains(out, "did ") {
+		t.Errorf("the agent printed %q; want the file, the workspace written, a uid other than 0, /etc/codex and /etc as 0 755, the lines of the steps that set up the attempts, "+
+			"the rename of /etc/codex failed with Permission denied, hooks.json alone in /etc/codex, the file again, and no line with \"did\"", out)
+	}
+	if b, err := os.ReadFile(hooks); err != nil || string(b) != content {
+		t.Errorf("the file on this machine is %q, %v", b, err)
+	}
+	if fi, err := os.Stat(hooks); err != nil {
+		t.Error(err)
+	} else if fi.Mode().Perm() != 0o666 {
+		t.Errorf("the file on this machine has mode %o; want 0666", fi.Mode().Perm())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "written")); err != nil {
+		t.Errorf("the workspace on this machine: %v", err)
+	}
+}
+
+// targetThroughImageLink requires that a launch with a mount whose Target goes through a
+// symbolic link of the image, /lib64 to lib in busybox, is refused before the agent's
+// container is made: the engine follows the link, so the bind would land at /lib.
+func targetThroughImageLink(t *testing.T) {
+	command, helper := relayEngine(t)
+	w := &wall.Docker{Command: command, Helper: helper, RelayArgs: e2e.RelayArgs, NestArgs: e2e.NestArgs}
+	runID := fmt.Sprintf("walltest-relay-%d-%d", os.Getpid(), time.Now().UnixNano())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	e, err := w.Prepare(ctx, wall.Request{RunID: runID, Image: busybox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close(context.Background())
+	proxy, err := net.Listen("tcp", e.ProxyAddr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close()
+	dir, home := t.TempDir(), t.TempDir()
+	_, err = e.Wrap(ctx, wall.Launch{Command: "sh", Args: []string{"-c", "true"}, Dir: dir,
+		Mounts: []wall.Mount{{Path: dir}, {Path: home, Target: "/lib64/agent-home"}}, Proxy: proxy.Addr().String(), ProxyToken: relaySecret})
+	want := `wall docker: make "/lib64" a directory or file in the image, not a symbolic link: "/lib64" is a symbolic link in the image`
+	if err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("the wrap: %v; want an error that starts with %q", err, want)
+	}
+	out, err := exec.Command(command, "ps", "--all", "--quiet", "--filter", "name=qory-"+runID+"-agent").CombinedOutput()
+	if err != nil || len(strings.TrimSpace(string(out))) != 0 {
+		t.Errorf("the agent's container: %q, %v", out, err)
 	}
 }
 

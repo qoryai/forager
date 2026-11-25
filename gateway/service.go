@@ -79,10 +79,18 @@ func checkService(cfg *Config) (*certFiles, error) {
 	return certs, nil
 }
 
-// maxRelayRunKey is the longest relay preamble with a run key, its newline included:
-// [link.RelayPreamble], a space, a run key of at most [runkey.MaxLength] characters and
-// a newline.
-const maxRelayRunKey = len(link.RelayPreamble) + 1 + runkey.MaxLength + 1
+// relayWords are the words a bound connection's first line may open with, each followed
+// by a space and a run key, and the proxy of the run each opens: the relay's preamble
+// the run's proxy, [link.StackPreamble] its stack proxy and [link.PushPreamble] its push
+// proxy.
+var relayWords = []struct {
+	word string
+	to   relayTo
+}{{link.RelayPreamble, toRunProxy}, {link.StackPreamble, toStackProxy}, {link.PushPreamble, toPushProxy}}
+
+// maxRelayRunKey is the longest line of word with a run key, its newline included:
+// word, a space, a run key of at most [runkey.MaxLength] characters and a newline.
+func maxRelayRunKey(word string) int { return len(word) + 1 + runkey.MaxLength + 1 }
 
 // maxFirstLine is the bound of what the one address reads of a connection before it
 // knows where it goes: its first line, the binding's or a request line, and on a bound
@@ -263,7 +271,8 @@ func (s *service) route(raw net.Conn) {
 // exporter value, then reads the connection's next line within the same deadline. The
 // relay's preamble with a run key goes to that run's proxy ([Gateway.relayRun]), and
 // [link.StackPreamble] with a run key to that run's stack proxy until the run's first
-// join request; any other line is the link's HTTP/1.1. admit lets go of c's count
+// join request, and [link.PushPreamble] with a run key to that run's push proxy; any
+// other line is the link's HTTP/1.1. admit lets go of c's count
 // among the connections whose run keys are not admitted, once its run key is; vouch
 // keeps c from being closed for a newer one, once a run key on it passed; release lets
 // go of c's count of its source and of its /48, once the open of a run request on it
@@ -284,26 +293,26 @@ func (s *service) bind(c *tls.Conn, r *bufio.Reader, admit, vouch, release func(
 	if !ok {
 		return false
 	}
-	for _, word := range []string{link.RelayPreamble, link.StackPreamble} {
-		if !bytes.HasPrefix(line, []byte(word+" ")) {
+	for _, w := range relayWords {
+		if !bytes.HasPrefix(line, []byte(w.word+" ")) {
 			continue
 		}
-		value, ok := relayRunKey(line, word)
+		value, ok := relayRunKey(line, w.word)
 		if !ok {
 			return false
 		}
 		r.Discard(len(line))
-		return s.g.relayRun(c, r, value, admit, release, word == link.StackPreamble)
+		return s.g.relayRun(c, r, value, admit, release, w.to)
 	}
 	c.SetDeadline(time.Time{})
 	return s.edgeQ.deliver(&boundConn{linkConn: linkConn{Conn: c, r: r}, ekm: ekm, admit: admit, vouch: vouch, release: release})
 }
 
-// relayRunKey is the run key of a line of the relay's preamble, or of
-// [link.StackPreamble], word, its newline included, and whether the line is within
-// [maxRelayRunKey]: a longer one has no run key. Both words have the same length.
+// relayRunKey is the run key of a line of word, one of [relayWords], its newline
+// included, and whether the line is within [maxRelayRunKey] of word: a longer one has no
+// run key.
 func relayRunKey(line []byte, word string) (string, bool) {
-	if len(line) > maxRelayRunKey {
+	if len(line) > maxRelayRunKey(word) {
 		return "", false
 	}
 	return strings.TrimSuffix(strings.TrimPrefix(string(line), word+" "), "\n"), true
@@ -409,9 +418,10 @@ func bearer(values []string) (string, bool) {
 // run key in the request's context and no Authorization left on it, every answer of
 // it other than a 2xx with Connection: close, once the rest of its body is read within
 // [refusedWait], and the connection closed unanswered when it is not. The connection is
-// admitted once a run request, a reload or a batch is answered 2xx ([forLiveRun]), after
-// the answer; a run request's counts in all only from the start of its open
-// ([Gateway.openRun]). Every answer is signed under the gateway's access key
+// admitted once the gateway sends a 2xx to a run request, a reload, a transcript
+// request, a join, a host call (next-session, pushed-commits or findings) or a batch
+// ([forLiveRun]), after the answer; a run request's counts in all only from the start
+// of its open ([Gateway.openRun]). Every answer is signed under the gateway's access key
 // ([signedWriter]).
 func (g *Gateway) edgeHandler(s *side) http.Handler {
 	next := g.handler(s)
@@ -470,16 +480,16 @@ func (g *Gateway) edgeHandler(s *side) http.Handler {
 	})
 }
 
-// forLiveRun reports whether r is a request of the link a 2xx answers for a live run
-// only: the run request, a reload, a join or a batch. Once one is answered 2xx, its connection
-// is admitted.
+// forLiveRun reports whether r is a request of the link that gets a 2xx for a live run
+// only: the run request, a reload, a transcript request, a join, a host call or a
+// batch. Once the gateway sends a 2xx to one, its connection is admitted.
 func forLiveRun(r *http.Request) bool {
 	switch {
 	case r.Method == http.MethodPost && (r.URL.Path == remoteRunPath || r.URL.Path == remoteEventsPath):
 		return true
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, remoteRunPath+"/"):
 		return true
-	case r.Method == http.MethodPost && isJoin(r.URL.Path, remoteRunPath):
+	case (r.Method == http.MethodPost && isJoin(r.URL.Path, remoteRunPath)) || isHostCall(r.Method, r.URL.Path, remoteRunPath):
 		return true
 	}
 	return false
@@ -500,29 +510,35 @@ func readRefused(w http.ResponseWriter, r *http.Request, body *capturedBody) boo
 }
 
 // maxBound is the most of a request's body a bound answer's signature covers: a batch's
-// bound, and one byte more, which no request the gateway answers in full carries.
+// bound, and one byte more, which no request the gateway answers in full carries. A host
+// call whose body may be longer, POST findings, has its limit and one byte more.
 const maxBound = maxBatch + 1
 
-// capturedBody is a request's body on a bound connection, hashed as it is read into
-// the third line of its answer's signature ([link.AnswerRequestHash]), so the signature
-// covers it and nothing of it is kept: the body of a POST, nothing of a GET.
+// capturedBody is a request's body on a bound connection, hashed as it is read, up to
+// bound, into the third line of its answer's signature ([link.AnswerRequestHash]), so the
+// signature covers it and nothing of it is kept: the body of a POST, nothing of a GET.
 type capturedBody struct {
-	r    io.ReadCloser
-	post bool
-	h    hash.Hash
-	n    int
+	r     io.ReadCloser
+	post  bool
+	bound int
+	h     hash.Hash
+	n     int
 }
 
 // newCapturedBody is r's body on the connection whose exporter value is ekm, hashed
 // with r's method and target.
 func newCapturedBody(r *http.Request, ekm []byte) *capturedBody {
-	return &capturedBody{r: r.Body, post: r.Method == http.MethodPost, h: link.AnswerRequestHash(ekm, r.Method, r.RequestURI)}
+	bound := maxBound
+	if _, c, ok := hostCallOf(r.Method, r.URL.Path, remoteRunPath); ok {
+		bound = max(bound, c.request+1)
+	}
+	return &capturedBody{r: r.Body, post: r.Method == http.MethodPost, bound: bound, h: link.AnswerRequestHash(ekm, r.Method, r.RequestURI)}
 }
 
 func (b *capturedBody) Read(p []byte) (int, error) {
 	n, err := b.r.Read(p)
-	if b.post && b.n < maxBound {
-		k := min(n, maxBound-b.n)
+	if b.post && b.n < b.bound {
+		k := min(n, b.bound-b.n)
 		b.h.Write(p[:k])
 		b.n += k
 	}
@@ -533,12 +549,12 @@ func (b *capturedBody) Read(p []byte) (int, error) {
 func (b *capturedBody) Close() error { return b.r.Close() }
 
 // answerRequest is the third line of the answer's signature over the request's body,
-// up to [maxBound]: what the handler read, then the rest; empty for a GET. It reports
-// whether it read the body whole, to its end or to [maxBound].
+// up to its bound: what the handler read, then the rest; empty for a GET. It reports
+// whether it read the body whole, to its end or to its bound.
 func (b *capturedBody) answerRequest() (string, bool) {
 	whole := true
-	if b.post && b.n < maxBound {
-		_, err := io.Copy(io.Discard, io.LimitReader(b, int64(maxBound-b.n)))
+	if b.post && b.n < b.bound {
+		_, err := io.Copy(io.Discard, io.LimitReader(b, int64(b.bound-b.n)))
 		whole = err == nil
 	}
 	return hex.EncodeToString(b.h.Sum(nil)), whole
@@ -578,6 +594,9 @@ func (s *signedWriter) Write(b []byte) (int, error) {
 	}
 	return s.buf.Write(b)
 }
+
+// Unwrap is the connection's writer, so an [http.ResponseController] sets its deadlines.
+func (s *signedWriter) Unwrap() http.ResponseWriter { return s.w }
 
 // Flush signs and writes the answer held, once.
 func (s *signedWriter) Flush() { s.flush(false) }

@@ -218,7 +218,7 @@ const imageMissingOutcome = "an outcome with the reason image_missing is failed 
 
 // noJoinReasons are the reasons Close takes only failed with -1, for a run no session
 // joined, as the gateway does.
-var noJoinReasons = []string{"image_missing", "image_user_root", "image_access_denied", "image_rate_limited", "image_registry_unreachable", "workflow_not_in_harness", "read_needs_wall", "read_needs_setup_outside", "read_needs_no_nested_docker", "read_needs_setup_removed"}
+var noJoinReasons = []string{"image_missing", "image_user_root", "image_access_denied", "image_rate_limited", "image_registry_unreachable", "workflow_not_in_harness", "read_needs_wall", "read_needs_setup_outside", "read_needs_no_nested_docker", "read_needs_setup_removed", "write_needs_wall"}
 
 // noJoinOutcome is Close's text for an outcome with one of noJoinReasons that the
 // gateway does not accept.
@@ -229,8 +229,9 @@ func noJoinOutcome(reason string) string {
 // TestImageMissingClosesOnlyARunNoSessionJoined pins the close's image_missing,
 // image_user_root, image_access_denied, image_rate_limited, image_registry_unreachable,
 // workflow_not_in_harness, read_needs_wall, read_needs_setup_outside,
-// read_needs_no_nested_docker and read_needs_setup_removed: failed with -1 after a join
-// is refused before anything is written, and the run closes with another outcome after.
+// read_needs_no_nested_docker, read_needs_setup_removed and write_needs_wall: failed
+// with -1 after a join is refused before anything is written, and the run closes with
+// another outcome after.
 func TestImageMissingClosesOnlyARunNoSessionJoined(t *testing.T) {
 	for _, reason := range noJoinReasons {
 		sp, g := specGateway(t, "FAKE_EXIT=0")
@@ -257,8 +258,8 @@ func TestImageMissingClosesOnlyARunNoSessionJoined(t *testing.T) {
 // TestANoJoinReasonClosesARunNoSessionJoined pins the close's image_missing,
 // image_user_root, image_access_denied, image_rate_limited, image_registry_unreachable,
 // workflow_not_in_harness, read_needs_wall, read_needs_setup_outside,
-// read_needs_no_nested_docker and read_needs_setup_removed, failed with -1 in a run no
-// session joined: Close writes the outcome as given and posts it.
+// read_needs_no_nested_docker, read_needs_setup_removed and write_needs_wall, failed
+// with -1 in a run no session joined: Close writes the outcome as given and posts it.
 func TestANoJoinReasonClosesARunNoSessionJoined(t *testing.T) {
 	for _, reason := range noJoinReasons {
 		sp, g := specGateway(t, "FAKE_EXIT=0")
@@ -338,10 +339,14 @@ func TestCloseChecksTheOutcome(t *testing.T) {
 		{session.Outcome{State: "failed", ExitCode: -2}, "the outcome's exit code -2 is under -1"},
 		{session.Outcome{State: "cancelled", Reason: "timeout", ExitCode: 1}, "an outcome with the reason timeout is cancelled with the exit code 124"},
 		{session.Outcome{State: "failed", Reason: "interrupted"}, "an outcome with the reason interrupted is cancelled"},
-		{session.Outcome{State: "paused"}, "close a paused run with the reason model_key_limit: the close writes paused with no other reason"},
-		{session.Outcome{State: "paused", Reason: "timeout", ExitCode: 124}, "close a paused run with the reason model_key_limit: the close writes paused with no other reason"},
-		{session.Outcome{State: "paused", Reason: "checks_failed"}, "close a paused run with the reason model_key_limit: the close writes paused with no other reason"},
+		{session.Outcome{State: "paused"}, "close a paused run with the reason model_key_limit or model_key_switch: the close writes paused with no other reason"},
+		{session.Outcome{State: "paused", Reason: "timeout", ExitCode: 124}, "close a paused run with the reason model_key_limit or model_key_switch: the close writes paused with no other reason"},
+		{session.Outcome{State: "paused", Reason: "checks_failed"}, "close a paused run with the reason model_key_limit or model_key_switch: the close writes paused with no other reason"},
 		{session.Outcome{State: "cancelled", Reason: "model_key_limit"}, "close with model_key_limit only as paused, after a last session that ended with model_key_limit"},
+		{session.Outcome{State: "failed", Reason: "model_key_switch"}, "close with model_key_switch only as paused, after a last session that ended with model_key_switch"},
+		{session.Outcome{State: "paused", Reason: "model_key_switch"}, "close with model_key_switch only as paused, after a last session that ended with model_key_switch"},
+		{session.Outcome{State: "paused", Reason: "model_key_unauthorized"}, "close a paused run with the reason model_key_limit or model_key_switch: the close writes paused with no other reason"},
+		{session.Outcome{State: "failed", Reason: "model_key_unauthorized", ExitCode: 1}, "close with model_key_unauthorized only as failed, after a last session that ended with model_key_unauthorized"},
 		{session.Outcome{State: "failed", Reason: "session_lost", ExitCode: -1}, `the outcome's reason "session_lost" is not a code of the caller's: a lower-case letter, then up to 63 lower-case letters, digits and _, and none of Forager's reserved codes`},
 		{session.Outcome{State: "failed", Reason: "image_missing", ExitCode: 0}, imageMissingOutcome},
 		{session.Outcome{State: "succeeded", Reason: "image_missing", ExitCode: -1}, imageMissingOutcome},
@@ -357,6 +362,8 @@ func TestCloseChecksTheOutcome(t *testing.T) {
 		{session.Outcome{State: "cancelled", Reason: "read_needs_no_nested_docker", ExitCode: -1}, noJoinOutcome("read_needs_no_nested_docker")},
 		{session.Outcome{State: "failed", Reason: "read_needs_setup_removed", ExitCode: 1}, noJoinOutcome("read_needs_setup_removed")},
 		{session.Outcome{State: "succeeded", Reason: "read_needs_setup_removed", ExitCode: -1}, noJoinOutcome("read_needs_setup_removed")},
+		{session.Outcome{State: "failed", Reason: "write_needs_wall", ExitCode: 0}, noJoinOutcome("write_needs_wall")},
+		{session.Outcome{State: "cancelled", Reason: "write_needs_wall", ExitCode: -1}, noJoinOutcome("write_needs_wall")},
 	} {
 		if _, err := r.Close(ctx, c.out); err == nil || err.Error() != c.want {
 			t.Errorf("%+v: %v, want %s", c.out, err, c.want)
@@ -431,13 +438,13 @@ func TestTheMaskerIsTheRuns(t *testing.T) {
 	first := sp.SessionSpec
 	envFile := filepath.Join(t.TempDir(), "env")
 	first.Forwarder = nil
-	first.Command, first.Args = "/bin/sh", []string{"-c", `env > "$0"`, envFile}
+	first.Command, first.Args = installedShell, []string{"-c", `env > "$0"`, envFile}
 	if _, err := r.Join(ctx, first); err != nil {
 		t.Fatal(err)
 	}
 	second := sp.SessionSpec
 	second.Forwarder = nil
-	second.Command, second.Args = "/bin/sh", []string{"-c", `grep -o 'http://qory:[^@]*@' "$0"`, envFile}
+	second.Command, second.Args = installedShell, []string{"-c", `grep -o 'http://qory:[^@]*@' "$0"`, envFile}
 	if _, err := r.Join(ctx, second); err != nil {
 		t.Fatal(err)
 	}

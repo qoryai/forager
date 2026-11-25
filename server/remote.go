@@ -323,6 +323,18 @@ func (k *Link) DialStack(ctx context.Context) (net.Conn, error) {
 	return k.dialOpened(ctx, "stack proxy", link.StackLine(k.remote.runKey))
 }
 
+// DialPush opens one connection to the run's push proxy on a separate gateway, its one
+// address, as [Link.DialProxy] opens one to its proxy, with [link.PushLine] and the run
+// key in place of the relay's preamble. The gateway closes such a connection unanswered
+// for a run with no push credential. The local link has no such way: the run answer's
+// push_proxy_secret opens its push proxy on loopback.
+func (k *Link) DialPush(ctx context.Context) (net.Conn, error) {
+	if k.remote == nil {
+		return nil, errors.New("Open the push proxy on the local link with the run answer's push_proxy_secret.\nThe local link has no push proxy over TLS.")
+	}
+	return k.dialOpened(ctx, "push proxy", link.PushLine(k.remote.runKey))
+}
+
 // dialOpened opens one bound connection to a separate gateway's one address and writes
 // line first; what is the proxy's name in its errors.
 func (k *Link) dialOpened(ctx context.Context, what, line string) (net.Conn, error) {

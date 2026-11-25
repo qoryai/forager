@@ -125,11 +125,19 @@ func (l *live) stale() bool {
 	return l.conf.Run != nil && l.want.RunConfiguration != "" && l.want.RunConfiguration != l.runDigest && l.want.RunConfiguration != l.tried
 }
 
-// failed reports a reload that failed, unless the run's end is why.
+// failed reports a reload that failed, unless the run's end is why. A refusal with its
+// fix first ([run.FixFirstError]) keeps the fix on the first line, and "the reload
+// failed: " starts the second.
 func (l *live) failed(err error) {
-	if l.ctx.Err() == nil {
-		l.report("the reload failed: " + accesskey.ShownError(err).Error())
+	if l.ctx.Err() != nil {
+		return
 	}
+	var fix *run.FixFirstError
+	if errors.As(err, &fix) {
+		l.report(accesskey.ShownValue(fix.Fix, false) + "\nthe reload failed: " + accesskey.ShownValue(fix.Cause, false))
+		return
+	}
+	l.report("the reload failed: " + accesskey.ShownError(err).Error())
 }
 
 // loop runs passes until nothing is marked dirty or the run ends. After a pass that

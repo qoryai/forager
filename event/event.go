@@ -59,7 +59,8 @@ const (
 // compose of the harness, a fetch of the run's image, a setup command, the join of a
 // session, the start of a wall or the start or the removal of a setup container, a build
 // of an image, host work that sends the run's commits, the start of the machine the run
-// runs on, and host work that copies the session's work out of the wall.
+// runs on, host work that copies the session's work out of the wall, and the command
+// SessionSpec.After runs inside the wall once the runtime exits.
 const (
 	StepFetch   = "fetch"
 	StepCompose = "compose"
@@ -71,6 +72,7 @@ const (
 	StepPush    = "push"
 	StepMachine = "machine"
 	StepCopy    = "copy"
+	StepAfter   = "after"
 )
 
 // The states of a write, the state of dev.qory.run.target_write: it began, the system
@@ -104,10 +106,11 @@ const (
 // names quiet, credential_expired, credential_check_unreachable,
 // credential_check_invalid, run_ended_at_issuer, issuer_unreachable and
 // issuer_answer_invalid, which Forager never writes. The session writes timeout,
-// interrupted and run_closed, the close of a run with no join writes no_session, the
-// close after a join writes model_key_limit, and the session in the session's record
-// the code of the gateway's 410, batch_refused among them; the resend of a record
-// writes gateway_lost; the gateway writes the others.
+// interrupted and run_closed, the close of a failed run with no join and no reason
+// writes no_session, the close after a join writes model_key_limit, and the session in
+// the session's record the code of the gateway's 410, batch_refused among them; the
+// resend of a record writes gateway_lost; the contract reserves model_key_switch and
+// model_key_unauthorized for the close; the gateway writes the others.
 const (
 	ReasonTimeout = "timeout"
 	// ReasonInterrupted is a session's run stopped from where it was started, cancelled:
@@ -123,15 +126,34 @@ const (
 	// gateway's 410 to the session's later requests, the reason of the gateway's own
 	// dev.qory.run.exited, and of the session's in its own record after it.
 	ReasonBatchRefused = "batch_refused"
-	// ReasonNoSession is a run closed with no join, failed with exit code -1: its host
-	// work, such as a fetch or a compose, failed before the first session.
+	// ReasonNoSession is a run closed failed with no join and no reason, with exit code
+	// -1: its host work, such as a fetch or a compose, failed before the first session.
 	ReasonNoSession = "no_session"
 	// ReasonModelKeyLimit is a session the session stopped after the gateway's answer to
 	// a batch had stop with this reason, paused: the gateway's proxy passed a model
 	// provider's limit refusal to the session. It is also the reason of the close of a
 	// run whose last session ended with it, and that close is paused too.
 	ReasonModelKeyLimit = "model_key_limit"
+	// ReasonModelKeySwitch is the contract's reason, with paused, of a session stopped
+	// after the gateway's answer to a batch had stop with it, and of the close of a run
+	// whose last session ended with it: the model provider returned 401 for the
+	// session's key, and another key of the key group is usable. The contract's README,
+	// §Credentials, Keys out after a 401, lists what the gateway and the session do with
+	// it.
+	ReasonModelKeySwitch = "model_key_switch"
+	// ReasonModelKeyUnauthorized is the contract's reason, with failed, of a session
+	// stopped after the gateway's answer to a batch had stop with it, and of the close
+	// of a run whose last session ended with it: every key of the key group is out, and
+	// a 401 of the model provider took at least one out. The README section of
+	// ReasonModelKeySwitch lists what the gateway and the session do with it.
+	ReasonModelKeyUnauthorized = "model_key_unauthorized"
 )
+
+// ReasonOutOfMemory is why an after step failed: the kernel killed a process of the
+// agent's container for lack of memory while the step ran. It is the reason of
+// dev.qory.run.step_exited alone; an after step that ran past SessionSpec.AfterTimeout
+// has ReasonTimeout there.
+const ReasonOutOfMemory = "out_of_memory"
 
 // ReasonWorkflowNotInHarness is the reason qory gives the close of a run with no join
 // whose workflow is not in the harness, failed with exit code -1. It is a caller's
@@ -154,6 +176,14 @@ const (
 	ReasonReadNeedsSetupRemoved   = "read_needs_setup_removed"
 )
 
+// ReasonWriteNeedsWall is the reason qory gives the close of a run with no join: the
+// run's access is not read, so the agent may change the checkout, and the machine has
+// no wall, so the agent would run as the machine's user; qory closes the run failed,
+// with exit code -1, before any session joins. It is a caller's code, not one of
+// Forager's reserved codes; the close and the gateway accept it only failed with exit
+// code -1, for a run with no join.
+const ReasonWriteNeedsWall = "write_needs_wall"
+
 // The states of dev.qory.run.exited and dev.qory.session.exited: the run or the session
 // ended well, ended badly, was stopped before it said how it went, or paused at the
 // model key limit. A step ends with the first three, and so does a run's starter's
@@ -164,8 +194,8 @@ const (
 	StateCancelled = "cancelled"
 	// StatePaused is a session the session stopped after the gateway's answer to a batch
 	// had stop with model_key_limit, and the close of a run whose last session ended
-	// that way. It goes with the reason model_key_limit alone. A control plane can
-	// continue the run.
+	// that way. It goes with model_key_limit, and in the contract also with
+	// model_key_switch. A control plane can continue the run.
 	StatePaused = "paused"
 )
 
@@ -186,7 +216,7 @@ func IsStepState(s string) bool {
 var reserved = map[string]bool{
 	ReasonTimeout: true, ReasonInterrupted: true, ReasonStopped: true,
 	ReasonSessionLost: true, ReasonGatewayLost: true, ReasonBatchRefused: true, ReasonRunClosed: true,
-	ReasonNoSession: true, ReasonModelKeyLimit: true,
+	ReasonNoSession: true, ReasonModelKeyLimit: true, ReasonModelKeySwitch: true, ReasonModelKeyUnauthorized: true,
 	"quiet": true, "credential_expired": true, "credential_check_unreachable": true, "credential_check_invalid": true,
 	"run_ended_at_issuer": true, "issuer_unreachable": true, "issuer_answer_invalid": true,
 }

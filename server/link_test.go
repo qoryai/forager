@@ -30,6 +30,7 @@ import (
 const (
 	proxySecret = "proxy-secret-BBBBBBBBBBBBBBBBBBBBBBBB"
 	stackSecret = "stack-secret-CCCCCCCCCCCCCCCCCCCCCCCC"
+	pushSecret  = "push-secret-DDDDDDDDDDDDDDDDDDDDDDDDD"
 	runID       = "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d"
 	userAgent   = "qory-forager/test"
 	runDigest   = "sha256=" + "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
@@ -163,7 +164,7 @@ func TestTheLinkSpeaksTheContractOverTheSocket(t *testing.T) {
 		t.Errorf("reload answer %+v", re)
 	}
 	j, err := k.Join(ctx, d.Run.URL, runID, server.LinkJoinRequest{Passes: []string{"NODE_ENV", "HOME"}, ModelKey: true})
-	if err != nil || j.Session != 1 || j.ModelCredential != "" {
+	if err != nil || j.Session != 1 || j.ModelProviderCredentialName != "" {
 		t.Errorf("join answer %+v, %v", j, err)
 	}
 	del, err := k.Deliver(ctx, d.Events.URL, "d1", []byte(`[]`), runDigest)
@@ -575,7 +576,8 @@ func TestTheLinkReadsATranscript(t *testing.T) {
 }
 
 // TestTheRunAnswerNeverShowsItsProxySecret pins that a run answer prints and logs
-// without its proxy secret and its stack proxy secret under every verb, and that a link
+// without its proxy secret, its stack proxy secret and its push proxy secret under every
+// verb, and that a link
 // prints by the place it speaks to.
 func TestTheRunAnswerNeverShowsItsProxySecret(t *testing.T) {
 	if _, err := server.NewLocalLink(link.Local{}, userAgent, nil); err == nil {
@@ -585,7 +587,7 @@ func TestTheRunAnswerNeverShowsItsProxySecret(t *testing.T) {
 	k, _ := server.NewLocalLink(g.Local(), userAgent, nil)
 	var out bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&out, nil))
-	a := server.LinkRunAnswer{RunID: runID, ProxySecret: proxySecret, StackProxySecret: stackSecret}
+	a := server.LinkRunAnswer{RunID: runID, ProxySecret: proxySecret, StackProxySecret: stackSecret, PushProxySecret: pushSecret}
 	for _, verb := range []string{"%v", "%+v", "%#v", "%s"} {
 		fmt.Fprintf(&out, verb+"\n", a)
 		fmt.Fprintf(&out, verb+"\n", &a)
@@ -593,7 +595,7 @@ func TestTheRunAnswerNeverShowsItsProxySecret(t *testing.T) {
 		fmt.Fprintf(&out, verb+"\n", *k)
 	}
 	log.Info("answer", "answer", a, "link", k)
-	if strings.Contains(out.String(), proxySecret) || strings.Contains(out.String(), stackSecret) {
+	if strings.Contains(out.String(), proxySecret) || strings.Contains(out.String(), stackSecret) || strings.Contains(out.String(), pushSecret) {
 		t.Errorf("a secret is shown:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "[redacted]") || !strings.Contains(out.String(), "server.LinkRunAnswer{") || !strings.Contains(out.String(), "server.Link{the gateway's local link "+g.Socket+"}") {
@@ -602,28 +604,29 @@ func TestTheRunAnswerNeverShowsItsProxySecret(t *testing.T) {
 }
 
 // TestTheRunAnswerNeverWritesItsProxySecretAsJSON pins that a run answer writes its
-// proxy secret and its stack proxy secret redacted under encoding/json, nested in a
-// value log/slog's JSONHandler logs as well, and that a run answer read from the wire
-// keeps both.
+// proxy secret, its stack proxy secret and its push proxy secret redacted under
+// encoding/json, nested in a value log/slog's JSONHandler logs as well, and that a run
+// answer read from the wire keeps the three.
 func TestTheRunAnswerNeverWritesItsProxySecretAsJSON(t *testing.T) {
-	a := server.LinkRunAnswer{Version: 1, RunID: runID, ProxySecret: proxySecret, StackProxySecret: stackSecret}
+	a := server.LinkRunAnswer{Version: 1, RunID: runID, ProxySecret: proxySecret, StackProxySecret: stackSecret, PushProxySecret: pushSecret}
 	var out bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&out, nil))
 	log.Info("nested", "both", struct {
 		A server.LinkRunAnswer
 		B *server.LinkRunAnswer
 	}{a, &a})
-	if strings.Contains(out.String(), proxySecret) || strings.Contains(out.String(), stackSecret) ||
-		!strings.Contains(out.String(), `"proxy_secret":"[redacted]"`) || !strings.Contains(out.String(), `"stack_proxy_secret":"[redacted]"`) {
+	if strings.Contains(out.String(), proxySecret) || strings.Contains(out.String(), stackSecret) || strings.Contains(out.String(), pushSecret) ||
+		!strings.Contains(out.String(), `"proxy_secret":"[redacted]"`) || !strings.Contains(out.String(), `"stack_proxy_secret":"[redacted]"`) ||
+		!strings.Contains(out.String(), `"push_proxy_secret":"[redacted]"`) {
 		t.Errorf("the nested log: %s", out.String())
 	}
 	b, err := json.Marshal(a)
-	if err != nil || string(b) != `{"version":1,"run_id":"`+runID+`","proxy_secret":"[redacted]","stack_proxy_secret":"[redacted]"}` {
+	if err != nil || string(b) != `{"version":1,"run_id":"`+runID+`","proxy_secret":"[redacted]","stack_proxy_secret":"[redacted]","push_proxy_secret":"[redacted]"}` {
 		t.Errorf("json.Marshal of the run answer: %s, %v", b, err)
 	}
 	var back server.LinkRunAnswer
-	withStack := strings.Replace(runAnswer, `"proxy_secret":`, `"stack_proxy_secret":"`+stackSecret+`","proxy_secret":`, 1)
-	if err := json.Unmarshal([]byte(withStack), &back); err != nil || back.ProxySecret != proxySecret || back.StackProxySecret != stackSecret {
+	withStack := strings.Replace(runAnswer, `"proxy_secret":`, `"stack_proxy_secret":"`+stackSecret+`","push_proxy_secret":"`+pushSecret+`","proxy_secret":`, 1)
+	if err := json.Unmarshal([]byte(withStack), &back); err != nil || back.ProxySecret != proxySecret || back.StackProxySecret != stackSecret || back.PushProxySecret != pushSecret {
 		t.Errorf("the run answer read back: %v", err)
 	}
 }

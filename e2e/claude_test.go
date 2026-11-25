@@ -27,23 +27,22 @@ import (
 )
 
 // TestDockerClaudeCodeThroughTheWall runs Claude Code itself behind the Docker adapter
-// against a recorder that answers as the Messages API, the endpoint of a model key of
-// the machine's, which the session sets in ANTHROPIC_BASE_URL: with an API key and
-// with an OAuth credential, each a fake key the proxy sets outside, headless and
-// interactive. The variables Claude Code reads a
-// model credential from that the run does not set a stand-in in are set empty, so each
-// run also checks that Claude Code reads an empty one as unset and uses the stand-in.
-// The launch's environment does not set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: the
-// descriptor's fixed sets it, so a headless run reaches no host but the recorder, also
-// when the workspace's .claude/settings.json sets it empty.
-// Claude Code answers with the recorder's text; every request the recorder gets
-// carries the key in the credential's header, no stand-in and not the other
-// credential's header; the record lists one request through the proxy for each the
-// recorder received, each to the recorder with the credential; and the run's
-// directory, the agent's home and the output contain no key. With the descriptor's
-// fixed variables, an interactive run of 2.1.316, like a headless one, tries no host
-// but the recorder. The test logs a request of an interactive run to another host that
-// the policy refused, and does not count it.
+// against a recorder that answers as the Messages API, the endpoint of a local model
+// provider credential, which the session sets in ANTHROPIC_BASE_URL: with an API key
+// and with an OAuth credential, each a fake key the proxy sets outside, headless and
+// interactive. The variables Claude Code reads a model credential from that the run
+// does not set a stand-in in are set empty, so each run also checks that Claude Code
+// reads an empty one as unset and uses the stand-in. The launch's environment does not
+// set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: the descriptor's fixed sets it, so a
+// headless run reaches no host but the recorder, also when the workspace's
+// .claude/settings.json sets it empty. Claude Code answers with the recorder's text;
+// every request the recorder gets carries the key in the credential's header, no
+// stand-in and not the other credential's header; the record lists one request through
+// the proxy for each the recorder received, each to the recorder with the credential;
+// and the run's directory, the agent's home and the output contain no key. With the
+// descriptor's fixed variables, an interactive run of 2.1.316, like a headless one,
+// tries no host but the recorder. The test logs a request of an interactive run to
+// another host that the policy refused, and does not count it.
 //
 // An interactive run starts on a pseudo-terminal with HOME set to a temporary
 // directory that the test makes for that run and mounts into the container. The
@@ -53,13 +52,15 @@ import (
 // runtime pre-approved the stand-in: the configuration then holds the stand-in's
 // entry, and every member it held before.
 //
-// QORY_WALL_CLAUDE_IMAGE selects an image with claude on its PATH; without it the test
-// is skipped.
+// QORY_WALL_CLAUDE_IMAGE selects an image whose HOME others can write, and
+// QORY_WALL_CLAUDE_INSTALL and QORY_WALL_CLAUDE_VERSION the folder Claude Code is
+// installed in on this machine; without them the test is skipped.
 func TestDockerClaudeCodeThroughTheWall(t *testing.T) {
 	image := os.Getenv("QORY_WALL_CLAUDE_IMAGE")
 	if image == "" {
-		t.Skip("QORY_WALL_CLAUDE_IMAGE is empty: it selects an image with Claude Code")
+		t.Skip("QORY_WALL_CLAUDE_IMAGE is empty: it selects an image for Claude Code")
 	}
+	install := claudeInstall(t)
 	command := os.Getenv("QORY_WALL_COMMAND")
 	if command == "" {
 		command = "docker"
@@ -90,12 +91,29 @@ func TestDockerClaudeCodeThroughTheWall(t *testing.T) {
 	pid := strconv.Itoa(os.Getpid())
 	apiKey := claudeCredential{scheme: "header", header: apiKeyHeader, standIn: apiKeyStandIn, unset: claudeOAuthVariable, key: "sk-ant-test" + keyMark + "0001-" + pid}
 	oauth := claudeCredential{scheme: "bearer", oauth: true, header: "Authorization", prefix: "Bearer ", standIn: claudeOAuthVariable, unset: apiKeyStandIn, key: "sk-ant-oat01-test" + keyMark + "0002-" + pid}
-	run := claudeRun{command: command, recorder: name, host: host, helper: helper, image: image}
+	run := claudeRun{command: command, recorder: name, host: host, helper: helper, image: image, install: install}
 	t.Run("api key in x-api-key", func(t *testing.T) { run.check(t, apiKey, false, "") })
 	t.Run("oauth as a bearer", func(t *testing.T) { run.check(t, oauth, false, "") })
 	t.Run("workspace settings empty the fixed variable", func(t *testing.T) { run.check(t, apiKey, false, emptiedNonessential) })
 	t.Run("interactive api key", func(t *testing.T) { run.check(t, apiKey, true, "") })
 	t.Run("interactive oauth", func(t *testing.T) { run.check(t, oauth, true, "") })
+}
+
+// claudeInstall is the folder Claude Code is installed in on this machine, with the
+// program at bin/claude, from QORY_WALL_CLAUDE_INSTALL, and its version from
+// QORY_WALL_CLAUDE_VERSION; without either the test is skipped.
+func claudeInstall(t *testing.T) *session.RuntimeInstall {
+	t.Helper()
+	in := &session.RuntimeInstall{Dir: os.Getenv("QORY_WALL_CLAUDE_INSTALL"), Version: os.Getenv("QORY_WALL_CLAUDE_VERSION")}
+	if in.Dir == "" || in.Version == "" {
+		Skip(t, "QORY_WALL_CLAUDE_INSTALL or QORY_WALL_CLAUDE_VERSION is empty: they select a folder with Claude Code 2.1.316 at bin/claude, and its version")
+	}
+	return in
+}
+
+// claudeProgram is Claude Code's program in the folder in.
+func claudeProgram(in *session.RuntimeInstall) string {
+	return filepath.Join(in.Dir, "bin", "claude")
 }
 
 // emptiedNonessential is a workspace's .claude/settings.json that sets
@@ -124,9 +142,11 @@ type claudeCredential struct {
 // claudeRun is what the runs of TestDockerClaudeCodeThroughTheWall share.
 type claudeRun struct {
 	command, recorder, host, helper, image string
+	install                                *session.RuntimeInstall
 }
 
-// modelKey is the machine's model key of c, model, whose endpoint is the recorder.
+// modelKey is the local model provider credential of c, model, whose endpoint is the
+// recorder.
 func (r claudeRun) modelKey(c claudeCredential) gateway.Credential {
 	k := gateway.Credential{Name: "model", Env: apiKeyVar, Format: "anthropic-messages", Endpoint: "https://" + r.host + ":" + recorderTLS, Scheme: c.scheme, OAuth: c.oauth}
 	if c.scheme == "header" {
@@ -173,9 +193,10 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool, pro
 		Report:         func(l string) { t.Log("report:", l) },
 	},
 		SessionSpec: session.SessionSpec{
-			Runtime: rt,
-			Command: "claude",
-			Args:    []string{"-p", "Reply with one word."},
+			Runtime:        rt,
+			RuntimeInstall: r.install,
+			Command:        claudeProgram(r.install),
+			Args:           []string{"-p", "Reply with one word."},
 			Env: []string{
 				"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 				"DISABLE_AUTOUPDATER=1",

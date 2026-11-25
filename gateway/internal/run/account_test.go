@@ -1,0 +1,305 @@
+package run_test
+
+import (
+	"encoding/base64"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/qoryai/forager/gateway/internal/credential"
+	"github.com/qoryai/forager/gateway/internal/modelkey"
+	"github.com/qoryai/forager/gateway/internal/run"
+)
+
+// fakeToken is a JWT of three parts with payload, base64url, and no real signature: a
+// fake value for a subscription key.
+func fakeToken(payload string) string {
+	enc := base64.RawURLEncoding.EncodeToString
+	return enc([]byte(`{"alg":"none"}`)) + "." + enc([]byte(payload)) + ".fake-signature"
+}
+
+// accountOf is a fake token whose payload has the account id id at accountDoc's
+// account_claim.
+func accountOf(id string) string {
+	return fakeToken(`{"https://auth.model.example/auth":{"account_id":"` + id + `"}}`)
+}
+
+// accountDoc is a run configuration with two subscription keys of one group on
+// chat.model.example with paths and an account header, a host credential, files, on other
+// paths of that host, and an API key on another host, under a policy that allows both
+// hosts.
+const accountDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["chat.model.example","api.model.example"]}},"default_model_provider_credential_name":"subscription","credentials":[` +
+	`{"name":"subscription","group":"openai","format":"openai-responses","endpoint":"https://chat.model.example/backend-api/codex","auth":{"scheme":"bearer","oauth":true,"account_header":"chatgpt-account-id","account_claim":"/https:~1~1auth.model.example~1auth/account_id"},"paths":["/backend-api/codex/*"],"pause_for_s":18000},` +
+	`{"name":"subscription-2","group":"openai","format":"openai-responses","endpoint":"https://chat.model.example/backend-api/codex","auth":{"scheme":"bearer","oauth":true,"account_header":"chatgpt-account-id","account_claim":"/https:~1~1auth.model.example~1auth/account_id"},"paths":["/backend-api/codex/*"],"pause_for_s":18000},` +
+	`{"name":"api-key","group":"openai-api","format":"openai-responses","endpoint":"https://api.model.example/v1","auth":{"scheme":"bearer"},"paths":["/v1/responses","/v1/responses/*"]},` +
+	`{"name":"files","apply":[{"hosts":["chat.model.example"],"scheme":"bearer","paths":["/backend-api/files/*"]}],"placeholders":["FILES_TOKEN"]}]}`
+
+// claimRefusal is the start of the refusal of a run whose key group openai, of
+// accountDoc, has no key with a string at its account_claim.
+const claimRefusal = "Store in the control plane a value of a key of group \"openai\" with a string at its account_claim.\n" +
+	"No key of the group has one in the run configuration " + runURL + ": run_configuration_invalid"
+
+// accountValues answers each subscription with a token of its account id, and every
+// other credential with a fake value of its name; values replaces the answer of a name.
+func accountValues(values map[string]string) func(string, int) (answer, error) {
+	return func(name string, _ int) (answer, error) {
+		if v, ok := values[name]; ok {
+			return answer{value: v}, nil
+		}
+		if strings.HasPrefix(name, "subscription") {
+			return answer{value: accountOf("acct-fake-" + name)}, nil
+		}
+		return answer{value: "value-of-" + name}, nil
+	}
+}
+
+// TestAPathLimitedSubscriptionSitsBesideAHostCredential pins that a subscription
+// key with paths opens beside a host credential with other paths of its host. Each use has
+// its paths, the subscription its account header and the account id of its value, and both
+// subscriptions are the key group. With the host credential's paths gone, or overlapping
+// the key's, or the key's paths gone, the run does not open.
+func TestAPathLimitedSubscriptionSitsBesideAHostCredential(t *testing.T) {
+	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, accountDoc, digest('1')),
+		Secrets: (&controlPlane{answer: accountValues(nil)}).fetch})
+	if got := keysOf(r, "subscription"); !slices.Equal(got, []string{"subscription", "subscription-2"}) {
+		t.Errorf("Group %v; want the two subscriptions", got)
+	}
+	if out := r.KeysOut(); len(out) != 0 {
+		t.Errorf("KeysOut %v; want none", out)
+	}
+	paths := map[string][]string{}
+	for _, u := range r.Uses() {
+		paths[u.Name] = u.Paths
+		switch {
+		case strings.HasPrefix(u.Name, "subscription"):
+			if u.AccountHeader != "chatgpt-account-id" || u.Account == nil {
+				t.Errorf("%s: account header %q", u.Name, u.AccountHeader)
+				continue
+			}
+			if id, err := u.Account(u.Value()); err != nil || id != "acct-fake-"+u.Name {
+				t.Errorf("%s: the account id %q, %v", u.Name, id, err)
+			}
+		case u.AccountHeader != "" || u.Account != nil:
+			t.Errorf("%s has an account header %q", u.Name, u.AccountHeader)
+		}
+	}
+	want := map[string][]string{"subscription": {"/backend-api/codex/*"}, "subscription-2": {"/backend-api/codex/*"},
+		"api-key": {"/v1/responses", "/v1/responses/*"}, "files": {"/backend-api/files/*"}}
+	for name, p := range want {
+		if !slices.Equal(paths[name], p) {
+			t.Errorf("%s: paths %v; want %v", name, paths[name], p)
+		}
+	}
+	for name, c := range map[string]struct{ doc, want string }{
+		"the host credential without paths": {strings.Replace(accountDoc, `,"paths":["/backend-api/files/*"]`, ``, 1),
+			"a credential without paths is alone on its hosts"},
+		"overlapping paths": {strings.Replace(accountDoc, `"/backend-api/files/*"`, `"/backend-api/*"`, 1),
+			"give the credentials subscription and files paths that do not overlap"},
+		"the key without paths": {strings.Replace(accountDoc, `,"paths":["/backend-api/codex/*"],"pause_for_s":18000},{"name":"subscription-2"`, `,"pause_for_s":18000},{"name":"subscription-2"`, 1),
+			"a credential without paths is alone on its hosts"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, err := run.Open(t.Context(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, c.doc, digest('1')),
+				Secrets: (&controlPlane{answer: accountValues(nil)}).fetch})
+			if err == nil {
+				r.Close()
+				t.Fatal("the run opened")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("%v; want %q", err, c.want)
+			}
+		})
+	}
+}
+
+// TestAValueWithoutItsClaimLeavesTheGroup pins a key whose value has no account claim
+// when the run opens: the run opens, KeysOut has the key, the run's record has one
+// line that starts with the fix and contains neither the token nor an account id, and
+// the group made with KeysOut sets the other key. With no key of the group left, the
+// run is refused, run_configuration_invalid.
+func TestAValueWithoutItsClaimLeavesTheGroup(t *testing.T) {
+	over := `{"https://auth.model.example/auth":{"account_id":"acct-fake-over"},"pad":"` + strings.Repeat("p", credential.MaxClaimPayload) + `"}`
+	for name, c := range map[string]struct{ value, cause string }{
+		"no claim":       {fakeToken(`{"https://auth.model.example/auth":{"org_id":"org-fake"}}`), "the value's JWT payload has no string at account_claim"},
+		"over 8 KiB":     {fakeToken(over), "the value's JWT payload is over 8192 bytes"},
+		"no JWT":         {"opaque-fake-token", "the value is not a JWT"},
+		"a broken token": {"e30.not*base64.sig", "the value's JWT payload is not base64url"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			log := &reports{}
+			r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, accountDoc, digest('1')), Log: log.report,
+				Secrets: (&controlPlane{answer: accountValues(map[string]string{"subscription": c.value})}).fetch})
+			if out := r.KeysOut(); !slices.Equal(out, []string{"subscription"}) {
+				t.Errorf("KeysOut %v; want subscription", out)
+			}
+			lines := log.lines()
+			if len(lines) != 1 || !strings.HasPrefix(lines[0], `Store in the control plane a value of the model key "subscription" with a string at its account_claim; the run does not set the key: `+c.cause) {
+				t.Fatalf("the record's lines %q", lines)
+			}
+			if strings.Contains(lines[0], c.value) || strings.Contains(lines[0], "acct-fake") || strings.Contains(lines[0], "org-fake") {
+				t.Errorf("the line contains the token or a claim: %s", lines[0])
+			}
+			g := modelkey.New(modelKeys(r), r.Held().DefaultCredential, nil)
+			for _, name := range r.KeysOut() {
+				g.Out(name)
+			}
+			if active, ok := g.Pick(); active != "subscription-2" || !ok {
+				t.Errorf("the group's active key %s, %v; want subscription-2", active, ok)
+			}
+		})
+	}
+	t.Run("no key left", func(t *testing.T) {
+		none := fakeToken(`{"sub":"fake"}`)
+		r, err := run.Open(t.Context(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, accountDoc, digest('1')),
+			Secrets: (&controlPlane{answer: accountValues(map[string]string{"subscription": none, "subscription-2": none})}).fetch})
+		if err == nil {
+			r.Close()
+			t.Fatal("the run opened")
+		}
+		if code, names := refusalOf(err); code != "run_configuration_invalid" || !slices.Equal(names, []string{"subscription"}) ||
+			!strings.HasPrefix(err.Error(), claimRefusal) {
+			t.Errorf("%v (%s %v)", err, code, names)
+		}
+	})
+}
+
+// TestAnotherGroupWithoutTheClaimIsRefused pins a key group other than the default
+// model provider credential's: with no key of it left, the run is refused at the start,
+// run_configuration_invalid, with the group's first key, as the default model provider
+// credential's group is. With one key of it left, the run opens, and KeysOut has the
+// other key.
+func TestAnotherGroupWithoutTheClaimIsRefused(t *testing.T) {
+	// The default model provider credential is api-key, of the group openai-api; the
+	// two subscriptions are the group openai.
+	doc := strings.Replace(accountDoc, `"default_model_provider_credential_name":"subscription"`, `"default_model_provider_credential_name":"api-key"`, 1)
+	none := fakeToken(`{"sub":"fake"}`)
+	t.Run("no key left", func(t *testing.T) {
+		r, err := run.Open(t.Context(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')),
+			Secrets: (&controlPlane{answer: accountValues(map[string]string{"subscription": none, "subscription-2": none})}).fetch})
+		if err == nil {
+			r.Close()
+			t.Fatal("the run opened")
+		}
+		if code, names := refusalOf(err); code != "run_configuration_invalid" || !slices.Equal(names, []string{"subscription"}) ||
+			!strings.HasPrefix(err.Error(), claimRefusal) {
+			t.Errorf("%v (%s %v)", err, code, names)
+		}
+	})
+	t.Run("one key left", func(t *testing.T) {
+		r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')),
+			Secrets: (&controlPlane{answer: accountValues(map[string]string{"subscription": none})}).fetch})
+		if out := r.KeysOut(); !slices.Equal(out, []string{"subscription"}) {
+			t.Errorf("KeysOut %v; want subscription", out)
+		}
+	})
+}
+
+// TestARenewalWithoutTheClaimKeepsTheValue pins a renewal of a subscription key whose
+// renewed value has no account claim: the renewal is refused as one with another
+// apply is, the report has why and no value, and the run keeps the value it had.
+func TestARenewalWithoutTheClaimKeepsTheValue(t *testing.T) {
+	clock := &fakeClock{now: start}
+	first, renewed := accountOf("acct-fake-first"), fakeToken(`{"sub":"fake"}`)
+	s := &controlPlane{answer: func(name string, call int) (answer, error) {
+		switch {
+		case name == "subscription" && call == 0:
+			return answer{value: first, expires: start.Add(time.Hour)}, nil
+		case name == "subscription":
+			return answer{value: renewed, expires: start.Add(2 * time.Hour)}, nil
+		}
+		return accountValues(nil)(name, call)
+	}}
+	rep := &reports{}
+	r := renewRun(t, accountDoc, s, clock, rep, nil)
+	clock.step(t, time.Hour-credential.RenewBefore)
+	want := `run ` + runID + `: If this repeats, check the control plane: credential "subscription" was not renewed: the value's JWT payload has no string at account_claim "/https:~1~1auth.model.example~1auth/account_id"`
+	if value(r, "subscription") != first || !rep.reported(want) {
+		t.Fatalf("after the renewal: the value is the first %v, reports %q", value(r, "subscription") == first, rep.lines())
+	}
+	for _, l := range rep.lines() {
+		if strings.Contains(l, renewed) || strings.Contains(l, first) {
+			t.Errorf("a report contains a value: %s", l)
+		}
+	}
+}
+
+// TestAGroupWithoutTheClaimIsRefusedBesideALocalModelProviderCredential pins a run
+// whose default model provider credential is a local model provider credential, in no
+// key group, beside the key groups of accountDoc: with no key of the group openai left,
+// the run is refused at the start, run_configuration_invalid, with the group's first
+// key in the refusal's names.
+func TestAGroupWithoutTheClaimIsRefusedBesideALocalModelProviderCredential(t *testing.T) {
+	t.Setenv("QORY_TEST_LOCAL_MODEL_PROVIDER_CREDENTIAL", "fake-machine-value")
+	doc := strings.Replace(accountDoc, `"default_model_provider_credential_name":"subscription"`, `"default_model_provider_credential_name":"machine"`, 1)
+	doc = strings.Replace(doc, `"allow":["chat.model.example","api.model.example"]}}`,
+		`"allow":["chat.model.example","api.model.example","api.machine.example"]},"credentials":[{"name":"machine"}]}`, 1)
+	none := fakeToken(`{"sub":"fake"}`)
+	r, err := run.Open(t.Context(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')),
+		Credentials: []run.Credential{{Name: "machine", Env: "QORY_TEST_LOCAL_MODEL_PROVIDER_CREDENTIAL", Format: "anthropic-messages", Endpoint: "https://api.machine.example/v1", Scheme: "header", Header: "x-api-key"}},
+		Secrets:     (&controlPlane{answer: accountValues(map[string]string{"subscription": none, "subscription-2": none})}).fetch})
+	if err == nil {
+		r.Close()
+		t.Fatal("the run opened")
+	}
+	if code, names := refusalOf(err); code != "run_configuration_invalid" || !slices.Equal(names, []string{"subscription"}) ||
+		!strings.HasPrefix(err.Error(), claimRefusal) {
+		t.Errorf("%v (%s %v)", err, code, names)
+	}
+}
+
+// TestAGroupAfterA401IsNotRefusedForTheClaim pins a reopened run whose default model
+// provider credential is api-key, of the group openai-api, and in which a 401 took out
+// subscription, of the group openai. subscription-2, the other key of that group, has
+// no string at its account_claim. The run opens with no refusal: checkClaims skips the
+// group, and KeysOut has subscription-2. Built as the gateway builds it, the group
+// openai has no key left, and its stop's reason is model_key_unauthorized.
+func TestAGroupAfterA401IsNotRefusedForTheClaim(t *testing.T) {
+	doc := strings.Replace(accountDoc, `"default_model_provider_credential_name":"subscription"`, `"default_model_provider_credential_name":"api-key"`, 1)
+	none := fakeToken(`{"sub":"fake"}`)
+	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')), Revoked: []string{"subscription"},
+		Secrets: (&controlPlane{answer: accountValues(map[string]string{"subscription-2": none})}).fetch})
+	if out := r.KeysOut(); !slices.Equal(out, []string{"subscription-2"}) {
+		t.Errorf("KeysOut %v; want subscription-2", out)
+	}
+	var groups []*modelkey.Group
+	for _, kg := range r.KeyGroups() {
+		g := modelkey.New(kg.Keys, r.Held().DefaultCredential, nil)
+		g.SetFormat(kg.Format)
+		groups = append(groups, g)
+	}
+	set := modelkey.NewSet(groups, nil)
+	for _, name := range r.KeysOut() {
+		set.Of(name).Out(name)
+	}
+	set.Restore([]modelkey.Unauthorized{{Credential: "subscription", At: start, Out: true}})
+	openai := set.Of("subscription")
+	if active, ok := openai.Pick(); ok {
+		t.Errorf("the group openai's active key %s is usable; want no key left", active)
+	}
+	openai.Pass()
+	if reason, ok := openai.Stop(); !ok || reason != "model_key_unauthorized" {
+		t.Errorf("the group openai's stop %q, %v; want model_key_unauthorized", reason, ok)
+	}
+	if reason, ok := set.Of("api-key").Stop(); ok {
+		t.Errorf("the group openai-api stops with %q; want no stop", reason)
+	}
+}
+
+// TestAGroupWithoutAnAccountClaimIsNeverRefused pins key groups whose keys have no
+// account_claim: values that are no JWT open, and KeysOut is empty.
+func TestAGroupWithoutAnAccountClaimIsNeverRefused(t *testing.T) {
+	doc := strings.ReplaceAll(accountDoc, `,"account_header":"chatgpt-account-id","account_claim":"/https:~1~1auth.model.example~1auth/account_id"`, ``)
+	if strings.Contains(doc, "account_claim") {
+		t.Fatal("the run configuration still has an account_claim")
+	}
+	opaque := map[string]string{"subscription": "opaque-fake-token", "subscription-2": "opaque-fake-token-2", "api-key": "opaque-fake-key"}
+	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')),
+		Secrets: (&controlPlane{answer: accountValues(opaque)}).fetch})
+	if out := r.KeysOut(); len(out) != 0 {
+		t.Errorf("KeysOut %v; want none", out)
+	}
+	if got := keysOf(r, "subscription"); !slices.Equal(got, []string{"subscription", "subscription-2"}) {
+		t.Errorf("Group %v; want the two subscriptions", got)
+	}
+}

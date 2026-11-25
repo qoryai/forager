@@ -3,6 +3,7 @@
   "names": [
     "AWS_CA_BUNDLE",
     "BASH_ENV",
+    "BUN_OPTIONS",
     "CURL_CA_BUNDLE",
     "DOCKER_CERT_PATH",
     "DOCKER_CONFIG",
@@ -36,6 +37,8 @@
   "model_keys": [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
-    "CLAUDE_CODE_OAUTH_TOKEN"
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CODEX_API_KEY",
+    "OPENAI_API_KEY"
   ]
 }

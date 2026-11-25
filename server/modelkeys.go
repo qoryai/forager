@@ -15,8 +15,9 @@ import (
 // of 64 characters take about 19 KiB.
 const MaxModelKeysReport = 32 << 10
 
-// ModelKeyState is the state of one limit window of one model key of a run's key group,
-// an entry of model-keys-report.schema.json's keys and of model-keys-answer.schema.json's.
+// ModelKeyState is the state of one limit window of one model key of a key group of a
+// run, an entry of model-keys-report.schema.json's keys and of
+// model-keys-answer.schema.json's.
 // Times are RFC 3339 in UTC; ResetsAt and CooldownUntil are empty when the state has
 // none, and Utilization nil.
 type ModelKeyState struct {
@@ -30,20 +31,39 @@ type ModelKeyState struct {
 	ObservedAt    string `json:"observed_at"`
 }
 
+// MaxUnauthorized is the most entries of a model keys report's unauthorized, and the
+// most names of a secrets request's: Qory Apiary sends a run at most 6 model keys.
+const MaxUnauthorized = 6
+
 // ModelKeysReport is a model keys report: the time it is sent, RFC 3339 in UTC with
-// whole seconds, empty for the clock's now, and every window the gateway has of the
-// run's key group.
+// whole seconds, empty for the clock's now; the number of the session open when the
+// gateway made it, 0 for none; every window the gateway has of the run's key groups;
+// and the keys the gateway no longer sets after a 401 of the model provider, none for
+// an empty list.
 type ModelKeysReport struct {
-	Time string
-	Keys []ModelKeyState
+	Time         string
+	Session      int
+	Keys         []ModelKeyState
+	Unauthorized []UnauthorizedKey
 }
 
-// modelKeysBody is a report's bytes: the version, the run's id, the time and the keys.
+// UnauthorizedKey is an entry of a model keys report's unauthorized: a key of a key
+// group of the run, and when the model provider's 401 to a request with it arrived,
+// RFC 3339 in UTC.
+type UnauthorizedKey struct {
+	Credential string `json:"credential"`
+	At         string `json:"at"`
+}
+
+// modelKeysBody is a report's bytes: the version, the run's id, the time, the session
+// when one is open, the keys and, when there is one, the keys after a 401.
 type modelKeysBody struct {
-	Version int             `json:"version"`
-	RunID   string          `json:"run_id"`
-	Time    string          `json:"time"`
-	Keys    []ModelKeyState `json:"keys"`
+	Version      int               `json:"version"`
+	RunID        string            `json:"run_id"`
+	Time         string            `json:"time"`
+	Session      int               `json:"session,omitempty"`
+	Keys         []ModelKeyState   `json:"keys"`
+	Unauthorized []UnauthorizedKey `json:"unauthorized,omitempty"`
 }
 
 // ModelKeysAnswerError is an answer to a model keys report other than a signed 200: its
@@ -63,10 +83,11 @@ func (e *ModelKeysAnswerError) Error() string {
 	return fmt.Sprintf("%s: %s status %d", e.What, signed, e.Status)
 }
 
-// PostModelKeys posts the state of a run's key group, rep, to
+// PostModelKeys posts the state of a run's key groups, rep, to
 // <runURL>/<runID>/model-keys, signed by the access key, and returns the answer's
-// keys: for each key of the group, the newest state per window from every gateway. A
-// body over [MaxModelKeysReport] is refused before anything is sent. A transport failure
+// keys: for each key of the groups, the newest state per window from every gateway. A
+// body over [MaxModelKeysReport], or with more than [MaxUnauthorized] unauthorized
+// entries, is refused before anything is sent. A transport failure
 // is an error with no answer; any answer other than a signed 200 is a
 // [*ModelKeysAnswerError]; a signed 200 that fails the schema is a [*DocumentError].
 func (c *Client) PostModelKeys(ctx context.Context, runURL, runID string, rep ModelKeysReport) ([]ModelKeyState, error) {
@@ -81,7 +102,10 @@ func (c *Client) PostModelKeys(ctx context.Context, runURL, runID string, rep Mo
 	if keys == nil {
 		keys = []ModelKeyState{}
 	}
-	body, err := json.Marshal(modelKeysBody{Version: 1, RunID: runID, Time: t, Keys: keys})
+	if len(rep.Unauthorized) > MaxUnauthorized {
+		return nil, fmt.Errorf("tell the Forager maintainers about this bug in the gateway's model keys report; the report lists %d unauthorized keys, and a report lists at most %d", len(rep.Unauthorized), MaxUnauthorized)
+	}
+	body, err := json.Marshal(modelKeysBody{Version: 1, RunID: runID, Time: t, Session: rep.Session, Keys: keys, Unauthorized: rep.Unauthorized})
 	if err != nil {
 		return nil, err
 	}

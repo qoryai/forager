@@ -32,7 +32,7 @@ func printedEnv(t *testing.T, sp *runSpec, script string) string {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "env")
 	sp.Forwarder = nil
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", `env > "$0"; ` + script, out}
+	sp.Command, sp.Args = installedShell, []string{"-c", `env > "$0"; ` + script, out}
 	return out
 }
 

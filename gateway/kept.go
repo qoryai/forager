@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/gateway/internal/modelkey"
 	"github.com/qoryai/forager/gateway/internal/proxy"
 	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/gateway/internal/run"
@@ -28,23 +29,32 @@ import (
 // The files a separate gateway writes in a run's record directory beside the stream's,
 // each mode 0600, so that a gateway that starts again on the same directory can reopen
 // the run: the run request ([keptRequest]), the policy members given ([givenFile]),
-// the join decisions ([joinsFile]) and the mark of a model key past its limit
-// ([limitMark]); the run's CA is [proxy.CACertFile] and [proxy.CAKeyFile]. The local
-// link writes none of them. The stream's Discard and Reclaim remove them by these names.
+// the join decisions ([joinsFile]), the mark of the key groups with a model key past its
+// limit or out of use after a 401, each with the stop's reason ([limitMark]), and the
+// keys out of use after a 401 ([unauthorizedFile]); the run's CA is [proxy.CACertFile] and
+// [proxy.CAKeyFile]. The local link writes none of them. The stream's Discard and
+// Reclaim remove them by these names.
 const (
-	requestFile = "request.json"
-	givenFile   = "given.jsonl"
-	joinsFile   = "joins.jsonl"
-	limitMark   = "model-key-limit"
+	requestFile      = "request.json"
+	givenFile        = "given.jsonl"
+	joinsFile        = "joins.jsonl"
+	limitMark        = "model-key-limit"
+	unauthorizedFile = "model-keys-unauthorized.json"
+	// limitMarkTemp is where [markKeys] writes the mark before it renames it, so a
+	// crash leaves the mark before the write or the mark after it, whole.
+	limitMarkTemp = limitMark + ".tmp"
+	// unauthorizedTemp is where [writeUnauthorized] writes the file before it renames
+	// it, so a crash leaves the file before the write or the file after it, whole.
+	unauthorizedTemp = unauthorizedFile + ".tmp"
 )
 
-// The CA key sweep (the user's "545 (a)", 2026-11-13): a gateway removes the files kept
-// to reopen a run, the CA files and the run request among them, of a run record it does
-// not hold whose events.jsonl has not changed for more than caSweepAge, at Start and
-// every caSweepEvery. A live run's session sends a heartbeat at least every
-// server.MaxInterval, 300 s, so its record changes at least 3 times within caSweepAge;
-// a record that does not is of a run that no session reopens, and its key goes from the
-// disk. A record with a final event is never reopened, so its key goes too.
+// The CA key sweep: a gateway removes the files kept to reopen a run, the CA files and
+// the run request among them, of a run record it does not hold whose events.jsonl has
+// not changed for more than caSweepAge, at Start and every caSweepEvery. A live run's
+// session sends a heartbeat at least every server.MaxInterval, 300 s, so its record
+// changes at least 3 times within caSweepAge; a record that does not is of a run that no
+// session reopens, and its key goes from the disk. A record with a final event is never
+// reopened, so its key goes too.
 const (
 	caSweepEvery = 10 * time.Minute
 	caSweepAge   = 15 * time.Minute
@@ -119,18 +129,18 @@ func readRequest(dir string) (keptRequest, error) {
 }
 
 // keptJoin is one line of joins.jsonl: one join decision, written before the gateway
-// writes its answer, with names alone. Session is the join's number; Accepted is true for a
-// 200, false for a 403; Passes are the request's passes; Model is the model key the
-// answer starts the session with, empty for none; NoKey is the request's model_key
-// false; and ModelCredential is the request's model_credential, empty for none, which
-// the replay of a join compares.
+// writes its answer, with names alone. Session is the join's number; Accepted is true
+// for a 200, false for a 403; Passes are the request's passes; Model is the model key
+// the answer starts the session with, empty for none; NoKey is the request's model_key
+// false; and ModelProviderCredentialName is the request's
+// model_provider_credential_name, empty for none, which the replay of a join compares.
 type keptJoin struct {
-	Session         int      `json:"session"`
-	Accepted        bool     `json:"accepted"`
-	Passes          []string `json:"passes"`
-	Model           string   `json:"model"`
-	NoKey           bool     `json:"no_key"`
-	ModelCredential string   `json:"model_credential,omitempty"`
+	Session                     int      `json:"session"`
+	Accepted                    bool     `json:"accepted"`
+	Passes                      []string `json:"passes"`
+	Model                       string   `json:"model"`
+	NoKey                       bool     `json:"no_key"`
+	ModelProviderCredentialName string   `json:"model_provider_credential_name,omitempty"`
 }
 
 // kept is the join's line of joins.jsonl.
@@ -139,13 +149,13 @@ func (j *join) kept() keptJoin {
 	if passes == nil {
 		passes = []string{}
 	}
-	return keptJoin{Session: j.session, Accepted: j.accepted, Passes: passes, Model: j.model, NoKey: j.noKey, ModelCredential: j.credential}
+	return keptJoin{Session: j.session, Accepted: j.accepted, Passes: passes, Model: j.model, NoKey: j.noKey, ModelProviderCredentialName: j.credential}
 }
 
 // join is the join of the line, with neither its session.started nor its
 // session.exited numbered: the record's events set those.
 func (k keptJoin) join() *join {
-	return &join{session: k.Session, accepted: k.Accepted, passes: slices.Clone(k.Passes), model: k.Model, noKey: k.NoKey, credential: k.ModelCredential}
+	return &join{session: k.Session, accepted: k.Accepted, passes: slices.Clone(k.Passes), model: k.Model, noKey: k.NoKey, credential: k.ModelProviderCredentialName}
 }
 
 // readJoins reads joins.jsonl from dir, in order; no file is no join. A line that does
@@ -178,18 +188,174 @@ func readGiven(dir string) (given []map[string]any, torn int, err error) {
 	return given, torn, err
 }
 
-// limitMarked reports whether dir has the mark of a model key past its limit: the
-// proxy passed a limit refusal to the session, and no join or end of a session cleared
-// it since.
-func limitMarked(dir string) (bool, error) {
-	_, err := os.Lstat(filepath.Join(dir, limitMark))
+// keptMark is the [limitMark] a gateway writes: each key group for which the run's
+// proxy passed a limit refusal or a 401 to the session since the group's last Resume,
+// in the order of the groups.
+type keptMark struct {
+	Version int           `json:"version"`
+	Groups  []markedGroup `json:"groups"`
+}
+
+// markedGroup is one key group of [keptMark]: its group value, [run.KeyGroup.Name], and
+// the stop's reason of the gateway's answers to the session ([modelkey.Group.Stop]),
+// empty until an answer had the stop.
+type markedGroup struct {
+	Group  string `json:"group"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// maxMark is the most bytes [limitMarked] reads of a mark: a run has at most 6 key
+// groups, and a group's entry, with a value of 64 characters and a reason of 22, takes
+// 110 bytes.
+const maxMark = 1 << 10
+
+// limitMarked reads dir's [limitMark]: the key groups for which the run's proxy passed
+// a limit refusal or a 401 to the session, and no join or end of a session cleared it
+// since ([markKeys]), each with its stop's reason, empty when it has none. No file has
+// no group. A file longer than [maxMark], or one that is no version 1 [keptMark] with
+// a group, has no group either, and torn is true.
+func limitMarked(dir string) (groups []markedGroup, torn bool, err error) {
+	path := filepath.Join(dir, limitMark)
+	_, err = os.Lstat(path)
 	switch {
-	case err == nil:
-		return true, nil
 	case errors.Is(err, fs.ErrNotExist):
-		return false, nil
+		return nil, false, nil
+	case err != nil:
+		return nil, false, accesskey.ShownError(err)
 	}
-	return false, accesskey.ShownError(err)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, false, accesskey.ShownError(err)
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxMark+1))
+	if err != nil {
+		return nil, false, accesskey.ShownError(err)
+	}
+	// markKeys writes the mark whole, so a file that does not read as one is no mark
+	// of this gateway's: it has no group.
+	var k keptMark
+	if len(b) > maxMark || json.Unmarshal(b, &k) != nil || k.Version != 1 || len(k.Groups) == 0 {
+		return nil, true, nil
+	}
+	for i, g := range k.Groups {
+		if !modelkey.StopReason(g.Reason) {
+			k.Groups[i].Reason = ""
+		}
+	}
+	return k.Groups, false, nil
+}
+
+// markKeys puts groups in dir's [limitMark] whole, mode 0600, through [limitMarkTemp]
+// ([replaceKept]), or removes the mark when groups is empty: no group has a pass since
+// its last Resume.
+func markKeys(dir string, groups []markedGroup) error {
+	if len(groups) == 0 {
+		err := os.Remove(filepath.Join(dir, limitMark))
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return nil
+		case err != nil:
+			return accesskey.ShownError(err)
+		}
+		return syncDir(dir)
+	}
+	b, err := json.Marshal(keptMark{Version: 1, Groups: groups})
+	if err != nil {
+		return err
+	}
+	return replaceKept(dir, limitMark, limitMarkTemp, append(b, '\n'))
+}
+
+// keptUnauthorized is model-keys-unauthorized.json: the keys of every key group of the
+// run out of use after a 401 of the model provider ([modelkey.Set.Unauthorized]).
+type keptUnauthorized struct {
+	Version int       `json:"version"`
+	Keys    []keptKey `json:"keys"`
+}
+
+// keptKey is one key of [keptUnauthorized]: its name, when the 401 arrived, and Out,
+// true once the key left the group for the run; false while its renewal is pending.
+type keptKey struct {
+	Credential string    `json:"credential"`
+	At         time.Time `json:"at"`
+	Out        bool      `json:"out"`
+}
+
+// writeUnauthorized writes keys to dir's [unauthorizedFile] whole ([replaceKept]), or
+// removes the file when keys is empty: every key a renewal brought back.
+func writeUnauthorized(dir string, keys []modelkey.Unauthorized) error {
+	if len(keys) == 0 {
+		err := os.Remove(filepath.Join(dir, unauthorizedFile))
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return nil
+		case err != nil:
+			return accesskey.ShownError(err)
+		}
+		return syncDir(dir)
+	}
+	k := keptUnauthorized{Version: 1, Keys: make([]keptKey, 0, len(keys))}
+	for _, u := range keys {
+		k.Keys = append(k.Keys, keptKey{Credential: u.Credential, At: u.At, Out: u.Out})
+	}
+	b, err := json.Marshal(k)
+	if err != nil {
+		return err
+	}
+	return replaceKept(dir, unauthorizedFile, unauthorizedTemp, append(b, '\n'))
+}
+
+// replaceKept puts b in dir's file name whole: it writes b to temp, made with mode 0600
+// after a temp left by a crash is removed, syncs it, renames it to name and syncs dir.
+// A write that fails removes temp and leaves name as it was.
+func replaceKept(dir, name, temp string, b []byte) error {
+	tmp := filepath.Join(dir, temp)
+	if err := os.Remove(tmp); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return accesskey.ShownError(err)
+	}
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return accesskey.ShownError(err)
+	}
+	_, werr := f.Write(b)
+	err = errors.Join(werr, f.Sync(), f.Close())
+	if err == nil {
+		err = os.Rename(tmp, filepath.Join(dir, name))
+	}
+	if err != nil {
+		if rerr := os.Remove(tmp); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+			err = errors.Join(err, rerr)
+		}
+		return accesskey.ShownError(err)
+	}
+	return syncDir(dir)
+}
+
+// readUnauthorized reads dir's [unauthorizedFile]: no file is no key.
+func readUnauthorized(dir string) ([]modelkey.Unauthorized, error) {
+	path := filepath.Join(dir, unauthorizedFile)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, accesskey.ShownError(err)
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, 64<<10))
+	if err != nil {
+		return nil, accesskey.ShownError(err)
+	}
+	var k keptUnauthorized
+	if err := json.Unmarshal(b, &k); err != nil || k.Version != 1 {
+		return nil, fmt.Errorf("remove %s, or start another run: it is not a list of model keys out of use after a 401 that the gateway wrote", accesskey.ShownValue(path, false))
+	}
+	out := make([]modelkey.Unauthorized, 0, len(k.Keys))
+	for _, key := range k.Keys {
+		out = append(out, modelkey.Unauthorized{Credential: key.Credential, At: key.At, Out: key.Out})
+	}
+	return out, nil
 }
 
 // readKeptLines calls take with each line of file that is not blank, without its newline;
@@ -285,29 +451,6 @@ func appendKept(dir, name string, v any) error {
 		return syncDir(dir)
 	}
 	return nil
-}
-
-// markLimit makes dir's empty [limitMark], mode 0600, when passed is true and removes
-// it when it is false, then syncs the file and dir.
-func markLimit(dir string, passed bool) error {
-	path := filepath.Join(dir, limitMark)
-	if !passed {
-		if err := os.Remove(path); err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil
-			}
-			return accesskey.ShownError(err)
-		}
-		return syncDir(dir)
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
-	if err != nil {
-		return accesskey.ShownError(err)
-	}
-	if err := errors.Join(f.Sync(), f.Close()); err != nil {
-		return accesskey.ShownError(err)
-	}
-	return syncDir(dir)
 }
 
 // syncDir syncs the directory, so the entries made or removed in it last.

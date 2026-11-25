@@ -12,9 +12,22 @@ import (
 // SetCgroupRoot sets where [Exec] reads the enclosure's cgroup v2 files.
 func SetCgroupRoot(root string) { cgroupRoot = root }
 
+// SetAgentUser sets the user After's program check treats as the agent's, in place of
+// the user the process runs as.
+func SetAgentUser(uid int) { agentUser = func() int { return uid } }
+
 // SetExecHooks sets what [Exec] calls just before it starts the program and once it
 // has reaped it; nil for nothing.
 func SetExecHooks(before, after func()) { beforeStart, afterWait = before, after }
+
+// SetAfterWindow sets how long the session allows the After step in place of the sum of
+// AfterTimeout and the waits for the container's start and its end, and returns a
+// function that restores it. A stop from outside still cuts it to the stop grace.
+func SetAfterWindow(d time.Duration) func() {
+	was := afterWindow
+	afterWindow = func(time.Duration) time.Duration { return d }
+	return func() { afterWindow = was }
+}
 
 // SetUserHome sets the home of the user the session runs as, where the session reads
 // the transcript of a runtime with resume whose launch has no HOME, and returns the

@@ -143,12 +143,12 @@ func TestTheDenyListCoversEverySourceBelowTheFixedNames(t *testing.T) {
 	})
 }
 
-// TestTheLoadersAndHomeAreDenied pins the built-in entries NODE_OPTIONS, LD_PRELOAD,
-// BASH_ENV and HOME: a value of each from the server, the run (--env), the machine
+// TestTheLoadersAndHomeAreDenied pins the built-in entries NODE_OPTIONS, BUN_OPTIONS,
+// LD_PRELOAD, BASH_ENV and HOME: a value of each from the server, the run (--env), the machine
 // (wall.env), the harness's defaults or the harness's computed values is left out and
 // recorded as denied, and the inherited environment's value then applies.
 func TestTheLoadersAndHomeAreDenied(t *testing.T) {
-	for _, name := range []string{"NODE_OPTIONS", "LD_PRELOAD", "BASH_ENV", "HOME", "home"} {
+	for _, name := range []string{"NODE_OPTIONS", "BUN_OPTIONS", "LD_PRELOAD", "BASH_ENV", "HOME", "home"} {
 		for _, tc := range []struct {
 			source string
 			set    func(in *variables.Inputs)

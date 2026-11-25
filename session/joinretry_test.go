@@ -54,7 +54,7 @@ func TestAJoinWithNoAnswerIsSentAgain(t *testing.T) {
 		t.Fatalf("%d join requests, want 3", len(joins))
 	}
 	for i, j := range joins[1:] {
-		if !slices.Equal(j.Request.Passes, joins[0].Request.Passes) || j.Request.ModelKey != joins[0].Request.ModelKey || j.Request.ModelCredential != joins[0].Request.ModelCredential {
+		if !slices.Equal(j.Request.Passes, joins[0].Request.Passes) || j.Request.ModelKey != joins[0].Request.ModelKey || j.Request.ModelProviderCredentialName != joins[0].Request.ModelProviderCredentialName {
 			t.Errorf("try %d %+v is not the first try %+v", i+2, j.Request, joins[0].Request)
 		}
 		if step := joinStepBatch(g); step < 0 || j.Answered <= step {
@@ -332,10 +332,9 @@ func TestAJoinWithNoAnswerUntilTheWindowEnds(t *testing.T) {
 	}
 }
 
-// TestTheFinalWaitIs180Seconds pins the final wait behind a separate gateway, the
-// user's "545 (a)": 180 seconds. TestTheFinalFlushWaitsForASeparateGateway pins that
-// the close of such a run waits the final wait, and the close on the local link the
-// close's wait.
+// TestTheFinalWaitIs180Seconds pins the final wait behind a separate gateway: 180
+// seconds. TestTheFinalFlushWaitsForASeparateGateway pins that the close of such a run
+// waits the final wait, and the close on the local link the close's wait.
 func TestTheFinalWaitIs180Seconds(t *testing.T) {
 	if got := session.DefaultFinalWait(); got != 180*time.Second {
 		t.Errorf("the final wait is %s, want 3m0s", got)

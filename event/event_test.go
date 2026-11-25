@@ -135,7 +135,7 @@ func TestStepKindsAndStatesAreTheContracts(t *testing.T) {
 		schema, member string
 		want           []string
 	}{
-		{"events/run.step_started.schema.json", "kind", []string{event.StepFetch, event.StepCompose, event.StepImage, event.StepSetup, event.StepJoin, event.StepWall, event.StepBuild, event.StepPush, event.StepMachine, event.StepCopy}},
+		{"events/run.step_started.schema.json", "kind", []string{event.StepFetch, event.StepCompose, event.StepImage, event.StepSetup, event.StepJoin, event.StepWall, event.StepBuild, event.StepPush, event.StepMachine, event.StepCopy, event.StepAfter}},
 		{"events/run.step_exited.schema.json", "state", []string{event.StateSucceeded, event.StateFailed, event.StateCancelled}},
 		{"events/run.target_write.schema.json", "state", []string{event.WriteStarted, event.WriteChanged, event.WriteRefused, event.WriteCut}},
 	} {
@@ -152,7 +152,8 @@ func TestStepKindsAndStatesAreTheContracts(t *testing.T) {
 
 // TestTheReservedCodesAreTheContracts pins event.Reserved to the reserved codes in the
 // description of the reason in the schema of run.exited, and those that fail link-batch.schema.json
-// beside timeout, interrupted, no_session and model_key_limit, and event.StarterReason to the reason's pattern less them: a
+// beside timeout, interrupted, no_session, model_key_limit, model_key_switch and
+// model_key_unauthorized, and event.StarterReason to the reason's pattern less them: a
 // starter's code is any other code.
 func TestTheReservedCodesAreTheContracts(t *testing.T) {
 	doc, err := contracts.Document("events/run.exited.schema.json")
@@ -167,7 +168,7 @@ func TestTheReservedCodesAreTheContracts(t *testing.T) {
 	for _, w := range regexp.MustCompile(`[a-z][a-z0-9_]+_[a-z0-9_]+|\btimeout\b|\binterrupted\b|\bquiet\b|\bstopped\b`).FindAllString(listed, -1) {
 		want = append(want, w)
 	}
-	if len(want) != 16 {
+	if len(want) != 18 {
 		t.Fatalf("the description names %d reserved codes: %v", len(want), want)
 	}
 	for _, code := range want {
@@ -185,9 +186,10 @@ func TestTheReservedCodesAreTheContracts(t *testing.T) {
 			t.Errorf("%q is reserved", code)
 		}
 	}
-	// A session's batch may contain timeout, interrupted, no_session and model_key_limit,
-	// the close's.
-	for name, allowed := range map[string][]string{"link-batch.schema.json": {event.ReasonTimeout, event.ReasonInterrupted, event.ReasonNoSession, event.ReasonModelKeyLimit}} {
+	// A session's batch may contain timeout, interrupted, no_session, model_key_limit,
+	// model_key_switch and model_key_unauthorized, the close's.
+	for name, allowed := range map[string][]string{"link-batch.schema.json": {event.ReasonTimeout, event.ReasonInterrupted, event.ReasonNoSession,
+		event.ReasonModelKeyLimit, event.ReasonModelKeySwitch, event.ReasonModelKeyUnauthorized}} {
 		doc, err := contracts.Document(name)
 		if err != nil {
 			t.Fatal(err)
@@ -204,6 +206,18 @@ func TestTheReservedCodesAreTheContracts(t *testing.T) {
 		sorted := slices.Sorted(slices.Values(want))
 		if !slices.Equal(refused, sorted) {
 			t.Errorf("%s refuses %v beside %v; the reserved codes are %v", name, refused, allowed, sorted)
+		}
+	}
+}
+
+// TestQorysEndCodesAreStarterReasons pins the end codes qory sets in a failed run's
+// outcome, $defs/end_codes of integrations' contracts/run/v1/outcome.schema.json, as
+// starter's reasons: none is one of Forager's reserved codes, so none is dropped. A
+// code of the pattern outside that list, push_window_closed, is a starter's reason too.
+func TestQorysEndCodesAreStarterReasons(t *testing.T) {
+	for _, code := range []string{"push_credential_missing", "push_refused", "prebuilt_image_too_large", "push_not_recorded", "environment_image_missing", "push_head_changed", "push_window_closed"} {
+		if !event.StarterReason(code) {
+			t.Errorf("%s is no starter's reason; want a starter's reason", code)
 		}
 	}
 }
