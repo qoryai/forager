@@ -113,7 +113,9 @@ func (c Config) hostCallTimeOf() time.Duration {
 // body over c.request bytes 413 payload_too_large, and a run with no control plane 404
 // not_found; Qory Apiary gets nothing for any of them. For a c.single, a GET with a body,
 // a Content-Length over 0 or a chunked one, is 400 invalid_request, and a Content-Length
-// over c.request is the 413 before the gateway reads the body.
+// over c.request is the 413 with none of the body counted: on the local link the gateway
+// reads none of it, and behind a separate gateway it reads up to c.request + 1 bytes only
+// to sign the 413.
 //
 // A request's body and an answer count past their first 1 MiB in the gateway's memory
 // budget ([proxy.RunAPILimits]): a body as it is read, before it is signed, until the call

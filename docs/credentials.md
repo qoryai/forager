@@ -256,7 +256,7 @@ A key group lets a run go on when the model provider returns a limit refusal for
 Each API credential of the run configuration has `group`, the public id of the provider
 of the run's model choice (its `con_` id), and the API credentials with one `group` value
 are one key group, in the order of `credentials`. A run can have several groups, such as
-one of `anthropic` keys and one of `openai` keys, and each group rotates, cools down and
+one of Anthropic keys and one of OpenAI keys, and each group rotates, cools down and
 stops apart from the others. The keys of one group need one `format`, `endpoint` and
 `auth`: two that differ stop the run with `run_configuration_invalid`, such as `Give the
 keys of group "anthropic" one format, endpoint and auth.` A key of `forager.yaml` has no
