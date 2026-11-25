@@ -152,7 +152,7 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 	if c.single {
 		refusal := g.bodyRefusal(s, r, runID)
 		// unread is true for a refusal of the request's head, for which the gateway reads none
-// of the body.
+		// of the body.
 		// After the handler, net/http reads up to 256 KiB of a body left unread; a read
 		// deadline of now ends that read, so the connection closes after the refusal. Behind
 		// a separate gateway, [Gateway.edgeHandler] sets the deadline to [refusedWait] again.
