@@ -108,6 +108,8 @@ type Gateway struct {
 	expired expired
 	// runAPILimits are the limits of the run API's route across every run.
 	runAPILimits proxy.RunAPILimits
+	// inFlight has a [runCall] for each [hostCall.single] call in flight.
+	inFlight sync.Map
 
 	// base is the context of everything a run starts, cancelled when Close is done.
 	base   context.Context

@@ -49,9 +49,10 @@ const (
 	// beyond a burst of as many. Qory Apiary's bucket for one key refills 50 a second, so
 	// a run's start on the same key keeps its tokens.
 	RunAPIGatewayRate = 20
-	// RunAPIMemoryBudget is the most bytes of POST artifacts bodies and of verified
-	// answers, beyond [runAPIFreeBytes] of each, that one gateway keeps at once. POST
-	// verdict is outside it, and so is a file, which streams.
+	// RunAPIMemoryBudget is the most bytes of POST artifacts bodies, of verified answers
+	// and of the link's host calls, beyond [runAPIFreeBytes] of each body and answer, that
+	// one gateway keeps at once. POST verdict is outside it, and so is a file, which
+	// streams.
 	RunAPIMemoryBudget int64 = 512 << 20
 	// runAPIFreeBytes is the part of each body and answer that no budget counts. The
 	// memory budget and the send slots hold back no verdict, and no body or answer of
@@ -89,12 +90,13 @@ var (
 	// errRunAPIWaiting is the error of a request whose run has one request waiting for a
 	// token of the gateway's bucket.
 	errRunAPIWaiting = errors.New("the run has a request waiting for a token of the gateway's bucket")
-	// errRunAPIBudget is the read error of a body that would pass [RunAPIMemoryBudget].
-	errRunAPIBudget = errors.New("the body would pass the gateway's memory budget")
+	// ErrRunAPIBudget is the read error of a body that would pass [RunAPIMemoryBudget].
+	ErrRunAPIBudget = errors.New("the body would pass the gateway's memory budget")
 )
 
 // RunAPILimits are the limits of the route that one gateway shares across its runs: the
-// send slots of POST artifacts, the bucket of signed requests and the memory budget.
+// send slots of POST artifacts, the bucket of signed requests and the memory budget,
+// which counts the link's host calls too.
 // The zero value is ready to use.
 type RunAPILimits struct {
 	// now, sleep, queueWait and budget, when set, replace the clock, the timer, the 5
@@ -196,6 +198,9 @@ func (l *RunAPILimits) giveBack() {
 	l.mu.Unlock()
 }
 
+// Used is the bytes of the memory budget taken now.
+func (l *RunAPILimits) Used() int64 { return l.used.Load() }
+
 // charge counts n more bytes, and returns false, counting nothing, when they would pass
 // the budget.
 func (l *RunAPILimits) charge(n int64) bool {
@@ -207,10 +212,33 @@ func (l *RunAPILimits) charge(n int64) bool {
 	return true
 }
 
-// chargedBody reads a POST artifacts body and charges [RunAPILimits] for each byte past
-// [runAPIFreeBytes] as it arrives, so a head with a Content-Length and no bytes costs
-// nothing. A read that would pass the budget ends in [errRunAPIBudget]. release gives
-// every byte back.
+// ChargeBody is r, the body of a request, charged to the memory budget as it is read
+// ([chargedBody]), and the func that ends the charge: the caller calls release once it
+// keeps the body no more, and a second call does nothing.
+func (l *RunAPILimits) ChargeBody(r io.Reader) (body io.Reader, release func()) {
+	b := &chargedBody{r: r, limits: l}
+	return b, b.release
+}
+
+// ChargeAnswer charges the memory budget for each byte past [runAPIFreeBytes] of an
+// answer of n bytes, and reports whether they had room, with the func that ends the
+// charge: the caller calls release once, after the write of the answer. With no room it
+// counts nothing.
+func (l *RunAPILimits) ChargeAnswer(n int) (release func(), ok bool) {
+	over := int64(n) - runAPIFreeBytes
+	if over <= 0 {
+		return func() {}, true
+	}
+	if !l.charge(over) {
+		return nil, false
+	}
+	return func() { l.used.Add(-over) }, true
+}
+
+// chargedBody reads a POST artifacts body or a host call's and charges [RunAPILimits] for
+// each byte past [runAPIFreeBytes] as it arrives, so a head with a Content-Length and no
+// bytes costs nothing. A read that would pass the budget ends in [ErrRunAPIBudget].
+// release ends the charge.
 type chargedBody struct {
 	r       io.Reader
 	limits  *RunAPILimits
@@ -223,15 +251,18 @@ func (b *chargedBody) Read(p []byte) (int, error) {
 	b.read += int64(n)
 	if over := b.read - runAPIFreeBytes - b.charged; over > 0 {
 		if !b.limits.charge(over) {
-			return 0, errRunAPIBudget
+			return 0, ErrRunAPIBudget
 		}
 		b.charged += over
 	}
 	return n, err
 }
 
-// release gives back what the body was charged.
-func (b *chargedBody) release() { b.limits.used.Add(-b.charged) }
+// release ends the body's charge. A second call does nothing.
+func (b *chargedBody) release() {
+	b.limits.used.Add(-b.charged)
+	b.charged = 0
+}
 
 // RunAPI is the route of one run's proxy to Qory Apiary's run API: the run's id, how a
 // request is sent, signed, and the gateway's limits. The gateway makes one for a run
@@ -542,9 +573,11 @@ func tooLarge(limit int64) string { return link.RunAPITooLarge(limit) }
 
 // The texts of the gateway's limits that have no number to fill in.
 const (
-	runAPIWaiting    = "Retry in 1 second: the run has a run API request waiting for the gateway's rate limit, the most it may have."
-	runAPIBudgetFull = "Retry in 1 second: the gateway keeps at most 512 MiB of run API bodies and answers, past the first 1 MiB of each, and this body would pass that."
-	runAPIAnswerFull = "Retry in 1 second: the gateway keeps at most 512 MiB of run API bodies and answers, past the first 1 MiB of each, and this answer would pass that. The gateway dropped the answer."
+	runAPIWaiting = "Retry in 1 second: the run has a run API request waiting for the gateway's rate limit, the most it may have."
+	// RunAPIBudgetFull and RunAPIAnswerFull are the texts of a 429 of the memory budget, of
+	// a body and of an answer, the route's and a host call's.
+	RunAPIBudgetFull = "Retry in 1 second: the gateway keeps at most 512 MiB of run API bodies and answers, past the first 1 MiB of each, and this body would pass that."
+	RunAPIAnswerFull = "Retry in 1 second: the gateway keeps at most 512 MiB of run API bodies and answers, past the first 1 MiB of each, and this answer would pass that. The gateway dropped the answer."
 )
 
 // runAPIBusy is the text of a request that found the gateway's limits full.
@@ -634,9 +667,9 @@ func (p *Proxy) serveRunAPI(w http.ResponseWriter, r *http.Request, a *RunAPI) {
 		rc.SetReadDeadline(deadline)
 		src := io.Reader(http.MaxBytesReader(w, r.Body, t.limit))
 		if t.artifacts {
-			charged := &chargedBody{r: src, limits: a.Limits}
-			defer charged.release()
-			src = charged
+			var release func()
+			src, release = a.Limits.ChargeBody(src)
+			defer release()
 		}
 		var err error
 		body, err = io.ReadAll(src)
@@ -645,12 +678,12 @@ func (p *Proxy) serveRunAPI(w http.ResponseWriter, r *http.Request, a *RunAPI) {
 		case errors.As(err, &over):
 			refuse(http.StatusRequestEntityTooLarge, "payload_too_large", tooLarge(t.limit))
 			return
-		case errors.Is(err, errRunAPIBudget):
+		case errors.Is(err, ErrRunAPIBudget):
 			// The connection cannot serve another request: part of the body is unread. The
 			// server reads the rest when the handler returns, up to this deadline.
 			w.Header().Set("Connection", "close")
 			rc.SetReadDeadline(time.Now())
-			refuse(http.StatusTooManyRequests, "rate_limited", runAPIBudgetFull)
+			refuse(http.StatusTooManyRequests, "rate_limited", RunAPIBudgetFull)
 			return
 		case err != nil:
 			// The connection cannot serve another request: part of the body is unread.
@@ -692,15 +725,14 @@ func (p *Proxy) serveRunAPI(w http.ResponseWriter, r *http.Request, a *RunAPI) {
 		return
 	}
 	d.Outcome, d.Status = Connected, ans.Status
-	if over := int64(len(ans.Body)) - runAPIFreeBytes; over > 0 {
-		if !a.Limits.charge(over) {
-			d.Status = http.StatusTooManyRequests
-			p.observe(d)
-			runAPIError(w, http.StatusTooManyRequests, "rate_limited", runAPIAnswerFull)
-			return
-		}
-		defer a.Limits.used.Add(-over)
+	release, ok := a.Limits.ChargeAnswer(len(ans.Body))
+	if !ok {
+		d.Status = http.StatusTooManyRequests
+		p.observe(d)
+		runAPIError(w, http.StatusTooManyRequests, "rate_limited", RunAPIAnswerFull)
+		return
 	}
+	defer release()
 	for _, name := range runAPIHeaders {
 		for _, v := range ans.Header.Values(name) {
 			w.Header().Add(name, v)

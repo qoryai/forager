@@ -86,7 +86,7 @@
       "required": ["name", "group", "format", "endpoint", "auth"],
       "properties": {
         "name": {"description": "The credential's name, unique among the entries.", "$ref": "#/$defs/credential_name"},
-        "group": {"description": "The key group of the key, the id of its provider as the server sets it, such as anthropic: the API credentials with one group value are one key group, whose keys the gateway sets one at a time, with a rotation, cooldowns and a stop apart from every other group's (README §Credentials, Several model keys). The keys of one group have one format, endpoint and auth, the case of a header ignored; keys of one group that differ in any of them are run_configuration_invalid. A host credential has no group.", "$ref": "#/$defs/credential_name"},
+        "group": {"description": "The key group of the key, the public id of the provider of the run's model choice (its con_ id): the API credentials with one group value are one key group, whose keys the gateway sets one at a time, with a rotation, cooldowns and a stop apart from every other group's (README §Credentials, Several model keys). The keys of one group have one format, endpoint and auth, the case of a header ignored; keys of one group that differ in any of them are run_configuration_invalid. A host credential has no group.", "$ref": "#/$defs/credential_name"},
         "format": {"description": "The API format the endpoint serves.", "$ref": "api-format.schema.json"},
         "endpoint": {"description": "The base URL of the model API, such as https://api.deepseek.com/anthropic.", "$ref": "#/$defs/endpoint"},
         "auth": {"description": "How the value is set on a request, a scheme from the closed set.", "$ref": "auth.schema.json"},

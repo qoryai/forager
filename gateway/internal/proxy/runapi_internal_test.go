@@ -837,7 +837,7 @@ func TestTheAnswerBudget(t *testing.T) {
 	}
 	b, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusTooManyRequests || !strings.Contains(string(b), runAPIAnswerFull[:40]) || len(b) > 1024 {
+	if resp.StatusCode != http.StatusTooManyRequests || !strings.Contains(string(b), RunAPIAnswerFull[:40]) || len(b) > 1024 {
 		t.Errorf("%d, %d bytes", resp.StatusCode, len(b))
 	}
 	dropped.mu.Lock()

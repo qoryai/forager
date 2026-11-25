@@ -15,10 +15,10 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// TestTheLinkSendsTheHostCalls pins both host calls on the local link: a POST of
-// <run.url>/<run_id>/next-session or /pushed-commits with Content-Type:
-// application/json and the body as given, whose 2xx body comes back as it came, empty
-// for a 204; a coded refusal is an accesskey.Refusal with its from; a 410 is the end of
+// TestTheLinkSendsTheHostCalls pins the host calls on the local link: a POST of
+// <run.url>/<run_id>/next-session, /pushed-commits or /findings with Content-Type:
+// application/json and the body as given, or a GET of /findings with neither, whose 2xx
+// body comes back as it came, empty for a 204; a coded refusal is an accesskey.Refusal with its from; a 410 is the end of
 // the run; a 502 with a code is a refusal too; a 503 with no body is a StatusError; an
 // answer over the most is an error; and
 // a run id of another form or a run URL off the link sends nothing.
@@ -34,7 +34,12 @@ func TestTheLinkSendsTheHostCalls(t *testing.T) {
 	k, _ := newLink(t, g)
 	ctx := context.Background()
 	runURL := server.LocalOrigin + "/v1/run-configuration"
-	calls := map[string]func(context.Context, string, string, []byte) ([]byte, error){"/next-session": k.NextSession, "/pushed-commits": k.PushedCommits}
+	calls := map[string]func(context.Context, string, string, []byte) ([]byte, error){
+		"POST /next-session": k.NextSession, "POST /pushed-commits": k.PushedCommits, "POST /findings": k.PostFindings,
+		"GET /findings": func(ctx context.Context, runURL, runID string, _ []byte) ([]byte, error) {
+			return k.Findings(ctx, runURL, runID)
+		},
+	}
 	for path, call := range calls {
 		seen = nil
 		reply = func(w http.ResponseWriter, _ *http.Request) { answer(w, 200, `{"next":"end"}`) }
@@ -42,7 +47,12 @@ func TestTheLinkSendsTheHostCalls(t *testing.T) {
 		if err != nil || string(b) != `{"next":"end"}` {
 			t.Errorf("%s: %q, %v", path, b, err)
 		}
-		if want := (got{"POST /v1/run-configuration/" + runID + path, "application/json", "not json"}); len(seen) != 1 || seen[0] != want {
+		method, under, _ := strings.Cut(path, " ")
+		want := got{method + " /v1/run-configuration/" + runID + under, "application/json", "not json"}
+		if method == http.MethodGet {
+			want.contentType, want.body = "", ""
+		}
+		if len(seen) != 1 || seen[0] != want {
 			t.Errorf("%s: the gateway got %+v, want %+v", path, seen, want)
 		}
 		reply = func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
@@ -84,11 +94,37 @@ func TestTheLinkSendsTheHostCalls(t *testing.T) {
 			t.Errorf("%s: the gateway got %+v", path, seen)
 		}
 	}
-	reply = func(w http.ResponseWriter, _ *http.Request) {
-		answer(w, 200, strings.Repeat(" ", server.MaxPushedCommitsAnswer+1))
+	for path, most := range map[string]int{"POST /pushed-commits": server.MaxPushedCommitsAnswer, "POST /findings": 64 << 10, "GET /findings": 16 << 20} {
+		for _, over := range []int{0, 1} {
+			reply = func(w http.ResponseWriter, _ *http.Request) { answer(w, 200, strings.Repeat(" ", most+over)) }
+			b, err := calls[path](ctx, runURL, runID, []byte(`{}`))
+			if over == 0 && (err != nil || len(b) != most) || over == 1 && (err == nil || !strings.HasPrefix(err.Error(), "Check the gateway and the control plane: ")) {
+				t.Errorf("%s: an answer of %d bytes: %d bytes, %v", path, most+over, len(b), err)
+			}
+		}
 	}
-	if _, err := k.PushedCommits(ctx, runURL, runID, []byte(`{}`)); err == nil || !strings.HasPrefix(err.Error(), "Check the gateway and the control plane: ") {
-		t.Errorf("an answer over the most: %v", err)
+}
+
+// TestAPostFindingsBodyOverItsLimitIsNotSent pins the link's check of a POST findings
+// body: 8 MiB is sent, and a longer one is an error that starts with the fix, with nothing
+// sent.
+func TestAPostFindingsBodyOverItsLimitIsNotSent(t *testing.T) {
+	var sent []int
+	g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, _ := io.Copy(io.Discard, r.Body)
+		sent = append(sent, int(n))
+		answer(w, 200, `{}`)
+	}))
+	k, _ := newLink(t, g)
+	runURL := server.LocalOrigin + "/v1/run-configuration"
+	for _, n := range []int{8 << 20, 8<<20 + 1, 8<<20 + 2, 64 << 20} {
+		_, err := k.PostFindings(context.Background(), runURL, runID, make([]byte, n))
+		if n == 8<<20 && err != nil || n > 8<<20 && (err == nil || err.Error() != "Send a POST findings body of at most 8 MiB (8,388,608 bytes): this one is longer, so nothing was sent.") {
+			t.Errorf("a body of %d bytes: %v", n, err)
+		}
+	}
+	if len(sent) != 1 || sent[0] != 8<<20 {
+		t.Errorf("the gateway got bodies of %v bytes", sent)
 	}
 }
 
@@ -143,5 +179,11 @@ func TestAHostCallWaitsPastTheLinksWait(t *testing.T) {
 	}
 	if _, err := k.PushedCommits(context.Background(), runURL, runID, []byte(`{}`)); err != nil {
 		t.Errorf("pushed-commits: %v", err)
+	}
+	if _, err := k.Findings(context.Background(), runURL, runID); err != nil {
+		t.Errorf("GET findings: %v", err)
+	}
+	if _, err := k.PostFindings(context.Background(), runURL, runID, []byte(`{}`)); err != nil {
+		t.Errorf("POST findings: %v", err)
 	}
 }

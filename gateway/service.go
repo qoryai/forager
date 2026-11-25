@@ -419,7 +419,7 @@ func bearer(values []string) (string, bool) {
 // it other than a 2xx with Connection: close, once the rest of its body is read within
 // [refusedWait], and the connection closed unanswered when it is not. The connection is
 // admitted once the gateway sends a 2xx to a run request, a reload, a transcript
-// request, a join, a host call (next-session or pushed-commits) or a batch
+// request, a join, a host call (next-session, pushed-commits or findings) or a batch
 // ([forLiveRun]), after the answer; a run request's counts in all only from the start
 // of its open ([Gateway.openRun]). Every answer is signed under the gateway's access key
 // ([signedWriter]).
@@ -489,7 +489,7 @@ func forLiveRun(r *http.Request) bool {
 		return true
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, remoteRunPath+"/"):
 		return true
-	case r.Method == http.MethodPost && (isJoin(r.URL.Path, remoteRunPath) || isHostCall(r.URL.Path, remoteRunPath)):
+	case (r.Method == http.MethodPost && isJoin(r.URL.Path, remoteRunPath)) || isHostCall(r.Method, r.URL.Path, remoteRunPath):
 		return true
 	}
 	return false
@@ -510,29 +510,35 @@ func readRefused(w http.ResponseWriter, r *http.Request, body *capturedBody) boo
 }
 
 // maxBound is the most of a request's body a bound answer's signature covers: a batch's
-// bound, and one byte more, which no request the gateway answers in full carries.
+// bound, and one byte more, which no request the gateway answers in full carries. A host
+// call whose body may be longer, POST findings, has its limit and one byte more.
 const maxBound = maxBatch + 1
 
-// capturedBody is a request's body on a bound connection, hashed as it is read into
-// the third line of its answer's signature ([link.AnswerRequestHash]), so the signature
-// covers it and nothing of it is kept: the body of a POST, nothing of a GET.
+// capturedBody is a request's body on a bound connection, hashed as it is read, up to
+// bound, into the third line of its answer's signature ([link.AnswerRequestHash]), so the
+// signature covers it and nothing of it is kept: the body of a POST, nothing of a GET.
 type capturedBody struct {
-	r    io.ReadCloser
-	post bool
-	h    hash.Hash
-	n    int
+	r     io.ReadCloser
+	post  bool
+	bound int
+	h     hash.Hash
+	n     int
 }
 
 // newCapturedBody is r's body on the connection whose exporter value is ekm, hashed
 // with r's method and target.
 func newCapturedBody(r *http.Request, ekm []byte) *capturedBody {
-	return &capturedBody{r: r.Body, post: r.Method == http.MethodPost, h: link.AnswerRequestHash(ekm, r.Method, r.RequestURI)}
+	bound := maxBound
+	if _, c, ok := hostCallOf(r.Method, r.URL.Path, remoteRunPath); ok {
+		bound = max(bound, c.request+1)
+	}
+	return &capturedBody{r: r.Body, post: r.Method == http.MethodPost, bound: bound, h: link.AnswerRequestHash(ekm, r.Method, r.RequestURI)}
 }
 
 func (b *capturedBody) Read(p []byte) (int, error) {
 	n, err := b.r.Read(p)
-	if b.post && b.n < maxBound {
-		k := min(n, maxBound-b.n)
+	if b.post && b.n < b.bound {
+		k := min(n, b.bound-b.n)
 		b.h.Write(p[:k])
 		b.n += k
 	}
@@ -543,12 +549,12 @@ func (b *capturedBody) Read(p []byte) (int, error) {
 func (b *capturedBody) Close() error { return b.r.Close() }
 
 // answerRequest is the third line of the answer's signature over the request's body,
-// up to [maxBound]: what the handler read, then the rest; empty for a GET. It reports
-// whether it read the body whole, to its end or to [maxBound].
+// up to its bound: what the handler read, then the rest; empty for a GET. It reports
+// whether it read the body whole, to its end or to its bound.
 func (b *capturedBody) answerRequest() (string, bool) {
 	whole := true
-	if b.post && b.n < maxBound {
-		_, err := io.Copy(io.Discard, io.LimitReader(b, int64(maxBound-b.n)))
+	if b.post && b.n < b.bound {
+		_, err := io.Copy(io.Discard, io.LimitReader(b, int64(b.bound-b.n)))
 		whole = err == nil
 	}
 	return hex.EncodeToString(b.h.Sum(nil)), whole
@@ -588,6 +594,9 @@ func (s *signedWriter) Write(b []byte) (int, error) {
 	}
 	return s.buf.Write(b)
 }
+
+// Unwrap is the connection's writer, so an [http.ResponseController] sets its deadlines.
+func (s *signedWriter) Unwrap() http.ResponseWriter { return s.w }
 
 // Flush signs and writes the answer held, once.
 func (s *signedWriter) Flush() { s.flush(false) }

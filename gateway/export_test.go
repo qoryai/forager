@@ -72,6 +72,16 @@ func SetHostCallTime(c *Config, d time.Duration) { c.hostCallTime = d }
 // HostCallTimeOf is the most time one host call has at the server under c.
 func HostCallTimeOf(c Config) time.Duration { return c.hostCallTimeOf() }
 
+// UsedRunAPI is the bytes of g's memory budget of run API bodies and answers taken now. It
+// charges nothing, so it takes no room of a request that charges meanwhile.
+func UsedRunAPI(g *Gateway) int64 { return g.runAPILimits.Used() }
+
+// ChargeRunAPI takes n bytes of g's memory budget of run API bodies and answers, and
+// reports whether they had room, with the func that ends the charge.
+func ChargeRunAPI(g *Gateway, n int) (release func(), ok bool) {
+	return g.runAPILimits.ChargeAnswer(n + 1<<20)
+}
+
 // SetRelayInFlight makes n the most requests the relay has with the server at once.
 func SetRelayInFlight(c *Config, n int) { c.relayInFlight = n }
 

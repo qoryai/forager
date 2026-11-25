@@ -2,9 +2,9 @@
 # version. It sets no install_required, so a session of Codex may start it from the
 # run's image, with no installed folder (SessionSpec.RuntimeInstall); with one, the
 # session reports the version installed there. The rules were written against the JSON
-# lines codex exec --json prints on its standard output, as recorded on runs of 0.167.2
-# for decision 521, and the source of codex-rs at 17a0e6f63f (2026-10-21). The fixtures
-# beside this file are written by hand in that shape.
+# lines codex exec --json prints on its standard output, as recorded on runs of 0.167.2,
+# and the source of codex-rs at 17a0e6f63f (2026-10-21). The fixtures beside this file
+# are written by hand in that shape.
 #
 # Codex has no hook a forwarder can be installed as, so the standard output is the only
 # source. codex exec --json prints thread.started first, with the thread's id, the id

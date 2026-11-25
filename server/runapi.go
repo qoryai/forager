@@ -84,12 +84,13 @@ func (c *Client) RunAPI(ctx context.Context, runURL, runID, method, path string,
 	return c.runAPI(ctx, runURL, runID, method, path, body, file, MaxRunAPIAnswer, MaxRunAPIAnswer)
 }
 
-// HostCall sends one host call of the link, a POST of body to the run endpoint runURL
-// followed by a slash, the run's id and path, as [Client.RunAPI] sends a POST, and reads
-// at most most bytes of a 200's body and at most [MaxRefusal] of any other: a longer
-// body is [ErrRunAPITooLarge], and no byte past the bound is read.
-func (c *Client) HostCall(ctx context.Context, runURL, runID, path string, body []byte, most int) (*RunAPIAnswer, error) {
-	return c.runAPI(ctx, runURL, runID, http.MethodPost, path, body, false, most, MaxRefusal)
+// HostCall sends one host call of the link, a method request with body, nil for a GET,
+// to the run endpoint runURL followed by a slash, the run's id and path, as
+// [Client.RunAPI] sends one, and reads at most most bytes of a 200's body and at most
+// [MaxRefusal] of any other: a longer body is [ErrRunAPITooLarge], and no byte past the
+// bound is read.
+func (c *Client) HostCall(ctx context.Context, runURL, runID, method, path string, body []byte, most int) (*RunAPIAnswer, error) {
+	return c.runAPI(ctx, runURL, runID, method, path, body, false, most, MaxRefusal)
 }
 
 // runAPI is [Client.RunAPI] with the bounds of the bytes it reads of a body other than

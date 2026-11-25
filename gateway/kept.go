@@ -48,13 +48,13 @@ const (
 	unauthorizedTemp = unauthorizedFile + ".tmp"
 )
 
-// The CA key sweep (the user's "545 (a)", 2026-11-13): a gateway removes the files kept
-// to reopen a run, the CA files and the run request among them, of a run record it does
-// not hold whose events.jsonl has not changed for more than caSweepAge, at Start and
-// every caSweepEvery. A live run's session sends a heartbeat at least every
-// server.MaxInterval, 300 s, so its record changes at least 3 times within caSweepAge;
-// a record that does not is of a run that no session reopens, and its key goes from the
-// disk. A record with a final event is never reopened, so its key goes too.
+// The CA key sweep: a gateway removes the files kept to reopen a run, the CA files and
+// the run request among them, of a run record it does not hold whose events.jsonl has
+// not changed for more than caSweepAge, at Start and every caSweepEvery. A live run's
+// session sends a heartbeat at least every server.MaxInterval, 300 s, so its record
+// changes at least 3 times within caSweepAge; a record that does not is of a run that no
+// session reopens, and its key goes from the disk. A record with a final event is never
+// reopened, so its key goes too.
 const (
 	caSweepEvery = 10 * time.Minute
 	caSweepAge   = 15 * time.Minute

@@ -750,13 +750,13 @@ func TestAKeyOfNoLiveRunAdmitsNothing(t *testing.T) {
 	pending(0)
 }
 
-// TestRunsThatOpenKeepTheLiveRunsOfTheirAddress pins decision 547 (a): a run request
-// counts against the bounds of its source and its /48 only until its open starts, its
-// run key passed. While Qory Apiary restarts, answering every attach 503, 64 runs open
-// from 127.0.0.1, each waiting on its connection; they count in all, not against their
-// source. A live run from the same address keeps its proxy connection and its
-// connection of the link, and opens 16 more proxy connections and 3 batches beside the
-// 64; once Qory Apiary is back, each of the 64 runs opens.
+// TestRunsThatOpenKeepTheLiveRunsOfTheirAddress pins that a run request counts against
+// the bounds of its source and its /48 only until its open starts, its run key passed.
+// While Qory Apiary restarts, answering every attach 503, 64 runs open from 127.0.0.1,
+// each waiting on its connection; they count in all, not against their source. A live
+// run from the same address keeps its proxy connection and its connection of the link,
+// and opens 16 more proxy connections and 3 batches beside the 64; once Qory Apiary is
+// back, each of the 64 runs opens.
 func TestRunsThatOpenKeepTheLiveRunsOfTheirAddress(t *testing.T) {
 	o := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "ok") }))
 	t.Cleanup(o.Close)
