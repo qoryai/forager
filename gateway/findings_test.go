@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -302,8 +303,10 @@ type budgetAt struct {
 	// and a run id's findings on it, with the headers every request of the first run has.
 	dial   func() net.Conn
 	lineTo func(method, runID string) string
-	// end ends run at the gateway.
-	end func(run int)
+	// end ends run at the gateway, and holdReports keeps each line the gateway reports
+	// from its end until the returned func is called.
+	end         func(run int)
+	holdReports func() (unhold func())
 }
 
 // head is the request line of the first run's findings call of method, with the headers
@@ -394,6 +397,10 @@ func budgetWays(t *testing.T, cfg func(*gateway.Config), try func(t *testing.T, 
 			return line(method, "/v1/run-configuration/"+runID+"/findings") + "Host: localhost\r\nContent-Type: application/json\r\n"
 		}
 		at.end = func(run int) { h.post(exited(at.runs[run])) }
+		at.holdReports = func() func() {
+			h.mu.Lock()
+			return h.mu.Unlock
+		}
 		try(t, at)
 	})
 	t.Run("the one address", func(t *testing.T) {
@@ -432,6 +439,10 @@ func budgetWays(t *testing.T, cfg func(*gateway.Config), try func(t *testing.T, 
 			if got := at.sendTo(run, http.MethodPost, "/qory-link/events", body); got.status != http.StatusAccepted {
 				t.Fatalf("the run's end: %d %s", got.status, got.body)
 			}
+		}
+		at.holdReports = func() func() {
+			r.mu.Lock()
+			return r.mu.Unlock
 		}
 		try(t, at)
 	})
@@ -646,12 +657,27 @@ func TestAFindingsCallOfAGETWithAnUnsentBodyEnds(t *testing.T) {
 	}
 }
 
-// TestAFindingsBodyCountsUntilTheCallEnds pins that a POST findings body is free while the
-// caller does not read the answer, and that the run's next POST passes once the time of a
-// host call passed.
+// TestAFindingsBodyCountsUntilTheCallEnds pins that a POST findings body is free once the
+// call to the control plane ends: while the gateway writes the line of a failed call to its
+// log, and while the caller does not read the answer; and that the run's next POST passes
+// once the time of a host call passed.
 func TestAFindingsBodyCountsUntilTheCallEnds(t *testing.T) {
 	const wait = 6 * time.Second
 	budgetWays(t, func(c *gateway.Config) { gateway.SetHostCallTime(c, wait) }, func(t *testing.T, at *budgetAt) {
+		at.f.answers(func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			at.f.sign(w, r, http.StatusGone, []byte(`{"error":"run_closed"}`))
+		})
+		unhold := sync.OnceFunc(at.holdReports())
+		defer unhold()
+		failed := make(chan int, 1)
+		go func() { failed <- at.send(0, http.MethodPost, "/findings", make([]byte, 3<<20)).status }()
+		eventually(t, "the POST at the control plane", func() bool { return len(at.f.requests()) == 1 })
+		freeWithin(t, "while the gateway reports the failed call", at.g, wait/2)
+		unhold()
+		if status := <-failed; status != http.StatusBadGateway {
+			t.Errorf("a POST whose call failed: %d", status)
+		}
+
 		sent := make(chan struct{}, 1)
 		at.f.answers(func(w http.ResponseWriter, r *http.Request, _ []byte) {
 			at.f.sign(w, r, http.StatusOK, bytes.Repeat([]byte(" "), 64<<10))
