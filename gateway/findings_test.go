@@ -702,8 +702,8 @@ func TestAFindingsGETWithABodyIsRefused(t *testing.T) {
 			}
 			if !at.remote {
 				// net/http reads up to 256 KiB of a body left unread after the handler. Behind
-				// a separate gateway, that read has the 10 seconds the gateway gives the body
-				// of a refused request, so the check runs on the local link alone.
+				// a separate gateway, that read ends at [refusedWait], 10 seconds, so the check
+				// runs on the local link alone.
 				conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 				_, err = io.Copy(io.Discard, br)
 				if ne, ok := err.(net.Error); ok && ne.Timeout() {

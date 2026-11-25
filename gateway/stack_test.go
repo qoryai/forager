@@ -601,9 +601,9 @@ func TestTheRunConfigurationsStackHostsOpenNoPrivateAddress(t *testing.T) {
 // TestTheNodesPolicyDecidesEachStackHost pins the rule that the node's policy only takes
 // stack hosts away, host by host: a host of the run configuration's stack_hosts passes
 // when the node's policy allows it under its mode and has no path rule for it, which the
-// stack proxy cannot check; otherwise it gets the body of the check it fails, and the
-// report line ends with that check's cause. A *. entry is decided
-// for each host below it, so a deny entry under it takes away that host alone.
+// stack proxy cannot check; otherwise a request to it gets the body of the check it
+// fails, and the report line ends with that check's cause. A *. entry is decided for each
+// host below it, so a deny entry under it takes away that host alone.
 // gateway.stack_hosts is not decided by the node's policy. Hosts under .invalid resolve
 // nowhere, so a host that passes gets the stack proxy's 502 for its dial.
 func TestTheNodesPolicyDecidesEachStackHost(t *testing.T) {
