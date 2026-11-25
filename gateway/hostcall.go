@@ -135,10 +135,10 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 	drop := func() { io.Copy(io.Discard, io.LimitReader(r.Body, int64(c.request)+1)) }
 	// The local link's server sets no deadline for a body, and closes the connection after
 	// a refusal that leaves 256 KiB or more of the body unread; the one address has both
-	// ([Gateway.edgeHandler]). net/http clears the deadline once the body ends. A body of
-	// no bytes gets none: net/http's background read, which ends the request's context when
-	// the caller hangs up, then starts before the handler, and the deadline would end that
-	// read, and with it the call, at the time of a host call.
+	// ([Gateway.edgeHandler]). net/http clears the deadline at the end of the body. A POST
+	// of 0 bytes gets no deadline. For such a body, net/http starts its background read
+	// before the handler runs. A deadline would end that read, cancel the request, and the
+	// caller would get no answer instead of the 502.
 	local := c.single && c.method == http.MethodPost && !s.remote
 	if local && r.ContentLength != 0 {
 		rc.SetReadDeadline(time.Now().Add(g.cfg.hostCallTimeOf()))
@@ -222,8 +222,9 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 	a, err := g.client.HostCall(ctx, conf.Run.URL, runID, c.method, c.path, body, c.answer)
 	release()
 	if c.single {
-		// A caller that stops reading the answer ends its write at the deadline. Where the
-		// handler writes the answer, the answer's count and the run's place end with it.
+		// A caller that stops reading the answer ends its write at the deadline. On the
+		// local link, and for a GET findings 200 on the one address, the answer's count and
+		// the run's place end when that write ends.
 		// net/http reads a body that came with a GET before it writes the answer's head, so
 		// that read has the deadline too. net/http clears both before the connection's next
 		// request.

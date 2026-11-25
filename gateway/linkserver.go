@@ -331,9 +331,9 @@ func (g *Gateway) linkRunOf(s *side, w http.ResponseWriter, r *http.Request, run
 	return lr
 }
 
-// runIDRefusal writes the refusal of the link request r when runID is the id of no run
-// that r is for, and is nil otherwise: on the one address of any id but the run key's, on
-// the local link of the id of no run here. It opens and reopens no run.
+// runIDRefusal returns the func that writes the refusal of the link request r when runID
+// is the id of no run that r is for, or nil: on the one address of any id but the run
+// key's, on the local link of the id of no run here. It opens and reopens no run.
 func (g *Gateway) runIDRefusal(s *side, r *http.Request, runID string) func(http.ResponseWriter) {
 	if s.remote {
 		p, _ := runKeyOf(r.Context())
@@ -349,10 +349,11 @@ func (g *Gateway) runIDRefusal(s *side, r *http.Request, runID string) func(http
 	return invalid
 }
 
-// bodyRefusal writes the refusal of the link request r of the run runID that the gateway
-// knows before it reads r's body, and is nil otherwise: that of [Gateway.runIDRefusal];
-// on the one address that of [Gateway.heldNow]; and the 410 of a run that ended at the
-// gateway. A run that the one address may reopen gets its answer after the reopen.
+// bodyRefusal returns the func that writes the refusal of the link request r of the run
+// runID that the gateway knows before it reads r's body, or nil: that of
+// [Gateway.runIDRefusal]; on the one address that of [Gateway.heldNow]; and the 410 of a
+// run that ended at the gateway. A run that the one address may reopen gets its answer
+// after the reopen.
 func (g *Gateway) bodyRefusal(s *side, r *http.Request, runID string) func(http.ResponseWriter) {
 	if refusal := g.runIDRefusal(s, r, runID); refusal != nil {
 		return refusal
