@@ -223,8 +223,8 @@ func (g *Gateway) handler(s *side) http.Handler {
 		case r.Method == http.MethodGet && isTranscript(r.URL.Path, runs):
 			id, _ := transcriptRun(r.URL.Path, runs)
 			g.transcript(s, w, r, id)
-		case r.Method == http.MethodPost && isHostCall(r.URL.Path, runs):
-			id, c, _ := hostCallOf(r.URL.Path, runs)
+		case isHostCall(r.Method, r.URL.Path, runs):
+			id, c, _ := hostCallOf(r.Method, r.URL.Path, runs)
 			g.serveHostCall(s, w, r, id, c)
 		case strings.HasPrefix(r.URL.Path, runs+"/") && r.Method == http.MethodGet:
 			g.reload(s, w, r, strings.TrimPrefix(r.URL.Path, runs+"/"))

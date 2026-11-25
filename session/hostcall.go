@@ -6,8 +6,9 @@ import (
 	"fmt"
 )
 
-// ErrRunClosed is the error that the errors of [Run.NextSession] and [Run.PushedCommits]
-// wrap once [Run.Close] began or the gateway closed the run; the call sent nothing.
+// ErrRunClosed is the error that the errors of [Run.NextSession], [Run.PushedCommits],
+// [Run.Findings] and [Run.PostFindings] wrap once [Run.Close] began or the gateway closed
+// the run; the call sent nothing.
 // Test for it with [errors.Is]. A 410 from the gateway, for a run that ended there
 // before or during the call, is not ErrRunClosed: [server.Ended] reports it.
 var ErrRunClosed = errors.New("this run is closed")
@@ -56,6 +57,45 @@ func (r *Run) PushedCommits(ctx context.Context, body []byte) ([]byte, error) {
 		return nil, err
 	}
 	return r.link.PushedCommits(ctx, r.disc.Run.URL, r.id, body)
+}
+
+// Findings sends the run's GET findings request and returns the answer's body, the
+// findings of the run's work item, as Qory Apiary returns them. Forager does not read it:
+// the gateway sends Qory Apiary GET <run.url>/<run_id>/findings, signed with its access
+// key. The answer is at most 16 MiB ([server.MaxFindingsAnswer]).
+//
+// It goes over the gateway's link, as [Run.NextSession] does, and returns an error in
+// the cases [Run.NextSession] lists: one that wraps [ErrRunClosed] once [Run.Close]
+// began or the gateway closed the run. A 429 rate_limited from the gateway is an answer
+// past the gateway's memory budget: send the request again.
+func (r *Run) Findings(ctx context.Context) ([]byte, error) {
+	if err := r.hostCallAllowed("GET findings"); err != nil {
+		return nil, err
+	}
+	return r.link.Findings(ctx, r.disc.Run.URL, r.id)
+}
+
+// PostFindings sends the run's POST findings request with body, the JSON document Qory
+// Apiary's run API takes at POST /v1/runs/<run_id>/findings, and returns the answer's
+// body. Forager reads neither: the gateway forwards body to Qory Apiary, POST
+// <run.url>/<run_id>/findings, signed with its access key. body is at most 8 MiB
+// ([server.MaxPostFindingsRequest]), and the answer at most 64 KiB.
+//
+// It goes over the gateway's link, as [Run.NextSession] does, and returns an error in
+// the cases [Run.NextSession] lists, and for a 429 rate_limited from the gateway, a body
+// past the gateway's memory budget.
+//
+// Qory Apiary has no key for a repeated request: a second request with the same raises
+// makes new findings. Nothing was sent for an error that wraps [ErrRunClosed], for a run
+// with no control plane, and for a refusal From the gateway with Status 400, 404, 413 or
+// 429. Qory Apiary may have stored the findings of every other call that returned an
+// error, a 503 with no code among them: read them with [Run.Findings] before you send
+// the request again.
+func (r *Run) PostFindings(ctx context.Context, body []byte) ([]byte, error) {
+	if err := r.hostCallAllowed("POST findings"); err != nil {
+		return nil, err
+	}
+	return r.link.PostFindings(ctx, r.disc.Run.URL, r.id, body)
 }
 
 // hostCallAllowed is the error of the host call name in a run that is closed or has no

@@ -23,26 +23,59 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// The tests of this file pin the link's two host calls, next-session and
-// pushed-commits: the gateway forwards each body unread to the control plane, signed
-// with its access key, and returns the answer unread; and no container reaches either.
+// The tests of this file pin the link's host calls, next-session, pushed-commits, GET
+// findings and POST findings: the gateway forwards each body unread to the control plane,
+// signed with its access key, and returns the answer unread; and no container reaches
+// any. findings_test.go pins what the findings calls alone have.
 
-// hostCallPaths are the paths of the two host calls under a run.
-var hostCallPaths = []string{"/next-session", "/pushed-commits"}
+// hostCalls are the host calls, each its method and its path under a run.
+var hostCalls = []string{"POST /next-session", "POST /pushed-commits", "GET /findings", "POST /findings"}
+
+// postLimits are the host calls with a body, and the largest body of each.
+var postLimits = map[string]int{"POST /next-session": server.MaxNextSessionRequest, "POST /pushed-commits": server.MaxPushedCommitsRequest, "POST /findings": server.MaxPostFindingsRequest}
+
+// methodPath is the method and the path of a host call of hostCalls.
+func methodPath(call string) (method, path string) {
+	method, path, _ = strings.Cut(call, " ")
+	return method, path
+}
+
+// callName is the name of a host call of hostCalls in texts.
+func callName(call string) string {
+	if strings.HasSuffix(call, " /findings") {
+		return strings.ReplaceAll(call, "/", "")
+	}
+	_, path := methodPath(call)
+	return path[1:]
+}
 
 // notJSON is a body no schema takes: the gateway reads none, so it arrives as sent.
 var notJSON = []byte("not json \x00\xff {\"session\":1}")
 
-// hostCall sends the host call path of the run on the local link of the harness, with
-// body, and returns the answer's body and the error.
-func hostCall(h *harness, runID, path string, body []byte) ([]byte, error) {
+// hostCall sends the host call of the run on the local link of the harness, with body
+// for a POST, and returns the answer's body and the error.
+func hostCall(h *harness, runID, call string, body []byte) ([]byte, error) {
+	return hostCallOn(context.Background(), h, runID, call, body)
+}
+
+// hostCallOn is hostCall with ctx.
+func hostCallOn(ctx context.Context, h *harness, runID, call string, body []byte) ([]byte, error) {
 	l := h.linkOf(runID)
 	runURL := server.LocalOrigin + "/v1/run-configuration"
-	if path == "/next-session" {
-		return l.NextSession(context.Background(), runURL, runID, body)
+	switch call {
+	case "POST /next-session":
+		return l.NextSession(ctx, runURL, runID, body)
+	case "POST /pushed-commits":
+		return l.PushedCommits(ctx, runURL, runID, body)
+	case "GET /findings":
+		return l.Findings(ctx, runURL, runID)
 	}
-	return l.PushedCommits(context.Background(), runURL, runID, body)
+	return l.PostFindings(ctx, runURL, runID, body)
 }
+
+// findingsDoc is the fake Qory Apiary's answer to a GET findings request: no JSON, since
+// the gateway reads none of it.
+var findingsDoc = []byte("{\"findings\":[ not json \x00\xff")
 
 // noContentTo sends a signed 204 with no body for r, as Qory Apiary does for a
 // pushed-commits request.
@@ -52,12 +85,20 @@ func (f *fakeRunAPI) noContentTo(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveHostCalls makes f return a signed 200 that echoes the body back for a
-// next-session request, and a signed 204 for a pushed-commits request.
+// next-session and a POST findings request, a signed 204 for a pushed-commits request,
+// and a signed 200 of findingsDoc for a GET findings request. An echo longer than 4 KiB
+// is left out.
 func serveHostCalls(f *fakeRunAPI) {
 	f.answers(func(w http.ResponseWriter, r *http.Request, body []byte) {
-		if strings.HasSuffix(r.URL.Path, "/pushed-commits") {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/pushed-commits"):
 			f.noContentTo(w, r)
 			return
+		case r.Method == http.MethodGet:
+			f.sign(w, r, http.StatusOK, findingsDoc)
+			return
+		case len(body) > 4<<10:
+			body = nil
 		}
 		f.sign(w, r, http.StatusOK, append([]byte(`{"next":"end","echo":`), append(slices.Clone(body), '}')...))
 	})
@@ -75,51 +116,59 @@ func refusalWith(t *testing.T, what string, err error, status int, code, from st
 	return ref
 }
 
-// TestAHostCallForwardsItsBodyUnread pins both host calls on the local link: the
-// control plane gets a signed POST of <run.url>/<run_id> and the call's path with the
-// body byte for byte and Content-Type: application/json, and the caller gets the
-// answer byte for byte, a 204's empty body among them; a body of exactly the limit
-// passes; and a call while a session is joined passes too.
+// TestAHostCallForwardsItsBodyUnread pins every host call on the local link: the
+// control plane gets a signed request of the call's method to <run.url>/<run_id> and the
+// call's path, a POST with the body byte for byte and Content-Type: application/json, a
+// GET with neither, and the caller gets the answer byte for byte, a 204's empty body
+// among them; a body of exactly the limit passes; and a call while a session is joined
+// passes too.
 func TestAHostCallForwardsItsBodyUnread(t *testing.T) {
 	o := openRunAPIRun(t)
 	serveHostCalls(o.f)
-	for _, path := range hostCallPaths {
+	for _, call := range hostCalls {
+		method, path := methodPath(call)
 		o.f.reset()
-		got, err := hostCall(o.h, o.a.RunID, path, notJSON)
+		got, err := hostCall(o.h, o.a.RunID, call, notJSON)
 		if err != nil {
-			t.Fatalf("%s: %v", path, err)
+			t.Fatalf("%s: %v", call, err)
 		}
-		if path == "/next-session" && string(got) != `{"next":"end","echo":`+string(notJSON)+`}` {
-			t.Errorf("%s: the answer %q", path, got)
+		want := `{"next":"end","echo":` + string(notJSON) + `}`
+		sent, contentType := notJSON, "application/json"
+		switch call {
+		case "POST /pushed-commits":
+			want = ""
+		case "GET /findings":
+			want, sent, contentType = string(findingsDoc), nil, ""
 		}
-		if path == "/pushed-commits" && len(got) != 0 {
-			t.Errorf("%s: the answer of a 204 %q", path, got)
+		if string(got) != want {
+			t.Errorf("%s: the answer %q, want %q", call, got, want)
 		}
 		seen := o.f.requests()
 		if len(seen) != 1 {
-			t.Fatalf("%s: the control plane got %d requests", path, len(seen))
+			t.Fatalf("%s: the control plane got %d requests", call, len(seen))
 		}
 		s := seen[0]
-		if s.method != http.MethodPost || s.target != "/v1/runs/"+o.a.RunID+path || !bytes.Equal(s.body, notJSON) ||
-			s.header.Get("Content-Type") != "application/json" || s.header.Get(server.HeaderSignature) == "" {
-			t.Errorf("%s: the control plane got %s %s %q %v", path, s.method, s.target, s.body, s.header)
+		if s.method != method || s.target != "/v1/runs/"+o.a.RunID+path || !bytes.Equal(s.body, sent) ||
+			s.header.Get("Content-Type") != contentType || s.header.Get(server.HeaderSignature) == "" ||
+			(s.header.Get(server.HeaderTimestamp) != "") != (method == http.MethodGet) {
+			t.Errorf("%s: the control plane got %s %s %q %v", call, s.method, s.target, s.body, s.header)
 		}
 	}
 
 	o.f.reset()
-	for path, limit := range map[string]int{"/next-session": server.MaxNextSessionRequest, "/pushed-commits": server.MaxPushedCommitsRequest} {
-		if _, err := hostCall(o.h, o.a.RunID, path, bytes.Repeat([]byte("a"), limit)); err != nil {
-			t.Errorf("%s: a body of the limit: %v", path, err)
+	for call, limit := range postLimits {
+		if _, err := hostCall(o.h, o.a.RunID, call, bytes.Repeat([]byte("a"), limit)); err != nil {
+			t.Errorf("%s: a body of the limit: %v", call, err)
 		}
 	}
-	if n := len(o.f.requests()); n != 2 {
-		t.Errorf("the control plane got %d bodies of the limit, want 2", n)
+	if n := len(o.f.requests()); n != len(postLimits) {
+		t.Errorf("the control plane got %d bodies of the limit, want %d", n, len(postLimits))
 	}
 
 	o.h.joined(o.a.RunID)
-	for _, path := range hostCallPaths {
-		if _, err := hostCall(o.h, o.a.RunID, path, []byte(`{}`)); err != nil {
-			t.Errorf("%s during a join: %v", path, err)
+	for _, call := range hostCalls {
+		if _, err := hostCall(o.h, o.a.RunID, call, []byte(`{}`)); err != nil {
+			t.Errorf("%s during a join: %v", call, err)
 		}
 	}
 }
@@ -130,13 +179,14 @@ func TestAHostCallForwardsItsBodyUnread(t *testing.T) {
 // signed answer with no code, a 200 that is no JSON and a 200 over the answer's limit
 // are 502 control_plane_unavailable from the gateway, with one line in its log. The
 // text of a signed 410, a 200 that is no JSON and an answer over the limit starts with
-// "Check the control plane", and that of the others with "Send the … request again".
+// "Check the control plane", and that of the others with "Send the … request again", or
+// for POST findings, which a caller does not send again unread, with "Read the findings".
 func TestAHostCallPassesOnTheControlPlanesRefusal(t *testing.T) {
 	o := openRunAPIRun(t)
 	answer := func(a func(w http.ResponseWriter, r *http.Request)) {
 		o.f.answers(func(w http.ResponseWriter, r *http.Request, _ []byte) { a(w, r) })
 	}
-	for _, path := range hostCallPaths {
+	for _, path := range hostCalls {
 		answer(func(w http.ResponseWriter, r *http.Request) {
 			o.f.sign(w, r, http.StatusConflict, []byte(`{"error":"run_ended","names":["repositories[0].commit","","repositories[0].commit"],"message":"Start a new run to record pushed commits."}`))
 		})
@@ -153,6 +203,14 @@ func TestAHostCallPassesOnTheControlPlanesRefusal(t *testing.T) {
 		refusalWith(t, path+": a signed 503", err, http.StatusServiceUnavailable, "unavailable", accesskey.FromApiary)
 		if _, ok := server.Ended(err); ok {
 			t.Errorf("%s: a signed 503 ends the run", path)
+		}
+		answer(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Retry-After", "7")
+			o.f.sign(w, r, http.StatusTooManyRequests, []byte(`{"error":"rate_limited"}`))
+		})
+		_, err = hostCall(o.h, o.a.RunID, path, []byte(`{}`))
+		if ref := refusalWith(t, path+": a signed 429", err, http.StatusTooManyRequests, "rate_limited", accesskey.FromApiary); ref != nil && ref.RetryAfter != 7*time.Second {
+			t.Errorf("%s: a signed 429: RetryAfter %v", path, ref.RetryAfter)
 		}
 	}
 	// A refusal whose names and message contain a run key reaches the caller with a
@@ -174,6 +232,7 @@ func TestAHostCallPassesOnTheControlPlanesRefusal(t *testing.T) {
 		send  func(w http.ResponseWriter, r *http.Request)
 		check bool
 	}{
+
 		"an unsigned 409": {func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusConflict)
 			io.WriteString(w, `{"error":"run_ended"}`)
@@ -194,23 +253,30 @@ func TestAHostCallPassesOnTheControlPlanesRefusal(t *testing.T) {
 			o.f.sign(w, r, http.StatusOK, bytes.Repeat([]byte(" "), server.MaxNextSessionAnswer+1))
 		}, true},
 	}
-	for what, u := range unavailable {
-		answer(u.send)
-		_, err := hostCall(o.h, o.a.RunID, "/next-session", []byte(`{}`))
-		refusalWith(t, what, err, http.StatusBadGateway, "control_plane_unavailable", accesskey.FromGateway)
-		if _, ok := server.Ended(err); ok {
-			t.Errorf("%s ends the run", what)
+	for _, call := range []string{"POST /next-session", "POST /findings"} {
+		name := callName(call)
+		for what, u := range unavailable {
+			what = call + ": " + what
+			answer(u.send)
+			_, err := hostCall(o.h, o.a.RunID, call, []byte(`{}`))
+			refusalWith(t, what, err, http.StatusBadGateway, "control_plane_unavailable", accesskey.FromGateway)
+			if _, ok := server.Ended(err); ok {
+				t.Errorf("%s ends the run", what)
+			}
+			want := "Send the " + name + " request again: "
+			switch {
+			case u.check:
+				want = "Check the control plane: "
+			case call == "POST /findings":
+				want = "Read the findings before you send the POST findings request again.\n"
+			}
+			if err == nil || !strings.HasPrefix(err.Error(), want) {
+				t.Errorf("%s: the text %q, want it to start with %q", what, err, want)
+			}
 		}
-		want := "Send the next-session request again: "
-		if u.check {
-			want = "Check the control plane: "
+		if n := len(o.h.reportsWith("the " + name + " request got no valid answer")); n != len(unavailable) {
+			t.Errorf("%s: %d lines in the gateway's log, want %d", call, n, len(unavailable))
 		}
-		if err == nil || !strings.HasPrefix(err.Error(), want) {
-			t.Errorf("%s: the text %q, want it to start with %q", what, err, want)
-		}
-	}
-	if n := len(o.h.reportsWith("the next-session request got no valid answer")); n != len(unavailable) {
-		t.Errorf("%d lines in the gateway's log, want %d", n, len(unavailable))
 	}
 }
 
@@ -251,7 +317,7 @@ func TestAHostCallPassesOnRetryAfter(t *testing.T) {
 				}
 				o.f.sign(w, r, refused.status, []byte(`{"error":"`+refused.code+`","message":"Send it again."}`))
 			})
-			_, err := hostCall(o.h, o.a.RunID, "/next-session", []byte(`{}`))
+			_, err := hostCall(o.h, o.a.RunID, "POST /next-session", []byte(`{}`))
 			if ref := refusalWith(t, what, err, refused.status, refused.code, accesskey.FromApiary); ref != nil && ref.RetryAfter != c.want {
 				t.Errorf("%s: RetryAfter %v, want %v", what, ref.RetryAfter, c.want)
 			}
@@ -284,25 +350,28 @@ func TestAHostCallPassesOnRetryAfter(t *testing.T) {
 func TestTheGatewaysRefusalsOfAHostCall(t *testing.T) {
 	o := openRunAPIRun(t)
 	serveHostCalls(o.f)
-	for path, limit := range map[string]int{"/next-session": server.MaxNextSessionRequest, "/pushed-commits": server.MaxPushedCommitsRequest} {
-		_, err := hostCall(o.h, o.a.RunID, path, bytes.Repeat([]byte("a"), limit+1))
-		if ref := refusalWith(t, path+": over the limit", err, http.StatusRequestEntityTooLarge, "payload_too_large", accesskey.FromGateway); ref != nil && !startsWithAFix.MatchString(err.Error()) {
-			t.Errorf("%s: the text %q starts with no fix", path, err)
+	for call, limit := range postLimits {
+		_, path := methodPath(call)
+		_, err := hostCall(o.h, o.a.RunID, call, bytes.Repeat([]byte("a"), limit+1))
+		if ref := refusalWith(t, call+": over the limit", err, http.StatusRequestEntityTooLarge, "payload_too_large", accesskey.FromGateway); ref != nil && !startsWithAFix.MatchString(err.Error()) {
+			t.Errorf("%s: the text %q starts with no fix", call, err)
 		}
 		status, body := rawPost(t, raw(t, o.h.g.LocalLink()), "/v1/run-configuration/"+o.a.RunID+path, "text/plain", "{}")
 		if status != http.StatusBadRequest || !strings.Contains(body, `"error":"invalid_request"`) || !strings.Contains(body, `"from":"gateway"`) ||
-			!strings.Contains(body, `"message":"Send the `+path[1:]+` request with Content-Type: application/json: the gateway sent nothing.\nContent-Type: text/plain"`) {
-			t.Errorf("%s: text/plain: %d %s", path, status, body)
+			!strings.Contains(body, `"message":"Send the `+callName(call)+` request with Content-Type: application/json: the gateway sent nothing.\nContent-Type: text/plain"`) {
+			t.Errorf("%s: text/plain: %d %s", call, status, body)
 		}
-		_, err = hostCall(o.h, event.NewRunID(), path, []byte(`{}`))
-		refusalWith(t, path+": a run id of no run", err, http.StatusBadRequest, server.CodeInvalidRequest, accesskey.FromGateway)
+	}
+	for _, call := range hostCalls {
+		_, err := hostCall(o.h, event.NewRunID(), call, []byte(`{}`))
+		refusalWith(t, call+": a run id of no run", err, http.StatusBadRequest, server.CodeInvalidRequest, accesskey.FromGateway)
 	}
 	if got := o.f.requests(); len(got) != 0 {
 		t.Errorf("the control plane got %+v", got)
 	}
 
 	o.h.post(exited(o.a.RunID))
-	for _, path := range hostCallPaths {
+	for _, path := range hostCalls {
 		_, err := hostCall(o.h, o.a.RunID, path, []byte(`{}`))
 		if _, ok := server.Ended(err); !ok {
 			t.Errorf("%s of a run that ended: %v", path, err)
@@ -314,18 +383,18 @@ func TestTheGatewaysRefusalsOfAHostCall(t *testing.T) {
 
 	h := start(t, gateway.Config{})
 	a := h.open(server.LinkRunRequest{})
-	for _, path := range hostCallPaths {
+	for _, path := range hostCalls {
 		_, err := hostCall(h, a.RunID, path, []byte(`{}`))
 		refusalWith(t, path+": no control plane", err, http.StatusNotFound, "not_found", accesskey.FromGateway)
 	}
 }
 
-// TestAHostCallBehindASeparateGateway pins both host calls on the one address: under
-// /qory-link/run-configuration/<run_id>/ with the run key, the body forwarded unread,
+// TestAHostCallBehindASeparateGateway pins the host calls on the one address: under
+// /qory-link/run-configuration/<run_id>/ with the run key, the bodies forwarded unread,
 // the answer signed whole, a 204 with no body among them; a refusal of the control
 // plane's passes from apiary, with the retry_after of its Retry-After in the signed
 // body; another run's key is 400 run_key_invalid; and a body over the limit 413; the
-// control plane gets nothing for either refusal of the gateway.
+// control plane gets nothing for either of those refusals of the gateway.
 func TestAHostCallBehindASeparateGateway(t *testing.T) {
 	c := gatewayControl(t)
 	f := runAPIOf(c)
@@ -341,8 +410,15 @@ func TestAHostCallBehindASeparateGateway(t *testing.T) {
 	if got := r.do(t, e.key, http.MethodPost, base+"/pushed-commits", notJSON); got.status != http.StatusNoContent || len(got.body) != 0 {
 		t.Errorf("pushed-commits: %d %q", got.status, got.body)
 	}
+	if got := r.do(t, e.key, http.MethodGet, base+"/findings", nil); got.status != http.StatusOK || !bytes.Equal(got.body, findingsDoc) || got.header.Get("Content-Type") != "application/json" {
+		t.Errorf("GET findings: %d %q", got.status, got.body)
+	}
+	if got := r.do(t, e.key, http.MethodPost, base+"/findings", notJSON); got.status != http.StatusOK || string(got.body) != `{"next":"end","echo":`+string(notJSON)+`}` {
+		t.Errorf("POST findings: %d %q", got.status, got.body)
+	}
 	seen := f.requests()
-	if len(seen) != 2 || !bytes.Equal(seen[0].body, notJSON) || !bytes.Equal(seen[1].body, notJSON) ||
+	if len(seen) != 4 || seen[2].method != http.MethodGet || len(seen[2].body) != 0 || seen[3].method != http.MethodPost || !bytes.Equal(seen[3].body, notJSON) ||
+		seen[2].target != "/v1/runs/"+e.a.RunID+"/findings" || seen[3].target != seen[2].target || !bytes.Equal(seen[0].body, notJSON) || !bytes.Equal(seen[1].body, notJSON) ||
 		seen[0].target != "/v1/runs/"+e.a.RunID+"/next-session" || seen[1].target != "/v1/runs/"+e.a.RunID+"/pushed-commits" {
 		t.Errorf("the control plane got %+v", seen)
 	}
@@ -369,12 +445,16 @@ func TestAHostCallBehindASeparateGateway(t *testing.T) {
 	r.mu.Lock()
 	r.keys = append(r.keys, other)
 	r.mu.Unlock()
-	for _, path := range hostCallPaths {
-		if got := r.do(t, other, http.MethodPost, base+path, []byte(`{}`)); got.status != http.StatusBadRequest || got.refusal()["error"] != "run_key_invalid" {
-			t.Errorf("%s with another run's key: %d %s", path, got.status, got.body)
+	for _, call := range hostCalls {
+		method, path := methodPath(call)
+		if got := r.do(t, other, method, base+path, []byte(`{}`)); got.status != http.StatusBadRequest || got.refusal()["error"] != "run_key_invalid" {
+			t.Errorf("%s with another run's key: %d %s", call, got.status, got.body)
 		}
-		if got := r.do(t, e.key, http.MethodPost, base+path, bytes.Repeat([]byte("a"), server.MaxPushedCommitsRequest+1)); got.status != http.StatusRequestEntityTooLarge || got.refusal()["error"] != "payload_too_large" {
-			t.Errorf("%s over the limit: %d %s", path, got.status, got.body)
+		if method == http.MethodGet {
+			continue
+		}
+		if got := r.do(t, e.key, http.MethodPost, base+path, bytes.Repeat([]byte("a"), postLimits[call]+1)); got.status != http.StatusRequestEntityTooLarge || got.refusal()["error"] != "payload_too_large" {
+			t.Errorf("%s over the limit: %d %s", call, got.status, got.body)
 		}
 	}
 	if got := f.requests(); len(got) != 0 {
@@ -382,13 +462,23 @@ func TestAHostCallBehindASeparateGateway(t *testing.T) {
 	}
 }
 
+// sendTo sends a request of method with a JSON body to u with c.
+func sendTo(c *http.Client, method, u string) (*http.Response, error) {
+	req, err := http.NewRequest(method, u, strings.NewReader(`{}`))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return c.Do(req)
+}
+
 // enforceNothing is a node policy that allows no host: the proxy refuses every host
 // but the run API's.
 var enforceNothing = &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{}}}
 
 // TestNoContainerReachesAHostCall pins that a program in a container, whose one way out
-// is the run's proxy through the wall's relay, reaches neither host call on one
-// machine: the run API route returns 404 for both paths; the proxy returns 400 for a
+// is the run's proxy through the wall's relay, reaches no host call on one
+// machine: the run API route returns 404 for every path; the proxy returns 400 for a
 // request with no host and 403 for the link's paths at localhost, which the policy does
 // not allow; and a connection to the proxy's address with no relay preamble is closed
 // with no answer. The control plane gets nothing.
@@ -400,15 +490,16 @@ func TestNoContainerReachesAHostCall(t *testing.T) {
 	o.f.reset()
 	body := []byte(`{"session":1,"state":"succeeded","reason":null}`)
 	head := "Content-Type: application/json\r\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n"
-	for _, path := range hostCallPaths {
-		resp, b, _ := o.send(line(http.MethodPost, o.url(path))+head, body)
+	for _, call := range hostCalls {
+		method, path := methodPath(call)
+		resp, b, _ := o.send(line(method, o.url(path))+head, body)
 		routeError(t, path+" through the run API route", resp, b, http.StatusNotFound, "not_found")
 
 		target := "/v1/run-configuration/" + o.a.RunID + path
-		if resp, b, _ = o.send(line(http.MethodPost, target)+head, body); resp.StatusCode != http.StatusBadRequest {
+		if resp, b, _ = o.send(line(method, target)+head, body); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s with no host through the proxy: %d %s", path, resp.StatusCode, b)
 		}
-		if resp, b, _ = o.send(line(http.MethodPost, server.LocalOrigin+target)+head, body); resp.StatusCode != http.StatusForbidden {
+		if resp, b, _ = o.send(line(method, server.LocalOrigin+target)+head, body); resp.StatusCode != http.StatusForbidden {
 			t.Errorf("%s at localhost through the proxy: %d %s", path, resp.StatusCode, b)
 		}
 
@@ -416,7 +507,7 @@ func TestNoContainerReachesAHostCall(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		io.WriteString(conn, line(http.MethodPost, target)+"Host: localhost\r\n"+head+"\r\n"+string(body))
+		io.WriteString(conn, line(method, target)+"Host: localhost\r\n"+head+"\r\n"+string(body))
 		if resp, err := http.ReadResponse(bufio.NewReader(conn), nil); err == nil {
 			t.Errorf("%s to the proxy's address with no preamble: %d", path, resp.StatusCode)
 		}
@@ -430,7 +521,7 @@ func TestNoContainerReachesAHostCall(t *testing.T) {
 // TestNoContainerReachesAHostCallBehindASeparateGateway pins the same behind a
 // separate gateway. The run's proxy connections arrive on the one address with the
 // relay's preamble and the run key, as the session's forwarder opens them for a
-// container, and never reach the link: the run API route returns 404 for both paths, a
+// container, and never reach the link: the run API route returns 404 for every path, a
 // request with no host 400, and the link's paths at the one address 403. A link
 // request needs the run key as its bearer, which no container has: a bound request
 // without it is 400 run_key_invalid (TestEveryRequestCarriesAnAcceptedRunKey), and an
@@ -444,8 +535,9 @@ func TestNoContainerReachesAHostCallBehindASeparateGateway(t *testing.T) {
 	e := r.open(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{})
 	f.reset()
 	client := r.relay(t, e.key)
-	for _, path := range hostCallPaths {
-		resp, err := client.Post(link.RunAPIURL(e.a.RunID)+path, "application/json", strings.NewReader(`{}`))
+	for _, call := range hostCalls {
+		method, path := methodPath(call)
+		resp, err := sendTo(client, method, link.RunAPIURL(e.a.RunID)+path)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -455,7 +547,7 @@ func TestNoContainerReachesAHostCallBehindASeparateGateway(t *testing.T) {
 
 		linkPath := "/qory-link/run-configuration/" + e.a.RunID + path
 		for _, u := range []string{"http://gateway.example:8443" + linkPath, "http://" + r.g.Addr() + linkPath} {
-			resp, err := client.Post(u, "application/json", strings.NewReader(`{}`))
+			resp, err := sendTo(client, method, u)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -470,7 +562,7 @@ func TestNoContainerReachesAHostCallBehindASeparateGateway(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		io.WriteString(bc, link.RelayLine(e.key)+line(http.MethodPost, linkPath)+"Host: gateway.example:8443\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
+		io.WriteString(bc, link.RelayLine(e.key)+line(method, linkPath)+"Host: gateway.example:8443\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
 		resp, err = http.ReadResponse(bufio.NewReader(bc), nil)
 		if err != nil || resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s with no host through the proxy: %v %v", path, resp, err)
@@ -478,7 +570,7 @@ func TestNoContainerReachesAHostCallBehindASeparateGateway(t *testing.T) {
 		bc.Close()
 
 		tc := r.dialTLS(t)
-		req, _ := http.NewRequest(http.MethodPost, "https://gateway.example:8443"+linkPath, strings.NewReader(`{}`))
+		req, _ := http.NewRequest(method, "https://gateway.example:8443"+linkPath, strings.NewReader(`{}`))
 		req.Header.Set("Authorization", "Bearer "+e.key)
 		req.Header.Set("Content-Type", "application/json")
 		req.Write(tc)
@@ -516,18 +608,12 @@ func within(t *testing.T, what string, c <-chan struct{}, d time.Duration) {
 	}
 }
 
-// startHostCall sends the host call path of the run on the local link of h with ctx,
-// and returns a channel that gets its error.
-func startHostCall(ctx context.Context, h *harness, runID, path string) <-chan error {
+// startHostCall sends the host call of the run on the local link of h with ctx, and
+// returns a channel that gets its error.
+func startHostCall(ctx context.Context, h *harness, runID, call string) <-chan error {
 	done := make(chan error, 1)
 	go func() {
-		l, runURL := h.linkOf(runID), server.LocalOrigin+"/v1/run-configuration"
-		var err error
-		if path == "/next-session" {
-			_, err = l.NextSession(ctx, runURL, runID, []byte(`{}`))
-		} else {
-			_, err = l.PushedCommits(ctx, runURL, runID, []byte(`{}`))
-		}
+		_, err := hostCallOn(ctx, h, runID, call, []byte(`{}`))
 		done <- err
 	}()
 	return done
@@ -540,7 +626,7 @@ func TestAHostCallEndsWithItsCaller(t *testing.T) {
 	o := openRunAPIRun(t)
 	arrived, ended := holdHostCalls(o.f)
 	ctx, cancel := context.WithCancel(context.Background())
-	done := startHostCall(ctx, o.h, o.a.RunID, "/next-session")
+	done := startHostCall(ctx, o.h, o.a.RunID, "POST /next-session")
 	within(t, "the request at the control plane", arrived, 10*time.Second)
 	cancel()
 	within(t, "the control plane's request cancelled", ended, 5*time.Second)
@@ -550,7 +636,7 @@ func TestAHostCallEndsWithItsCaller(t *testing.T) {
 	// A later call that passes is the barrier: the gateway has written any line of the
 	// first one by then.
 	serveHostCalls(o.f)
-	if _, err := hostCall(o.h, o.a.RunID, "/next-session", []byte(`{}`)); err != nil {
+	if _, err := hostCall(o.h, o.a.RunID, "POST /next-session", []byte(`{}`)); err != nil {
 		t.Fatal(err)
 	}
 	if got := o.h.reportsWith("request got no valid answer"); len(got) != 0 {
@@ -567,7 +653,7 @@ func TestAHostCallOfARunThatEndsMeanwhile(t *testing.T) {
 	arrived, ended := holdHostCalls(o.f)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	done := startHostCall(ctx, o.h, o.a.RunID, "/pushed-commits")
+	done := startHostCall(ctx, o.h, o.a.RunID, "POST /pushed-commits")
 	within(t, "the request at the control plane", arrived, 10*time.Second)
 	o.h.post(exited(o.a.RunID))
 	err := <-done
@@ -580,7 +666,7 @@ func TestAHostCallOfARunThatEndsMeanwhile(t *testing.T) {
 	}
 }
 
-// TestAHostCallOfARunClosedPaused pins a run that its session closed paused: both host
+// TestAHostCallOfARunClosedPaused pins a run that its session closed paused: the host
 // calls get the run's 410 run_closed, and the control plane gets nothing.
 func TestAHostCallOfARunClosedPaused(t *testing.T) {
 	o := openRunAPIRun(t)
@@ -594,7 +680,7 @@ func TestAHostCallOfARunClosedPaused(t *testing.T) {
 	if d := o.h.post(exitedWith(o.a.RunID, paused)); !d.Accepted() {
 		t.Fatalf("the paused close: %+v", d)
 	}
-	for _, path := range hostCallPaths {
+	for _, path := range hostCalls {
 		_, err := hostCall(o.h, o.a.RunID, path, []byte(`{}`))
 		if end, ok := server.Ended(err); !ok || end.Code != accesskey.CodeRunClosed || end.From != accesskey.FromGateway {
 			t.Errorf("%s of a run closed paused: %v (%+v)", path, err, end)
@@ -620,7 +706,7 @@ func TestAHostCallHasItsTime(t *testing.T) {
 	o := startRunAPIRun(t, start(t, cfg), f)
 	_, ended := holdHostCalls(f)
 	begin := time.Now()
-	_, err := hostCall(o.h, o.a.RunID, "/next-session", []byte(`{}`))
+	_, err := hostCall(o.h, o.a.RunID, "POST /next-session", []byte(`{}`))
 	if took := time.Since(begin); took > 10*time.Second {
 		t.Errorf("the call took %s", took)
 	}
@@ -646,9 +732,12 @@ func TestAnAnswerOverTheLimitStopsTheRead(t *testing.T) {
 		path         string
 		status, size int
 	}{
-		{"/next-session", http.StatusOK, server.MaxNextSessionAnswer + 1},
-		{"/next-session", http.StatusCreated, server.MaxRefusal + 1},
-		{"/pushed-commits", http.StatusOK, server.MaxPushedCommitsAnswer + 1},
+		{"POST /next-session", http.StatusOK, server.MaxNextSessionAnswer + 1},
+		{"POST /next-session", http.StatusCreated, server.MaxRefusal + 1},
+		{"POST /pushed-commits", http.StatusOK, server.MaxPushedCommitsAnswer + 1},
+		{"GET /findings", http.StatusOK, server.MaxFindingsAnswer + 1},
+		{"GET /findings", http.StatusNonAuthoritativeInfo, server.MaxRefusal + 1},
+		{"POST /findings", http.StatusOK, server.MaxPostFindingsAnswer + 1},
 	} {
 		ended := make(chan struct{}, 1)
 		o.f.answers(func(w http.ResponseWriter, r *http.Request, _ []byte) {
@@ -745,14 +834,15 @@ func TestAHostCallAdmitsItsConnection(t *testing.T) {
 		}
 	}
 	pending(0)
-	for path, status := range map[string]int{"/next-session": http.StatusOK, "/pushed-commits": http.StatusNoContent} {
+	for call, status := range map[string]int{"POST /next-session": http.StatusOK, "POST /pushed-commits": http.StatusNoContent, "GET /findings": http.StatusOK, "POST /findings": http.StatusOK} {
+		method, path := methodPath(call)
 		b, err := r.bind(t, gatewayKeys())
 		if err != nil {
 			t.Fatal(err)
 		}
 		pending(1)
-		if a := b.do(t, e.key, http.MethodPost, "/qory-link/run-configuration/"+e.a.RunID+path, []byte(`{}`)); a.status != status || a.close {
-			t.Errorf("%s: %d close=%v %s", path, a.status, a.close, a.body)
+		if a := b.do(t, e.key, method, "/qory-link/run-configuration/"+e.a.RunID+path, []byte(`{}`)); a.status != status || a.close {
+			t.Errorf("%s: %d close=%v %s", call, a.status, a.close, a.body)
 		}
 		pending(0)
 		b.Close()
@@ -810,9 +900,10 @@ func TestTheGuardKeepsAHostCallFromAContainer(t *testing.T) {
 		o := &runAPIRun{t: t, h: h, f: f, a: a}
 		serveHostCalls(f)
 		f.reset()
-		for _, path := range hostCallPaths {
+		for _, call := range hostCalls {
+			method, path := methodPath(call)
 			target := server.LocalOrigin + "/v1/run-configuration/" + a.RunID + path
-			if resp, b, _ := o.send(line(http.MethodPost, target)+head, body); resp.StatusCode != http.StatusForbidden {
+			if resp, b, _ := o.send(line(method, target)+head, body); resp.StatusCode != http.StatusForbidden {
 				t.Errorf("%s at localhost through the proxy: %d %s", path, resp.StatusCode, b)
 			}
 		}
@@ -833,10 +924,11 @@ func TestTheGuardKeepsAHostCallFromAContainer(t *testing.T) {
 		f.reset()
 		client := r.relay(t, e.key)
 		_, port, _ := net.SplitHostPort(r.g.Addr())
-		for _, path := range hostCallPaths {
+		for _, call := range hostCalls {
+			method, path := methodPath(call)
 			linkPath := "/qory-link/run-configuration/" + e.a.RunID + path
 			for _, u := range []string{"http://127.0.0.1:" + port + linkPath, "http://localhost:" + port + linkPath} {
-				resp, err := client.Post(u, "application/json", bytes.NewReader(body))
+				resp, err := sendTo(client, method, u)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -862,9 +954,10 @@ func TestTheGuardKeepsAHostCallFromAContainer(t *testing.T) {
 func TestNoOtherProxyOfARunReachesAHostCall(t *testing.T) {
 	try := func(t *testing.T, c *http.Client, runID, runAPI string, f *fakeRunAPI) {
 		t.Helper()
-		for _, path := range hostCallPaths {
+		for _, call := range hostCalls {
+			method, path := methodPath(call)
 			for _, u := range []string{runAPI + path, server.LocalOrigin + "/v1/run-configuration/" + runID + path} {
-				resp, err := c.Post(u, "application/json", strings.NewReader(`{}`))
+				resp, err := sendTo(c, method, u)
 				if err != nil {
 					t.Fatal(err)
 				}

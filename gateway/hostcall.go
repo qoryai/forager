@@ -12,35 +12,45 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/gateway/internal/proxy"
 	"github.com/qoryai/forager/server"
 )
 
-// hostCall is one of the link's two host calls: requests that only the run's host work
+// hostCall is one of the link's host calls: requests that only the run's host work
 // sends, over the link, which no container reaches. The gateway forwards each to Qory
 // Apiary unread.
 type hostCall struct {
-	// name is the request's name in texts; path ends its path on the link and at Qory
-	// Apiary, under the run's id.
-	name, path string
-	// request and answer are the largest bodies of the request and of a 2xx answer.
+	// name is the request's name in texts; method is its method, and path ends its path on
+	// the link and at Qory Apiary, under the run's id.
+	name, method, path string
+	// request and answer are the largest bodies of the request, 0 for a GET, and of a 200
+	// answer.
 	request, answer int
+	// readFirst is true for a request that Qory Apiary stores again when it is repeated: a
+	// caller reads what is stored before it sends the request again.
+	readFirst bool
 }
 
 // The link's host calls.
 var (
-	nextSessionCall   = hostCall{name: "next-session", path: "/next-session", request: server.MaxNextSessionRequest, answer: server.MaxNextSessionAnswer}
-	pushedCommitsCall = hostCall{name: "pushed-commits", path: "/pushed-commits", request: server.MaxPushedCommitsRequest, answer: server.MaxPushedCommitsAnswer}
+	nextSessionCall   = hostCall{name: "next-session", method: http.MethodPost, path: "/next-session", request: server.MaxNextSessionRequest, answer: server.MaxNextSessionAnswer}
+	pushedCommitsCall = hostCall{name: "pushed-commits", method: http.MethodPost, path: "/pushed-commits", request: server.MaxPushedCommitsRequest, answer: server.MaxPushedCommitsAnswer}
+	findingsCall      = hostCall{name: "GET findings", method: http.MethodGet, path: "/findings", answer: server.MaxFindingsAnswer}
+	postFindingsCall  = hostCall{name: "POST findings", method: http.MethodPost, path: "/findings", request: server.MaxPostFindingsRequest, answer: server.MaxPostFindingsAnswer, readFirst: true}
 )
 
-// hostCallOf is the run id and the host call of a POST's path under runs,
-// <runs>/<run_id>/next-session or <runs>/<run_id>/pushed-commits, and whether the path
-// is one.
-func hostCallOf(path, runs string) (string, *hostCall, bool) {
+// hostCallOf is the run id and the host call of a request's method and path under runs,
+// POST <runs>/<run_id>/next-session, POST <runs>/<run_id>/pushed-commits, or GET or POST
+// <runs>/<run_id>/findings, and whether the request is one.
+func hostCallOf(method, path, runs string) (string, *hostCall, bool) {
 	rest, ok := strings.CutPrefix(path, runs+"/")
 	if !ok {
 		return "", nil, false
 	}
-	for _, c := range []*hostCall{&nextSessionCall, &pushedCommitsCall} {
+	for _, c := range []*hostCall{&nextSessionCall, &pushedCommitsCall, &findingsCall, &postFindingsCall} {
+		if c.method != method {
+			continue
+		}
 		if id, ok := strings.CutSuffix(rest, c.path); ok && id != "" && !strings.Contains(id, "/") {
 			return id, c, true
 		}
@@ -48,9 +58,9 @@ func hostCallOf(path, runs string) (string, *hostCall, bool) {
 	return "", nil, false
 }
 
-// isHostCall reports whether path is a host call's under runs.
-func isHostCall(path, runs string) bool {
-	_, _, ok := hostCallOf(path, runs)
+// isHostCall reports whether a request of method to path is a host call's under runs.
+func isHostCall(method, path, runs string) bool {
+	_, _, ok := hostCallOf(method, path, runs)
 	return ok
 }
 
@@ -70,8 +80,9 @@ func (c Config) hostCallTimeOf() time.Duration {
 }
 
 // serveHostCall serves the host call c of the run runID: it forwards the request's body
-// unread to Qory Apiary, POST <run.url>/<run_id> and c's path with its signed client,
-// once, within [server.HostCallTime], and writes what Qory Apiary returned.
+// unread to Qory Apiary, c's method to <run.url>/<run_id> and c's path with its signed
+// client, once, within [server.HostCallTime], and writes what Qory Apiary returned. The
+// body of a GET is not read, as a transcript request's.
 //
 //   - A 2xx passes with its status and body, a body with Content-Type:
 //     application/json alone. The body of a 200 is at most c.answer bytes, and that of
@@ -91,11 +102,28 @@ func (c Config) hostCallTimeOf() time.Duration {
 // with no body. A Content-Type other than application/json is 400 invalid_request, a
 // body over c.request bytes 413 payload_too_large, and a run with no control plane 404
 // not_found; Qory Apiary gets nothing for any of them.
+//
+// A request's body and an answer count past their first 1 MiB in the gateway's memory
+// budget ([proxy.RunAPILimits]): a body as it is read, before it is signed, to the end of
+// the request, and an answer once it is read and verified, to the end of its write,
+// within [server.HostCallTime]. One past the budget is 429 rate_limited: Qory Apiary gets
+// nothing of the body, and the gateway drops the answer.
 func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request, runID string, c *hostCall) {
 	// The body is read before the run is looked up, at most one byte over the limit: on
 	// the one address a reopen of the run may take 120 seconds, longer than the one
 	// address's time to read a request.
-	body, readErr := io.ReadAll(io.LimitReader(r.Body, int64(c.request)+1))
+	var body []byte
+	var readErr error
+	if c.method == http.MethodPost {
+		charged, release := g.runAPILimits.ChargeBody(io.LimitReader(r.Body, int64(c.request)+1))
+		defer release()
+		if body, readErr = io.ReadAll(charged); errors.Is(readErr, proxy.ErrRunAPIBudget) {
+			// The rest is read and dropped, so a caller that still writes it gets the answer.
+			body = nil
+			release()
+			io.Copy(io.Discard, io.LimitReader(r.Body, int64(c.request)))
+		}
+	}
 	lr := g.linkRunOf(s, w, r, runID)
 	if lr == nil {
 		return
@@ -108,13 +136,16 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 	}
 	lr.touch()
 	switch {
-	case !mediaType(r, server.LinkContentType):
+	case c.method == http.MethodPost && !mediaType(r, server.LinkContentType):
 		got := r.Header.Get("Content-Type")
 		if got == "" {
 			got = "(none)"
 		}
 		refuse(w, http.StatusBadRequest, server.CodeInvalidRequest, nil, accesskey.FromGateway,
 			fmt.Sprintf("Send the %s request with Content-Type: application/json: the gateway sent nothing.\nContent-Type: %s", c.name, accesskey.ShownValue(got, false)))
+		return
+	case errors.Is(readErr, proxy.ErrRunAPIBudget):
+		refuse(w, http.StatusTooManyRequests, accesskey.CodeRateLimited, nil, accesskey.FromGateway, proxy.RunAPIBudgetFull)
 		return
 	case readErr != nil:
 		refuse(w, http.StatusBadRequest, server.CodeInvalidRequest, nil, accesskey.FromGateway,
@@ -133,7 +164,7 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 	conf, _ := g.config()
 	ctx, cancel := lr.callContext(r, g.cfg.hostCallTimeOf())
 	defer cancel()
-	a, err := g.client.HostCall(ctx, conf.Run.URL, runID, c.path, body, c.answer)
+	a, err := g.client.HostCall(ctx, conf.Run.URL, runID, c.method, c.path, body, c.answer)
 	if err != nil {
 		end, ended := lr.gone()
 		switch {
@@ -157,9 +188,28 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 				g.hostCallFailed(w, runID, c, false, "the answer's Content-Type is not application/json")
 				return
 			}
+		}
+		release, ok := g.runAPILimits.ChargeAnswer(len(a.Body))
+		if !ok {
+			refuse(w, http.StatusTooManyRequests, accesskey.CodeRateLimited, nil, accesskey.FromGateway, proxy.RunAPIAnswerFull)
+			return
+		}
+		defer release()
+		if len(a.Body) > 0 {
 			w.Header().Set("Content-Type", "application/json")
 		}
+		if c.method == http.MethodGet {
+			// The one answer that counts: its write ends before the release, and a caller
+			// that stops reading ends it at the deadline.
+			rc := http.NewResponseController(w)
+			rc.SetWriteDeadline(time.Now().Add(g.cfg.hostCallTimeOf()))
+			defer rc.SetWriteDeadline(time.Time{})
+			defer rc.Flush()
+		}
 		w.WriteHeader(a.Status)
+		// shortcut: the copy of the answer that the one address signs does not count, so an
+		// answer there takes twice its count until it is written; count the copy when a
+		// gateway's memory needs it.
 		w.Write(a.Body)
 		return
 	}
@@ -183,12 +233,15 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 
 // hostCallFailed writes one line of the failure why of the host call c of the run
 // runID to the gateway's log, and writes 502 control_plane_unavailable: with again, a
-// text to send the request again, and without it, for an answer that comes back the
-// same, a text to check the control plane.
+// text to send the request again, for c.readFirst after a read of what is stored, and
+// without it, for an answer that comes back the same, a text to check the control plane.
 func (g *Gateway) hostCallFailed(w http.ResponseWriter, runID string, c *hostCall, again bool, why string) {
 	g.report(fmt.Sprintf("run %s: If this repeats, check the control plane: the %s request got no valid answer: %s", runID, c.name, why))
 	text := fmt.Sprintf("Check the control plane: the gateway does not pass on its answer to the %s request.\n%s", c.name, why)
-	if again {
+	switch {
+	case again && c.readFirst:
+		text = fmt.Sprintf("Read the findings before you send the %s request again.\nThe gateway got no valid answer from the control plane.", c.name)
+	case again:
 		text = fmt.Sprintf("Send the %s request again: the gateway got no valid answer from the control plane.", c.name)
 	}
 	refuse(w, http.StatusBadGateway, codeControlPlaneUnavailable, nil, accesskey.FromGateway, text)
