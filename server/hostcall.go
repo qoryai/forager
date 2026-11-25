@@ -103,7 +103,7 @@ func (k *Link) PostFindings(ctx context.Context, runURL, runID string, body []by
 	if len(body) > MaxPostFindingsRequest {
 		// The signature of a separate gateway's answer covers one byte more at most, so an
 		// answer to a longer body fails the link's check.
-		return nil, fmt.Errorf("Send a POST findings body of at most %d bytes: this one is longer, so nothing was sent.", MaxPostFindingsRequest)
+		return nil, errors.New("Send a POST findings body of at most 8 MiB (8,388,608 bytes): this one is longer, so nothing was sent.")
 	}
 	return k.hostCall(ctx, "the POST findings request", runURL, runID, http.MethodPost, "/findings", body, MaxPostFindingsAnswer)
 }

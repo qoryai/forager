@@ -119,7 +119,7 @@ func TestAPostFindingsBodyOverItsLimitIsNotSent(t *testing.T) {
 	runURL := server.LocalOrigin + "/v1/run-configuration"
 	for _, n := range []int{8 << 20, 8<<20 + 1, 8<<20 + 2, 64 << 20} {
 		_, err := k.PostFindings(context.Background(), runURL, runID, make([]byte, n))
-		if n == 8<<20 && err != nil || n > 8<<20 && (err == nil || err.Error() != "Send a POST findings body of at most 8388608 bytes: this one is longer, so nothing was sent.") {
+		if n == 8<<20 && err != nil || n > 8<<20 && (err == nil || err.Error() != "Send a POST findings body of at most 8 MiB (8,388,608 bytes): this one is longer, so nothing was sent.") {
 			t.Errorf("a body of %d bytes: %v", n, err)
 		}
 	}
