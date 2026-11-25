@@ -479,6 +479,27 @@ func TestAFindingsBodyCountsBeforeItIsSigned(t *testing.T) {
 	})
 }
 
+// TestAFindingsBodyIsBounded pins that the gateway reads at most one byte over the limit
+// of a POST findings: a body with a longer Content-Length is 413 while its caller still
+// holds the rest back, nothing is sent, and its count ends with the answer.
+func TestAFindingsBodyIsBounded(t *testing.T) {
+	budgetWays(t, func(*gateway.Config) {}, func(t *testing.T, at *budgetAt) {
+		conn := at.dial()
+		defer conn.Close()
+		fmt.Fprintf(conn, "%sContent-Length: %d\r\n\r\n", at.head(http.MethodPost), 64<<20)
+		conn.Write(make([]byte, server.MaxPostFindingsRequest+1))
+		conn.SetReadDeadline(time.Now().Add(20 * time.Second))
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil || resp.StatusCode != http.StatusRequestEntityTooLarge {
+			t.Errorf("a body held back past the limit: %v %v", resp, err)
+		}
+		if seen := at.f.requests(); len(seen) != 0 {
+			t.Errorf("the control plane got %d requests", len(seen))
+		}
+		isFree(t, "after the answer", at.g)
+	})
+}
+
 // TestAFindingsAnswerCountsUntilItIsWritten pins the count of a GET findings answer: it
 // counts while the caller has not read it, on the one address too, where the gateway
 // signs it whole before it writes it, and is free once the caller hangs up, and once the
