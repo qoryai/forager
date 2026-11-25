@@ -458,6 +458,20 @@ func TestAFindingsBodyCountsBeforeItIsSigned(t *testing.T) {
 			t.Errorf("a body past the budget's room: %v %v", resp, err)
 		}
 		conn.Close()
+
+		// A caller that writes its whole body before it reads gets the 429 too.
+		conn = at.dial()
+		defer conn.Close()
+		conn.SetDeadline(time.Now().Add(20 * time.Second))
+		fmt.Fprintf(conn, "%sContent-Length: %d\r\n\r\n", at.head(http.MethodPost), server.MaxPostFindingsRequest)
+		if _, err := conn.Write(make([]byte, server.MaxPostFindingsRequest)); err != nil {
+			t.Errorf("the write of a body past the budget's room: %v", err)
+		}
+		resp, err = http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil || resp.StatusCode != http.StatusTooManyRequests {
+			t.Errorf("a whole body past the budget's room: %v %v", resp, err)
+		}
+		conn.Close()
 		release()
 		if seen := at.f.requests(); len(seen) != 0 {
 			t.Errorf("the control plane got %d requests", len(seen))
