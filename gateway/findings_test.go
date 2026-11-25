@@ -910,6 +910,9 @@ func TestAFindingsBodyOnTheLocalLinkHasItsTime(t *testing.T) {
 			t.Errorf("a call past the time of its body: %d", status)
 		}
 
+		// A read deadline on a POST of 0 bytes would end the request with no answer. The
+		// deadline and the call's timer both end after wait, so this check fails for such
+		// a deadline only when the deadline ends before the timer.
 		arrived, _ := holdHostCalls(at.f)
 		empty := at.dial()
 		defer empty.Close()
@@ -932,8 +935,13 @@ func TestAFindingsBodyOfARunThatEndedCountsNothing(t *testing.T) {
 		conn := at.dial()
 		defer conn.Close()
 		at.write(conn, at.head(http.MethodPost), 8<<20, 8<<20-1)
-		if used := gateway.UsedRunAPI(at.g); used != 0 {
-			t.Errorf("%d bytes of a body of a run that ended count", used)
+		// The write can end before the gateway reads a byte: Linux's loopback buffers can
+		// take the whole body. The check therefore goes on for 500 ms.
+		for end := time.Now().Add(500 * time.Millisecond); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
+			if used := gateway.UsedRunAPI(at.g); used != 0 {
+				t.Errorf("%d bytes of a body of a run that ended count", used)
+				break
+			}
 		}
 		conn.Write(make([]byte, 1))
 		if status := statusOn(t, conn); status != http.StatusGone {
