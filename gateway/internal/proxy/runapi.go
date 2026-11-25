@@ -198,6 +198,9 @@ func (l *RunAPILimits) giveBack() {
 	l.mu.Unlock()
 }
 
+// Used is the bytes of the memory budget taken now.
+func (l *RunAPILimits) Used() int64 { return l.used.Load() }
+
 // charge counts n more bytes, and returns false, counting nothing, when they would pass
 // the budget.
 func (l *RunAPILimits) charge(n int64) bool {
