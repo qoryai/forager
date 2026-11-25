@@ -5149,8 +5149,9 @@ are qoryai/integrations' documents, such as `next-session-request.schema.json` a
 `findings-post.schema.json`: Forager reads none of them, and checks only the media type
 and the size. The gateway sends the body as it came to Qory Apiary's run endpoint,
 `run.url` of the discovery, signed with its access key as every request of the run API
-(§The run API, What Qory Apiary gets), once, within 60 seconds, and sends nothing again
-after a failure. A `2xx` of Qory Apiary's that verifies under the pin passes with its
+(§The run API, What Qory Apiary gets), within 60 seconds. It sends a `POST` once, and
+nothing again after a failure. A GET findings may reach Qory Apiary twice, when Qory
+Apiary closes a connection that the gateway kept open before any answer. A `2xx` of Qory Apiary's that verifies under the pin passes with its
 status and its body, with `Content-Type: application/json` when it has one: a
 next-session answer's `200`, a pushed-commits answer's `204` with no body, a findings
 answer's `200`. The session waits 4 minutes at most, and sends nothing once the run's
@@ -5159,11 +5160,11 @@ close began or for a run with no control plane. The other answers:
 | Status | `error` | `from` | When |
 |---|---|---|---|
 | Qory Apiary's | Qory Apiary's | `apiary` | a signed answer of Qory Apiary's with a code and a status from `400` to `599` but `401` and `410`, such as `409` `run_ended` or `503` `unavailable`, with its `names` and its `message`; a name that contains a secret is a phrase in its place. With a `Retry-After` of whole seconds, such as on a `429` `rate_limited`, it has `retry_after`, those seconds (Waiting before a request again, below) |
-| `400` | `invalid_request` | `gateway` | a `POST` with a `Content-Type` other than `application/json`, or whose body the gateway did not read whole; on the local link, a run id of no run there; nothing is sent |
+| `400` | `invalid_request` | `gateway` | a `POST` with a `Content-Type` other than `application/json`, or whose body the gateway did not read whole, a POST findings body that did not arrive within 60 seconds among them; on the local link, a run id of no run there; nothing is sent |
 | `400` | `run_key_invalid` | `gateway` | behind a separate gateway, a run id that is not the run key's; nothing is sent |
 | `404` | `not_found` | `gateway` | the run has no control plane; nothing is sent |
-| `413` | `payload_too_large` | `gateway` | the body is over its limit; nothing is sent |
-| `429` | `rate_limited` | `gateway` | a POST findings body over 1 MiB, nothing of which is sent, or a GET findings answer over 1 MiB, which the gateway drops, while the gateway's 512 MiB are full (below); no `retry_after` |
+| `413` | `payload_too_large` | `gateway` | the body is over its limit; nothing is sent. For a POST findings body over 8 MiB, the session's link returns an error with nothing sent, so only another client gets this `413` |
+| `429` | `rate_limited` | `gateway` | a GET findings or a POST findings of a run that has one of the same method in flight, nothing of which is sent; a POST findings body over 1 MiB, nothing of which is sent, or a GET findings answer over 1 MiB, which the gateway drops, while the gateway's 512 MiB are full (below); no `retry_after` |
 | `410` | the end's code | `gateway` | the run ended at the gateway: nothing is sent, or the gateway cancels the request it sent |
 | `502` | `control_plane_unavailable` | `gateway` | no answer of Qory Apiary's, one that fails verification, an unsigned `401` among them, a signed `410`, an answer with no code that is no `2xx`, a `2xx` over its limit, or a `2xx` body without `Content-Type: application/json`; the gateway writes one line to its log |
 | `503` | none | | no body: the gateway closes and suspends the run, before the send or while Qory Apiary has the request, or behind a separate gateway the run's reopen goes on; send the request again, but a POST findings as below |
@@ -5171,15 +5172,22 @@ close began or for a run with no control plane. The other answers:
 **What a findings call takes.** The gateway keeps at most 512 MiB of bodies and answers
 (§The run API, The limits), and a POST findings body and a GET findings answer count there
 past the first 1 MiB of each. A body counts as its bytes arrive, before the gateway signs
-it, until the request ends. An answer counts once it is read and verified, until its write
-to the caller ends, within 60 seconds. Behind a separate gateway the gateway also keeps a
-copy of the answer, to sign it, that does not count. The other host calls have no body or
-answer over 1 MiB, so they take none of the 512 MiB.
+it, until the call to Qory Apiary ends. An answer counts once it is read and verified,
+until its write to the caller ends, within 60 seconds. An answer during its read does not
+count, nor does the copy of it that a separate gateway signs. The other host calls have no
+body or answer over 1 MiB, so they take none of the 512 MiB.
+
+A run has at most one GET findings and one POST findings in flight. A second one of the
+same method gets the `429`, and the gateway reads its body only to drop it. The gateway
+checks the run id first, then whether the run has one in flight, then reads the body, so a
+body of no run here counts nothing. A POST findings body has 60 seconds to arrive. A
+request is in flight until its answer is written, within 60 seconds of the end of the call
+to Qory Apiary.
 
 **A POST findings again.** Qory Apiary has no key for a repeated POST findings: a second
 request with the same raises makes new findings. Nothing was sent for a session's error
-before the send, in a closed run, which wraps `session.ErrRunClosed` in Go, or in a run
-with no control plane, and for the gateway's `400`, `404`, `413` and `429`. After any
+before the send, in a closed run, which wraps `session.ErrRunClosed` in Go, in a run
+with no control plane, or for a body over 8 MiB, and for the gateway's `400`, `404`, `413` and `429`. After any
 other error, Qory Apiary may have stored the findings: read them with GET findings before
 you send the POST findings again.
 
@@ -5979,8 +5987,9 @@ than files, and of the findings host calls (§The gateway's link, The host calls
 the bytes of each past its first 1 MiB. A body counts as its bytes
 arrive, until the request ends, so a head with a `Content-Length` and no bytes costs
 nothing, and a body that stalls costs what it sent past 1 MiB, at most 31 MiB. A read that
-would pass 512 MiB ends: the caller gets the `429` on a closed connection, and nothing is
-sent. A caller still writing its body can get a connection error in place of the `429`. A
+would pass 512 MiB ends: the caller gets the `429`, and nothing is sent. The connection
+closes, except the local link's, where the gateway reads the rest of a POST findings body
+and drops it. A caller still writing its body can get a connection error in place of the `429`. A
 verified answer counts after its read, until its write to the caller ends. An answer that
 would pass 512 MiB gets the `429`, and the gateway drops it. While stalled bodies fill the
 512 MiB, other runs' bodies and answers over 1 MiB get the `429` until the stalled reads

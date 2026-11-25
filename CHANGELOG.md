@@ -391,7 +391,8 @@ release may change what an existing document does, and says so under Upgrading.
   unread to Qory Apiary's run endpoint, signed with the gateway's access key. A POST's
   body is at most 8 MiB and its answer 64 KiB, and a GET's answer 16 MiB. Past 1 MiB, a
   body and an answer count in the gateway's 512 MiB: over it, the gateway's refusal is
-  `429` `rate_limited`. Read the findings before you send a POST findings again: Qory
+  `429` `rate_limited`. A run has at most one of each in flight, and a second one gets the
+  same code. Read the findings before you send a POST findings again: Qory
   Apiary has no key for a repeated one, so the same raises make new findings. No container
   reaches either call: they go over the link alone, and the run API's route returns `404`
   for both (§The gateway's link, The host calls).
@@ -1550,8 +1551,10 @@ release may change what an existing document does, and says so under Upgrading.
   sends a `GET` with no body and no `Content-Type`. On the one address, the signature of
   an answer to a POST findings covers a body up to 8 MiB and one byte, and to any other
   request up to 2 MiB and one byte, as before. A POST findings body counts in the
-  gateway's 512 MiB as it arrives, and a GET findings answer from its read to the end of
-  its write, which has 60 seconds. `server.Client.HostCall` takes the method.
+  gateway's 512 MiB from its arrival, within 60 seconds, to the end of the call to Qory
+  Apiary, and a GET findings answer from its read to the end of its write, which has 60
+  seconds. The gateway checks the run id, and that the run has no other call of the method
+  in flight, before it reads the body. `server.Client.HostCall` takes the method.
 - The link's host calls, `POST <run.url>/<run_id>/next-session` and `POST
   <run.url>/<run_id>/pushed-commits`: the gateway reads the body, at most 4 KiB and
   64 KiB, before it looks up or reopens the run, and sends it unread to Qory Apiary with
@@ -2711,7 +2714,8 @@ release may change what an existing document does, and says so under Upgrading.
   verdicts of a program that sends each after the reply to the one before in the order
   sent.
 - `Run.Findings` and `Run.PostFindings`: the GET findings and POST findings host calls,
-  with the errors of `Run.NextSession`.
+  with the errors of `Run.NextSession`. For a body over 8 MiB, `Run.PostFindings` returns
+  an error that starts with the fix, with nothing sent.
 - `session.ErrRunClosed`: the error of `Run.NextSession` and `Run.PushedCommits` wraps
   it once `Close` began or the gateway closed the run, with nothing sent, so a caller
   tests the case with `errors.Is`. A `410` from the gateway, for a run that ended there
