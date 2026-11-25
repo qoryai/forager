@@ -101,8 +101,7 @@ var closeWait = 15 * time.Second
 // take plus the link sink's longest wait between two tries of a batch, 60 seconds
 // (sink.MaxBackoff), so a batch whose try failed just before the gateway came back is
 // tried once more. The flush ends as soon as the gateway accepts the last batch, or the
-// batch gets a 410. The user approved the value ("545 (a)", 2026-11-13). Tests set it
-// shorter.
+// batch gets a 410. Tests set it shorter.
 var finalWait = 180 * time.Second
 
 // joinWindow is how long a join request behind a separate gateway is sent again after

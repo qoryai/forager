@@ -49,11 +49,11 @@ func localRequest(t *testing.T, h *harness, method, path, body string, runID []s
 	return resp.StatusCode, refusalOf(b)
 }
 
-// TestTheLocalLinkFindsABatchsRunByItsRunID pins D-15 on the local link: a batch that
-// names no run in X-Qory-Run-Id, an empty one, one of no run or the run's own twice is
-// a 400 invalid_request that ends no run; a reload names its run by its path alone, and
-// one of no run id is the same 400; the run goes on, and a batch that names it reaches
-// it.
+// TestTheLocalLinkFindsABatchsRunByItsRunID pins how the gateway finds the run of a
+// batch and of a reload on the local link: a batch that names no run in X-Qory-Run-Id,
+// an empty one, one of no run or the run's own twice is a 400 invalid_request that ends
+// no run; a reload names its run by its path alone, and one of no run id is the same
+// 400; the run goes on, and a batch that names it reaches it.
 func TestTheLocalLinkFindsABatchsRunByItsRunID(t *testing.T) {
 	h := start(t, gateway.Config{})
 	a := h.open(server.LinkRunRequest{})

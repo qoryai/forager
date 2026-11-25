@@ -525,10 +525,10 @@ func TestASweepThatPanicsLetsTheRunGo(t *testing.T) {
 	}
 }
 
-// TestTheSweepRunsEvery10MinutesOnRecordsOlderThan15 pins the CA key sweep's values,
-// the user's "545 (a)": the sweep's ticker has an interval of 10 minutes, and a pass
-// removes the kept files of a record whose events.jsonl has not changed for more than
-// 15 minutes, not those of one unchanged for 14 minutes.
+// TestTheSweepRunsEvery10MinutesOnRecordsOlderThan15 pins the CA key sweep's values: the
+// sweep's ticker has an interval of 10 minutes, and a pass removes the kept files of a
+// record whose events.jsonl has not changed for more than 15 minutes, not those of one
+// unchanged for 14 minutes.
 func TestTheSweepRunsEvery10MinutesOnRecordsOlderThan15(t *testing.T) {
 	dir := t.TempDir()
 	older := fakeRecord(t, dir, time.Now().Add(-16*time.Minute), event.RunRegistered)

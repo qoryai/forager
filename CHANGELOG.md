@@ -39,21 +39,22 @@ release may change what an existing document does, and says so under Upgrading.
   composer that reads `frontmatter` alone finds no agent place in Codex's entry,
   `{toml: model}` for an agent's model id and `{toml: model_reasoning_effort}` for an
   agent's effort value.
-- Give each API credential of a run configuration `group`, the id of its provider as
-  the server sets it, such as `anthropic`: the schema refuses an API credential without
-  it, and a host credential with it. The API credentials with one `group` value are one
-  key group, and a run can have several. Give the keys of one group one `format`,
-  `endpoint` and `auth`: `server.CheckCredentials` refuses others with
-  `run_configuration_invalid`, such as `Give the keys of group "anthropic" one format,
-  endpoint and auth.` with the cause on a second line. `server.KeyGroupDiffers` returns
-  the member in which two keys differ. The run answer's `credential_hosts` entries of an
-  API credential from the server have `group` (`server.LinkCredentialHosts.Group`), and
-  `link.GroupPlaceholder` returns a key's placeholder: that of its group's first key in
-  that list. A session sets the runtime's key variable to it. A run configuration still
-  has at most 6 API credentials, across every group, and `server.CheckCredentials`
-  refuses a seventh in a document built in Go too: `Remove API credentials until the run
-  has 6 at most.` A separate gateway's `model-key-limit` lists each key group that
-  passed, by its `group` value, with the stop's reason, as JSON.
+- Give each API credential of a run configuration `group`, the public id of the provider
+  of the run's model choice (its `con_` id): an API credential without it, and a host
+  credential with it, fail the schema. The API credentials with one `group` value are
+  one key group, and a run can have several. Give the keys of one group one `format`,
+  `endpoint` and `auth`: for others, `server.CheckCredentials` returns
+  `run_configuration_invalid`, such as `Give the keys of group "con_49cey7zrc2eb9qgn"
+  one format, endpoint and auth.` with the cause on a second line.
+  `server.KeyGroupDiffers` returns the member in which two keys differ. The run answer's
+  `credential_hosts` entries of an API credential from the server have `group`
+  (`server.LinkCredentialHosts.Group`), and `link.GroupPlaceholder` returns a key's
+  placeholder: that of its group's first key in that list. A session sets the runtime's
+  key variable to it. A run configuration still has at most 6 API credentials, across
+  every group, and a seventh in a document built in Go fails `server.CheckCredentials`
+  too: `Remove API credentials until the run has 6 at most.` A separate gateway's
+  `model-key-limit` lists each key group that passed, by its `group` value, with the
+  stop's reason, as JSON.
 - Read `model.endpoint` of a runtime in `runtimes.json` as one of `variable` and
   `setting`: a descriptor's endpoint may be a setting, such as
   `model_providers.qory.base_url`, and then has no `variable`. Read `resume` of a
@@ -97,8 +98,11 @@ release may change what an existing document does, and says so under Upgrading.
   `mount_target_conflict`, and fails a run with `run_configuration_invalid` when the run
   configuration's API credential has `paths`, `account_header` or `account_claim`.
 - A gateway built before this change returns `405` to the link's host calls, `POST
-  <run.url>/<run_id>/next-session` and `POST <run.url>/<run_id>/pushed-commits`: run
-  `Run.NextSession` and `Run.PushedCommits` against a gateway of this change.
+  <run.url>/<run_id>/next-session`, `POST <run.url>/<run_id>/pushed-commits` and `POST
+  <run.url>/<run_id>/findings`, and `400` to `GET <run.url>/<run_id>/findings`,
+  `invalid_request` on the local link and `run_key_invalid` on the one address: run
+  `Run.NextSession`, `Run.PushedCommits`, `Run.PostFindings` and `Run.Findings` against a
+  gateway of this change.
 - A gateway built before this change fails a run whose run configuration has a
   credential with `purpose: push` with `run_configuration_invalid`, and reads a
   `QORY-PUSH` connection on its one address as a request of the link's HTTP. A schema
@@ -381,13 +385,44 @@ release may change what an existing document does, and says so under Upgrading.
 - `retry_after` in a link refusal, and `RetryAfter` in `accesskey.Refusal`: when Qory
   Apiary's refusal of a host call has `Retry-After` in whole seconds, such as a `429`
   `rate_limited` or a `503` `unavailable` with `Retry-After: 7`, the gateway passes
-  that wait on, and `Run.NextSession` and `Run.PushedCommits` return a refusal whose
-  `RetryAfter` is 7 seconds. A run that did not open has the same from the last answer
-  of Qory Apiary as the run opens: to its registration or attach, the reload after the
-  attach, or its secrets request. `server.Link.OpenRun`, and so `session.Open`, return
-  it. The gateway's tries as a run opens still ignore `Retry-After`. The gateway
-  passes a wait over 31 days, `server.MaxRetryAfter`, as 31 days, and passes none for
-  `Retry-After: 0`, an HTTP date or any other form; `server.ReadRetryAfter` reads it.
+  that wait on, and `Run.NextSession`, `Run.PushedCommits`, `Run.Findings` and
+  `Run.PostFindings` return a refusal whose `RetryAfter` is 7 seconds. A run that did not
+  open has the same from the last answer of Qory Apiary as the run opens: to its
+  registration or attach, the reload after the attach, or its secrets request.
+  `server.Link.OpenRun`, and so `session.Open`, return it. The gateway's tries as a run
+  opens still ignore `Retry-After`. The gateway passes a wait over 31 days,
+  `server.MaxRetryAfter`, as 31 days, and passes none for `Retry-After: 0`, an HTTP date
+  or any other form; `server.ReadRetryAfter` reads it.
+- The findings host calls of the gateway's link, `GET <run.url>/<run_id>/findings` and
+  `POST <run.url>/<run_id>/findings`, and `Run.Findings` and `Run.PostFindings`, which
+  send them: a run's host work reads and writes the findings of its work item, forwarded
+  unread to Qory Apiary's run endpoint, signed with the gateway's access key. A POST's
+  body is at most 8 MiB and its answer 64 KiB, and a GET's answer 16 MiB. The gateway
+  matches a host call's method and its path, and sends a `GET` with no body and no
+  `Content-Type`. A GET findings with a body gets `400` `invalid_request`, and a POST
+  findings whose `Content-Length` is over 8 MiB gets `413` `payload_too_large` with none
+  of the body counted. On the local link the gateway reads none of it; behind a separate
+  gateway it reads up to 8 MiB and one byte, only to sign the `413`. Past 1 MiB, a body
+  and an answer count in the gateway's 512 MiB:
+  a POST findings body from its arrival, within 60 seconds, to the end of the call to Qory
+  Apiary, and a GET findings answer from its read to the end of its write, which has 60
+  seconds. Over the 512 MiB, the gateway's refusal is `429` `rate_limited`. A run has at
+  most one of each in flight, and a second one gets the same code. The gateway reads no
+  body until it checks the run id, the run's end, the request's head, and whether the run
+  has one in flight. Behind a separate gateway, it also checks first whether the gateway's
+  close began. The body of a request that fails one of these checks counts nothing.
+  Behind a separate gateway, the gateway signs its answer to a POST findings that fails
+  one of these checks, such as the `413` and the `429`, over the body: the body, up to
+  8 MiB and one byte, has 10 seconds to arrive, or the connection closes with no answer.
+  On the one address, the signature of an answer to a POST findings covers a body up to
+  8 MiB and one byte, and to any other request up to 2 MiB and one byte, as before.
+  `Run.Findings` and `Run.PostFindings` return the errors of `Run.NextSession`, and for a
+  body over 8 MiB `Run.PostFindings` returns an error that starts with the fix, with
+  nothing sent. Read the findings before you send a POST findings again: Qory Apiary has
+  no key for a repeated one, so the same raises make new findings.
+  `server.Client.HostCall` takes the method. No container reaches either call: they go
+  over the link alone, and the run API's route returns `404` for both (§The gateway's
+  link, The host calls).
 - Two host calls of the gateway's link, `POST <run.url>/<run_id>/next-session` and
   `POST <run.url>/<run_id>/pushed-commits`, and `Run.NextSession` and
   `Run.PushedCommits`, which send them: the gateway forwards the body unread to Qory

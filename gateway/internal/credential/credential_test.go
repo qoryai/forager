@@ -131,10 +131,10 @@ func TestWhatCannotHoldIsNoRun(t *testing.T) {
 	}
 }
 
-// TestCredentialsWithPathsThatDoNotOverlapShareAHost pins decision 886 (a): two
-// credentials may claim one host when each has paths and no path of one overlaps a path
-// of the other. Paths that one request path can match both of are refused, and so is a
-// credential without paths beside another on its host.
+// TestCredentialsWithPathsThatDoNotOverlapShareAHost pins that two credentials may claim
+// one host when each has paths and no path of one overlaps a path of the other. Paths
+// that one request path can match both of are refused, and so is a credential without
+// paths beside another on its host.
 func TestCredentialsWithPathsThatDoNotOverlapShareAHost(t *testing.T) {
 	t.Setenv("PRODUCT_TOKEN", "token-product-0001")
 	t.Setenv("HARNESS_TOKEN", "token-harness-0001")

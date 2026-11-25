@@ -332,10 +332,9 @@ func TestAJoinWithNoAnswerUntilTheWindowEnds(t *testing.T) {
 	}
 }
 
-// TestTheFinalWaitIs180Seconds pins the final wait behind a separate gateway, the
-// user's "545 (a)": 180 seconds. TestTheFinalFlushWaitsForASeparateGateway pins that
-// the close of such a run waits the final wait, and the close on the local link the
-// close's wait.
+// TestTheFinalWaitIs180Seconds pins the final wait behind a separate gateway: 180
+// seconds. TestTheFinalFlushWaitsForASeparateGateway pins that the close of such a run
+// waits the final wait, and the close on the local link the close's wait.
 func TestTheFinalWaitIs180Seconds(t *testing.T) {
 	if got := session.DefaultFinalWait(); got != 180*time.Second {
 		t.Errorf("the final wait is %s, want 3m0s", got)

@@ -657,10 +657,11 @@ p.Close()                                         // the next Join closes it too
 
 ### The host calls
 
-`(*session.Run).NextSession` and `(*session.Run).PushedCommits` send the run's
-next-session and pushed-commits requests to Qory Apiary, from the host alone. Each goes
-over the gateway's link, which no container reaches, and the run API's route serves
-neither path:
+`(*session.Run).NextSession`, `(*session.Run).PushedCommits`, `(*session.Run).Findings`
+and `(*session.Run).PostFindings` send the run's next-session, pushed-commits, GET
+findings and POST findings requests to Qory Apiary, from the host alone. Each goes over
+the gateway's link, which no container reaches, and the run API's route serves none of
+their paths:
 
 ```go
 answer, err := run.NextSession(ctx, []byte(`{"session":1,"state":"succeeded","reason":null}`))
@@ -670,13 +671,19 @@ if errors.As(err, &ref) && ref.From == accesskey.FromApiary && ref.Code == "run_
 }
 ```
 
-Forager reads neither body. The gateway sends the body to Qory Apiary, signed with its
-access key, once, and returns the answer's body as it came: a next-session answer, or the
-empty body of a pushed-commits `204`. A body is at most 4 KiB for next-session and 64 KiB
-for pushed-commits. Call either at any time from `Open` to `Close`, from any goroutine,
-while a `Join` runs too.
+Forager reads no body of them. The gateway sends each request to Qory Apiary, signed with
+its access key, and returns the answer's body as it came: a next-session answer, the
+empty body of a pushed-commits `204`, or a findings answer. It sends a `POST` once. It
+may send a GET findings twice, when Qory Apiary closes a kept connection before it
+answers. A body is at most 4 KiB for next-session, 64 KiB for pushed-commits and 8 MiB
+for POST findings; GET findings has none, and its answer is at most 16 MiB.
+`PostFindings` returns an error for a body over 8 MiB, with nothing sent. Call each at
+any time from `Open` to `Close`, from any goroutine, while a `Join` runs too, and from
+the check of `Run.SetRunAPICheck`. A call waits at most 4 minutes; in the check, it ends
+with the check's context, after 90 seconds at most. If `PostFindings` returns an error
+after 4 minutes, read the findings before you send it again.
 
-No container reaches either call. On one machine, only a gateway started with
+No container reaches any of the calls. On one machine, only a gateway started with
 `gateway.Config.NoLinkSocket` keeps them to the process that holds the link in memory:
 with a link socket, any process of the session's user that reaches the socket can send
 them for a run whose id it knows.
@@ -690,13 +697,36 @@ Apiary's code with its status, such as `409` `run_ended`, and `gateway` for the
 gateway's, such as `413` `payload_too_large` or `502` `control_plane_unavailable`. A
 `410` is the end of the run at the gateway, which `server.Ended` reports. A `503` with
 no code, while the gateway closes or reopens the run, is a `*server.StatusError`.
-Forager sends no request again: send it again after a `5xx` or a transport failure,
-since Qory Apiary returns the same result for a repeated request. When Qory Apiary's
-refusal has a `Retry-After` of whole seconds, `RetryAfter` of the `*accesskey.Refusal`
-is that wait, at most 31 days: wait that long before you send the request again. It is
-0 for no `Retry-After`, for `Retry-After: 0` and for any other form. A `5xx` with the
-code `internal` is a `*server.StatusError`, with no wait. The contract's
-README, §The gateway's link, The host calls, lists every answer.
+Forager sends no `POST` again. Send a next-session or a pushed-commits request again
+after a `5xx` or a transport failure, since Qory Apiary returns the same result for a
+repeated one. Send a GET findings again at any time. When Qory Apiary's refusal has a
+`Retry-After` of whole seconds, `RetryAfter` of the `*accesskey.Refusal` is that wait, at
+most 31 days: wait that long before you send the request again. It is 0 for no
+`Retry-After`, for `Retry-After: 0` and for any other form. A `5xx` with the code
+`internal` is a `*server.StatusError`, with no wait. The contract's README, §The gateway's
+link, The host calls, lists every answer.
+
+Read the findings before you send a POST findings again. Qory Apiary has no key for a
+repeated one: a second request with the same raises makes new findings. Nothing was sent
+for an error that wraps `session.ErrRunClosed`, for a run with no control plane, for a body
+over 8 MiB, and for a refusal from the gateway with status `400`, `404`, `413` or `429`.
+After any other error
+Qory Apiary may have stored the findings:
+
+```go
+_, err := run.PostFindings(ctx, body)
+var ref *accesskey.Refusal
+unsent := errors.Is(err, session.ErrRunClosed) || len(body) > server.MaxPostFindingsRequest || errors.As(err, &ref) &&
+	ref.From == accesskey.FromGateway && slices.Contains([]int{400, 404, 413, 429}, ref.Status)
+if err != nil && !unsent {
+	stored, err := run.Findings(ctx) // then send only what stored does not have
+	...
+}
+```
+
+A run has at most one `Findings` and one `PostFindings` in flight. A `429` `rate_limited`
+from the gateway is a second one, or the gateway's memory budget, full (The run API,
+below): send the request again after a second.
 
 ### The run API
 
@@ -731,26 +761,36 @@ file that fails its signed digest ends in a read error. The contract's README, �
 API, lists the five requests, each status and the limits. A sixth path of Qory Apiary's
 run API, `GET /resume/transcript`, gets `404` `not_found` through `QORY_RUN_API` and
 from behind a wall, and nothing is sent: the session reads the transcript over the
-gateway's link. So do `POST /next-session` and `POST /pushed-commits`, the host calls.
+gateway's link. So do `POST /next-session`, `POST /pushed-commits`, `GET /findings` and
+`POST /findings`, the host calls.
 
 Plan the gateway's memory for the route. A budget of 512 MiB per gateway counts the
-bytes of `POST /artifacts` bodies and of answers other than files, past the first 1 MiB of
-each. A body or answer over the budget's room gets a `429` `rate_limited`. A retry can
-pass once a stalled read ends; runs that stall again can keep the 512 MiB full. These
-figures are what the heap takes:
+bytes of `POST /artifacts` bodies and of answers other than files, and of POST findings
+bodies and GET findings answers on the link, past the first 1 MiB of each. A body or
+answer over the budget's room gets a `429` `rate_limited`. A retry can pass once a stalled
+read ends; runs that stall again can keep the 512 MiB full. These figures are what the
+heap takes:
 
 - During a read, the heap holds up to 1.6 times the bytes read: about 685 MiB for 32 MiB
   bodies that fill the budget. For other sizes, plan up to about 820 MiB plus 1.6 MiB per
   run with a POST.
-- A 32 MiB POST body takes up to about 74 MiB at the end of its read, then about 64 MiB
-  while it signs, 32 MiB of it the copy that `accesskey.Request.Message` makes. At most 8
-  sign at once.
+- A 32 MiB `POST /artifacts` body takes up to about 74 MiB at the end of its read, then
+  about 64 MiB while it signs, 32 MiB of it the copy that `accesskey.Request.Message`
+  makes. At most 8 sign at once.
+- An 8 MiB POST findings body takes up to about 20 MiB at the end of its read, then about
+  16 MiB while it signs, 8 MiB of it the copy. One per run at most is in flight, and no
+  limit of the gateway applies across runs.
 - A 16 MiB answer takes up to about 35 MiB at the end of its read and 16 MiB after it.
+- A 16 MiB GET findings answer behind a separate gateway takes 16 MiB more until it is
+  written, the copy that the gateway signs.
 - Each run also holds up to 1 MiB uncharged per answer.
+- Past the 820 MiB, plan for each run that sends findings at the same time: 8 MiB for the
+  signing copy and 1.6 MiB for the first 1 MiB of its POST findings, and up to 35 MiB for
+  its GET findings answer during its read. Ten such runs take up to about 450 MiB.
 
 The budget does not cover the read buffer's room past the bytes it counts, the signing
-copy, an answer during its read, `POST /verdict` bodies, or the first 1 MiB of each body
-and answer. A file streams, so it takes no budget.
+copy, an answer during its read, the copy of a GET findings answer, `POST /verdict`
+bodies, or the first 1 MiB of each body and answer. A file streams, so it takes no budget.
 
 #### Check a push before it leaves the wall
 
