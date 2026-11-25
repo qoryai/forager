@@ -292,10 +292,11 @@ type budgetAt struct {
 	g      *gateway.Gateway
 	f      *fakeRunAPI
 	remote bool
-	// runs are the ids of the two runs, and send sends a request of run with body to the
-	// path under its id and returns its answer.
-	runs [2]string
-	send func(run int, method, path string, body []byte) answer
+	// runs are the ids of the two runs, send sends a request of run with body to the path
+	// under its id and returns its answer, and sendTo, of the one address alone, sends one
+	// with run's key to any path.
+	runs         [2]string
+	send, sendTo func(run int, method, path string, body []byte) answer
 	// dial opens a connection for a request, and lineTo is the request line of a method
 	// and a run id's findings on it, with the headers every request of the first run has.
 	dial   func() net.Conn
@@ -329,12 +330,24 @@ func (at *budgetAt) refusalOf(got answer) (status int, code, message, from strin
 }
 
 // stall opens a connection, sends the first run's POST findings with a Content-Length of
-// size and sent bytes of the body, and returns the connection.
+// size and sent bytes of the body, and returns the connection. The gateway reads them all
+// but what the connection buffers, so a caller that writes before it reads gets its
+// answer.
 func (at *budgetAt) stall(size, sent int) net.Conn {
 	conn := at.dial()
-	fmt.Fprintf(conn, "%sContent-Length: %d\r\n\r\n", at.head(http.MethodPost), size)
-	conn.Write(make([]byte, sent))
+	at.write(conn, at.head(http.MethodPost), size, sent)
 	return conn
+}
+
+// write writes head, a Content-Length of size and sent bytes of the body to conn, and
+// fails the test unless all are written within 20 seconds.
+func (at *budgetAt) write(conn net.Conn, head string, size, sent int) {
+	at.t.Helper()
+	conn.SetWriteDeadline(time.Now().Add(20 * time.Second))
+	fmt.Fprintf(conn, "%sContent-Length: %d\r\n\r\n", head, size)
+	if _, err := conn.Write(make([]byte, sent)); err != nil {
+		at.t.Errorf("the write of a body: %v", err)
+	}
 }
 
 // statusOn is the status of the answer on conn, read within 20 seconds.
@@ -394,8 +407,11 @@ func budgetWays(t *testing.T, cfg func(*gateway.Config), try func(t *testing.T, 
 			at.runs[i], keys[i] = e.a.RunID, e.key
 		}
 		f.reset()
+		at.sendTo = func(run int, method, path string, body []byte) answer {
+			return r.do(t, keys[run], method, path, body)
+		}
 		at.send = func(run int, method, path string, body []byte) answer {
-			return r.do(t, keys[run], method, "/qory-link/run-configuration/"+at.runs[run]+path, body)
+			return at.sendTo(run, method, "/qory-link/run-configuration/"+at.runs[run]+path, body)
 		}
 		at.dial = func() net.Conn {
 			b, err := r.bind(t, gatewayKeys())
@@ -677,6 +693,11 @@ func TestARunHasOneFindingsCallOfAMethodInFlight(t *testing.T) {
 		hold(0, http.MethodPost, "/findings", make([]byte, 3<<20))
 		refused("a second POST", http.MethodPost, []byte(`{}`))
 		refused("a second POST of 8 MiB", http.MethodPost, make([]byte, 8<<20))
+		whole := at.stall(8<<20, 8<<20)
+		defer whole.Close()
+		if status := statusOn(t, whole); status != http.StatusTooManyRequests {
+			t.Errorf("a second POST whose caller writes its body first: %d", status)
+		}
 		if used := gateway.UsedRunAPI(at.g); used != 2<<20 {
 			t.Errorf("%d bytes count beside a second POST", used)
 		}
@@ -755,7 +776,7 @@ func TestARunHasOneFindingsCallOfAMethodInFlight(t *testing.T) {
 // TestAFindingsRunIDIsCheckedBeforeItsBody pins that the body of a POST findings of no run
 // here, on the local link, and of another run than the run key's, on the one address,
 // counts nothing and takes no run's place, and that its refusal is the one of every other
-// request of the run id.
+// request of the run id, also while that run has a POST in flight.
 func TestAFindingsRunIDIsCheckedBeforeItsBody(t *testing.T) {
 	budgetWays(t, func(*gateway.Config) {}, func(t *testing.T, at *budgetAt) {
 		want := "invalid_request"
@@ -765,9 +786,7 @@ func TestAFindingsRunIDIsCheckedBeforeItsBody(t *testing.T) {
 		}
 		conn := at.dial()
 		defer conn.Close()
-		// The write ends once the gateway read all but what the connection buffers.
-		fmt.Fprintf(conn, "%sContent-Length: %d\r\n\r\n", at.lineTo(http.MethodPost, unknown), 8<<20)
-		conn.Write(make([]byte, 8<<20-1))
+		at.write(conn, at.lineTo(http.MethodPost, unknown), 8<<20, 8<<20-1)
 		if used := gateway.UsedRunAPI(at.g); used != 0 {
 			t.Errorf("%d bytes of a body of no run count", used)
 		}
@@ -788,6 +807,18 @@ func TestAFindingsRunIDIsCheckedBeforeItsBody(t *testing.T) {
 		}
 		if n := len(at.f.requests()); n != 2 {
 			t.Errorf("the control plane got %d requests", n)
+		}
+		if !at.remote {
+			return
+		}
+		arrived, _ := holdHostCalls(at.f)
+		held := at.dial()
+		defer held.Close()
+		io.WriteString(held, at.head(http.MethodPost)+"Content-Length: 0\r\n\r\n")
+		within(t, "a POST at the control plane", arrived, 10*time.Second)
+		path := "/qory-link/run-configuration/" + at.runs[0] + "/findings"
+		if status, code, _, _ := at.refusalOf(at.sendTo(1, http.MethodPost, path, []byte(`{}`))); status != http.StatusBadRequest || code != want {
+			t.Errorf("another run's key while the run has a POST in flight: %d %s", status, code)
 		}
 	})
 }
