@@ -17,12 +17,13 @@ import (
 	"github.com/qoryai/forager/policy"
 )
 
-// TestSeveralCredentialsOnOneHostAreSetByPath pins decisions 886 (a) and 887 (a). Two
-// credentials on github.com, each with paths: the proxy sets the one whose paths match
-// the request, and a 401 renews that one alone. A path no credential's paths match gets
-// no credential: under enforce it passes only when the policy's paths for the host
-// match it, under observe it passes. Every answer from the host has both values
-// replaced, on a path that gets no credential too.
+// TestSeveralCredentialsOnOneHostAreSetByPath pins how the proxy sets one of several
+// credentials on one host by the request's path. Two credentials on github.com, each
+// with paths: the proxy sets the one whose paths match the request, and a 401 renews
+// that one alone. A path no credential's paths match gets no credential: under enforce
+// it passes only when the policy's paths for the host match it, under observe it passes.
+// Every answer from the host has both values replaced, on a path that gets no credential
+// too.
 func TestSeveralCredentialsOnOneHostAreSetByPath(t *testing.T) {
 	const productToken, harnessToken = "token-product-0001", "token-harness-0001"
 	up, err := NewCA("upstream")

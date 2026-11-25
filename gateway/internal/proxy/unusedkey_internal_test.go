@@ -17,12 +17,13 @@ import (
 	"github.com/qoryai/forager/policy"
 )
 
-// TestAHostOnlyAnUnusedModelKeyCoversPasses pins decision 845 (a). Under enforce, with
-// two model keys on two hosts and the session using key 1, a request to key 2's host
-// passes with no credential set and no path rule, and its answer has key 2's value
-// replaced with key 2's placeholder, as key 1's answer has key 1's. A request to a host no key covers is
-// decided by the policy: a path its path rules list passes, another path is denied,
-// and a host its allow list does not list is denied.
+// TestAHostOnlyAnUnusedModelKeyCoversPasses pins that a request passes to the host of a
+// model key the session does not use. Under enforce, with two model keys on two hosts
+// and the session using key 1, a request to key 2's host passes with no credential set
+// and no path rule, and its answer has key 2's value replaced with key 2's placeholder,
+// as key 1's answer has key 1's. A request to a host no key covers is decided by the
+// policy: a path its path rules list passes, another path is denied, and a host its
+// allow list does not list is denied.
 func TestAHostOnlyAnUnusedModelKeyCoversPasses(t *testing.T) {
 	const one, two = "fake-model-key-one-0001", "fake-model-key-two-0002"
 	const hostOne, hostTwo, ruled, unlisted = "api.model-one.example", "api.model-two.example", "docs.example", "unlisted.example"

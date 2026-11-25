@@ -166,7 +166,7 @@ func (g *Gateway) heldRun(w http.ResponseWriter, r *http.Request, runID string) 
 	default:
 		// The run key verified: while the connection waits on the reopen, up to 120
 		// seconds, it counts against the one address's bounds in all alone, not of its
-		// source or its /48, and is closed for no newer one (the user's "547 (a)").
+		// source or its /48, and is closed for no newer one.
 		releaseSource(r.Context())
 		p, _ := runKeyOf(r.Context())
 		lr, final := g.reopenRun(r.Context(), runID, p)
@@ -251,7 +251,7 @@ func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit, rel
 	if _, spent := g.spentOf(k.RunID); lr == nil && !spent && g.reopenable(k.RunID) {
 		// The run key verified: while the connection waits on the reopen, up to 120
 		// seconds, it counts against the one address's bounds in all alone, not of its
-		// source or its /48, and is closed for no newer one (the user's "547 (a)").
+		// source or its /48, and is closed for no newer one.
 		release()
 		c.SetDeadline(time.Time{})
 		lr, _ = g.reopenRun(g.openCtx, k.RunID, presented{raw: value, key: k})

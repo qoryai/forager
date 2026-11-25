@@ -533,7 +533,7 @@ func TestStartRefusesAnAddressItCannotServe(t *testing.T) {
 	}
 }
 
-// TestASeparateGatewayRunsNoSessions pins D-4: a gateway with an address makes no link
+// TestASeparateGatewayRunsNoSessions pins that a gateway with an address makes no link
 // directory, no socket and no proxy on loopback; its local link has no socket and no
 // proxy, and every connection to it fails, saying why; its one address is its proxy's.
 func TestASeparateGatewayRunsNoSessions(t *testing.T) {
@@ -2487,13 +2487,13 @@ func TestAReopenWhoseAttachFails(t *testing.T) {
 }
 
 // TestConnectionsThatWaitOnAReopenAreNotBounded pins the bound of 64 connections of one
-// source whose run key has not been admitted, for connections that wait on a reopen:
-// a connection counts against its source's bound only until its run key verifies (the
-// user's "547 (a)"), and against the bound in all until the run is live. With the
-// attach answered 503, 40 relay connections and 30 reloads from one address wait on the
-// reopen of one run; none of them is closed, the one address counts each of them in
-// all and none of its source, and each gets its answer once the attach is answered;
-// then the one address counts none of them.
+// source whose run key has not been admitted, for connections that wait on a reopen: a
+// connection counts against its source's bound only until its run key verifies, and
+// against the bound in all until the run is live. With the attach answered 503, 40 relay
+// connections and 30 reloads from one address wait on the reopen of one run; none of
+// them is closed, the one address counts each of them in all and none of its source, and
+// each gets its answer once the attach is answered; then the one address counts none of
+// them.
 func TestConnectionsThatWaitOnAReopenAreNotBounded(t *testing.T) {
 	const relays, reloads = 40, 30
 	if relays+reloads <= gateway.MaxSourceConns {
