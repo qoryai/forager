@@ -105,6 +105,29 @@ func TestTheLinkSendsTheHostCalls(t *testing.T) {
 	}
 }
 
+// TestAPostFindingsBodyOverItsLimitIsNotSent pins the link's check of a POST findings
+// body: 8 MiB is sent, and a longer one is an error that starts with the fix, with nothing
+// sent.
+func TestAPostFindingsBodyOverItsLimitIsNotSent(t *testing.T) {
+	var sent []int
+	g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, _ := io.Copy(io.Discard, r.Body)
+		sent = append(sent, int(n))
+		answer(w, 200, `{}`)
+	}))
+	k, _ := newLink(t, g)
+	runURL := server.LocalOrigin + "/v1/run-configuration"
+	for _, n := range []int{8 << 20, 8<<20 + 1, 8<<20 + 2, 64 << 20} {
+		_, err := k.PostFindings(context.Background(), runURL, runID, make([]byte, n))
+		if n == 8<<20 && err != nil || n > 8<<20 && (err == nil || err.Error() != "Send a POST findings body of at most 8388608 bytes: this one is longer, so nothing was sent.") {
+			t.Errorf("a body of %d bytes: %v", n, err)
+		}
+	}
+	if len(sent) != 1 || sent[0] != 8<<20 {
+		t.Errorf("the gateway got bodies of %v bytes", sent)
+	}
+}
+
 // TestALinkRefusalHasItsRetryAfter pins the wait the link reads from a coded refusal's
 // retry_after: whole seconds from 1 to 31 days are the wait, and none, 0, a negative,
 // a fraction, a string and a value over 31 days are no wait.

@@ -44,10 +44,9 @@ const (
 // send to the end of the answer: the run API's time for any request but a file.
 const HostCallTime = 60 * time.Second
 
-// hostCallWait is the most time the session waits for the answer to one host call:
-// [HostCallTime] and the up to 120 seconds a reopen of the run behind a separate gateway
-// takes before the gateway sends it (heldRun in gateway/remote.go), 3 minutes, rounded
-// up.
+// hostCallWait is the most time the session waits for the answer to one host call behind
+// a separate gateway: up to 60 seconds for the body to arrive, up to 120 seconds for a
+// reopen of the run (heldRun in gateway/remote.go), and [HostCallTime], 4 minutes in all.
 const hostCallWait = 4 * time.Minute
 
 // NextSession sends the next-session request of the run runID, a POST of body to
@@ -93,11 +92,17 @@ func (k *Link) Findings(ctx context.Context, runURL, runID string) ([]byte, erro
 // answer's body. The gateway forwards body unread to Qory Apiary, POST
 // <run.url>/<run_id>/findings, signed with the gateway's access key, and returns its 2xx
 // unread, at most [MaxPostFindingsAnswer] bytes. It returns an error in the cases
-// [Link.NextSession] lists.
+// [Link.NextSession] lists, and, with nothing sent, for a body over
+// [MaxPostFindingsRequest].
 //
 // Qory Apiary has no key for a repeated request: a second request with the same raises
 // makes new findings. Read the findings with [Link.Findings] before you send one again.
 func (k *Link) PostFindings(ctx context.Context, runURL, runID string, body []byte) ([]byte, error) {
+	if len(body) > MaxPostFindingsRequest {
+		// The signature of a separate gateway's answer covers one byte more at most, so an
+		// answer to a longer body fails the link's check.
+		return nil, fmt.Errorf("Send a POST findings body of at most %d bytes: this one is longer, so nothing was sent.", MaxPostFindingsRequest)
+	}
 	return k.hostCall(ctx, "the POST findings request", runURL, runID, http.MethodPost, "/findings", body, MaxPostFindingsAnswer)
 }
 

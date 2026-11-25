@@ -198,11 +198,18 @@ func sendsHostCalls(t *testing.T, sp runSpec, l *hostCallLog, secret string) {
 		t.Errorf("GET findings: a signed 429: %v (%+v)", err, ref)
 	}
 	l.refuse(nil)
-	_, err = r.PostFindings(ctx, bytes.Repeat([]byte(" "), server.MaxPostFindingsRequest+1))
-	if !errors.As(err, &ref) || ref.Status != http.StatusRequestEntityTooLarge || ref.From != accesskey.FromGateway || errors.Is(err, session.ErrRunClosed) {
-		t.Errorf("POST findings: a body over the limit: %v (%+v)", err, ref)
+	sent := l.count()
+	for _, n := range []int{server.MaxPostFindingsRequest + 1, server.MaxPostFindingsRequest + 2, 64 << 20} {
+		var ke *server.GatewayKeyError
+		_, err = r.PostFindings(ctx, make([]byte, n))
+		if err == nil || !strings.HasSuffix(err.Error(), "so nothing was sent.") || errors.As(err, &ke) || errors.Is(err, session.ErrRunClosed) {
+			t.Errorf("POST findings: a body of %d bytes: %v", n, err)
+		}
+		errs = append(errs, err)
 	}
-	errs = append(errs, err)
+	if l.count() != sent {
+		t.Errorf("the control plane got %d POST findings over the limit", l.count()-sent)
+	}
 	_, err = r.NextSession(ctx, bytes.Repeat([]byte(" "), server.MaxNextSessionRequest+1))
 	if !errors.As(err, &ref) || ref.Status != http.StatusRequestEntityTooLarge || ref.From != accesskey.FromGateway || errors.Is(err, session.ErrRunClosed) {
 		t.Errorf("a body over the limit: %v (%+v)", err, ref)
@@ -223,7 +230,7 @@ func sendsHostCalls(t *testing.T, sp runSpec, l *hostCallLog, secret string) {
 	if _, err := r.Close(context.Background(), session.Outcome{State: event.StateCancelled}); err != nil {
 		t.Fatal(err)
 	}
-	sent := l.count()
+	sent = l.count()
 	for _, call := range hostCallsOf(r) {
 		_, err := call(context.Background(), []byte(`{}`))
 		if !errors.Is(err, session.ErrRunClosed) || !strings.HasPrefix(err.Error(), "Open another run to send the ") {
