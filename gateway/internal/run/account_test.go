@@ -25,10 +25,10 @@ func accountOf(id string) string {
 	return fakeToken(`{"https://auth.model.example/auth":{"account_id":"` + id + `"}}`)
 }
 
-// accountDoc is the configuration of the 521 probe's fix 2 in a run configuration: two
-// subscription keys of one group on chat.model.example with paths and an account
-// header, a host credential, files, on other paths of that host, and an API key on
-// another host, under a policy that allows both hosts.
+// accountDoc is a run configuration with two subscription keys of one group on
+// chat.model.example with paths and an account header, a host credential, files, on other
+// paths of that host, and an API key on another host, under a policy that allows both
+// hosts.
 const accountDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["chat.model.example","api.model.example"]}},"default_model_provider_credential_name":"subscription","credentials":[` +
 	`{"name":"subscription","group":"openai","format":"openai-responses","endpoint":"https://chat.model.example/backend-api/codex","auth":{"scheme":"bearer","oauth":true,"account_header":"chatgpt-account-id","account_claim":"/https:~1~1auth.model.example~1auth/account_id"},"paths":["/backend-api/codex/*"],"pause_for_s":18000},` +
 	`{"name":"subscription-2","group":"openai","format":"openai-responses","endpoint":"https://chat.model.example/backend-api/codex","auth":{"scheme":"bearer","oauth":true,"account_header":"chatgpt-account-id","account_claim":"/https:~1~1auth.model.example~1auth/account_id"},"paths":["/backend-api/codex/*"],"pause_for_s":18000},` +
@@ -54,12 +54,11 @@ func accountValues(values map[string]string) func(string, int) (answer, error) {
 	}
 }
 
-// TestAPathLimitedSubscriptionSitsBesideAHostCredential pins the 521 probe's fix 2: a
-// subscription key with paths opens beside a host credential with other paths of its
-// host. Each use has its paths, the subscription its account header and the account
-// id of its value, and both subscriptions are the key group. With the host
-// credential's paths gone, or overlapping the key's, or the key's paths gone, the run is
-// refused as before.
+// TestAPathLimitedSubscriptionSitsBesideAHostCredential pins that a subscription
+// key with paths opens beside a host credential with other paths of its host. Each use has
+// its paths, the subscription its account header and the account id of its value, and both
+// subscriptions are the key group. With the host credential's paths gone, or overlapping
+// the key's, or the key's paths gone, the run is refused as before.
 func TestAPathLimitedSubscriptionSitsBesideAHostCredential(t *testing.T) {
 	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, accountDoc, digest('1')),
 		Secrets: (&controlPlane{answer: accountValues(nil)}).fetch})

@@ -14,8 +14,8 @@ import (
 )
 
 // The openai-responses answers of this file have fake values. Their shapes follow the
-// openai/codex source at 17a0e6f63f (from source, to confirm with probe
-// 1a/1c/8-api/burst-429), and the x-codex-* header names follow the probe's item 8.
+// openai/codex source at 17a0e6f63f (from source, to confirm against the provider), and
+// the x-codex-* header names are measured.
 
 // responsesPath is the stream path of the openai-responses group of these tests.
 const responsesPath = "/v1/responses"

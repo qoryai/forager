@@ -220,7 +220,7 @@ func receivePacks(records []recorded) []string {
 	return out
 }
 
-// TestASessionsRequestsGetOnlyTheWorkCredential pins the card's split, in a write run
+// TestASessionsRequestsGetOnlyTheWorkCredential pins the split, in a write run
 // and in a write-no-push run, on the local link: what the sessions, the setup step,
 // After, the image step and the host proxy send through the run's proxy, the run
 // answer's proxy_secret, gets the read work credential alone, never push-1's value. A
@@ -416,7 +416,7 @@ func TestThePushProxySetsThePushCredentialAlone(t *testing.T) {
 	}
 }
 
-// TestThePushAndWorkValuesAreRenewed pins the card's renewal: a run's work-1 and push-1
+// TestThePushAndWorkValuesAreRenewed pins the renewal: a run's work-1 and push-1
 // values expire an hour after the start; 5 minutes before, the gateway requests both
 // from the reference receiver in one request, and from then on the run's proxy sets
 // work-1's second value and the push proxy push-1's second value. The run's proxy

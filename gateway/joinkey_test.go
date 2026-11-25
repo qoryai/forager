@@ -30,7 +30,7 @@ import (
 // openai-responses, model and model-2, as bearers, on a fake provider that returns a
 // 401 for each key in unauthorized, a ChatGPT subscription's 429 for model and a 200
 // for model-2. The 429's shape follows the openai/codex source at 17a0e6f63f (to
-// confirm with probe burst-429).
+// confirm against the provider).
 type openaiRemote struct {
 	r   *remote
 	c   *control

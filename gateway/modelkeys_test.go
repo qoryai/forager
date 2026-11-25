@@ -65,7 +65,7 @@ func startGroupRun(t *testing.T) *groupRun {
 // key of anthropic-messages goes in the header x-api-key, and the provider's refusal is
 // Anthropic's; a key of openai-responses goes as a bearer, and the refusal is a ChatGPT
 // subscription's, its shape from the openai/codex source at 17a0e6f63f (to confirm
-// with probe burst-429).
+// against the provider).
 func startGroupRunOf(t *testing.T, format string) *groupRun {
 	t.Helper()
 	return openGroupRun(t, format, false)

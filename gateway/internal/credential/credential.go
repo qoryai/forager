@@ -582,7 +582,7 @@ func KeyMatches(prefixes []string, value []byte) bool {
 // MaxClaimPayload is the most bytes of a JWT payload [AccountClaim] decodes, once
 // decoded: it bounds what the gateway decodes of a model key's value each time it
 // loads one. The claims of a subscription's token under the member account_claim
-// points into are 8 members (the 521 probe, item 7).
+// points into are 8 members, as measured.
 const MaxClaimPayload = 8 << 10
 
 // AccountClaim is the string at pointer, a JSON pointer (RFC 6901), in the JWT payload

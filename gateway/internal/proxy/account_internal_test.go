@@ -159,12 +159,12 @@ func (f *accountFixture) send(t *testing.T, method, path string, keyed bool) (in
 }
 
 // TestAModelKeyIsSetOnItsPathsAlone pins a model key with paths beside a host
-// credential with other paths of its host, the 521 probe's fix 2: the key goes on its
-// paths with the account id of its value in the account header; the host credential
-// on its paths with no account header; another path of the host is denied with 403,
-// unless the run policy's path rules list it, and then it goes with neither the key nor
-// an account header. The agent's account header never reaches the provider, in any
-// spelling, also on a request without the placeholder.
+// credential with other paths of its host: the key goes on its paths with the account id
+// of its value in the account header; the host credential on its paths with no account
+// header; another path of the host is denied with 403, unless the run policy's path rules
+// list it, and then it goes with neither the key nor an account header. The agent's
+// account header never reaches the provider, in any spelling, also on a request without
+// the placeholder.
 func TestAModelKeyIsSetOnItsPathsAlone(t *testing.T) {
 	token := chatToken("acct-fake-0001")
 	placeholder := "Bearer " + link.KeyPlaceholder("subscription")

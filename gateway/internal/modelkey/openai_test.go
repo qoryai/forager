@@ -10,10 +10,10 @@ import (
 )
 
 // The fixtures of this file have fake values. The x-codex-* header names and shapes of
-// a 200 are measured (probe 521, item 8). Each fixture marked "from source" follows the
-// openai/codex source at 17a0e6f63f, to confirm with probe 1a/1c/8-api/burst-429: the
-// x-codex-rate-limit-reached-type header, the API key's x-ratelimit-* headers, the 429
-// bodies and the response.failed event.
+// a 200 are measured. Each fixture marked "from source" follows the openai/codex source
+// at 17a0e6f63f, to confirm against the provider: the x-codex-rate-limit-reached-type
+// header, the API key's x-ratelimit-* headers, the 429 bodies and the response.failed
+// event.
 
 // openaiGroup is [group] with keys of the format openai-responses.
 func openaiGroup(t *testing.T) (*modelkey.Group, *clock) {

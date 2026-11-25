@@ -93,7 +93,7 @@ var skills = []string{"skills", "cloud.skills"}
 // run before each tool call: hooks, and codex_hooks, its legacy name, turn them off
 // (codex-rs features/src/lib.rs:1468-1473, features/src/legacy.rs); with
 // unified_exec_tty on, a shell started with a terminal takes later commands through
-// write_stdin, which runs no hook (probe U2). Hooks are on by default, and qory turns
+// write_stdin, which runs no hook. Hooks are on by default, and qory turns
 // unified_exec_tty off in the config.toml it writes for the run, so a launch's pair,
 // --enable or --disable may not set one, a key under one, such as
 // features.hooks.enabled, or a key above one.
