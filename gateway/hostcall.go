@@ -90,8 +90,10 @@ func (c Config) hostCallTimeOf() time.Duration {
 
 // serveHostCall serves the host call c of the run runID: it forwards the request's body
 // unread to Qory Apiary, c's method to <run.url>/<run_id> and c's path with its signed
-// client, once, within [server.HostCallTime], and writes what Qory Apiary returned. The
-// body of a GET is not read, as a transcript request's.
+// client, within [server.HostCallTime], and writes what Qory Apiary returned. It sends a
+// POST once; net/http's transport may send a GET again on a reused connection that
+// closes with no answer. The body of a GET is not read, as a transcript request's, so a
+// GET that came with a body goes on after its caller hangs up, until the call ends.
 //
 //   - A 2xx passes with its status and body, a body with Content-Type:
 //     application/json alone. The body of a 200 is at most c.answer bytes, and that of
@@ -122,7 +124,9 @@ func (c Config) hostCallTimeOf() time.Duration {
 // rate_limited, and Qory Apiary gets nothing of it. For such a c, the run id and the end
 // of the run are checked first ([Gateway.bodyRefusal]), then the place is taken, and then
 // the body is read, on the local link within [server.HostCallTime], as on the one address
-// within [edgeReadWait].
+// within [edgeReadWait]. A request is in flight until its answer is written; on the one
+// address, any answer but a GET's 200 only until the handler passes it to
+// [signedWriter], which signs and writes it after the handler.
 func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request, runID string, c *hostCall) {
 	rc := http.NewResponseController(w)
 	release := func() {}
@@ -218,10 +222,11 @@ func (g *Gateway) serveHostCall(s *side, w http.ResponseWriter, r *http.Request,
 	a, err := g.client.HostCall(ctx, conf.Run.URL, runID, c.method, c.path, body, c.answer)
 	release()
 	if c.single {
-		// A caller that stops reading the answer ends its write at the deadline, and so the
-		// answer's count and the run's place. net/http reads a body that came with a GET
-		// before it writes the answer's head, so that read has the deadline too. net/http
-		// clears both before the connection's next request.
+		// A caller that stops reading the answer ends its write at the deadline. Where the
+		// handler writes the answer, the answer's count and the run's place end with it.
+		// net/http reads a body that came with a GET before it writes the answer's head, so
+		// that read has the deadline too. net/http clears both before the connection's next
+		// request.
 		deadline := time.Now().Add(g.cfg.hostCallTimeOf())
 		rc.SetReadDeadline(deadline)
 		rc.SetWriteDeadline(deadline)

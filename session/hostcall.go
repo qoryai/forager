@@ -90,9 +90,9 @@ func (r *Run) Findings(ctx context.Context) ([]byte, error) {
 // Qory Apiary has no key for a repeated request: a second request with the same raises
 // makes new findings. Nothing was sent for an error that wraps [ErrRunClosed], for a run
 // with no control plane, for a body over 8 MiB, and for a refusal From the gateway with
-// Status 400, 404, 413 or 429. Qory Apiary may have stored the findings of every other call that returned an
-// error, a 503 with no code among them: read them with [Run.Findings] before you send
-// the request again.
+// Status 400, 404, 413 or 429. Qory Apiary may have stored the findings of every other
+// call that returned an error, a 503 with no code among them: read them with
+// [Run.Findings] before you send the request again.
 func (r *Run) PostFindings(ctx context.Context, body []byte) ([]byte, error) {
 	if err := r.hostCallAllowed("POST findings"); err != nil {
 		return nil, err

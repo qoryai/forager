@@ -5151,16 +5151,20 @@ and the size. The gateway sends the body as it came to Qory Apiary's run endpoin
 `run.url` of the discovery, signed with its access key as every request of the run API
 (§The run API, What Qory Apiary gets), within 60 seconds. It sends a `POST` once, and
 nothing again after a failure. A GET findings may reach Qory Apiary twice, when Qory
-Apiary closes a connection that the gateway kept open before any answer. A `2xx` of Qory Apiary's that verifies under the pin passes with its
-status and its body, with `Content-Type: application/json` when it has one: a
-next-session answer's `200`, a pushed-commits answer's `204` with no body, a findings
-answer's `200`. The session waits 4 minutes at most, and sends nothing once the run's
-close began or for a run with no control plane. The other answers:
+Apiary closes a connection that the gateway kept open before any answer. A `2xx` of
+Qory Apiary's that verifies under the pin passes with its status and its body, with
+`Content-Type: application/json` when it has one: a next-session answer's `200`, a
+pushed-commits answer's `204` with no body, a findings answer's `200`. The session
+waits 4 minutes at most, and sends nothing once the run's close began or for a run with
+no control plane. Behind a separate gateway, the 4 minutes are 60 seconds for the body,
+120 for a reopen of the run and the 60 seconds at Qory Apiary, with no time left for
+the answer's write: when the wait ends, read the findings before you send a POST
+findings again (A POST findings again, below). The other answers:
 
 | Status | `error` | `from` | When |
 |---|---|---|---|
 | Qory Apiary's | Qory Apiary's | `apiary` | a signed answer of Qory Apiary's with a code and a status from `400` to `599` but `401` and `410`, such as `409` `run_ended` or `503` `unavailable`, with its `names` and its `message`; a name that contains a secret is a phrase in its place. With a `Retry-After` of whole seconds, such as on a `429` `rate_limited`, it has `retry_after`, those seconds (Waiting before a request again, below) |
-| `400` | `invalid_request` | `gateway` | a `POST` with a `Content-Type` other than `application/json`, or whose body the gateway did not read whole, a POST findings body that did not arrive within 60 seconds among them; on the local link, a run id of no run there; nothing is sent |
+| `400` | `invalid_request` | `gateway` | a `POST` with a `Content-Type` other than `application/json`, or whose body the gateway did not read whole, on the local link a POST findings body that did not arrive within 60 seconds among them; on the local link, a run id of no run there; nothing is sent |
 | `400` | `run_key_invalid` | `gateway` | behind a separate gateway, a run id that is not the run key's; nothing is sent |
 | `404` | `not_found` | `gateway` | the run has no control plane; nothing is sent |
 | `413` | `payload_too_large` | `gateway` | the body is over its limit; nothing is sent. For a POST findings body over 8 MiB, the session's link returns an error with nothing sent, so only another client gets this `413` |
@@ -5179,17 +5183,25 @@ body or answer over 1 MiB, so they take none of the 512 MiB.
 
 A run has at most one GET findings and one POST findings in flight. A second one of the
 same method gets the `429`, and the gateway reads its body only to drop it. The gateway
-checks the run id first, then whether the run has one in flight, then reads the body, so a
-body of no run here counts nothing. A POST findings body has 60 seconds to arrive. A
-request is in flight until its answer is written, within 60 seconds of the end of the call
-to Qory Apiary.
+checks the run id and whether the run ended first, then whether the run has one in
+flight, then reads the body. A body of another run's id, on the local link of no run,
+and of a run that ended at the gateway counts nothing. Behind a separate gateway, the
+body of a run that the gateway reopens counts during the reopen, up to 120 seconds. A
+POST findings body has 60 seconds to arrive. A request is in flight until the gateway
+wrote its answer, within 60 seconds of the end of the call to Qory Apiary. Behind a
+separate gateway, every answer but a GET findings `200` is written after that: the
+request is in flight until the gateway has the answer to sign. A caller that hangs up
+while Qory Apiary has its request ends the call. The gateway reads no body of a GET
+findings, so after the hang-up of a GET findings that came with a body, the call goes on
+until Qory Apiary answers or the 60 seconds end, and the run has that GET findings in
+flight.
 
 **A POST findings again.** Qory Apiary has no key for a repeated POST findings: a second
 request with the same raises makes new findings. Nothing was sent for a session's error
-before the send, in a closed run, which wraps `session.ErrRunClosed` in Go, in a run
-with no control plane, or for a body over 8 MiB, and for the gateway's `400`, `404`, `413` and `429`. After any
-other error, Qory Apiary may have stored the findings: read them with GET findings before
-you send the POST findings again.
+before the send: in a closed run, which wraps `session.ErrRunClosed` in Go, in a run
+with no control plane, and for a body over 8 MiB; and for the gateway's `400`, `404`,
+`413` and `429`. After any other error, Qory Apiary may have stored the findings: read
+them with GET findings before you send the POST findings again.
 
 **Waiting before a request again.** When Qory Apiary's coded refusal of a host call
 has `Retry-After: 7`, the link refusal has `"retry_after": 7`, and `Run.NextSession`,
