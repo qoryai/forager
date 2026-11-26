@@ -743,7 +743,42 @@ func TestDockerRestartRelayCommandLines(t *testing.T) {
 	if err := enc.(*dockerEnclosure).RestartRelay(ctx, Launch{Proxy: "172.30.0.1:50123", ProxyToken: "not-a-real-token"}); err != nil {
 		t.Fatal(err)
 	}
-	if lines := strings.Join(fresh.lines, "\n"); strings.Contains(lines, "docker rm") || !strings.Contains(lines, "docker start qory-"+runID+"-relay") {
+	if lines := strings.Join(fresh.lines, "\n"); !strings.Contains(lines, "docker rm --force --volumes qory-"+runID+"-relay\ndocker create --name qory-"+runID+"-relay") || !strings.Contains(lines, "docker start qory-"+runID+"-relay") {
 		t.Errorf("a restart of a relay that never started:\n%s", lines)
+	}
+}
+
+// TestDockerRestartRelayAfterAFailedRestart pins a restart whose docker start fails after
+// docker create made the relay: the next restart removes that container first and
+// starts the relay, and the commands that remove what the run made list the relay once.
+func TestDockerRestartRelayAfterAFailedRestart(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", local_: true, uid: 1000}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, sys: rec}
+	enc, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := enc.(*dockerEnclosure)
+	ctx := context.Background()
+	l := Launch{Proxy: "172.30.0.1:50123", ProxyToken: "not-a-real-token"}
+	if err := e.StartRelay(ctx, l); err != nil {
+		t.Fatal(err)
+	}
+	rec.fail = "docker start qory-" + runID + "-relay"
+	if err := e.RestartRelay(ctx, l); err == nil {
+		t.Fatal("a restart whose docker start fails returned no error")
+	}
+	rec.fail = ""
+	from := len(rec.lines)
+	if err := e.RestartRelay(ctx, l); err != nil {
+		t.Fatal(err)
+	}
+	lines := rec.lines[from:]
+	if len(lines) < 4 || lines[0] != "docker rm --force --volumes qory-"+runID+"-relay" || !strings.HasPrefix(lines[1], "docker create --name qory-"+runID+"-relay ") || !slices.Contains(lines, "docker start qory-"+runID+"-relay") {
+		t.Errorf("the restart after a failed one:\n%s", strings.Join(lines, "\n"))
+	}
+	relay := []string{"rm", "--force", "--volumes", "qory-" + runID + "-relay"}
+	if n := len(slices.DeleteFunc(slices.Clone(e.made), func(c []string) bool { return !slices.Equal(c, relay) })); n != 1 {
+		t.Errorf("the relay's removal is listed %d times", n)
 	}
 }

@@ -1106,7 +1106,9 @@ func (e *dockerEnclosure) StartRelay(ctx context.Context, l Launch) error {
 	create = append(create, fmt.Sprintf("%d=%s", relayPort, net.JoinHostPort(e.host, port)))
 	pull, cancel := context.WithTimeout(ctx, relayWait)
 	defer cancel()
-	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.relay()})
+	if rm := []string{"rm", "--force", "--volumes", e.relay()}; !slices.ContainsFunc(e.made, func(c []string) bool { return slices.Equal(c, rm) }) {
+		e.made = append(e.made, rm)
+	}
 	if out, err := e.docker(pull, create...); err != nil {
 		return e.unpulled(e.relayImage(), out, err)
 	}
@@ -1123,19 +1125,19 @@ func (e *dockerEnclosure) StartRelay(ctx context.Context, l Launch) error {
 	return nil
 }
 
-// RestartRelay removes the relay, when it started, with docker rm --force, which returns
-// once every process of it ended and its connections are gone, and starts it again as
-// [dockerEnclosure.StartRelay] does, with l.ProxyToken. The session calls it at the end
-// of a window of unprivileged containers, after the run's forwarder took a new hop
-// token: a connection the old relay still held never reaches the proxy. Only l.Proxy,
-// l.ProxyToken and l.ProxyPeer are read.
+// RestartRelay removes the relay with docker rm --force, which returns once every
+// process of it ended and its connections are gone, and starts it again as
+// [dockerEnclosure.StartRelay] does, with l.ProxyToken. The removal runs also when the
+// relay did not start, so a container that an earlier start or restart created before
+// it failed goes too, and a relay that is gone is not an error. The session calls it at
+// the end of a window of unprivileged containers, after the run's forwarder took a new
+// hop token: a connection the old relay still held never reaches the proxy. Only
+// l.Proxy, l.ProxyToken and l.ProxyPeer are read.
 func (e *dockerEnclosure) RestartRelay(ctx context.Context, l Launch) error {
-	if e.relayed {
-		if err := e.removeContainer(ctx, e.relay(), noSuchContainer); err != nil {
-			return err
-		}
-		e.relayed = false
+	if err := e.removeContainer(ctx, e.relay(), noSuchContainer); err != nil {
+		return err
 	}
+	e.relayed = false
 	return e.StartRelay(ctx, l)
 }
 
