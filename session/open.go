@@ -148,6 +148,9 @@ type Run struct {
 	enclosure  wall.Enclosure
 	wallFwd    *forwarder
 	relayToken string
+	// windowed is true from [Run.openWindow] to the [Run.endWindow] that restarted the
+	// relay: a step container or an unprivileged setup container ran since the last end.
+	windowed bool
 	// setupFirst and setupLast are the numbers of the first and the last step of
 	// [Run.Setup], 0 until it wrote one, and setupFailed the number of the step of
 	// [Run.Setup] or [Run.RemoveSetup] that failed, 0 for none: no session joins after it.

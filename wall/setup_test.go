@@ -702,3 +702,48 @@ func TestDockerAfterBindsNoRuntimeFolder(t *testing.T) {
 		t.Errorf("After's container binds the runtime folder: %s", run)
 	}
 }
+
+// TestDockerRestartRelayCommandLines pins RestartRelay: the relay removed with docker
+// rm --force and created, connected and started again, with the new token in its
+// environment file and the old one nowhere; Close removes the new relay once. A relay
+// that never started is started.
+func TestDockerRestartRelayCommandLines(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", local_: true, uid: 1000}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, sys: rec}
+	enc, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := enc.(*dockerEnclosure)
+	ctx := context.Background()
+	if err := e.StartRelay(ctx, Launch{Proxy: "172.30.0.1:50123", ProxyToken: "not-a-real-old-token"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.RestartRelay(ctx, Launch{Proxy: "172.30.0.1:50123", ProxyToken: "not-a-real-new-token"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rec.relayEnv, "=not-a-real-new-token\n") || strings.Contains(rec.relayEnv, "old") {
+		t.Errorf("the relay's environment after the restart:\n%s", rec.relayEnv)
+	}
+	if err := e.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Join(rec.lines, "\n")
+	if n := strings.Count(lines, "rm --force --volumes qory-"+runID+"-relay"); n != 2 {
+		t.Errorf("the relay was removed %d times, want twice:\n%s", n, lines)
+	}
+	golden(t, "relay-restart", lines+"\n\nrelay environment:\n"+rec.relayEnv)
+
+	fresh := &recorder{t: t, gateway: "172.30.0.1", local_: true, uid: 1000}
+	d = &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, sys: fresh}
+	enc, err = d.Prepare(ctx, Request{RunID: runID, Image: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := enc.(*dockerEnclosure).RestartRelay(ctx, Launch{Proxy: "172.30.0.1:50123", ProxyToken: "not-a-real-token"}); err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Join(fresh.lines, "\n"); strings.Contains(lines, "docker rm") || !strings.Contains(lines, "docker start qory-"+runID+"-relay") {
+		t.Errorf("a restart of a relay that never started:\n%s", lines)
+	}
+}

@@ -1116,6 +1116,11 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		if err := r.listed.update(slices.Concat(again.sources, binds, installBinds, r.wallOwn, r.setupBinds)); err != nil {
 			return fail(err)
 		}
+		// No connection of a step container or an unprivileged setup container reaches
+		// the proxy unmarked once the agent's container can connect.
+		if err := r.endWindow(runCtx); err != nil {
+			return fail(err)
+		}
 		inner, innerArgs := withExec(spec.Exec, unset, command, args)
 		launch, err = enclosure.Wrap(runCtx, wall.Launch{
 			Command: inner, Args: innerArgs, Dir: shown.Dir, Interactive: interactive,

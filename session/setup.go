@@ -398,6 +398,11 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 	// The run's push proxy forwarders end before the setup container starts, so no push
 	// runs while it can write the run's binds.
 	r.pushes.closeAll()
+	// A setup container without Unprivileged gets credentials: no connection of an
+	// earlier step container reaches the proxy unmarked once it can connect.
+	if err := r.endWindow(ctx); err != nil {
+		return fail(err)
+	}
 	// The engine may have started the setup container also when StartSetup returns an
 	// error, as when ctx ends after docker run reached it, so RemoveSetup removes it.
 	r.setupUp = container

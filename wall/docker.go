@@ -1121,6 +1121,22 @@ func (e *dockerEnclosure) StartRelay(ctx context.Context, l Launch) error {
 	return nil
 }
 
+// RestartRelay removes the relay, when it started, with docker rm --force, which returns
+// once every process of it ended and its connections are gone, and starts it again as
+// [dockerEnclosure.StartRelay] does, with l.ProxyToken. The session calls it at the end
+// of a window of unprivileged containers, after the run's forwarder took a new hop
+// token: a connection the old relay still held never reaches the proxy. Only l.Proxy,
+// l.ProxyToken and l.ProxyPeer are read.
+func (e *dockerEnclosure) RestartRelay(ctx context.Context, l Launch) error {
+	if e.relayed {
+		if err := e.removeContainer(ctx, e.relay(), noSuchContainer); err != nil {
+			return err
+		}
+		e.relayed = false
+	}
+	return e.StartRelay(ctx, l)
+}
+
 // firstUse is what the first container of the run's image needs, once per enclosure:
 // for an image by reference, the image held by its digest, which [Docker.Pull] fetched
 // before; when the relay starts from another image, the container of the run's image
