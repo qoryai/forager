@@ -42,11 +42,11 @@ func isUnprivileged(ctx context.Context) bool {
 // ServeUnprivileged hands c to a proxy [New] made as [Proxy.ServeConn] does, as a
 // connection that opened with link.UnprivilegedPreamble: the run's allow list and the
 // record apply to its requests, the proxy sets no credential on them, sends none of them
-// to a tool and answers each run API request with 403.
+// to a tool and returns 403 for each run API request.
 func (p *Proxy) ServeUnprivileged(c net.Conn) { p.ServeConn(&unprivileged{Conn: c}) }
 
 // refuseTool records d, a request on an unprivileged connection to a tool's host, as
-// refused with [UnprivilegedRule], and answers it with 403.
+// refused with [UnprivilegedRule], and writes the 403.
 func (p *Proxy) refuseTool(w http.ResponseWriter, d Decision) {
 	d.Allowed, d.PathRule, d.Outcome = false, UnprivilegedRule, Refused
 	p.observe(d)

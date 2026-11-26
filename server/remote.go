@@ -315,7 +315,7 @@ func (k *Link) DialProxy(ctx context.Context) (net.Conn, error) {
 // [Link.DialProxy] does, with [link.UnprivilegedLine] and the run key in place of the
 // relay's preamble: the gateway's proxy applies the run's allow list to what is written
 // after it and records it, sets no credential on it, sends none of it to a tool, and
-// answers its run API requests with 403. The session dials it for a connection from a
+// returns 403 for its run API requests. The session dials it for a connection from a
 // step container or an unprivileged setup container. The local link has no such way.
 func (k *Link) DialProxyUnprivileged(ctx context.Context) (net.Conn, error) {
 	if k.remote == nil {

@@ -17,7 +17,7 @@ import (
 // a new container of the run's image on the inside network, whose only way out is the
 // relay. The session marks every connection of the relay while a step container may run,
 // so the gateway's proxy applies the run's allow list to its requests and records them,
-// sets no credential on them and answers its run API requests with 403. A step container
+// sets no credential on them and returns 403 for its run API requests. A step container
 // gets no nested Docker daemon, no hook socket, no home and no transcript.
 type StepWrapper interface {
 	// WrapStep creates the step container and returns the launch that starts it and

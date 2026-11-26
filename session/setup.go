@@ -40,7 +40,7 @@ type SetupSpec struct {
 	Limits wall.Limits
 	// Unprivileged starts the setup container as a step container is started: the
 	// run's allow list and the record of its egress apply to its requests, the gateway's
-	// proxy sets no credential on them, and the run API answers them with 403. Its
+	// proxy sets no credential on them, and the run API returns 403 for them. Its
 	// environment has no QORY_RUN_API. While it runs, no session joins: call
 	// [Run.RemoveSetup] first. [Run.RunStep] runs beside a setup container only when
 	// the setup started with Unprivileged.

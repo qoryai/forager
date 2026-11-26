@@ -100,7 +100,7 @@ type runningStep struct {
 // daemon, no hook socket and no home. While a step container may run, every connection
 // of the wall's relay is unprivileged: the gateway's proxy applies the run's allow list
 // to its requests and records them, sets no credential on them, sends none of them to
-// a tool and answers each run API request with 403. A service that an unprivileged
+// a tool and returns 403 for each run API request. A service that an unprivileged
 // setup container runs is reached by the name qory-setup, as from a session.
 //
 // RunStep writes one step, numbered on from the run's last step, of kind

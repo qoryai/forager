@@ -86,8 +86,8 @@ const (
 // the hop then, is unprivileged: the forwarder opens its connection to the proxy with
 // link.UnprivilegedPreamble, on one machine, or through way.dialUnprivileged, behind a
 // separate gateway, and passes it on as it arrives, past the check and the route. The
-// gateway's proxy then sets no credential on its requests and answers its run API
-// requests with 403. [forwarder.swap] ends the marking and replaces the hop, so a
+// gateway's proxy then sets no credential on its requests and returns 403 for its run
+// API requests. [forwarder.swap] ends the marking and replaces the hop, so a
 // connection the relay of the window opens later fails the hop's check.
 //
 // The secrets are held in memory alone: never in a file or a report, and in an
@@ -284,7 +284,7 @@ func (f *forwarder) stamp(c net.Conn) (hop string, marked, ok bool) {
 	return f.way.hop, f.marking, true
 }
 
-// mark makes every connection accepted, or that shows the hop, from now on
+// mark makes every connection accepted, or that shows the hop, from this call on
 // unprivileged, until [forwarder.swap]. The session calls it before a step container
 // or an unprivileged setup container starts.
 func (f *forwarder) mark() {

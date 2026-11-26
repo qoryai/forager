@@ -359,8 +359,30 @@ release may change what an existing document does, and says so under Upgrading.
   token could carry the pull. A run whose image the engine does not have fails with "Pull the
   image on this machine before you set the engine proxy: …". Before, the engine pulled a
   missing image the machine defines when the wall created its container.
+- Read the wall's relay token as a hop token on one machine too: the relay opens each
+  connection to the run's forwarder with a token that the forwarder checks and replaces
+  with the run's proxy secret, so the proxy secret no longer reaches the relay's
+  environment file. A wall adapter reads `wall.Launch.ProxyToken` as before.
 
 #### Added
+
+- `(*session.Run).RunStep` and `session.StepSpec`: one command of the caller's in a step
+  container, a new container of the run's image on the wall's inside network, with no
+  run secret, no `QORY_RUN_API`, no nested Docker daemon and no hook socket. It writes a
+  step of the new kind `container` and returns a `session.StepResult` with the exit
+  status, the signal, `TimedOut`, `OOMKilled`, the first 1 MiB of the masked output and
+  the times. `Close` during a step stops it. The Docker wall implements it with
+  `wall.StepWrapper`.
+- `SetupSpec.Unprivileged`: a setup container with no credential and no run API, which
+  steps may run beside. A join while it runs returns "Call RemoveSetup before the join:
+  the setup container runs with Unprivileged."
+- The unprivileged mark: while a step container or an unprivileged setup container may
+  run, the run's forwarder opens the gateway's proxy with the link word
+  `QORY-UNPRIVILEGED`. The proxy applies the run's allow list and records each request,
+  sets no credential, and returns `403` with the rule `wall:unprivileged` for a tool's
+  host and `403` `unprivileged` for the run API. The next join, or setup without
+  `Unprivileged`, gives the forwarder a new hop token and restarts the relay, so no
+  connection of a step reaches the proxy unmarked.
 
 - `QORY_SESSION`, `session.EnvSession`, in each session's environment: the number the
   gateway assigns to the session's join, counted from 1 in the run, where the gateway
