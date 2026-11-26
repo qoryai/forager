@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -230,5 +231,24 @@ func TestTheWindowEndsWithOneRestart(t *testing.T) {
 	enc.fail = nil
 	if err := r.endWindow(ctx); err != nil || len(enc.tokens) != 3 || r.windowed {
 		t.Fatalf("the retry: %v, %d restarts", err, len(enc.tokens))
+	}
+}
+
+// TestAnUnprivilegedConnectionSkipsTheRoute pins that a request to the route's host on an
+// unprivileged connection never reaches the caller's handler: the forwarder reads the
+// relay's peer line and passes the request on to the proxy after
+// link.UnprivilegedPreamble, whose 403 the program gets.
+func TestAnUnprivilegedConnectionSkipsTheRoute(t *testing.T) {
+	h := &routeHandler{answer: func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "routed") }}
+	q, _, _ := routeFor(t, h)
+	p := startRouteProxy(t)
+	f := walledRoute(t, p, q)
+	f.mark()
+	resp, body := replyOf(t, relaySend(t, f, toRoute("POST", "/push", "{}")))
+	if resp.StatusCode != http.StatusForbidden || body != "denied" || len(h.got()) != 0 {
+		t.Errorf("the program got %d %q; the handler got %d calls", resp.StatusCode, body, len(h.got()))
+	}
+	if got := p.requests(); len(got) != 1 || !strings.HasPrefix(got[0], link.UnprivilegedPreamble+" ") {
+		t.Errorf("the proxy got %q", got)
 	}
 }
