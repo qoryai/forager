@@ -458,8 +458,10 @@ type dockerEnclosure struct {
 	host string
 	// subnets are the inside network's, where the relay listens.
 	subnets []string
-	// made holds the commands that remove what was created, in the order created.
+	// made holds the commands that remove what was created, in the order created; kept
+	// lists the containers whose last removal by removeContainer failed.
 	made [][]string
+	kept []string
 	temp string
 	// env is the engine's selection every command of the run's runs with, nil for
 	// Forager's own environment.
@@ -1462,15 +1464,19 @@ func (e *dockerEnclosure) Unwrap(ctx context.Context) error {
 // within closeWait, and returns once the engine removed it: the engine kills what still
 // runs in it. A failed command whose output gone accepts is not an error. On any other
 // failure, which matches [ErrContainerKept], the entry stays in e.made, so Close tries
-// again.
+// again, and e.kept lists the container until a removal succeeds.
 func (e *dockerEnclosure) removeContainer(ctx context.Context, name string, gone func(out string) bool) error {
 	ctx, cancel := context.WithTimeout(ctx, closeWait)
 	defer cancel()
 	rm := []string{"rm", "--force", "--volumes", name}
 	if err := e.remove(ctx, rm, gone); err != nil {
+		if !slices.Contains(e.kept, name) {
+			e.kept = append(e.kept, name)
+		}
 		return err
 	}
 	e.made = slices.DeleteFunc(e.made, func(c []string) bool { return slices.Equal(c, rm) })
+	e.kept = slices.DeleteFunc(e.kept, func(k string) bool { return k == name })
 	return nil
 }
 

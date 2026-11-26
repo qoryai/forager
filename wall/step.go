@@ -32,9 +32,9 @@ type StepWrapper interface {
 	// gone is not an error, and gives the zero StepExit. A failed removal matches
 	// [ErrContainerKept]: the container may still run, and Close tries again.
 	UnwrapStep(ctx context.Context, grace time.Duration) (StepExit, error)
-	// Kept lists the names of the run's containers whose removal failed and that may
+	// Kept lists the names of the run's containers whose last removal failed and that may
 	// still run: the agent's, After's, the setup container or the step container. The
-	// relay and the run's image container, which never starts, are not listed.
+	// relay, which binds the helper alone, is not listed.
 	Kept() []string
 }
 
@@ -58,7 +58,7 @@ func (e *dockerEnclosure) step() string { return e.base + "-step" }
 // runtime, as the wall's user with no capability and none to gain, with the launch's
 // mounts at their paths or their Targets, the working directory, the helper, with l.CA
 // the bundle, and the launch's limits. Its environment, through a file, is l.Env, the
-// proxy variables, which name the relay with no password, and, with l.CA, the variables
+// proxy variables, set to the relay's address with no password, and, with l.CA, the variables
 // that point at the bundle. It has no --rm, so UnwrapStep reads its exit before it
 // removes it, and no hook socket. With nested Docker it runs under the same runtime,
 // with no root, no daemon, no store volume and no IPv6 sysctl. The entrypoint is
@@ -177,14 +177,8 @@ func stepExit(out string) (StepExit, error) {
 	return StepExit{Started: f[0] != "created", ExitCode: code, OOMKilled: f[2] == "true"}, nil
 }
 
-// Kept lists the containers whose docker rm is still among the commands that remove
-// what the run made, apart from the relay and the run's image container.
+// Kept lists the containers whose last removal failed, apart from the relay, in the
+// order the removals failed.
 func (e *dockerEnclosure) Kept() []string {
-	var out []string
-	for _, c := range e.made {
-		if len(c) == 4 && c[0] == "rm" && c[3] != e.relay() && c[3] != e.image() {
-			out = append(out, c[3])
-		}
-	}
-	return out
+	return slices.DeleteFunc(slices.Clone(e.kept), func(k string) bool { return k == e.relay() })
 }

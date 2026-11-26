@@ -228,14 +228,15 @@ func (r *Run) RunStep(ctx context.Context, spec StepSpec) (res *StepResult, err 
 	}
 	if r.listed != nil {
 		r.listed.askID(runCtx, r.open.Wall)
-		all := slices.Concat(r.openBinds, again.sources, binds)
+		all := withNew(r.openBinds, slices.Concat(again.sources, binds))
 		if err := r.listed.update(all); err != nil {
 			return fail(err)
 		}
 		// What the step container writes stays after its removal, so each join lists
-		// its places with the setup container's, until the run closes.
+		// its places with the setup container's, until the run closes. Steps that bind
+		// the same places list them once.
 		r.openBinds = all
-		r.setupBinds = slices.Concat(r.setupBinds, again.sources, binds)
+		r.setupBinds = withNew(r.setupBinds, slices.Concat(again.sources, binds))
 	}
 	// Every connection of the relay is unprivileged from here until the next privileged
 	// container's start ends the window.
@@ -308,6 +309,23 @@ func (r *Run) RunStep(ctx context.Context, spec StepSpec) (res *StepResult, err 
 		step.end(event.StateFailed, res.ExitCode)
 	}
 	return res, nil
+}
+
+// withNew is have with each bind of add that have does not list yet, in add's order.
+func withNew(have, add []bindSource) []bindSource {
+	out := slices.Clone(have)
+	for _, b := range add {
+		if !slices.ContainsFunc(out, func(o bindSource) bool { return sameBind(o, b) }) {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// sameBind reports whether a and b list the same place the same way.
+func sameBind(a, b bindSource) bool {
+	return a.Path == b.Path && a.Resolved == b.Resolved && slices.Equal(a.Lookups, b.Lookups) &&
+		a.Writable == b.Writable && a.Kind == b.Kind && a.Pattern == b.Pattern
 }
 
 // checkStep refuses a spec RunStep cannot run, before anything is written.

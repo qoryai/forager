@@ -559,7 +559,7 @@ applied, the command's output as its lines on `stdout` and `stderr`, and its end
 | is stopped by `ctx` or `Close` | `cancelled` | the stop's cause as the error |
 
 `Output` is the first 1 MiB of the masked output of both streams, in the order the bytes
-arrived, and `OutputCut` says the command wrote more. A stop sends `SIGTERM`, then
+arrived. `OutputCut` is true when the command wrote more. A stop sends `SIGTERM`, then
 `SIGKILL` 5 seconds later. `RunStep` removes the step container before it returns.
 `Close` during a step stops it, waits for `RunStep` to return, and closes the run.
 

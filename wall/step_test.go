@@ -105,12 +105,13 @@ func TestStepExit(t *testing.T) {
 	}
 }
 
-// TestDockerUnwrapStepKeepsAFailedRemoval pins UnwrapStep when docker rm fails: the error
-// matches ErrContainerKept, Kept lists the step container, and a later UnwrapStep that
-// removes it clears the list. Without a WrapStep, UnwrapStep runs nothing.
+// TestDockerUnwrapStepKeepsAFailedRemoval pins UnwrapStep when docker rm fails beside a
+// setup container that runs: the error matches ErrContainerKept, Kept lists the step
+// container alone, and a later UnwrapStep that removes it clears the list. Without a
+// WrapStep, UnwrapStep runs nothing.
 func TestDockerUnwrapStepKeepsAFailedRemoval(t *testing.T) {
 	rec := &recorder{t: t, gateway: "172.30.0.1", local_: true, uid: 1000}
-	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, sys: rec}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, HoldArgs: []string{"run", "hold"}, sys: rec}
 	enc, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
 	if err != nil {
 		t.Fatal(err)
@@ -120,6 +121,11 @@ func TestDockerUnwrapStepKeepsAFailedRemoval(t *testing.T) {
 	before := len(rec.lines)
 	if exit, err := e.UnwrapStep(ctx, time.Second); err != nil || exit != (StepExit{}) || len(rec.lines) != before {
 		t.Fatalf("UnwrapStep with no step container: %+v, %v, ran %q", exit, err, rec.lines[before:])
+	}
+	setup := setupLaunch()
+	setup.Proxy = "172.30.0.1:50123"
+	if err := e.StartSetup(ctx, setup); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := e.WrapStep(ctx, stepLaunch()); err != nil {
 		t.Fatal(err)
