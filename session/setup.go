@@ -298,7 +298,7 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 	}
 	// The window of an unprivileged setup container ends with a restart of the relay.
 	if _, ok := r.enclosure.(relayRestarter); spec.Unprivileged && !ok {
-		return fmt.Errorf("Start the setup without Unprivileged: the %s wall cannot start its relay again after it.", accesskey.ShownName(r.open.Wall.Name(), false))
+		return fmt.Errorf("Start the setup without Unprivileged: the %s wall does not restart its relay.", accesskey.ShownName(r.open.Wall.Name(), false))
 	}
 	puller, pulls := r.open.Wall.(wall.Puller)
 	pulls = pulls && r.byReference && r.imageStep == 0

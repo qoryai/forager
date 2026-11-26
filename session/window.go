@@ -23,7 +23,8 @@ func (r *Run) openWindow() {
 
 // endWindow ends the window of unprivileged containers, when one opened since the last
 // end, before a privileged container starts: the agent's for a join, or a setup
-// container without Unprivileged. The run's forwarder takes a new hop token and stops
+// container without Unprivileged. It refuses while a step container whose removal
+// failed may still run. The run's forwarder takes a new hop token and stops
 // marking, in one step, so a connection the relay opens with the old token from then on
 // is closed; then the wall removes the relay and starts it again with the new token, so
 // no byte of the window reaches the proxy unmarked, however late it arrives. After a
@@ -32,9 +33,12 @@ func (r *Run) endWindow(ctx context.Context) error {
 	if !r.windowed {
 		return nil
 	}
+	if r.stepKept {
+		return wall.ContainerKeptError(r.keptError())
+	}
 	restarter, ok := r.enclosure.(relayRestarter)
 	if !ok {
-		return fmt.Errorf("Close the run: the %s wall cannot start its relay again after the steps.", accesskey.ShownName(r.open.Wall.Name(), false))
+		return fmt.Errorf("Close the run: the %s wall does not restart its relay after the steps.", accesskey.ShownName(r.open.Wall.Name(), false))
 	}
 	hop, err := newForwarderSecret()
 	if err != nil {

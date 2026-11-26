@@ -193,21 +193,30 @@ func mountHolding(mounts []wall.Mount, dir string) []wall.Mount {
 	return nil
 }
 
-// limitedBuffer keeps the first limit bytes written to it and discards the rest.
+// limitedBuffer keeps the first limit bytes written to it and discards the rest; cut is
+// true once it discarded a byte.
 type limitedBuffer struct {
 	mu    sync.Mutex
 	limit int
 	buf   bytes.Buffer
+	cut   bool
 }
 
 // Write keeps what fits.
 func (b *limitedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if room := b.limit - b.buf.Len(); room > 0 {
-		b.buf.Write(p[:min(room, len(p))])
-	}
+	room := max(b.limit-b.buf.Len(), 0)
+	b.buf.Write(p[:min(room, len(p))])
+	b.cut = b.cut || len(p) > room
 	return len(p), nil
+}
+
+// cutOff reports whether a byte was discarded.
+func (b *limitedBuffer) cutOff() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.cut
 }
 
 // String returns what was kept.

@@ -135,7 +135,7 @@ func TestStepKindsAndStatesAreTheContracts(t *testing.T) {
 		schema, member string
 		want           []string
 	}{
-		{"events/run.step_started.schema.json", "kind", []string{event.StepFetch, event.StepCompose, event.StepImage, event.StepSetup, event.StepJoin, event.StepWall, event.StepBuild, event.StepPush, event.StepMachine, event.StepCopy, event.StepAfter}},
+		{"events/run.step_started.schema.json", "kind", []string{event.StepFetch, event.StepCompose, event.StepImage, event.StepSetup, event.StepJoin, event.StepWall, event.StepBuild, event.StepPush, event.StepMachine, event.StepCopy, event.StepAfter, event.StepContainer}},
 		{"events/run.step_exited.schema.json", "state", []string{event.StateSucceeded, event.StateFailed, event.StateCancelled}},
 		{"events/run.target_write.schema.json", "state", []string{event.WriteStarted, event.WriteChanged, event.WriteRefused, event.WriteCut}},
 	} {

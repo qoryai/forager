@@ -414,12 +414,15 @@ func joinUnanswered(err error) bool {
 	return !errors.As(err, &ref) && !errors.As(err, &status) && !errors.As(err, &doc)
 }
 
-// wallKept is the error of a call that must not run beside the wall of a session whose
-// removal failed, nil for a run with no such wall: [Run.Join], since the wall may still
+// wallKept is the error of a call that must not run beside the wall of a session or a
+// step container whose removal failed, nil for a run with no such wall: [Run.Join], since the wall may still
 // run, and [Run.HostProxy], since the agent's container may still change what a push
 // sends. A timed-out or cancelled session ends by killing the docker client, which does
 // not prove the container stopped.
 func (r *Run) wallKept() error {
+	if r.stepKept {
+		return wall.ContainerKeptError(r.keptError())
+	}
 	if r.keptBy > 0 {
 		return fmt.Errorf("Open a new run. The wall of session %d could not be removed and may still run, so this run takes no more sessions.", r.keptBy)
 	}

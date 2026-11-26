@@ -160,6 +160,12 @@ type Run struct {
 	// setup started with SetupSpec.Unprivileged.
 	setupUp           setupContainer
 	setupUnprivileged bool
+	// stepping is the step that [Run.RunStep] runs, nil for none, which stepMu guards:
+	// Close reads it while RunStep holds the joining lock. stepKept is true once the
+	// removal of a step container failed: it may still run, and no session joins.
+	stepMu   sync.Mutex
+	stepping *runningStep
+	stepKept bool
 	// route is the run's route to OpenSpec.QoryRoute, nil for a run with none.
 	route *qoryRoute
 }
@@ -861,7 +867,8 @@ func (r *Run) setApplied(m map[string]any) {
 }
 
 // Close writes the run's dev.qory.run.exited with the caller's outcome, once, and
-// closes the run: a host step still open ends cancelled with -1 first, then the run's
+// closes the run: a step of [Run.RunStep] that runs is stopped, and Close waits for
+// RunStep to return; a host step still open ends cancelled with -1 first, then the run's
 // wall is removed, the heartbeats and the reloads stop, the sinks are flushed within 15
 // seconds, 180 behind a separate gateway, which may be restarting, and the lock, the
 // registry entry and the link are let go. A wall that could
@@ -880,7 +887,7 @@ func (r *Run) Close(ctx context.Context, out Outcome) (*Closed, error) {
 
 // close is Close with its error unmasked.
 func (r *Run) close(ctx context.Context, out Outcome) (*Closed, error) {
-	if !r.joining.TryLock() {
+	if !r.lockForClose() {
 		return nil, errors.New("a session of the run is still running: close the run after Join returns")
 	}
 	defer r.joining.Unlock()
