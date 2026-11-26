@@ -581,7 +581,9 @@ with -1, `ContainerKept()` is true from then on, and `RunStep`, `Setup`, `Join` 
 host proxies return an error that matches `wall.ErrContainerKept`: `Remove the kept
 container, then close the run: Forager could not remove it, and it may still run.`, and
 on its second line the container's name and the command that removes it, which the wall
-supplies, such as `docker rm -f <name>` for the Docker wall.
+supplies, such as `docker rm -f <name>` for the Docker wall. When the run's engine
+commands run with an engine selection, the command starts with its variables, such as
+`DOCKER_HOST=tcp://engine.example:2376 docker rm -f <name>`, with no password.
 
 After a build of an image, write the build as a step of kind `event.StepBuild`, then
 write its result with `(*session.Run).Built(b)`. `Built` writes `dev.qory.run.built`

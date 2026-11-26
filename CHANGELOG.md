@@ -373,7 +373,7 @@ release may change what an existing document does, and says so under Upgrading.
   status, the signal, `TimedOut`, `OOMKilled`, the first 1 MiB of the masked output and
   the times. `Close` during a step stops it. The Docker wall implements it with
   `wall.StepWrapper`, whose `Kept` lists each container whose removal failed as a
-  `wall.KeptContainer` with the command that removes it. A step container gets no
+  `wall.KeptContainer` with the command that removes it, from the run's engine. A step container gets no
   helper: a program the image lacks comes in a read-only mount of `StepSpec.Mounts`.
 - `SetupSpec.Unprivileged`: a setup container with no credential and no run API, which
   steps may run beside. A join while it runs returns "Call RemoveSetup before the join:

@@ -191,16 +191,30 @@ func stepExit(out string) (StepExit, error) {
 }
 
 // Kept lists the containers whose last removal failed, apart from the relay, in the
-// order the removals failed, each with docker rm -f of its name as Remove.
+// order the removals failed, each with docker rm -f of its name as Remove. When the
+// run's commands run with an engine selection, Remove starts with its variables, such
+// as DOCKER_HOST=tcp://engine.example:2376, so it reaches the same engine. The selection
+// has no password: [Docker.Engine] takes it out of DOCKER_HOST and CONTAINER_HOST.
 func (e *dockerEnclosure) Kept() []KeptContainer {
+	var prefix string
+	for _, kv := range e.env {
+		name, value, _ := strings.Cut(kv, "=")
+		prefix += name + "=" + shellWord(accesskey.ShownValue(value, false)) + " "
+	}
 	var out []KeptContainer
 	for _, name := range e.kept {
 		if name != e.relay() {
-			// shortcut: Remove has none of the engine selection in e.env, such as
-			// DOCKER_HOST, so it removes from the shell's default engine; add the
-			// selection when a run selects an engine other than the default.
-			out = append(out, KeptContainer{Name: name, Remove: e.command() + " rm -f " + name})
+			out = append(out, KeptContainer{Name: name, Remove: prefix + shellWord(e.command()) + " rm -f " + name})
 		}
 	}
 	return out
+}
+
+// shellWord is s as one word of a POSIX shell's command line: as it is when it has only
+// letters, digits and the characters @%+=:,./_-, else in single quotes.
+func shellWord(s string) string {
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%+=:,./_-") == "" {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

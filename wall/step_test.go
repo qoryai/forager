@@ -180,3 +180,51 @@ func TestAStepTargetThroughALinkInTheImageIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// TestKeptRemovesFromTheRunsEngine pins Remove of a kept container: docker rm -f of its
+// name alone with no engine selection; with one, its variables first, as the run's
+// commands run with them, a value with a space in single quotes.
+func TestKeptRemovesFromTheRunsEngine(t *testing.T) {
+	step := "qory-" + runID + "-step"
+	for name, c := range map[string]struct {
+		selection []string
+		want      string
+	}{
+		"no selection": {nil, "docker rm -f " + step},
+		"a selection": {[]string{"DOCKER_HOST=tcp://engine.example:2376", "DOCKER_TLS_VERIFY=1", "DOCKER_CERT_PATH=/home/u/certs", "DOCKER_CONFIG=/home/u/my docker"},
+			"DOCKER_HOST=tcp://engine.example:2376 DOCKER_TLS_VERIFY=1 DOCKER_CERT_PATH=/home/u/certs DOCKER_CONFIG='/home/u/my docker' docker rm -f " + step},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &recorder{t: t, gateway: "172.30.0.1", local_: true, uid: 1000}
+			d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, sys: rec}
+			if c.selection != nil {
+				d.recorded = &Engine{Command: "docker", Env: c.selection}
+			}
+			enc, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := enc.(*dockerEnclosure)
+			e.kept = []string{step}
+			if kept := e.Kept(); len(kept) != 1 || kept[0].Name != step || kept[0].Remove != c.want {
+				t.Errorf("Kept %+v; want Remove %q", kept, c.want)
+			}
+		})
+	}
+}
+
+// TestShellWord pins shellWord: a plain word as it is, any other in single quotes, a
+// single quote inside closed, escaped and opened again.
+func TestShellWord(t *testing.T) {
+	for in, want := range map[string]string{
+		"tcp://engine.example:2376": "tcp://engine.example:2376",
+		"/home/u/my docker":         "'/home/u/my docker'",
+		"it's":                      `'it'\''s'`,
+		"":                          "''",
+		"$(rm -rf /)":               "'$(rm -rf /)'",
+	} {
+		if got := shellWord(in); got != want {
+			t.Errorf("shellWord(%q) = %s; want %s", in, got, want)
+		}
+	}
+}
