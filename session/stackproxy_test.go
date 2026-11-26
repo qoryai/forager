@@ -248,7 +248,8 @@ func TestARunAnswerWithoutAStackProxySecretIsNoRun(t *testing.T) {
 
 // TestTheStackProxySecretStaysOutOfTheWall pins where the stack proxy secret goes in a
 // walled run with a setup and a session: into no request to the wall, no launch of the
-// setup container or the agent, and no file of the run directory.
+// setup container or the agent, and no file of the run directory. The run's proxy
+// secret goes into no request to the wall or launch either: the relay gets a hop token.
 func TestTheStackProxySecretStaysOutOfTheWall(t *testing.T) {
 	sp, g := specGateway(t, "FAKE_EXIT=0")
 	w := &setupWall{}
@@ -278,11 +279,13 @@ func TestTheStackProxySecretStaysOutOfTheWall(t *testing.T) {
 	w.mu.Lock()
 	seen := fmt.Sprintf("%#v\n%#v\n%#v", w.req, w.setup, w.got)
 	w.mu.Unlock()
-	if w.setup.ProxyToken != linktest.ProxySecret || w.got.Proxy == "" {
+	if w.setup.ProxyToken == "" || w.got.Proxy == "" {
 		t.Errorf("the setup container's token %q, the agent's proxy %q", w.setup.ProxyToken, w.got.Proxy)
 	}
-	if strings.Contains(seen, linktest.StackProxySecret) {
-		t.Errorf("the wall received the stack proxy secret:\n%s", seen)
+	for _, secret := range []string{linktest.StackProxySecret, linktest.ProxySecret} {
+		if strings.Contains(seen, secret) {
+			t.Errorf("the wall received a proxy secret of the gateway:\n%s", seen)
+		}
 	}
 	noSecretIn(t, linktest.StackProxySecret, r.Dir(), g, reports())
 }

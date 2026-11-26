@@ -217,7 +217,7 @@ func (w *relayWall) Close(ctx context.Context) error {
 // TestWallWrapsTheLaunch pins what crosses to a wall and what does not: the enclosure
 // is asked where the forwarder listens and told where it does, it gets the socket,
 // the settings the session wrote and the run's environment without the proxy
-// variables, the run's proxy secret goes to the wall's relay alone, a nil environment
+// variables, the wall's relay gets a hop token and never the run's proxy secret, a nil environment
 // is nothing and not the process's own, the record names the wall and the image, and
 // the enclosure is closed once.
 func TestWallWrapsTheLaunch(t *testing.T) {
@@ -238,8 +238,10 @@ func TestWallWrapsTheLaunch(t *testing.T) {
 	if !strings.HasPrefix(w.got.Proxy, "127.0.0.1:") || strings.HasSuffix(w.got.Proxy, ":0") || w.got.Socket == "" {
 		t.Errorf("proxy %q socket %q", w.got.Proxy, w.got.Socket)
 	}
-	if w.got.ProxyToken != linktest.ProxySecret {
-		t.Errorf("the wall's relay got %q as the proxy secret", w.got.ProxyToken)
+	// The relay gets a hop token, which the run's forwarder replaces with the proxy
+	// secret: the proxy secret never reaches the wall.
+	if w.got.ProxyToken == "" || w.got.ProxyToken == linktest.ProxySecret {
+		t.Errorf("the wall's relay got %q as its token", w.got.ProxyToken)
 	}
 	if want := []wall.Mount{{Path: sp.Dir}, {Path: res.SessionDir, ReadOnly: true}}; !slices.Equal(w.got.Mounts, want) {
 		t.Errorf("mounts %v, want %v", w.got.Mounts, want)

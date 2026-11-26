@@ -196,11 +196,12 @@ type Launch struct {
 	Interactive bool
 	// Proxy is the address the proxy listens on, host:port with the port it got.
 	Proxy string
-	// ProxyToken is what the proxy requires every connection to open with, when it is
-	// not empty: the run's proxy secret on one machine, and behind a separate gateway a
-	// token the session's forwarder checks and replaces with the proxy secret inside
-	// TLS. An adapter gives it to its relay and to nothing inside the enclosure, so the
-	// proxy serves this run's relay alone, whoever else reaches its address.
+	// ProxyToken is what the run's forwarder requires every connection to open with,
+	// when it is not empty: the run's hop token, which the forwarder checks and replaces
+	// with the run's proxy secret on one machine, or with the run key inside TLS behind
+	// a separate gateway. An adapter gives it to its relay and to nothing inside the
+	// enclosure, so the forwarder serves this run's relay alone, whoever else reaches
+	// its address.
 	ProxyToken string
 	// ProxyPassword, when not empty, is the password of the agent's proxy URL: given to
 	// Wrap, the proxy variables inside are http://qory:<password>@ and the relay's

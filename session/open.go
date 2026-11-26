@@ -518,7 +518,7 @@ func (r *Run) start(ctx context.Context) (err error) {
 		}
 	}
 	// On one machine the proxy secret opens every connection to the gateway's proxy,
-	// written by a forwarder or by the wall's relay, the stack proxy secret every
+	// written by a forwarder, the stack proxy secret every
 	// connection of the stack proxy's forwarder: one no preamble contains is no run. The
 	// push proxy secret, present for a run with a push credential, passes the schema's
 	// pattern, which is stricter than a preamble's. Behind a separate gateway the run key

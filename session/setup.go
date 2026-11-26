@@ -100,12 +100,12 @@ type setupContainer interface {
 
 // openWall builds the run's wall as the run opens: the wall's preparation, the run's
 // forwarder at the address the enclosure's ProxyAddr returns, and, for an enclosure that
-// starts its relay apart from Wrap, the relay. On one machine the relay opens every
-// connection with the run's proxy secret, which the forwarder checks and writes on, and
-// the forwarder passes on what follows as it arrives until [Run.SetRunAPICheck] sets the
-// check. Behind a separate gateway the relay opens each with the run's hop token, which
-// the forwarder checks and takes off before it opens the gateway's proxy with the run key
-// inside TLS. What it made is the caller's to remove with closeWall, also when it fails.
+// starts its relay apart from Wrap, the relay. The relay opens every connection with the
+// run's hop token, which the forwarder checks and takes off. On one machine the forwarder
+// then opens the gateway's proxy with the run's proxy secret, which the relay never gets,
+// and passes on what follows as it arrives until [Run.SetRunAPICheck] sets the check.
+// Behind a separate gateway it opens the gateway's proxy with the run key inside TLS.
+// What it made is the caller's to remove with closeWall, also when it fails.
 func (r *Run) openWall(ctx context.Context) error {
 	enclosure, err := r.open.Wall.Prepare(ctx, r.wallRequest())
 	if err != nil {
@@ -122,18 +122,16 @@ func (r *Run) openWall(ctx context.Context) error {
 		r.route.agent = a.AgentAddrs
 	}
 	bind := enclosure.ProxyAddr()
-	r.relayToken = r.answer.ProxySecret
+	// The hop token is renewed at the end of each window of unprivileged containers
+	// ([Run.endWindow]), so it is not the proxy secret, which stays the run's.
+	if r.relayToken, err = newForwarderSecret(); err != nil {
+		return err
+	}
 	var fwd *forwarder
 	if r.remote == nil {
-		// Once [Run.SetRunAPICheck] sets the check, the forwarder reads each request, so
-		// it takes the relay's preamble off and writes the same preamble again toward the
-		// proxy; until then the preamble goes on as it arrives.
-		fwd, err = listenForwarding(bind, forwarding{dial: dialTCP(r.disc.Proxy.Address), checkRelay: r.relayToken, route: r.route})
+		fwd, err = listenForwarding(bind, forwarding{dial: dialTCP(r.disc.Proxy.Address), hop: r.relayToken, secret: r.answer.ProxySecret, route: r.route})
 	} else {
-		if r.relayToken, err = newForwarderSecret(); err != nil {
-			return err
-		}
-		fwd, err = listenForwarding(bind, forwarding{dial: r.link.DialProxy, hold: gatewayHold, hop: r.relayToken, route: r.route})
+		fwd, err = listenForwarding(bind, forwarding{dial: r.link.DialProxy, dialUnprivileged: r.link.DialProxyUnprivileged, hold: gatewayHold, hop: r.relayToken, route: r.route})
 	}
 	if err != nil {
 		return err

@@ -383,7 +383,7 @@ func (e *dockerEnclosure) prepare(ctx context.Context) (Enclosure, error) {
 	}
 	// The relay listens on its address in the inside network's subnets and on no other:
 	// on the ordinary network, what reaches it would have its connections opened with
-	// the proxy's secret. The engine gives the relay its address there only when it
+	// the run's hop token. The engine gives the relay its address there only when it
 	// starts, so the relay finds it by the subnet.
 	out, err = e.docker(ctx, "network", "inspect", "--format", "{{range .IPAM.Config}}{{.Subnet}} {{end}}", e.inside())
 	if err != nil {
@@ -2796,7 +2796,7 @@ func (hostSystem) local(ip string) bool {
 func (hostSystem) tempDir() (string, error) { return os.MkdirTemp("", tempPrefix) }
 
 // tempPrefix begins the name of the private directory the adapter writes a run's
-// environment files in, the relay's with the proxy's secret among them.
+// environment files in, the relay's with the run's hop token among them.
 const tempPrefix = "qory-wall-"
 
 // TempDirs is the pattern of the private directories the Docker adapter writes the
