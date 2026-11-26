@@ -77,6 +77,9 @@ func TestMain(m *testing.M) {
 		session.SetExecHooks(listFDs(os.Getenv("FAKE_FDS_OUT")), waitAfter(os.Getenv("FAKE_AFTER_WAIT")))
 		os.Exit(session.Exec(os.Args[2:], os.Stderr))
 	}
+	if len(os.Args) > 2 && os.Args[1] == "fake-step" {
+		os.Exit(fakeStep(os.Args[2], os.Args[3:]))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "setup-command" {
 		os.Exit(session.RunSetupCommand(os.Args[2:], os.Stderr))
 	}

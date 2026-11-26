@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -17,8 +19,9 @@ import (
 )
 
 // stepWall is a setupWall whose enclosure runs step containers: WrapStep notes its
-// launch and returns wrapErr, or a launch that runs the step's command on this machine,
-// until the command ends or UnwrapStep creates the step's stop file, which kills it.
+// launch and returns wrapErr, or a launch that runs the step's command on this machine
+// through [fakeStep], until the command ends or UnwrapStep creates the step's stop file,
+// which kills its process group.
 // UnwrapStep returns exit and unwrapErr, Kept returns kept, and Unwrap removes nothing.
 type stepWall struct {
 	setupWall
@@ -45,13 +48,39 @@ func (w *stepWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosur
 // after the session.
 func (w *stepWall) Unwrap(context.Context) error { return nil }
 
-// stepScript runs "$@" in the background and kills it once the file $1 exists.
-const stepScript = `stop=$1; shift
-"$@" & p=$!
-( while [ ! -e "$stop" ]; do sleep 0.02; done; kill $p ) >/dev/null 2>&1 & k=$!
-wait $p; c=$?
-kill $k 2>/dev/null
-exit $c`
+// fakeStep is the test binary's mode fake-step, the step container of stepWall: it
+// runs command in a new process group, as a container's processes share one, kills the
+// group with SIGTERM once the file stop exists, and exits with the command's exit
+// status, or 128+N after signal N. The group's kill also ends a process that a shell of
+// the command started, such as sleep under a /bin/sh -c that does not exec its last
+// command, as dash does, which would keep the output's pipe open until it exits.
+func fakeStep(stop string, command []string) int {
+	cmd := exec.Command(command[0], command[1:]...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 127
+	}
+	done := make(chan struct{})
+	go func() { cmd.Wait(); close(done) }()
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for killed := false; ; {
+		select {
+		case <-done:
+			if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+				return 128 + int(ws.Signal())
+			}
+			return cmd.ProcessState.ExitCode()
+		case <-tick.C:
+			if _, err := os.Stat(stop); err == nil && !killed {
+				syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+				killed = true
+			}
+		}
+	}
+}
 
 func (w *stepWall) WrapStep(_ context.Context, l wall.Launch) (wall.Launch, error) {
 	w.mu.Lock()
@@ -61,7 +90,11 @@ func (w *stepWall) WrapStep(_ context.Context, l wall.Launch) (wall.Launch, erro
 	if w.wrapErr != nil {
 		return wall.Launch{}, w.wrapErr
 	}
-	return wall.Launch{Command: "/bin/sh", Args: append([]string{"-c", stepScript, "sh", stop, l.Command}, l.Args...)}, nil
+	exe, err := os.Executable()
+	if err != nil {
+		return wall.Launch{}, err
+	}
+	return wall.Launch{Command: exe, Args: append([]string{"fake-step", stop, l.Command}, l.Args...)}, nil
 }
 
 func (w *stepWall) UnwrapStep(context.Context, time.Duration) (wall.StepExit, error) {
@@ -205,7 +238,7 @@ func TestAStepContainerThatDidNotStart(t *testing.T) {
 	w.exit = wall.StepExit{ExitCode: 127}
 	sp, r := openStepRun(t, w)
 	res, err := r.RunStep(context.Background(), session.StepSpec{Name: "x", Command: []string{"/bin/sh", "-c", "echo engine: no such file >&2; exit 1"}, Dir: sp.Dir})
-	if err == nil || err.Error() != "Check the step's command and the run's image: the step container did not start.\nsh: exit status 1" {
+	if err == nil || !strings.HasPrefix(err.Error(), "Check the step's command and the run's image: the step container did not start.\n") || !strings.HasSuffix(err.Error(), ": exit status 1") {
 		t.Fatalf("RunStep: %v", err)
 	}
 	if res == nil || res.ExitCode != -1 || !strings.Contains(string(res.Output), "engine: no such file") {
