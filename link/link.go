@@ -44,6 +44,14 @@ func ProxyEnv(u string) []string {
 // engine, a process of the machine.
 const RelayPreamble = "QORY-RELAY"
 
+// UnprivilegedPreamble is what opens a connection to a run's proxy in place of
+// [RelayPreamble] when the connection comes from a step container or a setup container
+// started with Unprivileged: this word, a space, the secret and a newline. The proxy
+// applies the run's allow list and records the egress of such a connection, sets no
+// credential on its requests, sends none of them to a tool, and answers its run API
+// requests with 403. A proxy that does not know the word closes the connection.
+const UnprivilegedPreamble = "QORY-UNPRIVILEGED"
+
 // StackPreamble is what opens a connection to a run's stack proxy on a separate
 // gateway's one address: this word, a space, the run key and a newline, on a bound
 // connection. From the run's first join request on, the gateway closes such a

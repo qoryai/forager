@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -233,7 +234,7 @@ func (l *Listener) dispatch(c net.Conn, guardedOnly bool) {
 			l.forget(c)
 		}
 	}()
-	p, r, why := l.open(c, guardedOnly)
+	p, r, marked, why := l.open(c, guardedOnly)
 	l.forget(c)
 	forgotten = true
 	if p == nil {
@@ -243,7 +244,11 @@ func (l *Listener) dispatch(c net.Conn, guardedOnly bool) {
 		}
 		return
 	}
-	p.in.deliver(&relayed{Conn: c, r: r})
+	var in net.Conn = &relayed{Conn: c, r: r}
+	if marked {
+		in = &unprivileged{Conn: in}
+	}
+	p.in.deliver(in)
 }
 
 // forget takes c off the connections whose preamble is being read.
@@ -255,34 +260,41 @@ func (l *Listener) forget(c net.Conn) {
 
 // open reads the preamble within the listener's wait, and finds the run whose secret
 // it names: the secret's digest picks the one candidate, and the secret itself is
-// compared in full in constant time. It reads nothing past the newline but into r.
-func (l *Listener) open(c net.Conn, guardedOnly bool) (*Proxy, *bufio.Reader, string) {
+// compared in full in constant time. The preamble opens with link.RelayPreamble or
+// link.UnprivilegedPreamble, and marked is true for the second. It reads nothing past
+// the newline but into r.
+func (l *Listener) open(c net.Conn, guardedOnly bool) (p *Proxy, r *bufio.Reader, marked bool, why string) {
 	c.SetReadDeadline(time.Now().Add(time.Duration(l.wait.Load())))
 	defer c.SetReadDeadline(time.Time{})
-	want := link.RelayPreamble + " "
-	r := bufio.NewReaderSize(c, 512)
-	line := make([]byte, 0, len(want)+maxSecret+1)
+	relay, step := link.RelayPreamble+" ", link.UnprivilegedPreamble+" "
+	r = bufio.NewReaderSize(c, 512)
+	line := make([]byte, 0, max(len(relay), len(step))+maxSecret+1)
 	for {
 		b, err := r.ReadByte()
 		if err != nil {
-			return nil, nil, RefusedRelay
+			return nil, nil, false, RefusedRelay
 		}
 		if b == '\n' {
 			break
 		}
 		if len(line) == cap(line)-1 {
-			return nil, nil, RefusedRelay
+			return nil, nil, false, RefusedRelay
 		}
 		line = append(line, b)
 	}
-	if len(line) < len(want) || string(line[:len(want)]) != want {
-		return nil, nil, RefusedRelay
+	var secret []byte
+	switch {
+	case bytes.HasPrefix(line, []byte(relay)):
+		secret = line[len(relay):]
+	case bytes.HasPrefix(line, []byte(step)):
+		secret, marked = line[len(step):], true
+	default:
+		return nil, nil, false, RefusedRelay
 	}
-	p := l.find(line[len(want):], guardedOnly)
-	if p == nil {
-		return nil, nil, RefusedRelay
+	if p = l.find(secret, guardedOnly); p == nil {
+		return nil, nil, false, RefusedRelay
 	}
-	return p, r, ""
+	return p, r, marked, ""
 }
 
 // validSecret reports whether s is within the bounds a listener reads: printable
