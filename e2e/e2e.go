@@ -286,6 +286,8 @@ func Main() {
 		os.Exit(afterInspect())
 	case modeSetupRoute:
 		os.Exit(setupRoute())
+	case modeStep:
+		os.Exit(stepProbe(os.Args[2:]))
 	case modeService:
 		err := http.ListenAndServe(":"+setupServicePort, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			io.WriteString(w, setupServiceLine)
@@ -715,6 +717,7 @@ func Run(t *testing.T, o Options) {
 	sessionNumbers(t, o, origin, outside)
 	afterStep(t, o, origin, outside)
 	runAPIThroughTheWall(t, o, origin, outside)
+	stepContainer(t, o, origin, outside)
 	qoryHostThroughTheWall(t, o, origin, outside)
 	qoryHostFromTheSetup(t, o, origin, outside)
 	transcriptSent(t, o, origin, outside)
@@ -1586,6 +1589,8 @@ type variant struct {
 	// afterSession, when set, is called with the run and its workspace after its session,
 	// before the close.
 	afterSession func(run *session.Run, workspace string)
+	// beforeJoin, when set, is called with the run and its workspace before the join.
+	beforeJoin func(run *session.Run, workspace string)
 	// readOnly binds the workspace read-only for the join, SessionSpec.WorkspaceReadOnly,
 	// with no setup commands inside.
 	readOnly bool
@@ -1776,6 +1781,9 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 	}
 	if v.afterSession != nil {
 		spec.afterSession = func(r *session.Run) { v.afterSession(r, dir) }
+	}
+	if v.beforeJoin != nil {
+		spec.beforeJoin = func(r *session.Run) { v.beforeJoin(r, dir) }
 	}
 	// The setup runner reports on the run socket, so a run has its setup command where
 	// the socket crosses into the enclosure.
