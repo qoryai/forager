@@ -243,8 +243,8 @@ func eachNoContainerKept(err error) bool {
 // SessionSpec.Limits. It gets Dir, writable, and the helper and, for a run
 // with an authority, the bundle, read-only: no harness home, run directory, hook socket
 // or engine socket. Its environment is the relay's proxy variables, the bundle's
-// variables, QORY_RUN_API for a run with a control plane, the run's placeholders, and
-// then Env, which a caller fills from
+// variables, QORY_RUN_API for a run with a control plane and a setup without
+// Unprivileged, the run's placeholders, and then Env, which a caller fills from
 // [Run.AgentEnv]. Env is refused before any step when it has a value for one of the
 // run's placeholders, [refusal.PlaceholderConflict]; a QORY_ name other than
 // QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES, or a name the machine's credentials are
@@ -284,20 +284,21 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 		return fmt.Errorf("Exit step %d before the setup: one host step is open at a time.", r.hostStep.n)
 	case len(spec.Commands) == 0:
 		return errors.New("Give the setup at least one command.")
-	case spec.Unprivileged:
-		// shortcut: no unprivileged setup until the mark of its traffic is built, in this change.
-		return errors.New("Start the setup without Unprivileged: this build has no unprivileged setup.")
 	}
 	if err := checkSetupCommands(spec.Commands); err != nil {
 		return err
 	}
-	env, err := r.setupEnv(spec.Env)
+	env, err := r.setupEnv(spec.Env, spec.Unprivileged)
 	if err != nil {
 		return err
 	}
 	container, ok := r.enclosure.(setupContainer)
 	if !ok {
 		return fmt.Errorf("Run the setup behind the Docker wall: the %s wall does not implement StartSetup, ExecSetup and RemoveSetup.", accesskey.ShownName(r.open.Wall.Name(), false))
+	}
+	// The window of an unprivileged setup container ends with a restart of the relay.
+	if _, ok := r.enclosure.(relayRestarter); spec.Unprivileged && !ok {
+		return fmt.Errorf("Start the setup without Unprivileged: the %s wall cannot start its relay again after it.", accesskey.ShownName(r.open.Wall.Name(), false))
 	}
 	puller, pulls := r.open.Wall.(wall.Puller)
 	pulls = pulls && r.byReference && r.imageStep == 0
@@ -398,14 +399,18 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 	// The run's push proxy forwarders end before the setup container starts, so no push
 	// runs while it can write the run's binds.
 	r.pushes.closeAll()
-	// A setup container without Unprivileged gets credentials: no connection of an
-	// earlier step container reaches the proxy unmarked once it can connect.
-	if err := r.endWindow(ctx); err != nil {
+	if spec.Unprivileged {
+		// Every connection of the relay is unprivileged from here until the next
+		// privileged container's start ends the window.
+		r.openWindow()
+	} else if err := r.endWindow(ctx); err != nil {
+		// A setup container without Unprivileged gets credentials: no connection of an
+		// earlier step container reaches the proxy unmarked once it can connect.
 		return fail(err)
 	}
 	// The engine may have started the setup container also when StartSetup returns an
 	// error, as when ctx ends after docker run reached it, so RemoveSetup removes it.
-	r.setupUp = container
+	r.setupUp, r.setupUnprivileged = container, spec.Unprivileged
 	err = container.StartSetup(ctx, wall.Launch{
 		Dir: shown.Dir, Env: env, CA: r.authority, Mounts: shown.Mounts,
 		Limits: spec.Limits, Proxy: r.wallFwd.Addr(), ProxyToken: r.relayToken, ProxyPeer: r.route != nil,
@@ -519,20 +524,21 @@ func (r *Run) removeSetupContainer(ctx context.Context) error {
 		step.end(state, -1)
 		return err
 	}
-	r.setupUp = nil
+	r.setupUp, r.setupUnprivileged = nil, false
 	step.end(event.StateSucceeded, -1)
 	return nil
 }
 
 // setupEnv is the part of the setup container's environment that comes after the
-// wall's variables: QORY_RUN_API for a run with a control plane, the run's placeholders,
+// wall's variables: QORY_RUN_API for a run with a control plane, unless unprivileged
+// is true, the run's placeholders,
 // then env, which [checkSetupEnv] checks first, without the access key's variables and
 // QORY_RUN_KEY. A
 // value is refused when it contains, in a form the run's masker replaces, the password
 // of one of the run's forwarders or of OpenSpec.EngineProxy: the run's masker gets the
 // engine proxy's password only in the image step, which comes after this check. A value
 // that contains a value of OpenSpec.Masker or a server's variable value is not refused.
-func (r *Run) setupEnv(env []string) ([]string, error) {
+func (r *Run) setupEnv(env []string, unprivileged bool) ([]string, error) {
 	if err := checkSetupEnv(env, r.answer.Placeholders, r.reserved); err != nil {
 		return nil, err
 	}
@@ -548,7 +554,7 @@ func (r *Run) setupEnv(env []string) ([]string, error) {
 		}
 	}
 	var runAPI []string
-	if r.answer.RunAPI != "" {
+	if r.answer.RunAPI != "" && !unprivileged {
 		runAPI = []string{EnvRunAPI + "=" + r.answer.RunAPI}
 	}
 	return slices.Concat(runAPI, placeholders(r.answer.Placeholders, keyed{}), kept), nil

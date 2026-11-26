@@ -156,8 +156,10 @@ type Run struct {
 	// [Run.Setup] or [Run.RemoveSetup] that failed, 0 for none: no session joins after it.
 	setupFirst, setupLast, setupFailed int
 	// setupUp is the run's setup container from the call of StartSetup until
-	// [Run.RemoveSetup] removes it, nil otherwise.
-	setupUp setupContainer
+	// [Run.RemoveSetup] removes it, nil otherwise; setupUnprivileged is true when the
+	// setup started with SetupSpec.Unprivileged.
+	setupUp           setupContainer
+	setupUnprivileged bool
 	// route is the run's route to OpenSpec.QoryRoute, nil for a run with none.
 	route *qoryRoute
 }

@@ -27,20 +27,29 @@ import (
 // setupWall is a targetWall whose enclosure starts a setup container, as the Docker
 // adapter's does: StartSetup notes its launch, and ExecSetup notes each command, writes
 // out <words> to stdout and err <words> to stderr, and exits with the code that codes maps
-// the command's first word to, 0 for none. RemoveSetup counts its calls. startErr,
-// execErr and removeErr, when set, are the errors of StartSetup, ExecSetup and
-// RemoveSetup.
+// the command's first word to, 0 for none. RemoveSetup counts its calls, and
+// RestartRelay notes each token. startErr, execErr, removeErr and restartErr, when set,
+// are the errors of StartSetup, ExecSetup, RemoveSetup and RestartRelay.
 type setupWall struct {
 	targetWall
-	mu        sync.Mutex
-	setup     wall.Launch
-	starts    int
-	execs     [][]string
-	codes     map[string]int
-	removes   int
-	startErr  error
-	execErr   error
-	removeErr error
+	mu         sync.Mutex
+	setup      wall.Launch
+	starts     int
+	execs      [][]string
+	codes      map[string]int
+	removes    int
+	restarts   []string
+	startErr   error
+	execErr    error
+	removeErr  error
+	restartErr error
+}
+
+func (w *setupWall) RestartRelay(_ context.Context, l wall.Launch) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.restarts = append(w.restarts, l.ProxyToken)
+	return w.restartErr
 }
 
 func (w *setupWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
@@ -103,7 +112,8 @@ func streamsOf(evs []map[string]any, step int) []string {
 // after a fetch: the wall step "start the setup container" and a setup step per command
 // follow the run's last step, each command's stdout and stderr are its step's lines with
 // no session, and the join's steps come after. The setup container gets the working
-// folder as its one mount, the run's forwarder and proxy secret, the caller's variables,
+// folder as its one mount, the run's forwarder and the relay's hop token, never the run's
+// proxy secret, the caller's variables,
 // QORY_RUN_SYSTEM among them, and no proxy variable, and SetupSpec.Limits, and the agent's
 // container reaches the same forwarder.
 func TestTheSetupRunsInTheSetupContainer(t *testing.T) {
@@ -153,7 +163,7 @@ func TestTheSetupRunsInTheSetupContainer(t *testing.T) {
 	if w.setup.Dir != sp.Dir || !slices.Equal(w.setup.Mounts, []wall.Mount{{Path: sp.Dir}}) {
 		t.Errorf("the setup container's folder %q, mounts %v", w.setup.Dir, w.setup.Mounts)
 	}
-	if w.setup.Proxy == "" || w.setup.Proxy != w.got.Proxy || w.setup.ProxyToken != linktest.ProxySecret {
+	if w.setup.Proxy == "" || w.setup.Proxy != w.got.Proxy || w.setup.ProxyToken == "" || w.setup.ProxyToken == linktest.ProxySecret || w.setup.ProxyToken != w.got.ProxyToken {
 		t.Errorf("the setup container's proxy %q and token %q; the agent's proxy %q", w.setup.Proxy, w.setup.ProxyToken, w.got.Proxy)
 	}
 	setupEnv := strings.Join(w.setup.Env, "\n")
