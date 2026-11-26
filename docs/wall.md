@@ -34,8 +34,8 @@ fails. Tools, path rules and images need a wall.
 - The agent's container is on a network with no route out.
 - On the inside network, the relay is the one peer the agent's container reaches; the
   engine's host is not one.
-- The relay copies a fixed port to the gateway's proxy, opening every connection with the
-  run's proxy secret, and decides nothing. It forwards no packet between its networks.
+- The relay copies a fixed port to the run's forwarder, opening every connection with the
+  run's hop token, and decides nothing. It forwards no packet between its networks.
 - Neither the relay nor the agent's container runs the image's health check.
 - With `SessionSpec.After`, once the runtime exits the session removes the agent's
   container and starts After's: a container of the same image on the same inside
@@ -227,7 +227,8 @@ route out leads to the gateway's proxy.
 - The session asks the gateway for a walled run, with the machine's images. The run
   answer names the image the run starts in, the run's certificate authority, which the
   enclosure trusts, and the placeholders the enclosure gets in place of the gateway's
-  credentials. The run's proxy secret goes to the wall's relay alone.
+  credentials. The run's proxy secret stays outside the wall: the wall's relay gets a hop
+  token, which the run's forwarder checks and replaces.
 
 The Docker adapter uses the `docker` command, and whatever engine it reaches:
 
@@ -311,8 +312,33 @@ system's roots, or the authorities of its CA file, and its pin when one is set.
   closes the connection. See
   [the session behind a separate gateway](go.md#the-session-behind-a-separate-gateway).
 
-On one machine nothing changes: the relay sends the run's proxy secret, and the
-forwarder passes the connection on to the gateway's proxy on loopback as it is.
+On one machine the relay opens every connection with a hop token in the same way, and the
+forwarder opens the gateway's proxy on loopback with the run's proxy secret, which the
+wall never gets, before what the relay sent.
+
+### Step containers and the relay's restart
+
+A step container of `(*session.Run).RunStep`, and a setup container started with
+`SetupSpec.Unprivileged`, reach the gateway through the same relay. From before such a
+container starts until the next join or setup without `Unprivileged`, the run's
+forwarder marks every connection of the relay: on one machine it opens the gateway's
+proxy with `QORY-UNPRIVILEGED` and the proxy secret, and behind a separate gateway it
+sends `QORY-UNPRIVILEGED` and the run key inside TLS. The proxy applies the run's allow
+list to each request on a marked connection and records it, but sets no credential,
+reaches no tool and returns `403` `unprivileged` for the run API.
+
+A request a step container sent may still sit in the relay when the step ends. So the
+join or setup that ends the marking first sets a new hop token in the forwarder, in the
+same step as the end of the marking, then removes the relay with `docker rm --force` and
+starts it again with the new token. A connection with the old token is closed at the
+forwarder unanswered; one the forwarder took before the swap keeps its mark. Steps that
+follow one another share one restart.
+
+The step container itself is a container of the run's image on the inside network, as
+the wall's user with the hardening of After's container, no hook socket, no nested Docker
+daemon and no token. The Docker adapter creates it with `docker create`, attaches with
+`docker start --attach`, stops it with `docker stop -t 5`, reads its exit status and
+`OOMKilled` with `docker inspect`, and removes it with `docker rm --force`.
 
 ### Forager's files
 
@@ -343,8 +369,7 @@ are the run's, and lie in Forager's files. Forager's files are:
     directory, `gateway.Config.Dir`, and where it keeps the runs' records.
 - The private directories in the system's temporary directory where every run on the
   machine makes its record socket, `qory-run-*`, and where the Docker wall writes a
-  run's environment files, `qory-wall-*`, the relay's with the proxy's secret among
-  them.
+  run's environment files, `qory-wall-*`, the relay's with the hop token among them.
 - The private directories in the system's temporary directory where every gateway on the
   machine makes its link's socket, `qory-link-*`, for a session in another process; a
   session in the same process as the gateway reaches it in memory, never by that path

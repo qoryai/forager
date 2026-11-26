@@ -383,7 +383,7 @@ func (e *dockerEnclosure) prepare(ctx context.Context) (Enclosure, error) {
 	}
 	// The relay listens on its address in the inside network's subnets and on no other:
 	// on the ordinary network, what reaches it would have its connections opened with
-	// the proxy's secret. The engine gives the relay its address there only when it
+	// the run's hop token. The engine gives the relay its address there only when it
 	// starts, so the relay finds it by the subnet.
 	out, err = e.docker(ctx, "network", "inspect", "--format", "{{range .IPAM.Config}}{{.Subnet}} {{end}}", e.inside())
 	if err != nil {
@@ -458,8 +458,10 @@ type dockerEnclosure struct {
 	host string
 	// subnets are the inside network's, where the relay listens.
 	subnets []string
-	// made holds the commands that remove what was created, in the order created.
+	// made lists the commands that remove what was created, in the order created; kept
+	// lists the containers whose last removal by removeContainer failed.
 	made [][]string
+	kept []string
 	temp string
 	// env is the engine's selection every command of the run's runs with, nil for
 	// Forager's own environment.
@@ -1104,7 +1106,9 @@ func (e *dockerEnclosure) StartRelay(ctx context.Context, l Launch) error {
 	create = append(create, fmt.Sprintf("%d=%s", relayPort, net.JoinHostPort(e.host, port)))
 	pull, cancel := context.WithTimeout(ctx, relayWait)
 	defer cancel()
-	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.relay()})
+	if rm := []string{"rm", "--force", "--volumes", e.relay()}; !slices.ContainsFunc(e.made, func(c []string) bool { return slices.Equal(c, rm) }) {
+		e.made = append(e.made, rm)
+	}
 	if out, err := e.docker(pull, create...); err != nil {
 		return e.unpulled(e.relayImage(), out, err)
 	}
@@ -1119,6 +1123,22 @@ func (e *dockerEnclosure) StartRelay(ctx context.Context, l Launch) error {
 	}
 	e.relayed = true
 	return nil
+}
+
+// RestartRelay removes the relay with docker rm --force, which returns once every
+// process of it ended and its connections are gone, and starts it again as
+// [dockerEnclosure.StartRelay] does, with l.ProxyToken. The removal runs also when the
+// relay did not start, so a container that an earlier start or restart created before
+// it failed goes too, and a relay that is gone is not an error. The session calls it at
+// the end of a window of unprivileged containers, after the run's forwarder took a new
+// hop token: a connection the old relay still held never reaches the proxy. Only
+// l.Proxy, l.ProxyToken and l.ProxyPeer are read.
+func (e *dockerEnclosure) RestartRelay(ctx context.Context, l Launch) error {
+	if err := e.removeContainer(ctx, e.relay(), noSuchContainer); err != nil {
+		return err
+	}
+	e.relayed = false
+	return e.StartRelay(ctx, l)
 }
 
 // firstUse is what the first container of the run's image needs, once per enclosure:
@@ -1446,15 +1466,19 @@ func (e *dockerEnclosure) Unwrap(ctx context.Context) error {
 // within closeWait, and returns once the engine removed it: the engine kills what still
 // runs in it. A failed command whose output gone accepts is not an error. On any other
 // failure, which matches [ErrContainerKept], the entry stays in e.made, so Close tries
-// again.
+// again, and e.kept lists the container until a removal succeeds.
 func (e *dockerEnclosure) removeContainer(ctx context.Context, name string, gone func(out string) bool) error {
 	ctx, cancel := context.WithTimeout(ctx, closeWait)
 	defer cancel()
 	rm := []string{"rm", "--force", "--volumes", name}
 	if err := e.remove(ctx, rm, gone); err != nil {
+		if !slices.Contains(e.kept, name) {
+			e.kept = append(e.kept, name)
+		}
 		return err
 	}
 	e.made = slices.DeleteFunc(e.made, func(c []string) bool { return slices.Equal(c, rm) })
+	e.kept = slices.DeleteFunc(e.kept, func(k string) bool { return k == name })
 	return nil
 }
 
@@ -2796,7 +2820,7 @@ func (hostSystem) local(ip string) bool {
 func (hostSystem) tempDir() (string, error) { return os.MkdirTemp("", tempPrefix) }
 
 // tempPrefix begins the name of the private directory the adapter writes a run's
-// environment files in, the relay's with the proxy's secret among them.
+// environment files in, the relay's with the run's hop token among them.
 const tempPrefix = "qory-wall-"
 
 // TempDirs is the pattern of the private directories the Docker adapter writes the

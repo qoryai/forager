@@ -1013,7 +1013,7 @@ func TestTheForwarderDropsAConnectionClosedWhileItWaited(t *testing.T) {
 			go io.WriteString(agent, r.sent)
 			served := make(chan struct{})
 			go func() {
-				f.serve(c)
+				f.serve(c, f.way.hop, false)
 				close(served)
 			}()
 			select {

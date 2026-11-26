@@ -148,13 +148,24 @@ type Run struct {
 	enclosure  wall.Enclosure
 	wallFwd    *forwarder
 	relayToken string
+	// windowed is true from [Run.openWindow] to the [Run.endWindow] that restarted the
+	// relay: a step container or an unprivileged setup container ran since the last end.
+	windowed bool
 	// setupFirst and setupLast are the numbers of the first and the last step of
 	// [Run.Setup], 0 until it wrote one, and setupFailed the number of the step of
 	// [Run.Setup] or [Run.RemoveSetup] that failed, 0 for none: no session joins after it.
 	setupFirst, setupLast, setupFailed int
 	// setupUp is the run's setup container from the call of StartSetup until
-	// [Run.RemoveSetup] removes it, nil otherwise.
-	setupUp setupContainer
+	// [Run.RemoveSetup] removes it, nil otherwise; setupUnprivileged is true when the
+	// setup started with SetupSpec.Unprivileged.
+	setupUp           setupContainer
+	setupUnprivileged bool
+	// stepping is the step that [Run.RunStep] runs, nil for none, which stepMu guards:
+	// Close reads it while RunStep holds the joining lock. stepKept is true once the
+	// removal of a step container failed: it may still run, and no session joins.
+	stepMu   sync.Mutex
+	stepping *runningStep
+	stepKept bool
 	// route is the run's route to OpenSpec.QoryRoute, nil for a run with none.
 	route *qoryRoute
 }
@@ -518,7 +529,7 @@ func (r *Run) start(ctx context.Context) (err error) {
 		}
 	}
 	// On one machine the proxy secret opens every connection to the gateway's proxy,
-	// written by a forwarder or by the wall's relay, the stack proxy secret every
+	// written by a forwarder, the stack proxy secret every
 	// connection of the stack proxy's forwarder: one no preamble contains is no run. The
 	// push proxy secret, present for a run with a push credential, passes the schema's
 	// pattern, which is stricter than a preamble's. Behind a separate gateway the run key
@@ -657,12 +668,13 @@ func (r *Run) Image() Image { return r.img }
 // the workspace in LaunchDefaults is written at /workspace, as Join writes it.
 // AgentEnv masks no value: apart from that rewrite, it returns each value as the
 // server, the caller or the machine passed it, and no value the gateway holds for a
-// placeholder. A caller that runs the setup passes the result as [SetupSpec.Env]. The result has QORY_RUN_SYSTEM and
-// QORY_RUN_REPOSITORIES when the server sets them, and Setup accepts both. The error
-// is the one Join returns for spec before its join request, as it checks the places of
-// a run whose image is a reference, or as it resolves the variables, the same
-// [refusal.VariableReserved] or [refusal.PlaceholderConflict] among them, or that the
-// run is closed or another call of the run is running.
+// placeholder. A caller that runs the setup passes the result as [SetupSpec.Env]. The
+// result has QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES when the server sets them, and
+// Setup accepts both. The error is the one Join returns for spec before its join
+// request, as it checks the places of a run whose image is a reference, or as it
+// resolves the variables, the same [refusal.VariableReserved] or
+// [refusal.PlaceholderConflict] among them, or that the run is closed or another call
+// of the run is running.
 func (r *Run) AgentEnv(spec SessionSpec) ([]string, error) {
 	if !r.joining.TryLock() {
 		return nil, errors.New("call AgentEnv after the run's other call returns: another call of the run is running")
@@ -856,18 +868,20 @@ func (r *Run) setApplied(m map[string]any) {
 }
 
 // Close writes the run's dev.qory.run.exited with the caller's outcome, once, and
-// closes the run: a host step still open ends cancelled with -1 first, then the run's
-// wall is removed, the heartbeats and the reloads stop, the sinks are flushed within 15
-// seconds, 180 behind a separate gateway, which may be restarting, and the lock, the
-// registry entry and the link are let go. A wall that could
-// not be removed is reported, and its entry among the walled runs still going stays. A
-// failed outcome with no reason of a run no session joined is written as failed with
-// no_session and -1. A run the gateway closed
-// before the close has its dev.qory.run.exited in the session's record alone, with the
-// state and the reason of the gateway's 410 and the last session's exit code. An error
-// means the outcome is refused, and nothing is written: the run stays open, and Close
-// may be called again; or the run is closed already. The run's masker replaces the
-// run's secrets in the error's text.
+// closes the run: a step of [Run.RunStep] that runs is stopped once the outcome is
+// checked, and Close waits for RunStep to return until ctx ends; a host step still open
+// ends cancelled with -1 first, then the run's wall is removed, the heartbeats and the
+// reloads stop, the sinks are flushed within 15 seconds, 180 behind a separate gateway,
+// which may be restarting, and the lock, the registry entry and the link are let go. A
+// wall that could not be removed is reported, and its entry among the walled runs still
+// going stays. A failed outcome with no reason of a run no session joined is written as
+// failed with no_session and -1. A run the gateway closed before the close has its
+// dev.qory.run.exited in the session's record alone, with the state and the reason of
+// the gateway's 410 and the last session's exit code. An error means the outcome is
+// refused, and nothing is written: the run stays open, and Close may be called again;
+// the run is closed already; or ctx ended while a step stopped, before RunStep
+// returned, and Close may be called again. The run's masker replaces the run's secrets
+// in the error's text.
 func (r *Run) Close(ctx context.Context, out Outcome) (*Closed, error) {
 	res, err := r.close(ctx, out)
 	return res, maskError(r.masker, err)
@@ -875,17 +889,20 @@ func (r *Run) Close(ctx context.Context, out Outcome) (*Closed, error) {
 
 // close is Close with its error unmasked.
 func (r *Run) close(ctx context.Context, out Outcome) (*Closed, error) {
-	if !r.joining.TryLock() {
-		return nil, errors.New("a session of the run is still running: close the run after Join returns")
+	check := func() error {
+		if r.closed {
+			return errors.New("the run is closed already")
+		}
+		return checkOutcome(out, r.numbered > 0 || r.maybeJoined, r.lastReason)
 	}
-	defer r.joining.Unlock()
-	if r.closed {
-		return nil, errors.New("the run is closed already")
-	}
-	joined := r.numbered > 0 || r.maybeJoined
-	if err := checkOutcome(out, joined, r.lastReason); err != nil {
+	if err := r.lockForClose(ctx, check); err != nil {
 		return nil, err
 	}
+	defer r.joining.Unlock()
+	if err := check(); err != nil {
+		return nil, err
+	}
+	joined := r.numbered > 0 || r.maybeJoined
 	if !joined && out.State == event.StateFailed && out.Reason == "" {
 		out.Reason, out.ExitCode = event.ReasonNoSession, -1
 	}

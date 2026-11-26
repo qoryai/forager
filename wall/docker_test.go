@@ -97,6 +97,9 @@ type recorder struct {
 	rms []string
 	// agentAddrs is what the inspect of the agent's container's addresses prints.
 	agentAddrs string
+	// stepState is what the inspect of the step container's state prints, "exited 0
+	// false" when empty.
+	stepState string
 }
 
 // statPath is the path inside of a docker cp that checks one, of the form docker cp
@@ -213,6 +216,10 @@ func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
 		return []byte("true\n"), nil
 	case strings.Contains(line, " inspect --format {{.State"):
 		return []byte("true\n"), nil
+	case strings.Contains(line, "{{.State.Status}}") && r.stepState != "":
+		return []byte(r.stepState + "\n"), nil
+	case strings.Contains(line, "{{.State.Status}}"):
+		return []byte("exited 0 false\n"), nil
 	case strings.Contains(line, ".NetworkSettings.Networks"):
 		return []byte(r.agentAddrs), nil
 	case strings.Contains(line, " logs ") && strings.HasSuffix(line, "-setup"):

@@ -59,20 +59,22 @@ const (
 // compose of the harness, a fetch of the run's image, a setup command, the join of a
 // session, the start of a wall or the start or the removal of a setup container, a build
 // of an image, host work that sends the run's commits, the start of the machine the run
-// runs on, host work that copies the session's work out of the wall, and the command
-// SessionSpec.After runs inside the wall once the runtime exits.
+// runs on, host work that copies the session's work out of the wall, the command
+// SessionSpec.After runs inside the wall once the runtime exits, and a command in a step
+// container of the wall.
 const (
-	StepFetch   = "fetch"
-	StepCompose = "compose"
-	StepImage   = "image"
-	StepSetup   = "setup"
-	StepJoin    = "join"
-	StepWall    = "wall"
-	StepBuild   = "build"
-	StepPush    = "push"
-	StepMachine = "machine"
-	StepCopy    = "copy"
-	StepAfter   = "after"
+	StepFetch     = "fetch"
+	StepCompose   = "compose"
+	StepImage     = "image"
+	StepSetup     = "setup"
+	StepJoin      = "join"
+	StepWall      = "wall"
+	StepBuild     = "build"
+	StepPush      = "push"
+	StepMachine   = "machine"
+	StepCopy      = "copy"
+	StepAfter     = "after"
+	StepContainer = "container"
 )
 
 // The states of a write, the state of dev.qory.run.target_write: it began, the system

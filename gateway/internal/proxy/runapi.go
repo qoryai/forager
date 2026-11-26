@@ -559,6 +559,9 @@ const (
 	runAPIUnverified  = "Check the clock of the gateway's host, its access key in Qory Apiary, and its pin, apiary_public_key. The answer to this request was a 401 or failed verification under the pin, and the gateway dropped it."
 	runAPITooLarge    = "Check the size of the work item's data in Qory Apiary: the answer is over the bound the gateway reads, 16 MiB for a 200 and 64 KiB for any other status, and the gateway dropped the answer."
 	runAPIUnavailable = "Retry the request: the gateway did not reach Qory Apiary, or the request timed out."
+	// runAPIUnprivileged is the text of the 403 to a request from a step container or an
+	// unprivileged setup container.
+	runAPIUnprivileged = "Run this from the session, not a step: steps and unprivileged setups have no run API access."
 )
 
 // The texts of a 403 to the host: on a proxy with the route, which a CONNECT reaches, and
@@ -623,6 +626,10 @@ func (p *Proxy) serveRunAPI(w http.ResponseWriter, r *http.Request, a *RunAPI) {
 			p.observe(d)
 		}
 		runAPIError(w, http.StatusTooManyRequests, "rate_limited", runAPIBucket)
+		return
+	}
+	if isUnprivileged(r.Context()) {
+		refuse(http.StatusForbidden, "unprivileged", runAPIUnprivileged)
 		return
 	}
 	if !inside {

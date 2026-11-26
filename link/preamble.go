@@ -45,6 +45,11 @@ func CheckSecret(secret string) error { return checkSecret(secret) }
 // secret: [RelayPreamble], a space, the secret and a newline.
 func RelayLine(secret string) string { return RelayPreamble + " " + secret + "\n" }
 
+// UnprivilegedLine is the line that opens a connection to a run's proxy from a step
+// container or an unprivileged setup container: [UnprivilegedPreamble], a space, the
+// secret and a newline.
+func UnprivilegedLine(secret string) string { return UnprivilegedPreamble + " " + secret + "\n" }
+
 // StackLine is the line that opens a connection to a run's stack proxy on a separate
 // gateway's one address: [StackPreamble], a space, the run key and a newline.
 func StackLine(runKey string) string { return StackPreamble + " " + runKey + "\n" }

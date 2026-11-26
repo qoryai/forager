@@ -81,12 +81,13 @@ func checkService(cfg *Config) (*certFiles, error) {
 
 // relayWords are the words a bound connection's first line may open with, each followed
 // by a space and a run key, and the proxy of the run each opens: the relay's preamble
-// the run's proxy, [link.StackPreamble] its stack proxy and [link.PushPreamble] its push
-// proxy.
+// the run's proxy, [link.UnprivilegedPreamble] the run's proxy for a connection with no
+// credential and no run API, [link.StackPreamble] its stack proxy and
+// [link.PushPreamble] its push proxy.
 var relayWords = []struct {
 	word string
 	to   relayTo
-}{{link.RelayPreamble, toRunProxy}, {link.StackPreamble, toStackProxy}, {link.PushPreamble, toPushProxy}}
+}{{link.RelayPreamble, toRunProxy}, {link.UnprivilegedPreamble, toUnprivileged}, {link.StackPreamble, toStackProxy}, {link.PushPreamble, toPushProxy}}
 
 // maxRelayRunKey is the longest line of word with a run key, its newline included:
 // word, a space, a run key of at most [runkey.MaxLength] characters and a newline.

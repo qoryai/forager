@@ -460,6 +460,9 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 	// every client that speaks to a proxy speaks it.
 	conn := tls.Server(client, &tls.Config{Certificates: []tls.Certificate{*leaf}, NextProtos: []string{"http/1.1"}, MinVersion: tls.VersionTLS12})
 	creds := t.credentials(d.Host)
+	// marked is a tunnel of an unprivileged connection: its requests get no credential
+	// and reach no tool.
+	marked := isUnprivileged(ctx)
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
 			// The host asked of upstream is the one the connection was opened to and
@@ -552,6 +555,11 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		}
 		keys := t.p.choice()
 		clean, rule, allowed, c := t.decide(d.Host, sentPath(r.URL), now.Mode, keys)
+		if marked {
+			// No credential, so no header, no key group and no resend: the answer is
+			// still masked below.
+			c = nil
+		}
 		req.Path, req.PathRule, req.Allowed = clean, rule, allowed
 		tl := t.tool(d.Host)
 		if tl != nil {
@@ -559,6 +567,10 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		}
 		if rated != nil {
 			t.p.limited(w, req, RateLimit, rated)
+			return
+		}
+		if marked && tl != nil {
+			t.p.refuseTool(w, req)
 			return
 		}
 		if len(creds) > 0 && (strings.EqualFold(r.Method, "TRACE") || strings.EqualFold(r.Method, "TRACK")) {

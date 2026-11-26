@@ -658,7 +658,6 @@ func TestTheWalledForwarderWithoutACheckPassesBytesAsTheyCome(t *testing.T) {
 		way     forwarding
 		relayed string
 	}{
-		"one machine":        {forwarding{checkRelay: checkSecret}, link.RelayLine(checkSecret)},
 		"a separate gateway": {forwarding{secret: checkSecret, hop: checkHop}, link.RelayLine(checkHop)},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -694,12 +693,13 @@ func TestTheWalledForwarderWithoutACheckPassesBytesAsTheyCome(t *testing.T) {
 
 // TestTheCheckOnOneMachineTakesTheRelaysPreamble pins the walled forwarder on one machine,
 // as the run opens it, once setCheck set the check: a connection without the relay's
-// preamble and the run's proxy secret closes with nothing sent on, and one with them
-// reaches the proxy after the same preamble.
+// preamble and the run's hop token closes with nothing sent on, the proxy secret in
+// place of the hop token among them, and one with them reaches the proxy after the
+// relay's preamble with the proxy secret.
 func TestTheCheckOnOneMachineTakesTheRelaysPreamble(t *testing.T) {
 	p := startProxyStandIn(t, checkSecret, nil)
 	k := &checkCalls{}
-	f, err := listenForwarding("127.0.0.1:0", forwarding{dial: dialTCP(p.Addr().String()), checkRelay: checkSecret})
+	f, err := listenForwarding("127.0.0.1:0", forwarding{dial: dialTCP(p.Addr().String()), hop: checkHop, secret: checkSecret})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -719,10 +719,10 @@ func TestTheCheckOnOneMachineTakesTheRelaysPreamble(t *testing.T) {
 		b, _ := io.ReadAll(c)
 		return string(b)
 	}
-	if out := send(link.RelayLine(checkHop)); out != "" {
-		t.Errorf("another secret got %q", out)
+	if out := send(link.RelayLine(checkSecret)); out != "" {
+		t.Errorf("the proxy secret in place of the hop got %q", out)
 	}
-	if resp, body := replyOf(t, send(link.RelayLine(checkSecret))); resp.StatusCode != http.StatusOK || body != "ok 2" {
+	if resp, body := replyOf(t, send(link.RelayLine(checkHop))); resp.StatusCode != http.StatusOK || body != "ok 2" {
 		t.Errorf("the relay got %d %q", resp.StatusCode, body)
 	}
 	raw, _ := p.seen()
@@ -926,7 +926,7 @@ func TestAConnectionDuringSetCheckIsRefusedOrChecked(t *testing.T) {
 		k := &checkCalls{answer: func(context.Context, RunAPIRequest) (*RunAPIRefusal, error) {
 			return &RunAPIRefusal{Status: http.StatusUnprocessableEntity, Code: "push_checks_failed", Message: "Fix the checks."}, nil
 		}}
-		f, err := listenForwarding("127.0.0.1:0", forwarding{dial: dialTCP(u.ln.Addr().String()), checkRelay: checkSecret})
+		f, err := listenForwarding("127.0.0.1:0", forwarding{dial: dialTCP(u.ln.Addr().String()), hop: checkHop, secret: checkSecret})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -944,7 +944,7 @@ func TestAConnectionDuringSetCheckIsRefusedOrChecked(t *testing.T) {
 					return
 				}
 				defer c.Close()
-				io.WriteString(c, link.RelayLine(checkSecret)+what)
+				io.WriteString(c, link.RelayLine(checkHop)+what)
 				c.(*net.TCPConn).CloseWrite()
 				c.SetReadDeadline(time.Now().Add(5 * time.Second))
 				b, _ := io.ReadAll(c)
@@ -1012,7 +1012,6 @@ func TestSetCheckIsRefusedOnceAConnectionShowedThePreamble(t *testing.T) {
 		way      forwarding
 		preamble string
 	}{
-		"one machine":        {forwarding{checkRelay: checkSecret}, link.RelayLine(checkSecret)},
 		"a separate gateway": {forwarding{secret: checkSecret, hop: checkHop}, link.RelayLine(checkHop)},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1053,7 +1052,6 @@ func TestAStrayConnectionLeavesSetCheckFree(t *testing.T) {
 		way             forwarding
 		preamble, wrong string
 	}{
-		"one machine":        {forwarding{checkRelay: checkSecret}, link.RelayLine(checkSecret), link.RelayLine(checkHop)},
 		"a separate gateway": {forwarding{secret: checkSecret, hop: checkHop}, link.RelayLine(checkHop), link.RelayLine(checkSecret)},
 	} {
 		t.Run(name, func(t *testing.T) {

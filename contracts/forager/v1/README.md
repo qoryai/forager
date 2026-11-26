@@ -191,10 +191,12 @@ Stated so a receiver reads the record for what it is.
   a signal arrives as `128` plus the signal's number, with `signal` absent.
 - The proxy behind a wall listens where the enclosure reaches it, which other
   containers of the same engine, or other processes of the machine, reach too. It
-  serves none of them: the run has a secret that only its relay receives, every connection
-  the relay forwards opens with `QORY-RELAY`, a space, the secret and a newline before
-  the first byte of HTTP, and a connection that opens otherwise is closed unanswered
-  and reported once. The secret is never inside the enclosure.
+  serves none of them: the run has a secret that never enters the enclosure, every
+  connection the run's forwarder passes on opens with `QORY-RELAY`, or
+  `QORY-UNPRIVILEGED`, a space, the secret and a newline before the first byte of HTTP,
+  and a connection that opens otherwise is closed unanswered and reported once. The relay
+  opens each connection to the forwarder with the run's hop token, a second secret, which
+  the forwarder checks and takes off.
 - On an engine inside a virtual machine, such as a Mac's, the hook socket does not cross the
   file share, so a walled run there has no runtime events from hooks; the log, the
   egress record and the structured output are unaffected. The forwarder's only
@@ -624,7 +626,10 @@ starts a parameter of a normal segment, and the path passes. A request target wi
 slash after its scheme, such as `https:..;/secret`, is denied the same way: its text is
 sent upstream as the path. On a host that gets a credential, a `TRACE` or `TRACK`
 through `CONNECT` is denied in either mode with a `405`, with the rule
-`wall:echo-method` (§Credentials, The answer). Under `observe` a path no entry matches is recorded as
+`wall:echo-method` (§Credentials, The answer). A request to a tool's host from a step
+container or a setup container started with `Unprivileged` is denied in either mode with
+a `403` and the rule `wall:unprivileged` (§The gateway's link, The unprivileged mark). Under
+`observe` a path no entry matches is recorded as
 allowed with an empty `path_rule` and passed on, as a host no entry matches is recorded
 as allowed with an empty `rule`, but the credential is set only where the credential's
 paths match: observe mode sends no secret to a path nobody configured. The host
@@ -2385,9 +2390,9 @@ readable name such as `fetch github.com/example-org/app`, and `kind`, then a
 and `-1` when no process exit status exists, the rule of `dev.qory.run.exited`'s
 `exit_code`. `duration_ms` is the time from the step's start to its end. Each member of
 the two events is required, apart from `reason` on `dev.qory.run.step_exited`, which an
-`after` step alone has: `timeout`, cancelled at `SessionSpec.AfterTimeout`, or
-`out_of_memory`, failed when the kernel killed a process of After's container for
-lack of memory while the step ran.
+`after` or a `container` step alone has: `timeout`, cancelled at
+`SessionSpec.AfterTimeout` or the step's time limit, or `out_of_memory`, failed when the
+kernel killed a process of the step's container for lack of memory while the step ran.
 
 | `kind` | The step |
 |---|---|
@@ -2402,6 +2407,7 @@ lack of memory while the step ran.
 | `machine` | the start of the machine the run runs on |
 | `copy` | host work that copies the session's work out of the wall |
 | `after` | the command `SessionSpec.After` runs inside the wall once the runtime exits (§The wall, After) |
+| `container` | a command of the caller's in a step container, `Run.RunStep`: a new container of the run's image on the wall's inside network, with the unprivileged mark (§The gateway's link, The unprivileged mark) |
 
 The steps come after `dev.qory.run.started`, numbered from 1 in the order they start,
 one at a time, apart from one case: a session with no runtime, `bare: true` in its
@@ -5843,6 +5849,22 @@ on a closed run; its forwarder ends at the next `Join`, at `Setup` before
 the setup container starts, and at `Run.Close`. No wall, relay or container gets the push proxy secret or the run key, so
 a session, the setup step and After reach the run's proxy alone.
 
+**The unprivileged mark.** A step container of `Run.RunStep`, and a setup container
+started with `SetupSpec.Unprivileged`, reach the run's proxy through the wall's relay.
+While one may run, the run's forwarder opens every connection of the relay to the
+gateway's proxy with `QORY-UNPRIVILEGED` in place of `QORY-RELAY`: on one machine
+followed by the run's proxy secret, and behind a separate gateway by the run key, over
+TLS, bound. The gateway serves such a connection through the run's proxy with its
+policy, its allow list and its record, and with these differences: it sets no
+credential and no key of a key group on any request, so the placeholders reach the host
+as they are; a request for a tool's host gets a `403` with the rule `wall:unprivileged`,
+whose first line is `qory: run this from the session: steps and unprivileged setup
+containers reach no tool.`; and the run API returns `403` `unprivileged` (§The run API).
+A connection the forwarder took while the mark was on keeps it. The next join, or setup
+without `Unprivileged`, ends the mark: the forwarder takes a new hop token and the wall
+starts the relay again with it, so a connection of the old relay never reaches the
+gateway.
+
 ## The run API
 
 The run API is how a run reads and writes its work item's artifacts in Qory Apiary, with
@@ -5907,6 +5929,7 @@ with the fix.
 
 | Status | `error` | When |
 |---|---|---|
+| `403` | `unprivileged` | the request came from a step container or a setup container with `Unprivileged`, on a connection with the unprivileged mark (§The gateway's link, The unprivileged mark); nothing is sent, and the `message` is `Run this from the session, not a step: steps and unprivileged setups have no run API access.` |
 | `404` | `not_found` | the request is outside the five, `GET /resume/transcript` among them, which the session reads over the gateway's link (The transcript of a paused run, below), and `POST /next-session`, `POST /pushed-commits`, `GET /findings` and `POST /findings`, the link's host calls |
 | `413` | `payload_too_large` | a POST's body is over its limit; nothing is sent |
 | `429` | `rate_limited` | a limit below, or a body or answer over 1 MiB while the gateway's 512 MiB are full; with `Retry-After: 1` |

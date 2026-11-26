@@ -50,11 +50,12 @@ const (
 	holdMaxWait   = 2 * time.Second
 )
 
-// forwarder is the run's own listener on this machine: every connection it accepts it
+// forwarder is the run's listener on this machine: every connection it accepts it
 // copies, byte for byte, to the gateway's proxy. Without a wall it opens each with the
-// relay's preamble and the run's proxy secret first; behind a wall on one machine the
-// wall's relay writes that preamble itself, and the forwarder checks it, writes the same
-// preamble on, and passes on what follows as it arrives.
+// relay's preamble and the run's proxy secret first; behind a wall on one machine every
+// connection must first open with the relay's preamble and the hop secret the session
+// gave the wall's relay, which the forwarder takes off before it writes the relay's
+// preamble with the run's proxy secret, and passes on what follows as it arrives.
 // Without a wall, on one machine as behind a separate gateway, the first request of
 // every connection must carry the password of the agent's proxy URL, a secret the
 // session made for this run's forwarder alone, which the forwarder takes off; the
@@ -81,6 +82,14 @@ const (
 // address in the relay's peer line. A connection that shows the preamble with neither
 // passes on as it is, after the same preamble.
 //
+// Behind a wall, a connection accepted while [forwarder.mark] is in force, or that shows
+// the hop then, is unprivileged: the forwarder opens its connection to the proxy with
+// link.UnprivilegedPreamble, on one machine, or through way.dialUnprivileged, behind a
+// separate gateway, and passes it on as it arrives, past the check and the route. The
+// gateway's proxy then sets no credential on its requests and returns 403 for its run
+// API requests. [forwarder.swap] ends the marking and replaces the hop, so a
+// connection the relay of the window opens later fails the hop's check.
+//
 // The secrets are held in memory alone: never in a file or a report, and in an
 // environment only as that password, in the unwalled agent's proxy URL.
 type forwarder struct {
@@ -103,7 +112,10 @@ type forwarder struct {
 	// check set when it showed them.
 	check *runAPICheck
 	shown bool
-	wg    sync.WaitGroup
+	// marking is true from [forwarder.mark] to [forwarder.swap]: every connection
+	// accepted, or that shows the hop, meanwhile is unprivileged.
+	marking bool
+	wg      sync.WaitGroup
 }
 
 // maxWaiting is the most connections a forwarder holds at once that are yet to show
@@ -115,6 +127,11 @@ type forwarding struct {
 	// dial opens one connection to the gateway's proxy: behind a separate gateway, bound
 	// and opened with the run key.
 	dial func(context.Context) (net.Conn, error)
+	// dialUnprivileged, behind a separate gateway, opens one connection to the gateway's
+	// proxy for an unprivileged connection, opened with link.UnprivilegedPreamble and the
+	// run key. Unset, an unprivileged connection is dialled with dial and secret is
+	// written with link.UnprivilegedPreamble.
+	dialUnprivileged func(context.Context) (net.Conn, error)
 	// hold, when set, is how long the forwarder tries dial again for one connection
 	// after a failed try, each try for [dialWait] at most: [gatewayHold] for every
 	// dial through the link to a separate gateway. Zero tries dial once.
@@ -124,7 +141,7 @@ type forwarding struct {
 	secret string
 	// hop, when set, is the secret every accepted connection must open with, in the
 	// relay's preamble, before anything reaches the proxy; the preamble is not passed
-	// on.
+	// on. [forwarder.swap] replaces it.
 	hop string
 	// password, when set, is the password of the proxy URL [forwarder.Env] gives, which
 	// the first request of every accepted connection must carry in its one
@@ -142,12 +159,10 @@ type forwarding struct {
 	// check returns nil, nil, or any other plain request and its reply. Nil passes on
 	// what arrives as it is. [listenForwarding] sets it as [forwarder.setCheck] does.
 	check *runAPICheck
-	// checkRelay, when set, is the secret of the relay's preamble on one machine, the
-	// run's proxy secret: every accepted connection must open with that preamble, read
-	// within the head's wait, before anything reaches the proxy. The forwarder writes the
-	// same preamble toward the proxy again, so without the check the proxy gets the bytes
-	// the relay sent, and with it the forwarder reads the request after the preamble.
-	checkRelay string
+	// unprivileged is true for one connection that [forwarder.show] returns this way
+	// for: it goes to the proxy opened with link.UnprivilegedPreamble, or through
+	// dialUnprivileged, and passes on as it arrives, with no check and no route.
+	unprivileged bool
 	// route, when set, is the run's route to OpenSpec.QoryRoute: the forwarder serves
 	// a plain request to link.QoryHost with it, and nothing of such a request reaches
 	// the proxy. session is the session this forwarder serves alone, without a wall,
@@ -179,7 +194,7 @@ func dialTCP(target string) func(context.Context) (net.Conn, error) {
 // listenForwarding listens on addr, host:port, and forwards each connection the way
 // says.
 func listenForwarding(addr string, way forwarding) (*forwarder, error) {
-	for _, s := range []string{way.secret, way.hop, way.password, way.checkRelay} {
+	for _, s := range []string{way.secret, way.hop, way.password} {
 		if s == "" {
 			continue
 		}
@@ -239,26 +254,62 @@ func (f *forwarder) accept() {
 		if err != nil {
 			return
 		}
-		if !f.track(c) {
+		hop, marked, ok := f.stamp(c)
+		if !ok {
 			c.Close()
 			return
 		}
-		if f.way.hop != "" || f.way.checkRelay != "" || f.way.password != "" {
+		if hop != "" || f.way.password != "" {
 			f.await(c)
 		}
 		f.wg.Add(1)
 		go func() {
 			defer f.wg.Done()
 			defer f.untrack(c)
-			f.serve(c)
+			f.serve(c, hop, marked)
 		}()
 	}
 }
 
+// stamp lists c, as track does, and returns, read together, the hop c must show and
+// whether c is unprivileged, accepted while the marking is in force. ok is false once
+// the forwarder is closed.
+func (f *forwarder) stamp(c net.Conn) (hop string, marked, ok bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return "", false, false
+	}
+	f.conns[c] = struct{}{}
+	return f.way.hop, f.marking, true
+}
+
+// mark makes every connection accepted, or that shows the hop, from this call on
+// unprivileged, until [forwarder.swap]. The session calls it before a step container
+// or an unprivileged setup container starts.
+func (f *forwarder) mark() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.marking = true
+}
+
+// swap ends the marking and replaces the hop with hop, in one step: a connection
+// accepted before it keeps the hop and the mark it was accepted with, and one accepted
+// after it must show hop. The session calls it at the end of a window of unprivileged
+// containers, before it starts the relay again with hop.
+func (f *forwarder) swap(hop string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.marking = false
+	f.way.hop = hop
+}
+
 // show marks that a connection showed the relay's hop or preamble, or needs neither, and
 // returns the way to serve it: with the check set at this moment, which a later
-// [forwarder.setCheck] does not change. It is false once the forwarder is closed.
-func (f *forwarder) show() (forwarding, bool) {
+// [forwarder.setCheck] does not change. A connection accepted unprivileged, marked, or
+// that shows the hop while the marking is in force is unprivileged: it gets no check and
+// no route. It is false once the forwarder is closed.
+func (f *forwarder) show(marked bool) (forwarding, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.closed {
@@ -267,8 +318,11 @@ func (f *forwarder) show() (forwarding, bool) {
 	f.shown = true
 	way := f.way
 	way.check = f.check
-	if way.checkRelay != "" {
-		way.secret = way.checkRelay
+	if marked || f.marking {
+		way.unprivileged, way.check, way.route = true, nil, nil
+		if way.dialUnprivileged != nil {
+			way.dial = way.dialUnprivileged
+		}
 	}
 	return way, true
 }
@@ -351,18 +405,15 @@ func (f *forwarder) admitLocked(c net.Conn) bool {
 
 // serve copies one connection to the proxy and back, each direction until its end,
 // which it passes on as a half close, the way that [forwarder.show] returns for it says.
-func (f *forwarder) serve(c net.Conn) {
-	// hop is the secret of the relay's preamble that the connection must open with:
-	// behind a separate gateway the hop, and on one machine the run's proxy secret.
-	hop, wait := f.way.hop, link.PreambleWait
+// hop is the secret of the relay's preamble that c must open with, empty for none, and
+// marked is true for a connection accepted unprivileged, both as [forwarder.stamp]
+// returned them.
+func (f *forwarder) serve(c net.Conn, hop string, marked bool) {
 	// peer is the address the relay wrote for the connection, with the route.
 	var peer netip.Addr
-	if hop == "" && f.way.checkRelay != "" {
-		hop, wait = f.way.checkRelay, f.headWait()
-	}
 	if hop != "" {
 		// Nothing reaches the proxy from a connection that is not the run's relay.
-		c.SetReadDeadline(time.Now().Add(wait))
+		c.SetReadDeadline(time.Now().Add(f.headWait()))
 		if ok, err := link.ReadRelayPreamble(c, hop); !ok || err != nil {
 			return
 		}
@@ -380,7 +431,7 @@ func (f *forwarder) serve(c net.Conn) {
 			return
 		}
 	}
-	way, ok := f.show()
+	way, ok := f.show(marked)
 	if !ok {
 		return
 	}
@@ -496,8 +547,12 @@ func (f *forwarder) serve(c net.Conn) {
 	}
 	defer f.untrack(up)
 	if way.secret != "" {
+		line := link.RelayLine(way.secret)
+		if way.unprivileged {
+			line = link.UnprivilegedLine(way.secret)
+		}
 		up.SetWriteDeadline(time.Now().Add(link.PreambleWait))
-		if _, err := io.WriteString(up, link.RelayLine(way.secret)); err != nil {
+		if _, err := io.WriteString(up, line); err != nil {
 			return
 		}
 		up.SetWriteDeadline(time.Time{})

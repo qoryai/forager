@@ -25,7 +25,8 @@ import (
 // the run has no push credential (on one machine, the run answer has no
 // push_proxy_secret; behind a separate gateway, the open's policy_applied lists no
 // credential with purpose push), a session of the run is running, the run is closed, a
-// copy step is open, the wall of a session could not be removed and may still run, a
+// copy step is open, the wall of a session or a step container could not be removed and
+// may still run, a
 // container that can write the run's binds may still run ([Run.ContainerKept]), the
 // setup container is up, a walled run with an authority has no bundle, or the
 // forwarder's port could not be opened.

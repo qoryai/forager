@@ -178,7 +178,7 @@ func routeError(t *testing.T, what string, resp *http.Response, b []byte, status
 }
 
 // startsWithAFix matches a text that opens with the imperative of what to do.
-var startsWithAFix = regexp.MustCompile(`^(Send|Retry|Shrink|Check) `)
+var startsWithAFix = regexp.MustCompile(`^(Send|Retry|Shrink|Check|Run) `)
 
 // egressOf are the dev.qory.run.egress of the run with channel run_api.
 func (o *runAPIRun) egressOf() []map[string]any {

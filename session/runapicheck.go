@@ -131,6 +131,7 @@ func (r *Run) SetRunAPICheck(check func(ctx context.Context, req RunAPIRequest) 
 var (
 	errCheckAfterSetup = errors.New("Call SetRunAPICheck before Setup: the setup started.")
 	errCheckAfterJoin  = errors.New("Call SetRunAPICheck before the first Join: a session joined the run.")
+	errCheckAfterStep  = errors.New("Call SetRunAPICheck before the first step: a step container ran.")
 	errCheckClosedRun  = errors.New("Open another run to check its run API: the run is closed.")
 )
 

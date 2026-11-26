@@ -27,6 +27,9 @@ type runSpec struct {
 	// afterSession, when set, is called with the run after a join that returned no error,
 	// before the close.
 	afterSession func(*session.Run)
+	// beforeJoin, when set, is called with the run after the setup and its removal,
+	// before the join.
+	beforeJoin func(*session.Run)
 }
 
 // runOne opens a run, fetches its image when sp.fetch is set, runs its setup commands
@@ -66,6 +69,9 @@ func runOne(ctx context.Context, sp runSpec) (*session.Result, error) {
 			r.Close(ctx, session.Outcome{State: event.StateFailed, ExitCode: -1})
 			return nil, err
 		}
+	}
+	if sp.beforeJoin != nil {
+		sp.beforeJoin(r)
 	}
 	res, err := r.Join(ctx, sp.SessionSpec)
 	if err == nil && sp.afterSession != nil {

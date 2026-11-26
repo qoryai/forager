@@ -304,7 +304,7 @@ func newProxy(mode policy.Mode, allow, deny []string, observe func(Decision)) (*
 	p.dial = d.DialContext
 	p.hosts = hostsFile
 	// A panic is reported without its value, which net/http would log.
-	p.srv = &http.Server{Handler: routine.Handler(p.reportPanic, p), ReadHeaderTimeout: 30 * time.Second}
+	p.srv = &http.Server{Handler: routine.Handler(p.reportPanic, p), ReadHeaderTimeout: 30 * time.Second, ConnContext: unprivilegedContext}
 	return p, nil
 }
 
@@ -1058,6 +1058,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !d.Allowed {
 		p.observe(d)
 		p.deny(w, d)
+		return
+	}
+	// A tool sends requests with the machine's rights: none comes from a step.
+	if tl != nil && isUnprivileged(r.Context()) {
+		p.refuseTool(w, d)
 		return
 	}
 	if !p.hold() {

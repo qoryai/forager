@@ -189,8 +189,10 @@ configuration, a key or its environment; `Start` makes the same calls again. See
 Without a wall the agent reaches the gateway's proxy through the session's forwarder, on
 loopback; behind one, through the wall's relay and the run's forwarder.
 On the local link every connection to the proxy opens with the relay's preamble and the
-run's proxy secret: without a wall the forwarder writes it, behind one the wall's relay
-does. Without a wall the agent's proxy URL is the forwarder on loopback with a password,
+run's proxy secret, which the forwarder writes. Behind a wall the wall's relay opens each
+connection to the run's forwarder with the run's hop token, a second secret that the
+forwarder checks and takes off; the proxy secret never enters the wall. Without a wall
+the agent's proxy URL is the forwarder on loopback with a password,
 `http://qory:<password>@127.0.0.1:<port>`, the password a secret the session makes for
 the session's forwarder alone, 32 bytes from the system's random source in base64url,
 which lives as long as the session and is never logged or recorded. A connection to the forwarder
@@ -499,6 +501,90 @@ alone, read-only, stay until the close and do not count, since neither can write
 After `Close` it equals `session.Closed.WallKept`. It reads no file and takes no lock,
 so a call returns at once, also while a session runs.
 
+### Step containers
+
+`(*session.Run).RunStep(ctx, spec)` runs one command of the caller's in a step
+container: a new container of the run's image on the wall's inside network, such as a
+check the work must pass. Use it for a command that needs the work's folder and the
+run's allow list, and no credential:
+
+```go
+res, err := run.RunStep(ctx, session.StepSpec{
+	Name:    "step first/ac-1-x",
+	Command: []string{"/bin/sh", "-c", "make test"},
+	Dir:     workspace,
+	Timeout: 10 * time.Minute,
+})
+if err != nil {
+	return err
+}
+if res.ExitCode != 0 {
+	fmt.Printf("the check failed with %d:\n%s", res.ExitCode, res.Output)
+}
+```
+
+The step container runs as the wall's user with the flags of the setup container, with
+`Dir` writable, `Mounts` with the checks of `SessionSpec.Mounts` and, for a run with an
+authority, the bundle. The wall mounts no helper in it: a program that the image does
+not have comes in a read-only mount of `Mounts`. `Image` is empty or the run's image by
+its name or reference: the node's policy sets the image, so any other is refused. Its environment
+has the relay's proxy variables and the bundle's variables: no run secret, no
+placeholder and no `QORY_RUN_API`. It has no nested Docker daemon and no hook socket.
+
+While a step container may run, the run's forwarder marks every connection of the wall's
+relay as unprivileged. The gateway's proxy applies the run's allow list to each request
+and records it, sets no credential on it, sends none to a tool, which gets `403` with
+the rule `wall:unprivileged`, and returns `403` `unprivileged` for each run API
+request. A setup container started with `SetupSpec.Unprivileged` gets the same
+treatment, and `RunStep` runs beside it; beside a setup container without it, `RunStep`
+returns `Start the setup with Unprivileged to run steps: the setup container gets
+credentials.` A `Join` beside an unprivileged setup container returns `Call RemoveSetup
+before the join: the setup container runs with Unprivileged.`
+
+The first `Join`, or `Setup` without `Unprivileged`, after one or more steps or an
+unprivileged setup sets a new hop token in the forwarder and stops the marking, then
+removes the relay and starts it again with the new token. A connection the old relay
+still held is closed at the forwarder, so no byte of a step reaches the proxy unmarked,
+however late it arrives. Steps that follow one another share one restart. A restart that
+fails fails the join with `Run the join again, or close the run: the relay did not
+start again after the steps.`, and the next join tries again. For `Setup` the restart
+runs before the first step, so a failed restart writes nothing and returns `Run the
+setup again, or close the run: the relay did not start again after the steps.`; a
+`Setup` while a container of the run may still run returns the `ContainerKept` text.
+
+`RunStep` writes one step of kind `container` named `spec.Name` with the run's masker
+applied, the command's output as its lines on `stdout` and `stderr`, and its end:
+
+| The command | `step_exited` | `StepResult` |
+|---|---|---|
+| exits 0 | `succeeded`, 0 | `ExitCode` 0 |
+| exits with N | `failed`, N | `ExitCode` N; for N above 128, `Signal` N-128 |
+| ends at the memory limit | `failed`, reason `out_of_memory` | `OOMKilled` |
+| runs past `Timeout` | `cancelled`, reason `timeout` | `TimedOut` |
+| is stopped by `ctx` or `Close` | `cancelled` | the stop's cause as the error |
+| never starts in the container | `failed`, -1 | the error below |
+
+A program that the image does not have is the command's failure: the init of the Docker
+wall's step container exits 127, and the step ends `failed`, 127. When the engine starts
+nothing in the container, `RunStep` returns `Check the step's command and the run's
+image: the step container did not start.`, and the engine's message is in the step's
+lines and in `Output`.
+
+`Output` is the first 1 MiB of the masked output of both streams, in the order the bytes
+arrived. `OutputCut` is true when the command wrote more. A stop sends `SIGTERM`, then
+`SIGKILL` 5 seconds later. `RunStep` removes the step container before it returns.
+`Close` during a step stops it, waits for `RunStep` to return, and closes the run.
+
+Each error before the step starts with the fix and writes nothing. A step container that
+could not be removed may still run and write the run's binds: the step ends `failed`
+with -1, `ContainerKept()` is true from then on, and `RunStep`, `Setup`, `Join` and the
+host proxies return an error that matches `wall.ErrContainerKept`: `Remove the kept
+container, then close the run: Forager could not remove it, and it may still run.`, and
+on its second line the container's name and the command that removes it, which the wall
+supplies, such as `docker rm -f <name>` for the Docker wall. When the run's engine
+commands run with an engine selection, the command starts with its variables, such as
+`DOCKER_HOST=tcp://engine.example:2376 docker rm -f <name>`, with no password.
+
 After a build of an image, write the build as a step of kind `event.StepBuild`, then
 write its result with `(*session.Run).Built(b)`. `Built` writes `dev.qory.run.built`
 with the members of `session.Built`:
@@ -753,8 +839,12 @@ control plane. A request of the client fails once the run is closed.
 Qory Apiary serves only a run of a work item through a gateway's access key. Any other run gets a `404`, and a POST body over 64 KiB on a node's key gets `502` `answer_unverified`.
 
 Inside a session, read the same base URL from `session.EnvRunAPI`, `QORY_RUN_API`, and
-send the request through `HTTP_PROXY`. A setup container gets the variable too. Behind a
-wall, a value a caller passes for the name is `variable_reserved`.
+send the request through `HTTP_PROXY`. A setup container gets the variable too, unless
+it started with `SetupSpec.Unprivileged`. A step container and an unprivileged setup
+container have no run API: the proxy returns `403` `unprivileged` for each of their
+requests, `Run this from the session, not a step: steps and unprivileged setups have
+no run API access.` Behind a wall, a value a caller passes for the
+name is `variable_reserved`.
 
 A file's `200` is chunked. Treat its bytes as unverified until the read ends cleanly: a
 file that fails its signed digest ends in a read error. The contract's README, §The run

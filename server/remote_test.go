@@ -371,6 +371,28 @@ func TestTheRemoteProxyOpensWithTheRunKey(t *testing.T) {
 	}
 }
 
+// TestTheRemoteUnprivilegedProxyOpensWithItsWord pins DialProxyUnprivileged: bound as
+// DialProxy is, then QORY-UNPRIVILEGED and the run key, then the traffic.
+func TestTheRemoteUnprivilegedProxyOpensWithItsWord(t *testing.T) {
+	f := linktest.StartRemoteFake(t)
+	key := f.RunKey(t, remoteRunID)
+	k := remoteLink(t, f, key)
+	c, err := k.DialProxyUnprivileged(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	io.WriteString(c, "GET http://api.example/ HTTP/1.1\r\nHost: api.example\r\n\r\n")
+	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	res, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil || res.StatusCode != 200 {
+		t.Fatalf("through the proxy: %v %v", res, err)
+	}
+	if want := []string{"QORY-UNPRIVILEGED " + key}; fmt.Sprint(f.Preambles()) != fmt.Sprint(want) || f.Bound() != 1 {
+		t.Errorf("the preambles %q, %d bound", f.Preambles(), f.Bound())
+	}
+}
+
 // TestTheRemoteLinkPassesTheGatewaysRefusalsOn pins the refusals of a separate gateway
 // as the local link's, signed as every answer is: the code, the status, the names and
 // who refused, and the refusal's message as its text, word for word; to a batch, in the

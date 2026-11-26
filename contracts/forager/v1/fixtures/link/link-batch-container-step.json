@@ -1,0 +1,46 @@
+[
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-b00000000001",
+    "source": "urn:qory:run:0198a6b7-d283-7495-a06b-1c2d3e4f5a6c",
+    "type": "dev.qory.run.step_started",
+    "subject": "0198a6b7-d283-7495-a06b-1c2d3e4f5a6c",
+    "time": "2026-11-26T09:10:00.100Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.step_started.schema.json",
+    "data": {
+      "step": 3,
+      "name": "step first/ac-1-x",
+      "kind": "container"
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-b00000000002",
+    "source": "urn:qory:run:0198a6b7-d283-7495-a06b-1c2d3e4f5a6c",
+    "type": "dev.qory.run.log",
+    "subject": "0198a6b7-d283-7495-a06b-1c2d3e4f5a6c",
+    "time": "2026-11-26T09:10:04.200Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.log.schema.json",
+    "data": {
+      "stream": "stdout",
+      "bytes": "b2sgIAlleGFtcGxlLmNvbS9hcHAJMy4xcwo=",
+      "step": 3
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-b00000000003",
+    "source": "urn:qory:run:0198a6b7-d283-7495-a06b-1c2d3e4f5a6c",
+    "type": "dev.qory.run.step_exited",
+    "subject": "0198a6b7-d283-7495-a06b-1c2d3e4f5a6c",
+    "time": "2026-11-26T09:10:04.300Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.step_exited.schema.json",
+    "data": {
+      "step": 3,
+      "state": "cancelled",
+      "exit_code": 143,
+      "duration_ms": 4200,
+      "reason": "timeout"
+    }
+  }
+]
