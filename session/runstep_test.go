@@ -324,7 +324,8 @@ func TestRunStepRefuses(t *testing.T) {
 
 // TestAStepContainerKeptStopsTheRun pins a step container whose removal failed: the step
 // fails with the container's name and the command to remove it, ContainerKept is true,
-// and a later step and a join are refused with the same text.
+// and a later step, which starts no container, a join and a setup are refused with the
+// same text; SetRunAPICheck is refused after a step.
 func TestAStepContainerKeptStopsTheRun(t *testing.T) {
 	// A container that stays leaves the run's entry among the walled runs still going.
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
@@ -342,11 +343,18 @@ func TestAStepContainerKeptStopsTheRun(t *testing.T) {
 	if d := stepExited(t, r, 1); d["state"] != event.StateFailed || d["exit_code"] != float64(-1) {
 		t.Errorf("step_exited %v", d)
 	}
-	if _, err := r.RunStep(ctx, session.StepSpec{Name: "x", Command: []string{"true"}, Dir: sp.Dir}); err == nil || err.Error() != want {
-		t.Errorf("the next step: %v", err)
+	if _, err := r.RunStep(ctx, session.StepSpec{Name: "x", Command: []string{"true"}, Dir: sp.Dir}); err == nil || err.Error() != want || w.started() != 1 {
+		t.Errorf("the next step: %v, %d step containers", err, w.started())
 	}
 	if _, err := r.Join(ctx, sp.SessionSpec); err == nil || err.Error() != want {
 		t.Errorf("the join: %v", err)
+	}
+	if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands}); err == nil || err.Error() != want || w.starts != 0 || len(w.restarts) != 0 {
+		t.Errorf("the setup: %v, %d starts, %d restarts", err, w.starts, len(w.restarts))
+	}
+	check := func(context.Context, session.RunAPIRequest) (*session.RunAPIRefusal, error) { return nil, nil }
+	if err := r.SetRunAPICheck(check); err == nil || err.Error() != "Call SetRunAPICheck before the first step: a step container ran." {
+		t.Errorf("SetRunAPICheck after a step: %v", err)
 	}
 }
 
