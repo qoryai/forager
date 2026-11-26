@@ -29,6 +29,8 @@ type stepWall struct {
 	exit      wall.StepExit
 	unwrapErr error
 	kept      []wall.KeptContainer
+	// hold, when set, keeps UnwrapStep from returning until it is closed.
+	hold chan struct{}
 }
 
 func newStepWall(t *testing.T) *stepWall { return &stepWall{dir: t.TempDir()} }
@@ -59,6 +61,9 @@ func (w *stepWall) WrapStep(_ context.Context, l wall.Launch) (wall.Launch, erro
 }
 
 func (w *stepWall) UnwrapStep(context.Context, time.Duration) (wall.StepExit, error) {
+	if w.hold != nil {
+		<-w.hold
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.unwraps++
@@ -457,5 +462,70 @@ func TestCloseStopsAStep(t *testing.T) {
 	}
 	if d := stepExited(t, r, 1); d["state"] != event.StateCancelled {
 		t.Errorf("step_exited %v", d)
+	}
+}
+
+// startLongStep runs a step of sleep 30 in r in the background, waits until its step
+// container started, and returns the channel of RunStep's error.
+func startLongStep(t *testing.T, w *stepWall, r *session.Run, dir string) <-chan error {
+	t.Helper()
+	got := make(chan error, 1)
+	go func() {
+		_, err := r.RunStep(context.Background(), session.StepSpec{Name: "long", Command: []string{"sleep", "30"}, Dir: dir})
+		got <- err
+	}()
+	for deadline := time.Now().Add(10 * time.Second); w.started() == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the step container did not start")
+		}
+	}
+	return got
+}
+
+// TestCloseChecksTheOutcomeFirst pins Close during a step with an outcome it refuses: it
+// returns the refusal and leaves the step running, and a Close with a valid outcome
+// then stops the step and closes the run.
+func TestCloseChecksTheOutcomeFirst(t *testing.T) {
+	ctx := context.Background()
+	w := newStepWall(t)
+	w.exit = wall.StepExit{Started: true, ExitCode: 143}
+	sp, r := openStepRun(t, w)
+	got := startLongStep(t, w, r, sp.Dir)
+	if _, err := r.Close(ctx, session.Outcome{State: "finished"}); err == nil || !strings.Contains(err.Error(), "is none of succeeded") {
+		t.Fatalf("Close with a refused outcome: %v", err)
+	}
+	select {
+	case err := <-got:
+		t.Fatalf("the refused Close stopped the step: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if _, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-got; err == nil {
+		t.Error("RunStep returned no error after Close stopped it")
+	}
+}
+
+// TestCloseWaitsForAStepUntilItsContextEnds pins Close during a step whose RunStep does
+// not return in time: Close returns the fix once its context ends and the run stays open;
+// once RunStep returned, Close closes the run.
+func TestCloseWaitsForAStepUntilItsContextEnds(t *testing.T) {
+	w := newStepWall(t)
+	w.exit = wall.StepExit{Started: true, ExitCode: 143}
+	w.hold = make(chan struct{})
+	sp, r := openStepRun(t, w)
+	got := startLongStep(t, w, r, sp.Dir)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded}); err == nil || !strings.HasPrefix(err.Error(), "Call Close again: the step is stopping") {
+		t.Fatalf("Close past its context: %v", err)
+	}
+	close(w.hold)
+	if err := <-got; err == nil {
+		t.Error("RunStep returned no error after Close stopped it")
+	}
+	if _, err := r.Close(context.Background(), session.Outcome{State: event.StateSucceeded}); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -151,11 +151,13 @@ func (r *Run) RunStep(ctx context.Context, spec StepSpec) (res *StepResult, err 
 	}
 	r.stepping = running
 	r.stepMu.Unlock()
+	// stepping is cleared before the lock is let go, so a Close that reads it set under
+	// stepMu knows that RunStep holds the lock.
 	defer func() {
-		r.joining.Unlock()
 		r.stepMu.Lock()
 		r.stepping = nil
 		r.stepMu.Unlock()
+		r.joining.Unlock()
 		close(running.done)
 	}()
 	stopFollow := context.AfterFunc(r.closing, func() { cancel(errRunClosed) })
@@ -423,20 +425,35 @@ func (s *stepStream) flush() {
 }
 
 // lockForClose takes r.joining for [Run.Close]: at once, or, while RunStep runs, once
-// the step stopped and RunStep returned. It reports false while any other call of the
-// run runs, a Join among them.
-func (r *Run) lockForClose() bool {
+// check passed, the step stopped and RunStep returned. check runs while RunStep holds
+// the lock, so it reads what only a holder of the lock writes, and its error leaves the
+// step running. It fails while any other call of the run runs, a Join among them, and
+// when ctx ends before RunStep returns.
+func (r *Run) lockForClose(ctx context.Context, check func() error) error {
 	for {
 		if r.joining.TryLock() {
-			return true
+			return nil
 		}
 		r.stepMu.Lock()
 		s := r.stepping
+		var err error
+		if s != nil {
+			err = check()
+		}
 		r.stepMu.Unlock()
-		if s == nil {
-			return r.joining.TryLock()
+		switch {
+		case s == nil && r.joining.TryLock():
+			return nil
+		case s == nil:
+			return errors.New("a session of the run is still running: close the run after Join returns")
+		case err != nil:
+			return err
 		}
 		s.cancel(errRunClosed)
-		<-s.done
+		select {
+		case <-s.done:
+		case <-ctx.Done():
+			return fmt.Errorf("Call Close again: the step is stopping, and RunStep did not return before Close's context ended.\n%w", context.Cause(ctx))
+		}
 	}
 }

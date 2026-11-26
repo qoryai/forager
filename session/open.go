@@ -867,8 +867,8 @@ func (r *Run) setApplied(m map[string]any) {
 }
 
 // Close writes the run's dev.qory.run.exited with the caller's outcome, once, and
-// closes the run: a step of [Run.RunStep] that runs is stopped, and Close waits for
-// RunStep to return; a host step still open ends cancelled with -1 first, then the run's
+// closes the run: a step of [Run.RunStep] that runs is stopped once the outcome is
+// checked, and Close waits for RunStep to return until ctx ends; a host step still open ends cancelled with -1 first, then the run's
 // wall is removed, the heartbeats and the reloads stop, the sinks are flushed within 15
 // seconds, 180 behind a separate gateway, which may be restarting, and the lock, the
 // registry entry and the link are let go. A wall that could
@@ -878,7 +878,8 @@ func (r *Run) setApplied(m map[string]any) {
 // before the close has its dev.qory.run.exited in the session's record alone, with the
 // state and the reason of the gateway's 410 and the last session's exit code. An error
 // means the outcome is refused, and nothing is written: the run stays open, and Close
-// may be called again; or the run is closed already. The run's masker replaces the
+// may be called again; the run is closed already; or ctx ended while a step stopped,
+// before RunStep returned, and Close may be called again. The run's masker replaces the
 // run's secrets in the error's text.
 func (r *Run) Close(ctx context.Context, out Outcome) (*Closed, error) {
 	res, err := r.close(ctx, out)
@@ -887,17 +888,20 @@ func (r *Run) Close(ctx context.Context, out Outcome) (*Closed, error) {
 
 // close is Close with its error unmasked.
 func (r *Run) close(ctx context.Context, out Outcome) (*Closed, error) {
-	if !r.lockForClose() {
-		return nil, errors.New("a session of the run is still running: close the run after Join returns")
+	check := func() error {
+		if r.closed {
+			return errors.New("the run is closed already")
+		}
+		return checkOutcome(out, r.numbered > 0 || r.maybeJoined, r.lastReason)
 	}
-	defer r.joining.Unlock()
-	if r.closed {
-		return nil, errors.New("the run is closed already")
-	}
-	joined := r.numbered > 0 || r.maybeJoined
-	if err := checkOutcome(out, joined, r.lastReason); err != nil {
+	if err := r.lockForClose(ctx, check); err != nil {
 		return nil, err
 	}
+	defer r.joining.Unlock()
+	if err := check(); err != nil {
+		return nil, err
+	}
+	joined := r.numbered > 0 || r.maybeJoined
 	if !joined && out.State == event.StateFailed && out.Reason == "" {
 		out.Reason, out.ExitCode = event.ReasonNoSession, -1
 	}
