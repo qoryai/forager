@@ -328,7 +328,7 @@ list to each request on a marked connection and records it, but sets no credenti
 reaches no tool and returns `403` `unprivileged` for the run API.
 
 A request a step container sent may still sit in the relay when the step ends. So the
-join or setup that ends the marking first gives the forwarder a new hop token, in the
+join or setup that ends the marking first sets a new hop token in the forwarder, in the
 same step as the end of the marking, then removes the relay with `docker rm --force` and
 starts it again with the new token. A connection with the old token is closed at the
 forwarder unanswered; one the forwarder took before the swap keeps its mark. Steps that

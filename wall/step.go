@@ -29,7 +29,7 @@ type StepWrapper interface {
 	// UnwrapStep stops the step container, with SIGTERM and then SIGKILL after grace
 	// when its command still runs, reads how it ended, and removes it, as
 	// [Enclosure.Close] would, returning once the engine removed it. A container that is
-	// gone is not an error, and gives the zero StepExit. A failed removal matches
+	// gone is not an error, and returns the zero StepExit. A failed removal matches
 	// [ErrContainerKept]: the container may still run, and Close tries again.
 	UnwrapStep(ctx context.Context, grace time.Duration) (StepExit, error)
 	// Kept lists the run's containers whose last removal failed and that may still run:
@@ -141,7 +141,7 @@ func (e *dockerEnclosure) WrapStep(ctx context.Context, l Launch) (Launch, error
 
 // UnwrapStep stops the step container with docker stop -t, reads its state with
 // docker inspect and removes it with docker rm --force, within the stop's grace and
-// closeWait. A container that is gone gives the zero StepExit and no error.
+// closeWait. For a container that is gone it returns the zero StepExit and no error.
 func (e *dockerEnclosure) UnwrapStep(ctx context.Context, grace time.Duration) (StepExit, error) {
 	if !slices.ContainsFunc(e.made, func(c []string) bool { return slices.Equal(c, []string{"rm", "--force", "--volumes", e.step()}) }) {
 		return StepExit{}, nil

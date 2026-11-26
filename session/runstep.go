@@ -151,8 +151,8 @@ func (r *Run) RunStep(ctx context.Context, spec StepSpec) (res *StepResult, err 
 	}
 	r.stepping = running
 	r.stepMu.Unlock()
-	// stepping is cleared before the lock is let go, so a Close that reads it set under
-	// stepMu knows that RunStep holds the lock.
+	// stepping is cleared before the lock is let go: while stepMu is held and stepping
+	// is set, RunStep holds the lock.
 	defer func() {
 		r.stepMu.Lock()
 		r.stepping = nil

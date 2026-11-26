@@ -458,7 +458,7 @@ type dockerEnclosure struct {
 	host string
 	// subnets are the inside network's, where the relay listens.
 	subnets []string
-	// made holds the commands that remove what was created, in the order created; kept
+	// made lists the commands that remove what was created, in the order created; kept
 	// lists the containers whose last removal by removeContainer failed.
 	made [][]string
 	kept []string

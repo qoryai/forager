@@ -381,7 +381,7 @@ release may change what an existing document does, and says so under Upgrading.
   `QORY-UNPRIVILEGED`. The proxy applies the run's allow list and records each request,
   sets no credential, and returns `403` with the rule `wall:unprivileged` for a tool's
   host and `403` `unprivileged` for the run API. The next join, or setup without
-  `Unprivileged`, gives the forwarder a new hop token and restarts the relay, so no
+  `Unprivileged`, sets a new hop token in the forwarder and restarts the relay, so no
   connection of a step reaches the proxy unmarked.
 
 - `QORY_SESSION`, `session.EnvSession`, in each session's environment: the number the

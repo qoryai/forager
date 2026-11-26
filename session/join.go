@@ -68,8 +68,8 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 // run whose setup container started with SetupSpec.Unprivileged and was not removed,
 // writes nothing. The first join after a step container or an unprivileged setup
 // container starts the wall's relay again with a new token, in its wall step: a restart
-// that fails fails the session as a launch the wall cannot wrap does. A join the gateway refuses with a 403, or that fails the session's checks,
-// writes dev.qory.session.exited, failed with -1, the refusal's code as its reason when
+// that fails fails the session as a launch the wall cannot wrap does. A join the gateway
+// refuses with a 403, or that fails the session's checks, writes dev.qory.session.exited, failed with -1, the refusal's code as its reason when
 // the session decides that code, and duration_ms 0; a refusal with a code is a
 // [*Refusal]. A failure in the image or the wall step, such as an image that runs as
 // root, an image that cannot be fetched or a launch the wall cannot wrap, writes
@@ -415,9 +415,9 @@ func joinUnanswered(err error) bool {
 }
 
 // wallKept is the error of a call that must not run beside the wall of a session or a
-// step container whose removal failed, nil for a run with no such wall: [Run.Join], since the wall may still
-// run, and [Run.HostProxy], since the agent's container may still change what a push
-// sends. A timed-out or cancelled session ends by killing the docker client, which does
+// step container whose removal failed, nil for a run with no such wall: [Run.Join],
+// since the wall may still run, and [Run.HostProxy] and [Run.PushProxy], since the
+// agent's container or the step container may still change what a push sends. A timed-out or cancelled session ends by killing the docker client, which does
 // not prove the container stopped.
 func (r *Run) wallKept() error {
 	if r.stepKept {

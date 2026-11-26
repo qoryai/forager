@@ -191,7 +191,8 @@ loopback; behind one, through the wall's relay and the run's forwarder.
 On the local link every connection to the proxy opens with the relay's preamble and the
 run's proxy secret, which the forwarder writes. Behind a wall the wall's relay opens each
 connection to the run's forwarder with the run's hop token, a second secret that the
-forwarder checks and takes off; the proxy secret never enters the wall. Without a wall the agent's proxy URL is the forwarder on loopback with a password,
+forwarder checks and takes off; the proxy secret never enters the wall. Without a wall
+the agent's proxy URL is the forwarder on loopback with a password,
 `http://qory:<password>@127.0.0.1:<port>`, the password a secret the session makes for
 the session's forwarder alone, 32 bytes from the system's random source in base64url,
 which lives as long as the session and is never logged or recorded. A connection to the forwarder
@@ -525,8 +526,8 @@ if res.ExitCode != 0 {
 The step container runs as the wall's user with the flags of the setup container, with
 `Dir` writable, `Mounts` with the checks of `SessionSpec.Mounts` and, for a run with an
 authority, the bundle. The wall mounts no helper in it: a program that the image does
-not have comes in a read-only mount of `Mounts`. `Image` is empty or the run's image by its name or
-reference: the node's policy sets the image, so any other is refused. Its environment
+not have comes in a read-only mount of `Mounts`. `Image` is empty or the run's image by
+its name or reference: the node's policy sets the image, so any other is refused. Its environment
 has the relay's proxy variables and the bundle's variables: no run secret, no
 placeholder and no `QORY_RUN_API`. It has no nested Docker daemon and no hook socket.
 
