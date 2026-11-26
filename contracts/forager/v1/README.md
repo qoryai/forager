@@ -626,7 +626,10 @@ starts a parameter of a normal segment, and the path passes. A request target wi
 slash after its scheme, such as `https:..;/secret`, is denied the same way: its text is
 sent upstream as the path. On a host that gets a credential, a `TRACE` or `TRACK`
 through `CONNECT` is denied in either mode with a `405`, with the rule
-`wall:echo-method` (§Credentials, The answer). Under `observe` a path no entry matches is recorded as
+`wall:echo-method` (§Credentials, The answer). A request to a tool's host from a step
+container or a setup container started with `Unprivileged` is denied in either mode with
+a `403` and the rule `wall:unprivileged` (§The gateway's link, The unprivileged mark). Under
+`observe` a path no entry matches is recorded as
 allowed with an empty `path_rule` and passed on, as a host no entry matches is recorded
 as allowed with an empty `rule`, but the credential is set only where the credential's
 paths match: observe mode sends no secret to a path nobody configured. The host
