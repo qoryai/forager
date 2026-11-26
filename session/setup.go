@@ -38,6 +38,13 @@ type SetupSpec struct {
 	// Limits are the resources the setup container may use, as SessionSpec.Limits
 	// are the runtime's.
 	Limits wall.Limits
+	// Unprivileged starts the setup container as a step container is started: the
+	// run's allow list and the record of its egress apply to its requests, the gateway's
+	// proxy sets no credential on them, and the run API answers them with 403. Its
+	// environment has no QORY_RUN_API. While it runs, no session joins: call
+	// [Run.RemoveSetup] first. [Run.RunStep] runs beside a setup container only when
+	// the setup started with Unprivileged.
+	Unprivileged bool
 }
 
 // SetupError is the error of [Run.Setup] when a setup command exits otherwise than 0:
@@ -279,6 +286,9 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 		return fmt.Errorf("Exit step %d before the setup: one host step is open at a time.", r.hostStep.n)
 	case len(spec.Commands) == 0:
 		return errors.New("Give the setup at least one command.")
+	case spec.Unprivileged:
+		// shortcut: no unprivileged setup until the mark of its traffic is built, in this change.
+		return errors.New("Start the setup without Unprivileged: this build has no unprivileged setup.")
 	}
 	if err := checkSetupCommands(spec.Commands); err != nil {
 		return err
