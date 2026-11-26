@@ -396,9 +396,10 @@ func (f *Fake) Bound() int {
 }
 
 // relayHead is the word and space a bound connection opens with, one of the relay's
-// preamble, [link.StackPreamble] and [link.PushPreamble], and whether it opens with one.
+// preamble, [link.UnprivilegedPreamble], [link.StackPreamble] and [link.PushPreamble],
+// and whether it opens with one.
 func relayHead(br *bufio.Reader) (string, bool) {
-	for _, word := range []string{link.RelayPreamble, link.StackPreamble, link.PushPreamble} {
+	for _, word := range []string{link.RelayPreamble, link.UnprivilegedPreamble, link.StackPreamble, link.PushPreamble} {
 		if head, err := br.Peek(len(word) + 1); err == nil && string(head) == word+" " {
 			return string(head), true
 		}

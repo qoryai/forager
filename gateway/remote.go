@@ -220,6 +220,9 @@ type relayTo int
 
 const (
 	toRunProxy relayTo = iota
+	// toUnprivileged is the run's proxy, for a connection from a step container or an
+	// unprivileged setup container.
+	toUnprivileged
 	toStackProxy
 	toPushProxy
 )
@@ -227,6 +230,8 @@ const (
 // relayRun hands a bound connection that opened with the relay's preamble and a run
 // key to the proxy of that run, live at the gateway, as the shared proxy does a local
 // connection with a run's proxy secret, admit called once the run key verifies; with
+// toUnprivileged, one that opened with [link.UnprivilegedPreamble] to the same proxy,
+// with no credential and no run API ([proxy.Proxy.ServeUnprivileged]); with
 // toStackProxy, one that opened with [link.StackPreamble] to that run's stack proxy,
 // until the run's first join request; with toPushProxy, one that opened with
 // [link.PushPreamble] to that run's push proxy. The run a gateway with Listen suspended at its stop is
@@ -279,6 +284,10 @@ func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit, rel
 		return false
 	}
 	c.SetDeadline(time.Time{})
+	if to == toUnprivileged {
+		px.ServeUnprivileged(&linkConn{Conn: c, r: r})
+		return true
+	}
 	px.ServeConn(&linkConn{Conn: c, r: r})
 	return true
 }

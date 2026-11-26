@@ -311,6 +311,19 @@ func (k *Link) DialProxy(ctx context.Context) (net.Conn, error) {
 	return k.dialOpened(ctx, "proxy", link.RelayLine(k.remote.runKey))
 }
 
+// DialProxyUnprivileged opens one connection to a separate gateway's proxy as
+// [Link.DialProxy] does, with [link.UnprivilegedLine] and the run key in place of the
+// relay's preamble: the gateway's proxy applies the run's allow list to what is written
+// after it and records it, sets no credential on it, sends none of it to a tool, and
+// answers its run API requests with 403. The session dials it for a connection from a
+// step container or an unprivileged setup container. The local link has no such way.
+func (k *Link) DialProxyUnprivileged(ctx context.Context) (net.Conn, error) {
+	if k.remote == nil {
+		return nil, errors.New("the gateway's local link has no proxy over TLS")
+	}
+	return k.dialOpened(ctx, "proxy", link.UnprivilegedLine(k.remote.runKey))
+}
+
 // DialStack opens one connection to the run's stack proxy on a separate gateway, its one
 // address, as [Link.DialProxy] opens one to its proxy, with [link.StackLine] and the run
 // key in place of the relay's preamble. The gateway closes such a connection unanswered
