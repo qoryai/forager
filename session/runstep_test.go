@@ -17,9 +17,9 @@ import (
 )
 
 // stepWall is a setupWall whose enclosure runs step containers: WrapStep notes its
-// launch and returns one that runs the step's command on this machine, until the
-// command ends or UnwrapStep creates the step's stop file, which kills it. UnwrapStep
-// returns exit and unwrapErr, Kept returns kept, and Unwrap removes nothing.
+// launch and returns wrapErr, or a launch that runs the step's command on this machine,
+// until the command ends or UnwrapStep creates the step's stop file, which kills it.
+// UnwrapStep returns exit and unwrapErr, Kept returns kept, and Unwrap removes nothing.
 type stepWall struct {
 	setupWall
 	dir       string
@@ -28,6 +28,7 @@ type stepWall struct {
 	unwraps   int
 	exit      wall.StepExit
 	unwrapErr error
+	wrapErr   error
 	kept      []wall.KeptContainer
 	// hold, when set, keeps UnwrapStep from returning until it is closed.
 	hold chan struct{}
@@ -57,6 +58,9 @@ func (w *stepWall) WrapStep(_ context.Context, l wall.Launch) (wall.Launch, erro
 	defer w.mu.Unlock()
 	stop := filepath.Join(w.dir, fmt.Sprint("stop-", len(w.steps)))
 	w.steps, w.stops = append(w.steps, l), append(w.stops, stop)
+	if w.wrapErr != nil {
+		return wall.Launch{}, w.wrapErr
+	}
 	return wall.Launch{Command: "/bin/sh", Args: append([]string{"-c", stepScript, "sh", stop, l.Command}, l.Args...)}, nil
 }
 
@@ -527,5 +531,152 @@ func TestCloseWaitsForAStepUntilItsContextEnds(t *testing.T) {
 	}
 	if _, err := r.Close(context.Background(), session.Outcome{State: event.StateSucceeded}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestRunStepRefusesInTheRunsState pins the refusals of a step from the run's state,
+// which start no step container and write nothing: a host step is open, the run is
+// closed, a setup step failed, the run's image by reference was not fetched, and
+// another call of the run is running.
+func TestRunStepRefusesInTheRunsState(t *testing.T) {
+	ctx := context.Background()
+	step := func(r *session.Run, dir string) error {
+		_, err := r.RunStep(ctx, session.StepSpec{Name: "x", Command: []string{"true"}, Dir: dir})
+		return err
+	}
+	for _, c := range []struct {
+		name   string
+		before func(t *testing.T, w *stepWall, sp runSpec, r *session.Run)
+		want   string
+	}{
+		{"a host step open", func(t *testing.T, _ *stepWall, _ runSpec, r *session.Run) {
+			if _, err := r.StartStep(event.StepFetch, "fetch github.com/example-org/app"); err != nil {
+				t.Fatal(err)
+			}
+		}, "Exit step 1 before the step: one host step is open at a time."},
+		{"a closed run", func(t *testing.T, _ *stepWall, _ runSpec, r *session.Run) {
+			if _, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded}); err != nil {
+				t.Fatal(err)
+			}
+		}, "Open another run to run a step: the run is closed."},
+		{"a failed setup", func(t *testing.T, w *stepWall, sp runSpec, r *session.Run) {
+			w.codes = map[string]int{"make": 2}
+			if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands, Unprivileged: true}); err == nil {
+				t.Fatal("the setup did not fail")
+			}
+		}, "Open another run: setup step 2 of this run failed, so no step runs in it."},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newStepWall(t)
+			sp, r := openStepRun(t, w)
+			c.before(t, w, sp, r)
+			before := len(stepOrder(events(t, &session.Result{Dir: r.Dir()})))
+			if err := step(r, sp.Dir); err == nil || err.Error() != c.want || w.started() != 0 {
+				t.Errorf("RunStep: %v, %d step containers; want %q", err, w.started(), c.want)
+			}
+			if n := len(stepOrder(events(t, &session.Result{Dir: r.Dir()}))); n != before {
+				t.Errorf("the refusal wrote %d lines of the record", n-before)
+			}
+		})
+	}
+	t.Run("an image not fetched", func(t *testing.T) {
+		sp, g := specGateway(t, "FAKE_EXIT=0")
+		byReference(g)
+		w := newStepWall(t)
+		sp.Wall = w
+		r, err := session.Open(ctx, opened(sp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+		if err := step(r, sp.Dir); err == nil || err.Error() != "Call FetchImage before the step: the run's image is not on this machine yet." || w.started() != 0 {
+			t.Errorf("RunStep: %v, %d step containers", err, w.started())
+		}
+	})
+	t.Run("another call running", func(t *testing.T) {
+		w := newStepWall(t)
+		w.exit = wall.StepExit{Started: true, ExitCode: 143}
+		sp, r := openStepRun(t, w)
+		got := startLongStep(t, w, r, sp.Dir)
+		if err := step(r, sp.Dir); err == nil || err.Error() != "Run the step after the run's other call returns: another call of the run is running." || w.started() != 1 {
+			t.Errorf("a second RunStep: %v, %d step containers", err, w.started())
+		}
+		if _, err := r.Close(ctx, session.Outcome{State: event.StateSucceeded}); err != nil {
+			t.Fatal(err)
+		}
+		<-got
+	})
+}
+
+// TestAStepWhoseWrapFails pins a WrapStep that fails: RunStep returns its error, the
+// step ends failed with -1, and UnwrapStep removes what WrapStep may have made.
+func TestAStepWhoseWrapFails(t *testing.T) {
+	w := newStepWall(t)
+	w.wrapErr = errors.New("wall docker: docker create: told to fail")
+	sp, r := openStepRun(t, w)
+	_, err := r.RunStep(context.Background(), session.StepSpec{Name: "x", Command: []string{"true"}, Dir: sp.Dir})
+	if err == nil || err.Error() != w.wrapErr.Error() || w.unwraps != 1 {
+		t.Fatalf("RunStep: %v, %d unwraps", err, w.unwraps)
+	}
+	if d := stepExited(t, r, 1); d["state"] != event.StateFailed || d["exit_code"] != float64(-1) {
+		t.Errorf("step_exited %v", d)
+	}
+}
+
+// TestAStepStoppedByItsContext pins a step whose ctx ends: the step container is
+// stopped, RunStep returns the result with the signal and ctx's cause, and the step
+// ends cancelled; the run takes the next step.
+func TestAStepStoppedByItsContext(t *testing.T) {
+	w := newStepWall(t)
+	w.exit = wall.StepExit{Started: true, ExitCode: 143}
+	sp, r := openStepRun(t, w)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	stop := errors.New("the caller stopped the step")
+	go func() {
+		for w.started() == 0 {
+			time.Sleep(10 * time.Millisecond)
+		}
+		cancel(stop)
+	}()
+	res, err := r.RunStep(ctx, session.StepSpec{Name: "long", Command: []string{"sleep", "30"}, Dir: sp.Dir})
+	if !errors.Is(err, stop) || res == nil || res.Signal != 15 || w.unwraps != 1 {
+		t.Fatalf("RunStep: %+v, %v, %d unwraps", res, err, w.unwraps)
+	}
+	if d := stepExited(t, r, 1); d["state"] != event.StateCancelled {
+		t.Errorf("step_exited %v", d)
+	}
+	w.exit = wall.StepExit{Started: true}
+	if _, err := r.RunStep(context.Background(), session.StepSpec{Name: "next", Command: []string{"true"}, Dir: sp.Dir}); err != nil {
+		t.Errorf("the next step: %v", err)
+	}
+}
+
+// TestTheHostProxiesRefuseAfterAKeptStepContainer pins HostProxy and PushProxy after a
+// step container whose removal failed: both return the refusal with the container's
+// name, which matches ErrContainerKept, and start no forwarder.
+func TestTheHostProxiesRefuseAfterAKeptStepContainer(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	ctx := context.Background()
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	withPush(g, true)
+	w := newStepWall(t)
+	w.exit = wall.StepExit{Started: true}
+	w.unwrapErr = wall.ContainerKeptError(errors.New("docker rm: told to fail"))
+	w.kept = []wall.KeptContainer{{Name: "qory-run-step", Remove: "engine rm qory-run-step"}}
+	sp.Wall, sp.Image = w, "example.com/agent:1"
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+	_, kept := r.RunStep(ctx, session.StepSpec{Name: "x", Command: []string{"true"}, Dir: sp.Dir})
+	if !errors.Is(kept, wall.ErrContainerKept) {
+		t.Fatalf("the step: %v", kept)
+	}
+	if _, err := r.HostProxy(); err == nil || err.Error() != kept.Error() || !errors.Is(err, wall.ErrContainerKept) {
+		t.Errorf("HostProxy: %v", err)
+	}
+	if _, err := r.PushProxy(); err == nil || err.Error() != kept.Error() || !errors.Is(err, wall.ErrContainerKept) {
+		t.Errorf("PushProxy: %v", err)
 	}
 }
