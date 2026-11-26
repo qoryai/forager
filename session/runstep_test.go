@@ -680,3 +680,31 @@ func TestTheHostProxiesRefuseAfterAKeptStepContainer(t *testing.T) {
 		t.Errorf("PushProxy: %v", err)
 	}
 }
+
+// TestAStepWhoseWallCommandDoesNotStart pins a launch whose program does not exist on
+// this machine: RunStep returns the fix with the program's name, and UnwrapStep removes
+// what WrapStep made.
+func TestAStepWhoseWallCommandDoesNotStart(t *testing.T) {
+	w := &missingCommandWall{stepWall: newStepWall(t)}
+	sp, r := openStepRun(t, w)
+	_, err := r.RunStep(context.Background(), session.StepSpec{Name: "x", Command: []string{"true"}, Dir: sp.Dir})
+	if err == nil || !strings.HasPrefix(err.Error(), "Check that the wall's command no-such-engine-cli runs on this machine, then run the step again.\n") || w.unwraps != 1 {
+		t.Fatalf("RunStep: %v, %d unwraps", err, w.unwraps)
+	}
+}
+
+// missingCommandWall is a stepWall whose step launch runs a program this machine does
+// not have.
+type missingCommandWall struct{ *stepWall }
+
+func (w *missingCommandWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *missingCommandWall) WrapStep(ctx context.Context, l wall.Launch) (wall.Launch, error) {
+	if _, err := w.stepWall.WrapStep(ctx, l); err != nil {
+		return wall.Launch{}, err
+	}
+	return wall.Launch{Command: filepath.Join(w.dir, "no-such-engine-cli")}, nil
+}

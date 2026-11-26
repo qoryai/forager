@@ -265,7 +265,7 @@ func (r *Run) RunStep(ctx context.Context, spec StepSpec) (res *StepResult, err 
 		if _, kept := r.unwrapStep(ctx, stepper, res); kept != nil {
 			err = errors.Join(err, kept)
 		}
-		return fail(fmt.Errorf("Check that the docker command runs on this machine, then run the step again.\nThe step container could not be started: %w", accesskey.ShownError(err)))
+		return fail(fmt.Errorf("Check that the wall's command %s runs on this machine, then run the step again.\nThe step container could not be started: %w", filepath.Base(launch.Command), accesskey.ShownError(err)))
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
