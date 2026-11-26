@@ -181,6 +181,49 @@ func TestAStepTargetThroughALinkInTheImageIsRefused(t *testing.T) {
 	}
 }
 
+// TestAStepBindsPlacesOverItsWorkingFolder pins WrapStep with the binds of a step
+// whose places lie below its working folder, shown at /workspace: the step container is
+// made with each bind after the one that holds it, each with its mode.
+func TestAStepBindsPlacesOverItsWorkingFolder(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, heads: map[string]tar.Header{"/workspace": {Typeflag: tar.TypeDir, Mode: 0o755}}}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, sys: rec}
+	enc, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer enc.Close(context.Background())
+	l := stepLaunch()
+	l.CA, l.Dir = nil, "/workspace"
+	l.Mounts = []Mount{
+		{Path: "/work", Target: "/workspace"},
+		{Path: "/work/checks", Target: "/workspace/checks"},
+		{Path: "/work/checks/locked", ReadOnly: true, Target: "/workspace/checks/locked"},
+		{Path: "/work/checks/check.sh", ReadOnly: true, Target: "/workspace/checks/check.sh"},
+	}
+	if _, err := enc.(*dockerEnclosure).WrapStep(context.Background(), l); err != nil {
+		t.Fatal(err)
+	}
+	create := ""
+	for _, line := range rec.lines {
+		if strings.Contains(line, " create --name qory-"+runID+"-step ") {
+			create = line
+		}
+	}
+	at := 0
+	for _, want := range []string{
+		"type=bind,src=/work,dst=/workspace ",
+		"type=bind,src=/work/checks,dst=/workspace/checks ",
+		"type=bind,src=/work/checks/locked,dst=/workspace/checks/locked,readonly ",
+		"type=bind,src=/work/checks/check.sh,dst=/workspace/checks/check.sh,readonly ",
+	} {
+		k := strings.Index(create[at:], want)
+		if k < 0 {
+			t.Fatalf("the docker create %q has no %q after the binds before it", create, want)
+		}
+		at += k + len(want)
+	}
+}
+
 // TestKeptRemovesFromTheRunsEngine pins Remove of a kept container: docker rm -f of its
 // name alone with no engine selection; with one, its variables first, as the run's
 // commands run with them, a value with a space in single quotes.

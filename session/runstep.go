@@ -185,7 +185,8 @@ func (r *Run) RunStep(ctx context.Context, spec StepSpec) (res *StepResult, err 
 	if spec.Dir == "" {
 		spec.Dir, _ = os.Getwd()
 	}
-	ws := runSpec{OpenSpec: r.open, SessionSpec: SessionSpec{Dir: spec.Dir, Mounts: spec.Mounts, ForagerFiles: spec.ForagerFiles, Written: spec.Written}}
+	ws := runSpec{OpenSpec: r.open, SessionSpec: SessionSpec{Dir: spec.Dir, Mounts: spec.Mounts, ForagerFiles: spec.ForagerFiles, Written: spec.Written},
+		stepBinds: true}
 	plan, err := checkMounts(ws, r.dir, "")
 	if err != nil {
 		return nil, err

@@ -841,6 +841,9 @@ type runSpec struct {
 	// install is SessionSpec.RuntimeInstall as Join checked it; nil for a session
 	// with no runtime.
 	install *installed
+	// stepBinds is true for the places of a step container, [Run.RunStep]: a place below
+	// the workspace is bound over the workspace's bind ([checkMounts]).
+	stepBinds bool
 }
 
 // openDefaults fills what the open's spec left empty.

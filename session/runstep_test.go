@@ -741,3 +741,156 @@ func (w *missingCommandWall) WrapStep(ctx context.Context, l wall.Launch) (wall.
 	}
 	return wall.Launch{Command: filepath.Join(w.dir, "no-such-engine-cli")}, nil
 }
+
+// stepPlaces makes, below the working folder dir, the places of a check bound over it,
+// and returns its mounts in an order apart from the binds': dir/top.txt read-only, one
+// name below; dir/checks writable; dir/checks/locked, a read-only folder; and
+// dir/checks/run writable with dir/checks/run/check.sh read-only in it.
+func stepPlaces(t *testing.T, dir string) []wall.Mount {
+	t.Helper()
+	checks := filepath.Join(dir, "checks")
+	mkdirs(t, filepath.Join(checks, "locked"), filepath.Join(checks, "run"))
+	for _, f := range []string{filepath.Join(dir, "top.txt"), filepath.Join(checks, "run", "check.sh")} {
+		if err := os.WriteFile(f, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return []wall.Mount{
+		{Path: filepath.Join(checks, "run", "check.sh"), ReadOnly: true},
+		{Path: filepath.Join(checks, "locked"), ReadOnly: true},
+		{Path: filepath.Join(checks, "run")},
+		{Path: filepath.Join(dir, "top.txt"), ReadOnly: true},
+		{Path: checks},
+	}
+}
+
+// TestRunStepBindsPlacesOverItsWorkingFolder pins a step's places below its working
+// folder: a read-only file one name below it, a read-only folder and file below writable
+// folders listed at their paths, and those folders are each bound, the working folder
+// first and each place after the one that holds it, each with its mode.
+func TestRunStepBindsPlacesOverItsWorkingFolder(t *testing.T) {
+	w := newStepWall(t)
+	w.exit = wall.StepExit{Started: true}
+	sp, r := openStepRun(t, w)
+	mounts := stepPlaces(t, sp.Dir)
+	if _, err := r.RunStep(context.Background(), session.StepSpec{Name: "x", Command: []string{"true"}, Dir: sp.Dir, Mounts: mounts}); err != nil {
+		t.Fatal(err)
+	}
+	checks := filepath.Join(sp.Dir, "checks")
+	want := []wall.Mount{
+		{Path: sp.Dir},
+		{Path: filepath.Join(sp.Dir, "top.txt"), ReadOnly: true},
+		{Path: checks},
+		{Path: filepath.Join(checks, "locked"), ReadOnly: true},
+		{Path: filepath.Join(checks, "run")},
+		{Path: filepath.Join(checks, "run", "check.sh"), ReadOnly: true},
+	}
+	if l := w.steps[0]; !slices.Equal(l.Mounts, want) || l.Dir != sp.Dir {
+		t.Errorf("the step container's mounts %+v in %s\nwant %+v", l.Mounts, l.Dir, want)
+	}
+}
+
+// TestRunStepRefusesAPlaceItCannotBindOverItsWorkingFolder pins the refusals of a step's
+// places below its working folder: a read-only file two names below it, with no mount of
+// the folder between; one reached through a link inside the working folder; a writable
+// folder inside a read-only one; and a read-only mount with a Target whose path lies
+// inside the working folder. No step container starts.
+func TestRunStepRefusesAPlaceItCannotBindOverItsWorkingFolder(t *testing.T) {
+	w := newStepWall(t)
+	sp, r := openStepRun(t, w)
+	dir := sp.Dir
+	deep, real, ro := filepath.Join(dir, "a", "b.txt"), filepath.Join(dir, "real"), filepath.Join(dir, "ro")
+	mkdirs(t, filepath.Join(dir, "a"), real, filepath.Join(ro, "w"))
+	for _, f := range []string{deep, filepath.Join(real, "f")} {
+		if err := os.WriteFile(f, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(dir, "link")
+	symlink(t, real, link)
+	for _, c := range []struct {
+		name   string
+		mounts []wall.Mount
+		code   string
+		detail string
+	}{
+		{"two names below", []wall.Mount{{Path: deep, ReadOnly: true}}, "mount_mode_conflict",
+			"Show the mount " + deep + " one name below the workspace " + dir + ", or list each directory between them as a mount: " +
+				"the step can rename " + filepath.Join(dir, "a") + ", and the bind moves with it"},
+		{"through a link", []wall.Mount{{Path: filepath.Join(link, "f"), ReadOnly: true}}, "mount_target_conflict",
+			"Remove the symbolic link " + link + " from the workspace " + dir + ": the engine binds the mount " + filepath.Join(link, "f") +
+				" through it and follows the link, so the bind could resolve to a place outside the mount"},
+		{"writable inside read-only", []wall.Mount{{Path: ro, ReadOnly: true}, {Path: filepath.Join(ro, "w")}}, "mount_mode_conflict",
+			"the mount " + filepath.Join(ro, "w") + " (writable) lies inside the mount " + ro + " (read-only): a part of a read-only mount can't be writable"},
+		{"a target", []wall.Mount{{Path: deep, ReadOnly: true, Target: "/opt/b.txt"}}, "mount_mode_conflict",
+			"List the mount " + deep + " at /opt/b.txt and the workspace " + dir + " with paths on this machine apart from each other: " +
+				"the mount " + deep + " at /opt/b.txt (read-only) lies inside the workspace " + dir + " (writable) on this machine, " +
+				"and a mount with a target can't share a path with a place of the other mode"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := r.RunStep(context.Background(), session.StepSpec{Name: "x", Command: []string{"true"}, Dir: dir, Mounts: c.mounts})
+			if got := refusalOf(t, c.code, err); got.Detail != c.detail {
+				t.Errorf("detail %q\nwant   %q", got.Detail, c.detail)
+			}
+		})
+	}
+	if w.started() != 0 {
+		t.Errorf("a refused step made %d step containers", w.started())
+	}
+}
+
+// TestAJoinRefusesAStepsPlacesOverTheWorkspace pins that only a step binds a read-only
+// place over the workspace: a join with the same places is mount_mode_conflict, as
+// before steps had them.
+func TestAJoinRefusesAStepsPlacesOverTheWorkspace(t *testing.T) {
+	sp := walledSpec(t, &openWall{})
+	sp.Mounts = stepPlaces(t, sp.Dir)
+	r := refusalOf(t, "mount_mode_conflict", runErr(sp))
+	file := filepath.Join(sp.Dir, "checks", "run", "check.sh")
+	run := filepath.Dir(file)
+	want := "the mount " + file + " (read-only) lies inside the mount " + run + " (writable): a part of a writable mount can't be read-only"
+	if r.Detail != want {
+		t.Errorf("detail %q\nwant   %q", r.Detail, want)
+	}
+}
+
+// pullingStepWall is a stepWall that fetches a run's image by reference.
+type pullingStepWall struct{ *stepWall }
+
+func (pullingStepWall) Pull(context.Context, wall.Request, []byte, []string) error { return nil }
+
+// TestAStepByReferenceBindsItsPlacesUnderTheWorkspace pins a step of a run whose policy
+// names its image by reference: the working folder is shown at /workspace, and each
+// place over it at the same names below /workspace, in the same order.
+func TestAStepByReferenceBindsItsPlacesUnderTheWorkspace(t *testing.T) {
+	ctx := context.Background()
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	byReference(g)
+	w := pullingStepWall{newStepWall(t)}
+	w.exit = wall.StepExit{Started: true}
+	sp.Wall = w
+	r, err := session.Open(ctx, opened(sp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+	if err := r.FetchImage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mounts := stepPlaces(t, sp.Dir)
+	if _, err := r.RunStep(ctx, session.StepSpec{Name: "x", Command: []string{"true"}, Dir: sp.Dir, Mounts: mounts}); err != nil {
+		t.Fatal(err)
+	}
+	checks := filepath.Join(sp.Dir, "checks")
+	want := []wall.Mount{
+		{Path: sp.Dir, Target: "/workspace"},
+		{Path: filepath.Join(sp.Dir, "top.txt"), ReadOnly: true, Target: "/workspace/top.txt"},
+		{Path: checks, Target: "/workspace/checks"},
+		{Path: filepath.Join(checks, "locked"), ReadOnly: true, Target: "/workspace/checks/locked"},
+		{Path: filepath.Join(checks, "run"), Target: "/workspace/checks/run"},
+		{Path: filepath.Join(checks, "run", "check.sh"), ReadOnly: true, Target: "/workspace/checks/run/check.sh"},
+	}
+	if l := w.steps[0]; !slices.Equal(l.Mounts, want) || l.Dir != "/workspace" {
+		t.Errorf("the step container's mounts %+v in %s\nwant %+v", l.Mounts, l.Dir, want)
+	}
+}
