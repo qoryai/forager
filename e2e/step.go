@@ -15,10 +15,15 @@ import (
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/wall"
 )
 
-// modeStep is the program of a step container, [stepProbe].
-const modeStep = "step"
+// modeStep is the program of a step container, [stepProbe], and stepProbeDir the path
+// in the step container of the folder with a copy of the helper.
+const (
+	modeStep     = "step"
+	stepProbeDir = "/opt/step-probe"
+)
 
 // stepReport is what the program of a step container found: the status of its request
 // inside the suite's credential's paths, and the status and the body of its POST of
@@ -68,7 +73,9 @@ func stepProbe(args []string) int {
 // stepContainer checks a step container of a run with a control plane, before the join:
 // it runs in the run's image; its request inside the suite's credential's paths is
 // recorded with no credential; its POST of artifacts to the run API gets 403 with the
-// code unprivileged; and the join after it runs.
+// code unprivileged; and the join after it runs. The wall mounts no helper in a step
+// container, so the step mounts o.Install, which has a copy of the helper at
+// bin/claude, read-only at stepProbeDir, as a caller mounts a program of its own.
 func stepContainer(t *testing.T, o Options, h hosts, outside string) {
 	const name = "a step container gets no credential and no run API"
 	if !o.Setup {
@@ -81,7 +88,8 @@ func stepContainer(t *testing.T, o Options, h hosts, outside string) {
 		var stepErr error
 		step := func(run *session.Run, workspace string) {
 			res, stepErr = run.RunStep(context.Background(), session.StepSpec{
-				Name: "step probe/1", Command: []string{o.Probe, modeStep, link.RunAPIURL(runID)}, Dir: workspace, Timeout: time.Minute,
+				Name: "step probe/1", Command: []string{stepProbeDir + "/bin/claude", modeStep, link.RunAPIURL(runID)}, Dir: workspace, Timeout: time.Minute,
+				Mounts: []wall.Mount{{Path: o.Install, ReadOnly: true, Target: stepProbeDir}},
 			})
 		}
 		r, err := runIn(t, o, variant{runID: runID, server: startRunAPIControl(t), beforeJoin: step}, false, h, outside)

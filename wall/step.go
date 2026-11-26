@@ -65,8 +65,9 @@ func (e *dockerEnclosure) step() string { return e.base + "-step" }
 // WrapStep creates the step container with docker create, as WrapAfter's container
 // starts: on the inside network, from the run's image under the run's container
 // runtime, as the wall's user with no capability and none to gain, with the launch's
-// mounts at their paths or their Targets, the working directory, the helper, with l.CA
-// the bundle, and the launch's limits. Its environment, through a file, is l.Env, the
+// mounts at their paths or their Targets, the working directory, with l.CA the bundle,
+// and the launch's limits; the helper is not mounted, since nothing in the step
+// container runs it. Its environment, through a file, is l.Env, the
 // proxy variables, set to the relay's address with no password, and, with l.CA, the variables
 // that point at the bundle. It has no --rm, so UnwrapStep reads its exit before it
 // removes it, and no hook socket. With nested Docker it runs under the same runtime,
@@ -76,10 +77,6 @@ func (e *dockerEnclosure) step() string { return e.base + "-step" }
 func (e *dockerEnclosure) WrapStep(ctx context.Context, l Launch) (Launch, error) {
 	l.Socket = ""
 	mounts, dir, err := e.mounts(l)
-	if err != nil {
-		return Launch{}, err
-	}
-	helper, err := mount(e.d.Helper, HelperPath, true)
 	if err != nil {
 		return Launch{}, err
 	}
@@ -116,7 +113,7 @@ func (e *dockerEnclosure) WrapStep(ctx context.Context, l Launch) (Launch, error
 		create = append(create, "--sysctl", "net.ipv6.conf.default.disable_ipv6=1")
 	}
 	create = append(create, limits...)
-	create = append(create, "--env-file", envFile, "--workdir", l.Dir, "--mount", helper)
+	create = append(create, "--env-file", envFile, "--workdir", l.Dir)
 	for _, m := range mounts {
 		create = append(create, "--mount", m)
 	}

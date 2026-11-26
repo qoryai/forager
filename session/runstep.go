@@ -95,8 +95,8 @@ type runningStep struct {
 
 // RunStep runs spec.Command in a step container: a new container of the run's image on
 // the run's inside network, as the wall's user with the flags of the setup container,
-// with the working folder writable, spec.Mounts, the helper and, for a run with an
-// authority, the bundle. Its environment is the relay's proxy variables and the
+// with the working folder writable, spec.Mounts and, for a run with an authority, the
+// bundle. Its environment is the relay's proxy variables and the
 // bundle's: no run secret, no placeholder and no QORY_RUN_API. It has no nested Docker
 // daemon, no hook socket and no home. While a step container may run, every connection
 // of the wall's relay is unprivileged: the gateway's proxy applies the run's allow list

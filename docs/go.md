@@ -523,8 +523,9 @@ if res.ExitCode != 0 {
 ```
 
 The step container runs as the wall's user with the flags of the setup container, with
-`Dir` writable, `Mounts` with the checks of `SessionSpec.Mounts`, the helper and, for a
-run with an authority, the bundle. `Image` is empty or the run's image by its name or
+`Dir` writable, `Mounts` with the checks of `SessionSpec.Mounts` and, for a run with an
+authority, the bundle. The wall mounts no helper in it: a program that the image does
+not have comes in a read-only mount of `Mounts`. `Image` is empty or the run's image by its name or
 reference: the node's policy sets the image, so any other is refused. Its environment
 has the relay's proxy variables and the bundle's variables: no run secret, no
 placeholder and no `QORY_RUN_API`. It has no nested Docker daemon and no hook socket.
