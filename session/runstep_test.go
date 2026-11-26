@@ -271,6 +271,36 @@ func TestASetupAfterAStep(t *testing.T) {
 	}
 }
 
+// TestAFailedRestartRefusesTheSetup pins a setup without Unprivileged after a step whose
+// restart of the relay fails: Setup returns the fix for a setup, starts no container and
+// writes no step, and the setup runs once the restart succeeds.
+func TestAFailedRestartRefusesTheSetup(t *testing.T) {
+	w := newStepWall(t)
+	w.exit = wall.StepExit{Started: true}
+	sp, r := openStepRun(t, w)
+	ctx := context.Background()
+	if _, err := r.RunStep(ctx, session.StepSpec{Name: "check", Command: []string{"true"}, Dir: sp.Dir}); err != nil {
+		t.Fatal(err)
+	}
+	steps := len(stepOrder(events(t, &session.Result{Dir: r.Dir()})))
+	w.mu.Lock()
+	w.restartErr = errors.New("docker start: told to fail")
+	w.mu.Unlock()
+	err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands})
+	if err == nil || !strings.HasPrefix(err.Error(), "Run the setup again, or close the run: the relay did not start again after the steps.\n") || w.starts != 0 {
+		t.Fatalf("a setup whose restart fails: %v, %d starts", err, w.starts)
+	}
+	if n := len(stepOrder(events(t, &session.Result{Dir: r.Dir()}))); n != steps {
+		t.Errorf("the refused setup wrote %d lines of the record", n-steps)
+	}
+	w.mu.Lock()
+	w.restartErr = nil
+	w.mu.Unlock()
+	if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands}); err != nil || w.starts != 1 || len(w.restarts) != 2 {
+		t.Fatalf("the setup again: %v, %d starts, %d restarts", err, w.starts, len(w.restarts))
+	}
+}
+
 // TestAStepBesideTheSetupContainer pins that a step runs beside a setup container that
 // started with Unprivileged and is refused beside one that started without.
 func TestAStepBesideTheSetupContainer(t *testing.T) {
@@ -343,14 +373,21 @@ func TestAStepContainerKeptStopsTheRun(t *testing.T) {
 	if d := stepExited(t, r, 1); d["state"] != event.StateFailed || d["exit_code"] != float64(-1) {
 		t.Errorf("step_exited %v", d)
 	}
+	steps := len(stepOrder(events(t, &session.Result{Dir: r.Dir()})))
 	if _, err := r.RunStep(ctx, session.StepSpec{Name: "x", Command: []string{"true"}, Dir: sp.Dir}); err == nil || err.Error() != want || w.started() != 1 {
 		t.Errorf("the next step: %v, %d step containers", err, w.started())
 	}
 	if _, err := r.Join(ctx, sp.SessionSpec); err == nil || err.Error() != want {
 		t.Errorf("the join: %v", err)
 	}
-	if err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands}); err == nil || err.Error() != want || w.starts != 0 || len(w.restarts) != 0 {
-		t.Errorf("the setup: %v, %d starts, %d restarts", err, w.starts, len(w.restarts))
+	for _, unprivileged := range []bool{false, true} {
+		err := r.Setup(ctx, session.SetupSpec{Dir: sp.Dir, Commands: twoCommands, Unprivileged: unprivileged})
+		if err == nil || err.Error() != want || !errors.Is(err, wall.ErrContainerKept) || w.starts != 0 || len(w.restarts) != 0 {
+			t.Errorf("the setup, Unprivileged %v: %v, %d starts, %d restarts", unprivileged, err, w.starts, len(w.restarts))
+		}
+	}
+	if n := len(stepOrder(events(t, &session.Result{Dir: r.Dir()}))); n != steps {
+		t.Errorf("the refusals wrote %d lines of the record", n-steps)
 	}
 	check := func(context.Context, session.RunAPIRequest) (*session.RunAPIRefusal, error) { return nil, nil }
 	if err := r.SetRunAPICheck(check); err == nil || err.Error() != "Call SetRunAPICheck before the first step: a step container ran." {

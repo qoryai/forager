@@ -540,12 +540,15 @@ credentials.` A `Join` beside an unprivileged setup container returns `Call Remo
 before the join: the setup container runs with Unprivileged.`
 
 The first `Join`, or `Setup` without `Unprivileged`, after one or more steps or an
-unprivileged setup gives the forwarder a new hop token and stops the marking, then
+unprivileged setup sets a new hop token in the forwarder and stops the marking, then
 removes the relay and starts it again with the new token. A connection the old relay
 still held is closed at the forwarder, so no byte of a step reaches the proxy unmarked,
 however late it arrives. Steps that follow one another share one restart. A restart that
 fails fails the join with `Run the join again, or close the run: the relay did not
-start again after the steps.`, and the next join tries again.
+start again after the steps.`, and the next join tries again. For `Setup` the restart
+runs before the first step, so a failed restart writes nothing and returns `Run the
+setup again, or close the run: the relay did not start again after the steps.`; a
+`Setup` while a container of the run may still run returns the `ContainerKept` text.
 
 `RunStep` writes one step of kind `container` named `spec.Name` with the run's masker
 applied, the command's output as its lines on `stdout` and `stderr`, and its end:

@@ -203,7 +203,7 @@ func TestTheWindowEndsWithOneRestart(t *testing.T) {
 	enc := &restarter{}
 	r := &Run{enclosure: enc, wallFwd: f, relayToken: windowHop}
 	ctx := context.Background()
-	if err := r.endWindow(ctx); err != nil || len(enc.tokens) != 0 {
+	if err := r.endWindow(ctx, "join"); err != nil || len(enc.tokens) != 0 {
 		t.Fatalf("no window: %v, %d restarts", err, len(enc.tokens))
 	}
 	r.openWindow()
@@ -211,10 +211,10 @@ func TestTheWindowEndsWithOneRestart(t *testing.T) {
 	if !f.marking {
 		t.Fatal("the forwarder does not mark in the window")
 	}
-	if err := r.endWindow(ctx); err != nil {
+	if err := r.endWindow(ctx, "join"); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.endWindow(ctx); err != nil {
+	if err := r.endWindow(ctx, "join"); err != nil {
 		t.Fatal(err)
 	}
 	if len(enc.tokens) != 1 || enc.tokens[0] != f.way.hop || r.relayToken != f.way.hop || f.way.hop == windowHop || f.marking {
@@ -222,14 +222,14 @@ func TestTheWindowEndsWithOneRestart(t *testing.T) {
 	}
 	r.openWindow()
 	enc.fail = errors.New("docker start: told to fail")
-	if err := r.endWindow(ctx); err == nil || !strings.HasPrefix(err.Error(), "Run the join again, or close the run") {
+	if err := r.endWindow(ctx, "join"); err == nil || !strings.HasPrefix(err.Error(), "Run the join again, or close the run") {
 		t.Fatalf("a failed restart: %v", err)
 	}
 	if !r.windowed || f.way.hop != enc.tokens[1] {
 		t.Fatal("a failed restart ended the window, or left the old hop")
 	}
 	enc.fail = nil
-	if err := r.endWindow(ctx); err != nil || len(enc.tokens) != 3 || r.windowed {
+	if err := r.endWindow(ctx, "join"); err != nil || len(enc.tokens) != 3 || r.windowed {
 		t.Fatalf("the retry: %v, %d restarts", err, len(enc.tokens))
 	}
 }

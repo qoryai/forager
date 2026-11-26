@@ -28,8 +28,9 @@ func (r *Run) openWindow() {
 // marking, in one step, so a connection the relay opens with the old token from then on
 // is closed; then the wall removes the relay and starts it again with the new token, so
 // no byte of the window reaches the proxy unmarked, however late it arrives. After a
-// failed restart the window stays open to end: the next call tries again.
-func (r *Run) endWindow(ctx context.Context) error {
+// failed restart the window stays open to end: the next call tries again. call is the
+// caller's word in the error's fix, join or setup.
+func (r *Run) endWindow(ctx context.Context, call string) error {
 	if !r.windowed {
 		return nil
 	}
@@ -47,7 +48,7 @@ func (r *Run) endWindow(ctx context.Context) error {
 	r.wallFwd.swap(hop)
 	r.relayToken = hop
 	if err := restarter.RestartRelay(ctx, wall.Launch{Proxy: r.wallFwd.Addr(), ProxyToken: hop, ProxyPeer: r.route != nil}); err != nil {
-		return fmt.Errorf("Run the join again, or close the run: the relay did not start again after the steps.\n%w", accesskey.ShownError(err))
+		return fmt.Errorf("Run the %s again, or close the run: the relay did not start again after the steps.\n%w", call, accesskey.ShownError(err))
 	}
 	r.windowed = false
 	return nil

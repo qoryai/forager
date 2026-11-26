@@ -1129,7 +1129,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 		}
 		// No connection of a step container or an unprivileged setup container reaches
 		// the proxy unmarked once the agent's container can connect.
-		if err := r.endWindow(runCtx); err != nil {
+		if err := r.endWindow(runCtx, "join"); err != nil {
 			return fail(err)
 		}
 		inner, innerArgs := withExec(spec.Exec, unset, command, args)

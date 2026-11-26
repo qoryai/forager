@@ -257,8 +257,9 @@ func eachNoContainerKept(err error) bool {
 //
 // An error before the steps means nothing is written: the run has no wall, a session of
 // the run is running or joined it, the setup ran already, a host step is open, the run
-// is closed, the commands or Env are refused, Dir fails a check, or the run's wall
-// does not implement the setup container's calls. A setup command that exits otherwise
+// is closed, a container of the run may still run (ContainerKept), the commands or Env
+// are refused, Dir fails a check, the run's wall does not implement the setup
+// container's calls, or, after a step, the relay did not start again. A setup command that exits otherwise
 // than 0 ends its step failed with its exit status and returns a [*SetupError]. Any
 // other failure in a step ends the step failed, or cancelled when ctx ended, with -1,
 // after its line, and is the error. After a step that fails no later step starts, and
@@ -280,6 +281,8 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 		return fmt.Errorf("Run the setup before the first join: session %d joined the run.", r.numbered)
 	case r.setupFirst > 0:
 		return fmt.Errorf("Run the setup once per run: it ran in steps %d to %d.", r.setupFirst, r.setupLast)
+	case r.ContainerKept():
+		return wall.ContainerKeptError(r.keptError())
 	case r.hostStep != nil:
 		return fmt.Errorf("Exit step %d before the setup: one host step is open at a time.", r.hostStep.n)
 	case len(spec.Commands) == 0:
@@ -318,6 +321,15 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 	shown, inside := plan, func(s string) string { return s }
 	if r.byReference {
 		if shown, inside, err = plan.atWorkspace(); err != nil {
+			return err
+		}
+	}
+	// A setup container without Unprivileged gets credentials: no connection of an
+	// earlier step container reaches the proxy unmarked once it can connect. The window
+	// ends before the first step, so a failed restart writes nothing and the setup may
+	// run again.
+	if !spec.Unprivileged {
+		if err := r.endWindow(ctx, "setup"); err != nil {
 			return err
 		}
 	}
@@ -403,10 +415,6 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 		// Every connection of the relay is unprivileged from here until the next
 		// privileged container's start ends the window.
 		r.openWindow()
-	} else if err := r.endWindow(ctx); err != nil {
-		// A setup container without Unprivileged gets credentials: no connection of an
-		// earlier step container reaches the proxy unmarked once it can connect.
-		return fail(err)
 	}
 	// The engine may have started the setup container also when StartSetup returns an
 	// error, as when ctx ends after docker run reached it, so RemoveSetup removes it.
