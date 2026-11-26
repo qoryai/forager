@@ -182,7 +182,7 @@ func TestAnUnprivilegedConnectionReachesNoTool(t *testing.T) {
 	step := s.client(t, link.UnprivilegedLine(s.secret))
 	for _, target := range []string{"https://" + stepToolHost + "/a", "http://" + stepToolHost + "/b"} {
 		code, body := stepGet(t, step, target)
-		if code != http.StatusForbidden || !strings.HasPrefix(body, "qory: run this from the session, not from a step") {
+		if code != http.StatusForbidden || !strings.HasPrefix(body, "qory: run this from the session: steps and unprivileged setup containers reach no tool.\n") {
 			t.Errorf("%s: %d %q", target, code, body)
 		}
 		if d := s.obs.at(-1); d.PathRule != UnprivilegedRule || d.Allowed || d.Outcome != Refused {

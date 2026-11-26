@@ -52,6 +52,6 @@ func (p *Proxy) refuseTool(w http.ResponseWriter, d Decision) {
 	p.observe(d)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
-	fmt.Fprintf(w, "qory: run this from the session, not from a step: steps and unprivileged setup containers reach no tool.\n"+
+	fmt.Fprintf(w, "qory: run this from the session: steps and unprivileged setup containers reach no tool.\n"+
 		"qory: %s %s%s denied by the gateway\n", accesskey.ShownValue(d.RequestMethod, false), d.Host, accesskey.ShownValue(d.Path, false))
 }
