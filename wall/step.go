@@ -32,10 +32,19 @@ type StepWrapper interface {
 	// gone is not an error, and gives the zero StepExit. A failed removal matches
 	// [ErrContainerKept]: the container may still run, and Close tries again.
 	UnwrapStep(ctx context.Context, grace time.Duration) (StepExit, error)
-	// Kept lists the names of the run's containers whose last removal failed and that may
-	// still run: the agent's, After's, the setup container or the step container. The
-	// relay, which binds the helper alone, is not listed.
-	Kept() []string
+	// Kept lists the run's containers whose last removal failed and that may still run:
+	// the agent's, After's, the setup container or the step container. The relay, which
+	// binds the helper alone, is not listed.
+	Kept() []KeptContainer
+}
+
+// KeptContainer is a container of the run whose last removal failed.
+type KeptContainer struct {
+	// Name is the container's name.
+	Name string
+	// Remove is the command line that removes the container on this machine, for a
+	// person to run.
+	Remove string
 }
 
 // StepExit is how a step container ended, as the engine reports it.
@@ -178,7 +187,16 @@ func stepExit(out string) (StepExit, error) {
 }
 
 // Kept lists the containers whose last removal failed, apart from the relay, in the
-// order the removals failed.
-func (e *dockerEnclosure) Kept() []string {
-	return slices.DeleteFunc(slices.Clone(e.kept), func(k string) bool { return k == e.relay() })
+// order the removals failed, each with docker rm -f of its name as Remove.
+func (e *dockerEnclosure) Kept() []KeptContainer {
+	var out []KeptContainer
+	for _, name := range e.kept {
+		if name != e.relay() {
+			// shortcut: Remove has none of the engine selection in e.env, such as
+			// DOCKER_HOST, so it removes from the shell's default engine; add the
+			// selection when a run selects an engine other than the default.
+			out = append(out, KeptContainer{Name: name, Remove: e.command() + " rm -f " + name})
+		}
+	}
+	return out
 }

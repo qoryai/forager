@@ -166,7 +166,7 @@ func (r *Run) RunStep(ctx context.Context, spec StepSpec) (res *StepResult, err 
 	case r.setupUp != nil && !r.setupUnprivileged:
 		return nil, errors.New("Start the setup with Unprivileged to run steps: the setup container gets credentials.")
 	case r.ContainerKept():
-		return nil, r.keptError()
+		return nil, wall.ContainerKeptError(r.keptError())
 	case r.byReference && r.imageStep == 0:
 		return nil, errors.New("Call FetchImage before the step: the run's image is not on this machine yet.")
 	}
@@ -372,12 +372,12 @@ func (r *Run) unwrapStep(ctx context.Context, stepper wall.StepWrapper, res *Ste
 }
 
 // keptError is the refusal of a call while a container of the run may still run: with
-// the name of the first such container the wall lists, else with none.
+// the name of the first such container the wall lists and the wall's command that
+// removes it, on the second line, else with no name.
 func (r *Run) keptError() error {
 	if s, ok := r.enclosure.(wall.StepWrapper); ok {
 		if kept := s.Kept(); len(kept) > 0 {
-			name := kept[0]
-			return fmt.Errorf("Remove the container %s with \"docker rm -f %s\", then close the run: Forager could not remove it, and it may still run.", name, name)
+			return fmt.Errorf("Remove the kept container, then close the run: Forager could not remove it, and it may still run.\nThe kept container is %s; remove it with \"%s\".", kept[0].Name, kept[0].Remove)
 		}
 	}
 	return errors.New("Close the run: a container of the run could not be removed and may still run.")

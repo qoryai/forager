@@ -28,7 +28,7 @@ type stepWall struct {
 	unwraps   int
 	exit      wall.StepExit
 	unwrapErr error
-	kept      []string
+	kept      []wall.KeptContainer
 }
 
 func newStepWall(t *testing.T) *stepWall { return &stepWall{dir: t.TempDir()} }
@@ -66,7 +66,7 @@ func (w *stepWall) UnwrapStep(context.Context, time.Duration) (wall.StepExit, er
 	return w.exit, w.unwrapErr
 }
 
-func (w *stepWall) Kept() []string {
+func (w *stepWall) Kept() []wall.KeptContainer {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.kept
@@ -363,9 +363,10 @@ func TestAStepContainerKeptStopsTheRun(t *testing.T) {
 	w := newStepWall(t)
 	w.exit = wall.StepExit{Started: true}
 	w.unwrapErr = wall.ContainerKeptError(errors.New("docker rm: told to fail"))
-	w.kept = []string{"qory-run-step"}
+	w.kept = []wall.KeptContainer{{Name: "qory-run-step", Remove: "engine rm qory-run-step"}}
 	sp, r := openStepRun(t, w)
-	const want = `Remove the container qory-run-step with "docker rm -f qory-run-step", then close the run: Forager could not remove it, and it may still run.`
+	const want = "Remove the kept container, then close the run: Forager could not remove it, and it may still run.\n" +
+		`The kept container is qory-run-step; remove it with "engine rm qory-run-step".`
 	_, err := r.RunStep(ctx, session.StepSpec{Name: "x", Command: []string{"true"}, Dir: sp.Dir})
 	if err == nil || err.Error() != want || !errors.Is(err, wall.ErrContainerKept) || !r.ContainerKept() {
 		t.Fatalf("the step: %v, kept %v", err, r.ContainerKept())
@@ -374,10 +375,10 @@ func TestAStepContainerKeptStopsTheRun(t *testing.T) {
 		t.Errorf("step_exited %v", d)
 	}
 	steps := len(stepOrder(events(t, &session.Result{Dir: r.Dir()})))
-	if _, err := r.RunStep(ctx, session.StepSpec{Name: "x", Command: []string{"true"}, Dir: sp.Dir}); err == nil || err.Error() != want || w.started() != 1 {
+	if _, err := r.RunStep(ctx, session.StepSpec{Name: "x", Command: []string{"true"}, Dir: sp.Dir}); err == nil || err.Error() != want || !errors.Is(err, wall.ErrContainerKept) || w.started() != 1 {
 		t.Errorf("the next step: %v, %d step containers", err, w.started())
 	}
-	if _, err := r.Join(ctx, sp.SessionSpec); err == nil || err.Error() != want {
+	if _, err := r.Join(ctx, sp.SessionSpec); err == nil || err.Error() != want || !errors.Is(err, wall.ErrContainerKept) {
 		t.Errorf("the join: %v", err)
 	}
 	for _, unprivileged := range []bool{false, true} {

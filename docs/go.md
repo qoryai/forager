@@ -568,9 +568,11 @@ arrived. `OutputCut` is true when the command wrote more. A stop sends `SIGTERM`
 
 Each error before the step starts with the fix and writes nothing. A step container that
 could not be removed may still run and write the run's binds: the step ends `failed`
-with -1, `ContainerKept()` is true from then on, and `RunStep`, `Join` and the host
-proxies return `Remove the container <name> with "docker rm -f <name>", then close the
-run: Forager could not remove it, and it may still run.`
+with -1, `ContainerKept()` is true from then on, and `RunStep`, `Setup`, `Join` and the
+host proxies return an error that matches `wall.ErrContainerKept`: `Remove the kept
+container, then close the run: Forager could not remove it, and it may still run.`, and
+on its second line the container's name and the command that removes it, which the wall
+supplies, such as `docker rm -f <name>` for the Docker wall.
 
 After a build of an image, write the build as a step of kind `event.StepBuild`, then
 write its result with `(*session.Run).Built(b)`. `Built` writes `dev.qory.run.built`
@@ -829,8 +831,8 @@ Inside a session, read the same base URL from `session.EnvRunAPI`, `QORY_RUN_API
 send the request through `HTTP_PROXY`. A setup container gets the variable too, unless
 it started with `SetupSpec.Unprivileged`. A step container and an unprivileged setup
 container have no run API: the proxy returns `403` `unprivileged` for each of their
-requests, `Run this from the session, not from a step: steps and unprivileged
-setup containers have no run API access.` Behind a wall, a value a caller passes for the
+requests, `Run this from the session, not a step: steps and unprivileged setups have
+no run API access.` Behind a wall, a value a caller passes for the
 name is `variable_reserved`.
 
 A file's `200` is chunked. Treat its bytes as unverified until the read ends cleanly: a

@@ -5929,7 +5929,7 @@ with the fix.
 
 | Status | `error` | When |
 |---|---|---|
-| `403` | `unprivileged` | the request came from a step container or a setup container with `Unprivileged`, on a connection with the unprivileged mark (§The gateway's link, The unprivileged mark); nothing is sent, and the `message` is `Run this from the session, not from a step: steps and unprivileged setup containers have no run API access.` |
+| `403` | `unprivileged` | the request came from a step container or a setup container with `Unprivileged`, on a connection with the unprivileged mark (§The gateway's link, The unprivileged mark); nothing is sent, and the `message` is `Run this from the session, not a step: steps and unprivileged setups have no run API access.` |
 | `404` | `not_found` | the request is outside the five, `GET /resume/transcript` among them, which the session reads over the gateway's link (The transcript of a paused run, below), and `POST /next-session`, `POST /pushed-commits`, `GET /findings` and `POST /findings`, the link's host calls |
 | `413` | `payload_too_large` | a POST's body is over its limit; nothing is sent |
 | `429` | `rate_limited` | a limit below, or a body or answer over 1 MiB while the gateway's 512 MiB are full; with `Retry-After: 1` |

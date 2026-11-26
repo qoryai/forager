@@ -135,7 +135,7 @@ func TestDockerUnwrapStepKeepsAFailedRemoval(t *testing.T) {
 	if !errors.Is(err, ErrContainerKept) || !exit.Started {
 		t.Fatalf("a failed removal: %+v, %v", exit, err)
 	}
-	if kept := e.Kept(); !slices.Equal(kept, []string{"qory-" + runID + "-step"}) {
+	if kept := e.Kept(); !slices.Equal(kept, []KeptContainer{{Name: "qory-" + runID + "-step", Remove: "docker rm -f qory-" + runID + "-step"}}) {
 		t.Errorf("kept %v", kept)
 	}
 	if _, err := e.UnwrapStep(ctx, time.Second); err != nil || len(e.Kept()) != 0 {

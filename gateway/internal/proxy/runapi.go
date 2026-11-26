@@ -561,7 +561,7 @@ const (
 	runAPIUnavailable = "Retry the request: the gateway did not reach Qory Apiary, or the request timed out."
 	// runAPIUnprivileged is the text of the 403 to a request from a step container or an
 	// unprivileged setup container.
-	runAPIUnprivileged = "Run this from the session, not from a step: steps and unprivileged setup containers have no run API access."
+	runAPIUnprivileged = "Run this from the session, not a step: steps and unprivileged setups have no run API access."
 )
 
 // The texts of a 403 to the host: on a proxy with the route, which a CONNECT reaches, and
