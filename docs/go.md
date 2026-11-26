@@ -560,6 +560,11 @@ applied, the command's output as its lines on `stdout` and `stderr`, and its end
 | ends at the memory limit | `failed`, reason `out_of_memory` | `OOMKilled` |
 | runs past `Timeout` | `cancelled`, reason `timeout` | `TimedOut` |
 | is stopped by `ctx` or `Close` | `cancelled` | the stop's cause as the error |
+| never starts in the container | `failed`, -1 | `Check the step's command and the run's image: the step container did not start.` as the error |
+
+A program that the image does not have is the command's failure: the init of the Docker
+wall's step container exits 127, and the step ends `failed`, 127. When the engine starts
+nothing in the container, its message is in the step's lines and in `Output`.
 
 `Output` is the first 1 MiB of the masked output of both streams, in the order the bytes
 arrived. `OutputCut` is true when the command wrote more. A stop sends `SIGTERM`, then

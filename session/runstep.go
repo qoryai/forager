@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"time"
 
@@ -109,7 +110,10 @@ type runningStep struct {
 // status 0; failed for any other, and with reason out_of_memory when the engine ended
 // the command at the memory limit; cancelled with reason timeout when spec.Timeout
 // ended it; and cancelled when ctx ended or the run was closed, which stop the command
-// with SIGTERM and then SIGKILL 5 seconds later. A stopped step returns its result and
+// with SIGTERM and then SIGKILL 5 seconds later. A command that the image does not have
+// is the command's failure: the init of the Docker wall's step container exits 127.
+// A step container in which the engine started nothing ends the step failed with -1
+// and is an error, with the engine's message in the step's lines. A stopped step returns its result and
 // the stop's cause as the error. RunStep removes the step container before it returns;
 // [Run.Close] during a step stops it, waits for RunStep to return, and closes the run.
 //
@@ -246,7 +250,7 @@ func (r *Run) RunStep(ctx context.Context, spec StepSpec) (res *StepResult, err 
 		Limits: spec.Limits, Proxy: r.wallFwd.Addr(), ProxyToken: r.relayToken, ProxyPeer: r.route != nil,
 	})
 	if err != nil {
-		if kept := r.unwrapStep(ctx, stepper, res); kept != nil {
+		if _, kept := r.unwrapStep(ctx, stepper, res); kept != nil {
 			err = errors.Join(err, kept)
 		}
 		return fail(accesskey.ShownError(err))
@@ -256,7 +260,7 @@ func (r *Run) RunStep(ctx context.Context, spec StepSpec) (res *StepResult, err 
 	cmd := exec.Command(launch.Command, launch.Args...)
 	cmd.Env, cmd.Dir, cmd.Stdout, cmd.Stderr = launch.Env, launch.Dir, stdout, stderr
 	if err := cmd.Start(); err != nil {
-		if kept := r.unwrapStep(ctx, stepper, res); kept != nil {
+		if _, kept := r.unwrapStep(ctx, stepper, res); kept != nil {
 			err = errors.Join(err, kept)
 		}
 		return fail(fmt.Errorf("Check that the docker command runs on this machine, then run the step again.\nThe step container could not be started: %w", accesskey.ShownError(err)))
@@ -270,8 +274,11 @@ func (r *Run) RunStep(ctx context.Context, spec StepSpec) (res *StepResult, err 
 		limit = t.C
 	}
 	stopped := false
+	// waitErr is how the wall's command that started the step container ended, which an
+	// error has when the container did not start.
+	var waitErr error
 	select {
-	case <-done:
+	case waitErr = <-done:
 		done = nil
 	case <-limit:
 		res.TimedOut = true
@@ -280,13 +287,13 @@ func (r *Run) RunStep(ctx context.Context, spec StepSpec) (res *StepResult, err 
 	}
 	// The container is stopped, read and removed in every case: docker start --attach
 	// ends once it stops.
-	kept := r.unwrapStep(ctx, stepper, res)
+	started, kept := r.unwrapStep(ctx, stepper, res)
 	if done != nil {
 		select {
-		case <-done:
+		case waitErr = <-done:
 		case <-time.After(closeWait):
 			cmd.Process.Kill()
-			<-done
+			waitErr = <-done
 		}
 	}
 	stdout.flush()
@@ -301,6 +308,13 @@ func (r *Run) RunStep(ctx context.Context, spec StepSpec) (res *StepResult, err 
 		return res, context.Cause(runCtx)
 	case res.TimedOut:
 		step.endWith(event.StateCancelled, res.ExitCode, afterReasonTimeout)
+	case !started:
+		// The engine made the container and ran nothing in it: its message is in the
+		// step's lines.
+		if waitErr == nil {
+			waitErr = errors.New("the engine reports no start")
+		}
+		return fail(fmt.Errorf("Check the step's command and the run's image: the step container did not start.\n%s: %w", filepath.Base(launch.Command), waitErr))
 	case res.OOMKilled:
 		step.endWith(event.StateFailed, res.ExitCode, afterReasonOutOfMemo)
 	case res.ExitCode == 0:
@@ -344,11 +358,11 @@ func (r *Run) checkStep(spec StepSpec) error {
 }
 
 // unwrapStep stops, reads and removes the step container within the stop's 5 seconds
-// and the removal's limit, whatever ctx's state, and fills res from its exit. A removal
-// that failed lists the run among the walled runs kept, sets wallFailed and stepKept,
-// and is the error, with the container's name: the container may still run and write
-// the run's binds.
-func (r *Run) unwrapStep(ctx context.Context, stepper wall.StepWrapper, res *StepResult) error {
+// and the removal's limit, whatever ctx's state, fills res from its exit, and reports
+// whether its command started. A removal that failed lists the run among the walled
+// runs kept, sets wallFailed and stepKept, and is the error, with the container's name:
+// the container may still run and write the run's binds.
+func (r *Run) unwrapStep(ctx context.Context, stepper wall.StepWrapper, res *StepResult) (bool, error) {
 	exit, err := stepper.UnwrapStep(context.WithoutCancel(ctx), afterKillWait)
 	if exit.Started {
 		res.ExitCode, res.OOMKilled = exit.ExitCode, exit.OOMKilled
@@ -357,10 +371,10 @@ func (r *Run) unwrapStep(ctx context.Context, stepper wall.StepWrapper, res *Ste
 		}
 	}
 	if err == nil {
-		return nil
+		return exit.Started, nil
 	}
 	if !errors.Is(err, wall.ErrContainerKept) {
-		return fmt.Errorf("Run the step again: how the step container ended could not be read.\n%w", accesskey.ShownError(err))
+		return exit.Started, fmt.Errorf("Run the step again: how the step container ended could not be read.\n%w", accesskey.ShownError(err))
 	}
 	r.wallFailed.Store(true)
 	r.stepKept = true
@@ -368,7 +382,7 @@ func (r *Run) unwrapStep(ctx context.Context, stepper wall.StepWrapper, res *Ste
 		r.listed.keep()
 	}
 	r.open.Report("removing the wall: " + accesskey.ShownError(err).Error())
-	return wall.ContainerKeptError(r.keptError())
+	return exit.Started, wall.ContainerKeptError(r.keptError())
 }
 
 // keptError is the refusal of a call while a container of the run may still run: with

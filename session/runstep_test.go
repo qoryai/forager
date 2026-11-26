@@ -158,6 +158,9 @@ func TestRunStepEndsAsTheContainerEnded(t *testing.T) {
 		signal  int
 	}{
 		{"exit 3", "exit 3", 0, wall.StepExit{Started: true, ExitCode: 3}, event.StateFailed, nil, 0},
+		// The init of the Docker wall's step container exits 127 for a program the image
+		// does not have.
+		{"a program the image lacks", "exit 127", 0, wall.StepExit{Started: true, ExitCode: 127}, event.StateFailed, nil, 0},
 		{"out of memory", "true", 0, wall.StepExit{Started: true, ExitCode: 137, OOMKilled: true}, event.StateFailed, "out_of_memory", 9},
 		{"time limit", "sleep 30", 200 * time.Millisecond, wall.StepExit{Started: true, ExitCode: 143}, event.StateCancelled, "timeout", 15},
 	} {
@@ -181,6 +184,29 @@ func TestRunStepEndsAsTheContainerEnded(t *testing.T) {
 				t.Errorf("step_exited %v", d)
 			}
 		})
+	}
+}
+
+// TestAStepContainerThatDidNotStart pins a step container in which the engine started
+// nothing, as without an init when the image lacks the program: RunStep returns the fix
+// and the wall command's exit, the step ends failed with -1, and the engine's message
+// is in the step's lines and in Output.
+func TestAStepContainerThatDidNotStart(t *testing.T) {
+	w := newStepWall(t)
+	w.exit = wall.StepExit{ExitCode: 127}
+	sp, r := openStepRun(t, w)
+	res, err := r.RunStep(context.Background(), session.StepSpec{Name: "x", Command: []string{"/bin/sh", "-c", "echo engine: no such file >&2; exit 1"}, Dir: sp.Dir})
+	if err == nil || err.Error() != "Check the step's command and the run's image: the step container did not start.\nsh: exit status 1" {
+		t.Fatalf("RunStep: %v", err)
+	}
+	if res == nil || res.ExitCode != -1 || !strings.Contains(string(res.Output), "engine: no such file") {
+		t.Errorf("the result %+v", res)
+	}
+	if d := stepExited(t, r, 1); d["state"] != event.StateFailed || d["exit_code"] != float64(-1) {
+		t.Errorf("step_exited %v", d)
+	}
+	if got := stepOrder(events(t, &session.Result{Dir: r.Dir()})); !slices.Contains(got, "log <nil> 1 engine: no such file") {
+		t.Errorf("the record:\n%q", got)
 	}
 }
 
