@@ -1,6 +1,7 @@
 package wall
 
 import (
+	"archive/tar"
 	"context"
 	"errors"
 	"os"
@@ -22,8 +23,8 @@ func stepLaunch() Launch {
 }
 
 // TestDockerStepCommandLines pins WrapStep and UnwrapStep: the step container is created
-// on the inside network with the hardening flags, the limits, the mounts, the helper and
-// the bundle, no --rm, no hook socket, no nested Docker and no token, its environment
+// on the inside network with the hardening flags, the limits, the mounts and the bundle,
+// no helper, no --rm, no hook socket, no nested Docker and no token, its environment
 // file has the proxy variables with no password and the bundle's variables; the launch
 // is docker start --attach; UnwrapStep stops it with the grace, reads its state and
 // removes it, and Close does not remove it again.
@@ -140,5 +141,42 @@ func TestDockerUnwrapStepKeepsAFailedRemoval(t *testing.T) {
 	}
 	if _, err := e.UnwrapStep(ctx, time.Second); err != nil || len(e.Kept()) != 0 {
 		t.Errorf("the second UnwrapStep: %v, kept %v", err, e.Kept())
+	}
+}
+
+// TestAStepTargetThroughALinkInTheImageIsRefused pins WrapStep's check of the names from
+// / down to each Target in the image, as Wrap's: a Target under a symbolic link fails
+// before the step container is made, and the same Target under a directory passes.
+func TestAStepTargetThroughALinkInTheImageIsRefused(t *testing.T) {
+	dir := tar.Header{Typeflag: tar.TypeDir, Mode: 0o755}
+	link := tar.Header{Typeflag: tar.TypeSymlink, Linkname: "lib", Mode: 0o777}
+	for name, c := range map[string]struct {
+		heads map[string]tar.Header
+		want  string
+	}{
+		"a parent that is a link": {map[string]tar.Header{"/var": dir, "/var/lib": link},
+			`wall docker: make "/var/lib" a directory or file in the image, not a symbolic link`},
+		"a parent that is a directory": {map[string]tar.Header{"/var": dir, "/var/lib": dir}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, heads: c.heads}
+			d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, sys: rec}
+			enc, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer enc.Close(context.Background())
+			l := stepLaunch()
+			l.CA = nil
+			l.Mounts = append(l.Mounts, Mount{Path: "/runs/r1/tool", Target: "/var/lib/tool"})
+			_, err = enc.(*dockerEnclosure).WrapStep(context.Background(), l)
+			created := slices.ContainsFunc(rec.lines, func(l string) bool { return strings.Contains(l, " create --name qory-"+runID+"-step ") })
+			switch {
+			case c.want == "" && (err != nil || !created):
+				t.Fatalf("the step: %v, created %v", err, created)
+			case c.want != "" && (err == nil || !strings.HasPrefix(err.Error(), c.want) || created):
+				t.Fatalf("the step: %v, created %v; want an error that starts with %q", err, created, c.want)
+			}
+		})
 	}
 }

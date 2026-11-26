@@ -72,12 +72,19 @@ func (e *dockerEnclosure) step() string { return e.base + "-step" }
 // that point at the bundle. It has no --rm, so UnwrapStep reads its exit before it
 // removes it, and no hook socket. With nested Docker it runs under the same runtime,
 // with no root, no daemon, no store volume and no IPv6 sysctl. The entrypoint is
-// l.Command. It starts the relay and runs the run's first use of the enclosure when
-// neither ran, as Wrap does, and returns docker start --attach of the container.
+// l.Command. It refuses a mount whose Target goes through a symbolic link in the image
+// before anything starts, [dockerEnclosure.targetLinks], as Wrap does. It starts the
+// relay and runs the run's first use of the enclosure when neither ran, as Wrap does,
+// and returns docker start --attach of the container.
 func (e *dockerEnclosure) WrapStep(ctx context.Context, l Launch) (Launch, error) {
 	l.Socket = ""
 	mounts, dir, err := e.mounts(l)
 	if err != nil {
+		return Launch{}, err
+	}
+	// As for the agent's container: a Target through a symbolic link in the image could
+	// put the bind over another mount.
+	if err := e.targetLinks(ctx, l); err != nil {
 		return Launch{}, err
 	}
 	limits, err := limits(l.Limits)
