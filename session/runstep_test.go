@@ -688,7 +688,7 @@ func TestAStepWhoseWallCommandDoesNotStart(t *testing.T) {
 	w := &missingCommandWall{stepWall: newStepWall(t)}
 	sp, r := openStepRun(t, w)
 	_, err := r.RunStep(context.Background(), session.StepSpec{Name: "x", Command: []string{"true"}, Dir: sp.Dir})
-	if err == nil || !strings.HasPrefix(err.Error(), "Check that the wall's command no-such-engine-cli runs on this machine, then run the step again.\n") || w.unwraps != 1 {
+	if err == nil || !strings.HasPrefix(err.Error(), "Check that no-such-engine-cli runs on this machine, then run the step again: the wall's command did not start (") || w.unwraps != 1 {
 		t.Fatalf("RunStep: %v, %d unwraps", err, w.unwraps)
 	}
 }

@@ -113,9 +113,10 @@ type runningStep struct {
 // with SIGTERM and then SIGKILL 5 seconds later. A command that the image does not have
 // is the command's failure: the init of the Docker wall's step container exits 127.
 // A step container in which the engine started nothing ends the step failed with -1
-// and is an error, with the engine's message in the step's lines. A stopped step returns its result and
-// the stop's cause as the error. RunStep removes the step container before it returns;
-// [Run.Close] during a step stops it, waits for RunStep to return, and closes the run.
+// and is an error, with the engine's message in the step's lines. A stopped step
+// returns its result and the stop's cause as the error. RunStep removes the step
+// container before it returns; [Run.Close] during a step stops it, waits for RunStep to
+// return, and closes the run.
 //
 // A step runs between joins and outside every host step, before the first join or
 // after the last one, and beside the setup container only when the setup started with
@@ -262,10 +263,11 @@ func (r *Run) RunStep(ctx context.Context, spec StepSpec) (res *StepResult, err 
 	cmd := exec.Command(launch.Command, launch.Args...)
 	cmd.Env, cmd.Dir, cmd.Stdout, cmd.Stderr = launch.Env, launch.Dir, stdout, stderr
 	if err := cmd.Start(); err != nil {
+		err = fmt.Errorf("Check that %s runs on this machine, then run the step again: the wall's command did not start (%w).", filepath.Base(launch.Command), accesskey.ShownError(err))
 		if _, kept := r.unwrapStep(ctx, stepper, res); kept != nil {
 			err = errors.Join(err, kept)
 		}
-		return fail(fmt.Errorf("Check that the wall's command %s runs on this machine, then run the step again.\nThe step container could not be started: %w", filepath.Base(launch.Command), accesskey.ShownError(err)))
+		return fail(err)
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -376,7 +378,7 @@ func (r *Run) unwrapStep(ctx context.Context, stepper wall.StepWrapper, res *Ste
 		return exit.Started, nil
 	}
 	if !errors.Is(err, wall.ErrContainerKept) {
-		return exit.Started, fmt.Errorf("Run the step again: how the step container ended could not be read.\n%w", accesskey.ShownError(err))
+		return exit.Started, fmt.Errorf("Run the step again: Forager could not read how the step container ended.\n%w", accesskey.ShownError(err))
 	}
 	r.wallFailed.Store(true)
 	r.stepKept = true

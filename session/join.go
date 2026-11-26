@@ -52,16 +52,16 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 // include After's step, which the session allows AfterTimeout + 66 seconds: the agent's
 // container's removal and the start of After's container (60 s together), the 5 s
 // between SIGTERM and SIGKILL, and 1 s of output. After a stop from outside it allows
-// StopGrace. It sends the gateway the join request with the names of the variables the session passes a value for and its model key, then checks
-// the session's places, prepares the runtime, resolves the variables, writes
-// dev.qory.session.started and the session's dev.qory.run.policy_applied, behind a
-// wall wraps the launch in the wall that [Open] built, and starts the runtime. Behind
-// the Docker wall the wrap writes the docker run of the agent's container, which
-// starts with the launch, after the wall step, and the session's end removes it; the
-// rest of the wall stays until [Run.Close]. With SessionSpec.After the session removes
-// the agent's container once the runtime exits, then runs After in a new container of the
-// wall, and writes its after step before dev.qory.session.exited. Sessions of one run
-// join one after another.
+// StopGrace. It sends the gateway the join request with the names of the variables the
+// session passes a value for and its model key, then checks the session's places,
+// prepares the runtime, resolves the variables, writes dev.qory.session.started and the
+// session's dev.qory.run.policy_applied, behind a wall wraps the launch in the wall
+// that [Open] built, and starts the runtime. Behind the Docker wall the wrap writes the
+// docker run of the agent's container, which starts with the launch, after the wall
+// step, and the session's end removes it; the rest of the wall stays until [Run.Close].
+// With SessionSpec.After the session removes the agent's container once the runtime
+// exits, then runs After in a new container of the wall, and writes its after step
+// before dev.qory.session.exited. Sessions of one run join one after another.
 //
 // An error means the session did not start. An error before the join request, of a
 // spec the session refuses, of a run whose setup step of [Run.Setup] failed, or of a
@@ -69,17 +69,17 @@ const endedBeforeJoin = "the session did not start: the run has ended already"
 // writes nothing. The first join after a step container or an unprivileged setup
 // container starts the wall's relay again with a new token, in its wall step: a restart
 // that fails fails the session as a launch the wall cannot wrap does. A join the gateway
-// refuses with a 403, or that fails the session's checks, writes dev.qory.session.exited, failed with -1, the refusal's code as its reason when
-// the session decides that code, and duration_ms 0; a refusal with a code is a
-// [*Refusal]. A failure in the image or the wall step, such as an image that runs as
-// root, an image that cannot be fetched or a launch the wall cannot wrap, writes
+// refuses with a 403, or that fails the session's checks, writes
+// dev.qory.session.exited, failed with -1, the refusal's code as its reason when the
+// session decides that code, and duration_ms 0; a refusal with a code is a [*Refusal].
+// A failure in the image or the wall step, such as an image that runs as root, an image
+// that cannot be fetched or a launch the wall cannot wrap, writes
 // dev.qory.session.started, then dev.qory.session.exited, failed with -1, with the
 // refusal's code as its reason when the wall refused with a code the session decides,
 // and no reason otherwise; a failure with no reason has its text as a dev.qory.run.log
 // chunk of the session on stderr before that dev.qory.session.exited. A docker run of
 // the agent's container that fails ends the session with docker's exit status as the
-// runtime's.
-// The run stays open: what follows is the caller's.
+// runtime's. The run stays open: what follows is the caller's.
 //
 // Every dev.qory.run.log, dev.qory.run.resized and dev.qory.runtime.* event of the
 // session has the session's number as session.
@@ -417,8 +417,9 @@ func joinUnanswered(err error) bool {
 // wallKept is the error of a call that must not run beside the wall of a session or a
 // step container whose removal failed, nil for a run with no such wall: [Run.Join],
 // since the wall may still run, and [Run.HostProxy] and [Run.PushProxy], since the
-// agent's container or the step container may still change what a push sends. A timed-out or cancelled session ends by killing the docker client, which does
-// not prove the container stopped.
+// agent's container or the step container may still change what a push sends. A
+// timed-out or cancelled session ends by killing the docker client, which does not
+// prove the container stopped.
 func (r *Run) wallKept() error {
 	if r.stepKept {
 		return wall.ContainerKeptError(r.keptError())
@@ -657,11 +658,12 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// binds, and nothing else of the run directory: the settings are read from it, the
 	// record is not the agent's to read or rewrite, and another session's settings are
 	// not its to read. The runtime learns whether the run is walled, and the
-	// placeholders the run sets, with or without a wall. A file the runtime reads from this machine is refused
-	// when a walled run could have written it: one in a place of SessionSpec.Written, in
-	// a writable bind of another walled run in the registry or, behind a wall, in the
-	// workspace, in a writable bind of this session's or in one of the setup container's.
-	// A directory the runtime passes is refused as well when it contains such a place. The places are worked out once, for both.
+	// placeholders the run sets, with or without a wall. A file the runtime reads from
+	// this machine is refused when a walled run could have written it: one in a place
+	// of SessionSpec.Written, in a writable bind of another walled run in the registry
+	// or, behind a wall, in the workspace, in a writable bind of this session's or in
+	// one of the setup container's. A directory the runtime passes is refused as well
+	// when it contains such a place. The places are worked out once, for both.
 	written := sync.OnceValues(func() ([]string, error) {
 		return writtenPlaces(spec, r.id, plan, slices.Concat(r.wallOwn, r.setupBinds))
 	})
@@ -900,8 +902,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 			return fail(err)
 		}
 		// The image step, for an image by reference no step fetched yet, spans the
-		// check of the image's manifest, the wall's pull and the check of its user. After a fetch, the wall finds
-		// the image by its digest and the join writes no image step.
+		// check of the image's manifest, the wall's pull and the check of its user.
+		// After a fetch, the wall finds the image by its digest and the join writes no
+		// image step.
 		if puller, ok := spec.Wall.(wall.Puller); ok && r.byReference && r.imageStep == 0 {
 			open = r.startStep(event.StepImage, r.imageShown())
 			if err := r.pullImage(runCtx, puller); err != nil {

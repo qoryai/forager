@@ -96,8 +96,9 @@ func (h *hostProxies) closeAll() {
 // gets the password before the forwarder starts. An error means no host proxy started:
 // a session of the run is running, the run is closed, a copy step is open, during which
 // a join closes the host proxy, the wall of a session or a step container could not be
-// removed and may still run, so a push must not run beside it, a walled run with an authority has no bundle
-// because the machine has no CA bundle, or the forwarder's port could not be opened.
+// removed and may still run, so a push must not run beside it, a walled run with an
+// authority has no bundle because the machine has no CA bundle, or the forwarder's port
+// could not be opened.
 func (r *Run) HostProxy() (HostProxy, error) {
 	if !r.joining.TryLock() {
 		return HostProxy{}, errors.New("start the host proxy after Join returns: a session of the run is still running")
@@ -124,11 +125,11 @@ func (r *Run) HostProxy() (HostProxy, error) {
 
 // startForwarder starts a forwarder on loopback with a fresh password, which the run's
 // masker gets before the forwarder starts, and lists it in list, the run's host proxies
-// or its push proxies, which the next Join and Close end. On one machine it opens each connection to the
-// gateway's proxy with the relay's preamble and secret; behind a separate gateway it
-// opens each one with dial. With bundle, Env sets the bundle's variables after the proxy
-// variables; without it, only when the run has a bundle. CABundle is the bundle's path,
-// empty for none.
+// or its push proxies, which the next Join and Close end. On one machine it opens each
+// connection to the gateway's proxy with the relay's preamble and secret; behind a
+// separate gateway it opens each one with dial. With bundle, Env sets the bundle's
+// variables after the proxy variables; without it, only when the run has a bundle.
+// CABundle is the bundle's path, empty for none.
 func (r *Run) startForwarder(secret string, dial func(context.Context) (net.Conn, error), bundle bool, list *hostProxies) (HostProxy, error) {
 	password, err := newForwarderSecret()
 	if err != nil {

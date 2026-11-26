@@ -668,12 +668,13 @@ func (r *Run) Image() Image { return r.img }
 // the workspace in LaunchDefaults is written at /workspace, as Join writes it.
 // AgentEnv masks no value: apart from that rewrite, it returns each value as the
 // server, the caller or the machine passed it, and no value the gateway holds for a
-// placeholder. A caller that runs the setup passes the result as [SetupSpec.Env]. The result has QORY_RUN_SYSTEM and
-// QORY_RUN_REPOSITORIES when the server sets them, and Setup accepts both. The error
-// is the one Join returns for spec before its join request, as it checks the places of
-// a run whose image is a reference, or as it resolves the variables, the same
-// [refusal.VariableReserved] or [refusal.PlaceholderConflict] among them, or that the
-// run is closed or another call of the run is running.
+// placeholder. A caller that runs the setup passes the result as [SetupSpec.Env]. The
+// result has QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES when the server sets them, and
+// Setup accepts both. The error is the one Join returns for spec before its join
+// request, as it checks the places of a run whose image is a reference, or as it
+// resolves the variables, the same [refusal.VariableReserved] or
+// [refusal.PlaceholderConflict] among them, or that the run is closed or another call
+// of the run is running.
 func (r *Run) AgentEnv(spec SessionSpec) ([]string, error) {
 	if !r.joining.TryLock() {
 		return nil, errors.New("call AgentEnv after the run's other call returns: another call of the run is running")
@@ -868,19 +869,19 @@ func (r *Run) setApplied(m map[string]any) {
 
 // Close writes the run's dev.qory.run.exited with the caller's outcome, once, and
 // closes the run: a step of [Run.RunStep] that runs is stopped once the outcome is
-// checked, and Close waits for RunStep to return until ctx ends; a host step still open ends cancelled with -1 first, then the run's
-// wall is removed, the heartbeats and the reloads stop, the sinks are flushed within 15
-// seconds, 180 behind a separate gateway, which may be restarting, and the lock, the
-// registry entry and the link are let go. A wall that could
-// not be removed is reported, and its entry among the walled runs still going stays. A
-// failed outcome with no reason of a run no session joined is written as failed with
-// no_session and -1. A run the gateway closed
-// before the close has its dev.qory.run.exited in the session's record alone, with the
-// state and the reason of the gateway's 410 and the last session's exit code. An error
-// means the outcome is refused, and nothing is written: the run stays open, and Close
-// may be called again; the run is closed already; or ctx ended while a step stopped,
-// before RunStep returned, and Close may be called again. The run's masker replaces the
-// run's secrets in the error's text.
+// checked, and Close waits for RunStep to return until ctx ends; a host step still open
+// ends cancelled with -1 first, then the run's wall is removed, the heartbeats and the
+// reloads stop, the sinks are flushed within 15 seconds, 180 behind a separate gateway,
+// which may be restarting, and the lock, the registry entry and the link are let go. A
+// wall that could not be removed is reported, and its entry among the walled runs still
+// going stays. A failed outcome with no reason of a run no session joined is written as
+// failed with no_session and -1. A run the gateway closed before the close has its
+// dev.qory.run.exited in the session's record alone, with the state and the reason of
+// the gateway's 410 and the last session's exit code. An error means the outcome is
+// refused, and nothing is written: the run stays open, and Close may be called again;
+// the run is closed already; or ctx ended while a step stopped, before RunStep
+// returned, and Close may be called again. The run's masker replaces the run's secrets
+// in the error's text.
 func (r *Run) Close(ctx context.Context, out Outcome) (*Closed, error) {
 	res, err := r.close(ctx, out)
 	return res, maskError(r.masker, err)
