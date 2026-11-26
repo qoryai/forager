@@ -531,6 +531,29 @@ its name or reference: the node's policy sets the image, so any other is refused
 has the relay's proxy variables and the bundle's variables: no run secret, no
 placeholder and no `QORY_RUN_API`. It has no nested Docker daemon and no hook socket.
 
+`Mounts` differ from a session's in one way: a mount with no `Target` whose path lies
+below `Dir` is bound over `Dir`'s bind at its path, read-only or writable, after the bind
+that holds it. Use it to keep the files of a check read-only in a clone that the step
+otherwise writes:
+
+```go
+mounts := []wall.Mount{
+	{Path: filepath.Join(clone, "checks")},                             // writable, a mount point
+	{Path: filepath.Join(clone, "checks", "check.sh"), ReadOnly: true}, // read-only
+}
+```
+
+A read-only mount must lie one name below `Dir`, or each folder between `Dir` and it
+must be a mount too, as `checks` is here: the step can rename any other folder there,
+and the bind moves with it. Otherwise `RunStep` returns `mount_mode_conflict`: `Show the mount
+<path> one name below the workspace <Dir>, or list each directory between them as a
+mount: the step can rename <folder>, and the bind moves with it`. A writable mount below
+a read-only one is `mount_mode_conflict`, a symbolic link on the way from `Dir` to a
+mount below it is `mount_target_conflict`, and a mount with a `Target` whose path lies
+below `Dir` is refused as for a session. A run whose image is by reference shows each
+such mount at its names below `/workspace`. `Join` keeps its checks: a read-only mount
+below the workspace is `mount_mode_conflict` there.
+
 While a step container may run, the run's forwarder marks every connection of the wall's
 relay as unprivileged. The gateway's proxy applies the run's allow list to each request
 and records it, sets no credential on it, sends none to a tool, which gets `403` with
