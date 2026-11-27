@@ -641,10 +641,32 @@ func Check(env, split []string, walled bool, placeholders, machine []string) err
 			return refusal.New(refusal.VariableReserved, reserved, "the run passes %s into the enclosure, Forager's names or what a value of the machine's is read from", strings.Join(reserved, ", "))
 		}
 	}
-	if conflict := accesskey.ShownNames(pick(func(n, _ string) bool { return slices.Contains(placeholders, n) })); len(conflict) > 0 {
+	return placeholderConflict(pick(func(n, _ string) bool { return slices.Contains(placeholders, n) }))
+}
+
+// placeholderConflict is the [refusal.PlaceholderConflict] that cites names, the names
+// as passed of values for a placeholder; nil when names is empty.
+func placeholderConflict(names []string) error {
+	if conflict := accesskey.ShownNames(names); len(conflict) > 0 {
 		return refusal.New(refusal.PlaceholderConflict, conflict, "the run passes a value for %s, a placeholder of what the gateway holds outside the enclosure", strings.Join(conflict, ", "))
 	}
 	return nil
+}
+
+// CheckAgentPlaceholders returns [Check]'s refusal for a walled run's value of split,
+// the run's and the machine's values, whose name starts with AGENT_ and whose rest is
+// one of placeholders. The session runs it before the join request: the gateway checks
+// the names a join request passes, and for such a value it would cite the rest alone.
+func CheckAgentPlaceholders(split, placeholders []string) error {
+	var names []string
+	for _, kv := range split {
+		given, _, _ := strings.Cut(kv, "=")
+		if name, prefixed, ok := AgentName(given); prefixed && ok && slices.Contains(placeholders, name) {
+			names = append(names, given)
+		}
+	}
+	slices.Sort(names)
+	return placeholderConflict(slices.Compact(names))
 }
 
 // entryShape is a deny entry's form: a name or a pattern of at most 128 characters

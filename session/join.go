@@ -199,6 +199,13 @@ func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) 
 	if err := checkVariables(spec.Variables); err != nil {
 		return runSpec{}, nil, err
 	}
+	// Behind a wall the join request passes AGENT_X by both names, and the gateway's
+	// refusal of X would not cite AGENT_X: the session refuses such a value first.
+	if s.Wall != nil {
+		if err := variables.CheckAgentPlaceholders(slices.Concat(spec.Variables.Run, spec.Variables.Machine), r.answer.Placeholders); err != nil {
+			return runSpec{}, nil, err
+		}
+	}
 	if err := checkHarnessHome(spec.HarnessHome); err != nil {
 		return runSpec{}, nil, err
 	}
@@ -1689,7 +1696,7 @@ func insideSetupLine(entries []variables.Entry, deny *variables.Deny, fixed []st
 	case 1:
 		return fmt.Sprintf("Prefix %s with AGENT_ for the setup in the agent's container.\nThat setup gets only the agent's variables, so the run leaves %s out of it.", names[0], names[0])
 	}
-	return fmt.Sprintf("Prefix these with AGENT_ for the setup in the agent's container: %s.\nThat setup gets only the agent's variables, so the run leaves them out of it.", orList(names, ", ", " and "))
+	return fmt.Sprintf("Prefix these with AGENT_ for the setup in the agent's container: %s.\nThat setup sees only the agent's variables, so these are left out of it.", orList(names, ", ", " and "))
 }
 
 // sourceOf is how a line names a source of the record.

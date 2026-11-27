@@ -302,7 +302,7 @@ func TestASetupInTheAgentsContainerListsTheNamesToPrefix(t *testing.T) {
 		want    string
 	}{
 		{nil, "Prefix DEPLOY with AGENT_ for the setup in the agent's container.\nThat setup gets only the agent's variables, so the run leaves DEPLOY out of it."},
-		{[]string{"MACHINE_PLAIN=x"}, "Prefix these with AGENT_ for the setup in the agent's container: DEPLOY and MACHINE_PLAIN.\nThat setup gets only the agent's variables, so the run leaves them out of it."},
+		{[]string{"MACHINE_PLAIN=x"}, "Prefix these with AGENT_ for the setup in the agent's container: DEPLOY and MACHINE_PLAIN.\nThat setup sees only the agent's variables, so these are left out of it."},
 	} {
 		sp, g := specGateway(t)
 		answerVariables(g, agentNamesVariables)
