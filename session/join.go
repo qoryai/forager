@@ -1653,11 +1653,14 @@ func leftOutCredentials(entries []variables.Entry, settings, placeholderNames, m
 const fromSettings = "settings"
 
 // unnamedLines is a line for each server's variable of entries whose name starts with
-// AGENT_ and whose rest is not a variable's name, which no container gets.
+// AGENT_ and whose rest is not a variable's name, which no container gets. The prefix
+// is removed once, so the server's AGENT_AGENT_9X applies as AGENT_9X: no line is
+// written for the server's AGENT_9X then, as every container has a variable of that
+// name.
 func unnamedLines(entries []variables.Entry) []string {
 	var lines []string
 	for _, e := range entries {
-		if _, prefixed, ok := variables.AgentName(e.Name); !prefixed || ok {
+		if _, prefixed, ok := variables.AgentName(e.Name); !prefixed || ok || e.From != "" {
 			continue
 		}
 		if slices.Contains(e.Lost, variables.Loss{From: variables.FromApiary, Why: variables.WhyNotAgent}) {

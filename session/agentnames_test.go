@@ -350,3 +350,31 @@ func TestASetupInTheAgentsContainerListsTheNamesToPrefix(t *testing.T) {
 		}
 	}
 }
+
+// TestAnAgentNameIsStrippedOnceInTheRenameLine pins the line for the server's AGENT_
+// names whose rest is not a variable's name: AGENT_AGENT_9X reaches the agent as
+// AGENT_9X, so the server's AGENT_9X gets no line, as every container has a variable of
+// that name, while AGENT_8Y, which no container has, gets one.
+func TestAnAgentNameIsStrippedOnceInTheRenameLine(t *testing.T) {
+	sp, g := specGateway(t)
+	answerVariables(g, `{"variables":{"AGENT_AGENT_9X":{"value":"a"},"AGENT_9X":{"value":"b"},"AGENT_8Y":{"value":"c"}}}`)
+	out := dumpsEnv(t, &sp)
+	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+	var reported []string
+	sp.Report = func(l string) { reported = append(reported, l) }
+	if _, err := run(context.Background(), sp); err != nil {
+		t.Fatal(err)
+	}
+	if got := pick(envOf(t, out), "AGENT_9X", "AGENT_AGENT_9X", "9X", "AGENT_8Y", "8Y"); !maps.Equal(got, map[string]string{"AGENT_9X": "a"}) {
+		t.Errorf("the agent has %v, want AGENT_9X=a alone", got)
+	}
+	var got []string
+	for _, l := range reported {
+		if strings.HasPrefix(l, "Rename ") {
+			got = append(got, l)
+		}
+	}
+	if want := []string{"Rename AGENT_8Y in the run configuration's variables: the run leaves it out of every container."}; !slices.Equal(got, want) {
+		t.Errorf("the join reported %q, want %q", got, want)
+	}
+}
