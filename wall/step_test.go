@@ -183,7 +183,7 @@ func TestAStepTargetThroughALinkInTheImageIsRefused(t *testing.T) {
 
 // TestAStepBindsPlacesOverItsWorkingFolder pins WrapStep with the binds of a step
 // whose places lie below its working folder, shown at /workspace: the step container is
-// made with each bind after the one that holds it, each with its mode.
+// made with each bind after the one it lies in, each with its mode.
 func TestAStepBindsPlacesOverItsWorkingFolder(t *testing.T) {
 	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, heads: map[string]tar.Header{"/workspace": {Typeflag: tar.TypeDir, Mode: 0o755}}}
 	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, sys: rec}
