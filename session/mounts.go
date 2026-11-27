@@ -509,6 +509,9 @@ type mountPlan struct {
 	root, workspace string
 	// sources are the binds as the registry of walled runs lists them.
 	sources []bindSource
+	// stepBinds is true for a step container's plan, whose places below the workspace
+	// are bound over the workspace's bind.
+	stepBinds bool
 }
 
 // workspaceInside is where a run whose policy names its image by its reference sees the
@@ -519,10 +522,10 @@ const workspaceInside = "/workspace"
 // atWorkspace is the plan of a run whose policy names its image by its reference: the
 // bind that holds the workspace shown at [workspaceInside], the working directory under
 // it, and inside, which writes a path of that bind's as the enclosure sees it, at
-// whole components ([translate]). A bind with no Target whose path lies below that
-// bind's, as a step container's over the workspace, is shown at the same names below
-// workspaceInside. Every other bind stays at its place inside, its
-// Target or its path; one whose place is, holds or lies under workspaceInside is
+// whole components ([translate]). In a step container's plan, a bind with no Target
+// whose path lies below that bind's is shown at the same names below workspaceInside.
+// Every other bind stays at its place inside, its Target or its path; one whose place
+// is, holds or lies under workspaceInside is
 // refused: mount_target_conflict for a mount with a Target, and with no code for one
 // shown at its path, the session's directory among them.
 func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
@@ -536,9 +539,9 @@ func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
 			out.Mounts[i].Target = workspaceInside
 			continue
 		}
-		// A bind over the root's, a step container's, is shown at its place below
+		// A step container's bind over the root's is shown at its place below
 		// workspaceInside.
-		if rel, err := filepath.Rel(p.root, m.Path); m.Target == "" && err == nil && under(p.root, m.Path) {
+		if rel, err := filepath.Rel(p.root, m.Path); p.stepBinds && m.Target == "" && err == nil && under(p.root, m.Path) {
 			out.Mounts[i].Target = filepath.Join(workspaceInside, rel)
 			continue
 		}
@@ -877,7 +880,7 @@ func checkMounts(spec runSpec, runDir, sessionDir string) (mountPlan, error) {
 	if err := checkOver(places, over, outer, ws); err != nil {
 		return mountPlan{}, err
 	}
-	var plan mountPlan
+	plan := mountPlan{stepBinds: spec.stepBinds}
 	for i, p := range places {
 		if outer[i] >= 0 {
 			continue
