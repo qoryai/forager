@@ -192,7 +192,8 @@ the read or the copy fails, or the paused run's session id starts with `-`, the 
 starts without a resume, after two lines on `stderr`: `This run starts without its
 earlier conversation, which could not be restored.`, then the fix, a colon and the
 cause, a `404` from the gateway among the causes. Behind a wall the same happens when
-the wall cannot bind the transcript directory where the agent's user writes it. See the contract's §The events, A session's transcript.
+the wall cannot bind the transcript directory where the agent's user writes it. See the
+contract's §The events, A session's transcript.
 
 Codex prints no result line, so the session writes the `dev.qory.runtime.result` of
 each launch of Codex itself, right before the session's `dev.qory.session.exited`, for
