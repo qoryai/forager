@@ -635,7 +635,7 @@ func TestTheRunsAndTheMachinesVariablesAreChecked(t *testing.T) {
 // server's variables may set, end to end: behind a wall the server's QORY_RUN_SYSTEM
 // and QORY_RUN_REPOSITORIES are in the agent's environment, and the session's setup command
 // sees them, while the server's QORY_RUN_KEY, a near miss and an access key's variable,
-// each passed with AGENT_ so the deny list decides, are not; the run's or the machine's value of either is variable_reserved.
+// each passed with AGENT_ so the deny list applies, are not; the run's or the machine's value of either is variable_reserved.
 func TestTheServersSystemAndRepositoriesReachTheAgent(t *testing.T) {
 	const doc = `{"variables":{"QORY_RUN_SYSTEM":{"value":"a system"},"QORY_RUN_REPOSITORIES":{"value":"one two"},` +
 		`"AGENT_QORY_RUN_KEY":{"value":"x"},"AGENT_QORY_RUN_SYSTEMX":{"value":"x"},"AGENT_QORY_ACCESS_KEY_SECRET":{"value":"x"}}}`

@@ -1783,7 +1783,7 @@ The session adds them to the launch's environment; the tools, the relay, the age
 Docker daemon and the wall's `docker` command keep their environment.
 
 **The agent's names.** In a walled run, the name of a variable of the server, the run or
-the machine decides which containers get it. This is the one rule:
+the machine sets which containers get it. This is the one rule:
 
 - A name that starts with `AGENT_`, in exact case, reaches the agent's container with
   that prefix removed once. `AGENT_AGENT_X` arrives as `AGENT_X`.
@@ -1795,8 +1795,9 @@ the machine decides which containers get it. This is the one rule:
 
 Every other name of those sources stays out of the agent's container, recorded as
 `not_agent`, but the server's `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`, which
-reach it by these names. The setup container gets each value under its name, and each
-`AGENT_X` as `X`; when both are set, the value of `X` wins there. A setup whose commands
+reach it by these names. The setup container gets each name without the prefix under
+that name, and each `AGENT_X` as `X`, not as `AGENT_X`; when both are set, the value of
+`X` wins there. A setup whose commands
 run in the agent's container gets the agent's variables alone, and the session reports
 the names to prefix. A server's name that starts with `AGENT_` and has no variable name
 after it, such as `AGENT_` or `AGENT_9X`, reaches no container: it is recorded as

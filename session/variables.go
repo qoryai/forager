@@ -82,7 +82,7 @@ func checkInputsDir(dir string) error {
 // sorted, each once. Behind a wall, a run's or a machine's variable whose name starts
 // with AGENT_ is passed by both names, the name as passed and the rest of it, which the
 // agent's container gets. A name outside the grammar of a variable's name is left out:
-// it can match no placeholder. The join request carries them, names alone, so the
+// it can match no placeholder. The join request contains them, names alone, so the
 // gateway refuses a placeholder the run passes a value for, as the session did.
 // Without a wall what the run inherits is left out: a placeholder wins over an
 // inherited value.
@@ -110,9 +110,10 @@ func passes(spec runSpec) []string {
 }
 
 // resolve resolves the run's variables for a container of kind, from the fixed names to
-// what the run inherits, after refusing what the run passes into the enclosure: placeholders are the variables
-// the agent sees in place of what the gateway holds, and reserved the names the gateway
-// sets for the run, what a value of the machine's is read from. Behind a wall, and
+// what the run inherits, after refusing what the run passes into the enclosure:
+// placeholders are the variables the agent sees in place of what the gateway holds, and
+// reserved the names the gateway sets for the run, what a value of the machine's is read
+// from. Behind a wall, and
 // without one for a run whose answer has credential_hosts, the endpoint rule checks
 // each value of the runtime's model endpoint variable against credentials, the run
 // answer's credential_hosts after [chosen]. It returns the resolution and, for a walled

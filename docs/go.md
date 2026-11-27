@@ -1681,7 +1681,8 @@ the gateway passed it:
 - `dev.qory.run.built`'s `image`, `environment_image`, `base` and `commit`.
 - `dev.qory.run.exited`'s `reason`, and `dev.qory.run.refused`'s `names`.
 - The errors the run's other methods return, such as `HostProxy`, `StackProxy`,
-  `EngineProxy`, `AgentEnv` and `Built`, apart from the engine proxy's password.
+  `EngineProxy`, `AgentEnv`, `SetupEnv` and `Built`, apart from the engine proxy's
+  password.
 - A value split across two calls of `Step.Log`.
 - The files the run writes for the runtime to read, such as the setup script in the
   session's directory, which has the setup commands as given.
@@ -1860,8 +1861,8 @@ credential the join request asks the gateway for, for this session.
   setup container remains. The host steps still write the workspace, so it keeps the
   checks of a writable place, and a settings file in it is refused as in a writable one. A writable
   mount that holds `Dir` is `mount_mode_conflict`; a read-only one is the one
-  bind. `Join` and `AgentEnv` return an error before the join request, and write
-  nothing, in a run with no `Wall`: `Open the run with a wall to mount the workspace
+  bind. `Join`, `AgentEnv` and `SetupEnv` return an error before the join request,
+  and write nothing, in a run with no `Wall`: `Open the run with a wall to mount the workspace
   read-only: a run with no wall starts the agent on this machine.` They do the same
   beside `Setup`, which runs in the agent's container: `Run the setup with Run.Setup, or
   leave SessionSpec.WorkspaceReadOnly unset: SessionSpec.Setup runs in the agent's
@@ -1994,11 +1995,12 @@ credential the join request asks the gateway for, for this session.
     variables, such as `variable_reserved` or `placeholder_conflict`, or that the run
     is closed, or that another call of the run is running.
   - `(*session.Run).SetupEnv(spec)` returns the setup container's environment, as
-    `AgentEnv` does, but with each value of those three sources under its name, and
-    each `AGENT_X` as `X` when no value of `X` is set. Call it before `Setup` with the
-    session's full spec, and pass the result as `SetupSpec.Env`; `Setup` accepts
-    `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`. For a forge token or a model key
-    passed by a name without `AGENT_`, it reports the fix through `OpenSpec.Report`.
+    `AgentEnv` does, but with each value of those three sources without the prefix
+    under its name, and each `AGENT_X` as `X`, not as `AGENT_X`, when no value of `X`
+    is set. Call it before `Setup` with the session's full spec, and pass the result as
+    `SetupSpec.Env`; `Setup` accepts `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`. For
+    a forge token or a model key passed by a name without `AGENT_`, it reports the fix
+    through `OpenSpec.Report` once per run, on the first call that returns no error.
 - `SocketGrace` is how long the run socket keeps accepting after the runtime exits, so
   a hook on its last event is still read. Zero or less means 200 ms. It is for tests:
   production leaves it zero.

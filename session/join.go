@@ -200,7 +200,8 @@ func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) 
 		return runSpec{}, nil, err
 	}
 	// Behind a wall the join request passes AGENT_X by both names, and the gateway's
-	// refusal of X would not cite AGENT_X: the session refuses such a value first.
+	// refusal of X would not cite AGENT_X: the session returns placeholder_conflict for
+	// such a value before the join request.
 	if s.Wall != nil {
 		if err := variables.CheckAgentPlaceholders(slices.Concat(spec.Variables.Run, spec.Variables.Machine), r.answer.Placeholders); err != nil {
 			return runSpec{}, nil, err

@@ -12,8 +12,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 - Rename a variable to `AGENT_<name>` for the agent: walled agents get no other server,
   `--env` or `wall.env` value. The agent's container gets `AGENT_X` as `X`; the setup
-  container gets each name as passed and `AGENT_X` as `X`, and a value of `X` wins
-  there. The server's `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` reach both
+  container gets each name without the prefix under that name and each `AGENT_X` as
+  `X`, not as `AGENT_X`, and a value of `X` wins there. The server's `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` reach both
   containers as they are. Fill `SetupSpec.Env` from the new `(*session.Run).SetupEnv`;
   `AgentEnv` returns the agent's set. `dev.qory.run.policy_applied` records the name as
   passed in `given` and the loss reason `not_agent`. Unwalled runs are unchanged.

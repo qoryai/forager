@@ -690,11 +690,11 @@ func (r *Run) AgentEnv(spec SessionSpec) ([]string, error) {
 // SetupEnv is the environment the setup container gets from the server's variables,
 // Variables.Run, Variables.Machine, LaunchDefaults and SessionSpec.Env, for a session of
 // spec: NAME=value, sorted by name, in a new slice on every call. A caller that runs the
-// setup passes the result as [SetupSpec.Env]. It is what [Run.AgentEnv] returns, but
-// that in a walled run each value of the server's variables, Variables.Run and
-// Variables.Machine reaches the setup under its name, and a value of a name that starts
-// with AGENT_, in exact case, by the rest of the name when no value under that name is
-// set. The server's QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES are in it when the server
+// setup passes the result as [SetupSpec.Env]. It differs from [Run.AgentEnv] in a
+// walled run: each value of the server's variables, Variables.Run and Variables.Machine
+// whose name does not start with AGENT_ reaches the setup under its name, and a value
+// of a name that starts with AGENT_, in exact case, by the rest of the name alone, when
+// no value under that name is set. The server's QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES are in it when the server
 // sets them, and Setup accepts both. For a variable of those three sources passed by a
 // name without AGENT_ that denied-variables.json lists as a forge token or a model key,
 // the first SetupEnv of the run that returns no error reports the fix through
@@ -704,8 +704,8 @@ func (r *Run) SetupEnv(spec SessionSpec) ([]string, error) {
 }
 
 // containerEnv is [Run.AgentEnv] for kind [variables.Agent] and [Run.SetupEnv] for
-// [variables.Setup]; call and what are the call's name and what it returns, as its errors
-// name them.
+// [variables.Setup]; call and what are the call's name and what it returns, as its
+// errors show them.
 func (r *Run) containerEnv(spec SessionSpec, kind variables.Kind, call, what string) ([]string, error) {
 	if !r.joining.TryLock() {
 		return nil, fmt.Errorf("call %s after the run's other call returns: another call of the run is running", call)
