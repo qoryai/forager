@@ -524,7 +524,8 @@ if res.ExitCode != 0 {
 ```
 
 The step container runs as the wall's user with the flags of the setup container, with
-`Dir` writable, `Mounts` with the checks of `SessionSpec.Mounts` and, for a run with an
+`Dir` writable at `/workspace` in every run, `Mounts` with the checks of
+`SessionSpec.Mounts` and, for a run with an
 authority, the bundle. The wall mounts no helper in it: a program that the image does
 not have comes in a read-only mount of `Mounts`. `Image` is empty or the run's image by
 its name or reference: the node's policy sets the image, so any other is refused. Its environment
@@ -532,8 +533,9 @@ has the relay's proxy variables and the bundle's variables: no run secret, no
 placeholder and no `QORY_RUN_API`. It has no nested Docker daemon and no hook socket.
 
 `Mounts` differ from a session's in one way: a mount with no `Target` whose path lies
-below `Dir` is bound over the bind it lies in, at its path, read-only or writable. Use it
-to keep the files of a check read-only in a clone that the step otherwise writes:
+below `Dir` is bound over the bind it lies in, at its names below `/workspace`, read-only
+or writable. Use it to keep the files of a check read-only in a clone that the step
+otherwise writes:
 
 ```go
 mounts := []wall.Mount{
@@ -563,20 +565,20 @@ can rename <folder>, and the bind moves with it`.
   session, and a writable one there is `mount_mode_conflict`.
 - A mount with a `Target` whose path lies below `Dir`: `mount_mode_conflict` or
   `mount_target_conflict`, as for a session.
+- A mount with a `Target` at or below `/workspace`: `mount_target_conflict`, as in a run
+  whose policy sets its image by reference.
 - While a setup container with `Unprivileged` runs, a mount below `Dir` that the setup
   container can write: `Call RemoveSetup before the step: the setup container can write
   <place>, where the step binds <path>.` A step with no mount below `Dir` runs beside it.
 
 Each writable mount below `Dir`, a file too, is a mount point in the step container, so
 the step cannot rename, delete or replace it: the call fails with `EBUSY`, and a `git
-clean` or a checkout that replaces it fails. A run whose policy sets its image by
-reference shows each mount below `Dir` at its names below `/workspace`. `Join` keeps its
-checks: a read-only mount below the workspace is `mount_mode_conflict` there.
-
-Known limit: in a run whose policy sets its image by name, `Dir` is shown at its path. If
-the image lets the step's user write a folder above `Dir`, the step can rename that
-folder, and every bind moves with it. A run whose policy sets its image by reference
-shows `Dir` at `/workspace`, which the step cannot rename.
+clean` or a checkout that replaces it fails. A step's `Dir` and each mount below it are
+shown below `/workspace` in every run, whatever the policy sets for the image, and the
+paths of `Dir` in `Command` are written as `/workspace`. `/workspace` is the mount point
+of `Dir`'s bind, and its parent `/` is root's, so the step can rename no folder above
+`Dir`. `Join` keeps its checks: a read-only mount below the workspace is
+`mount_mode_conflict` there.
 
 Known limit: on a disk that ignores the case of names, shared into the engine's virtual
 machine as with Docker Desktop on macOS, the step can reach a read-only file through

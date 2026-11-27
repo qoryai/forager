@@ -384,10 +384,11 @@ release may change what an existing document does, and says so under Upgrading.
   checked. Each writable mount below `Dir`, a file too, is a mount point that the step
   cannot rename, delete or replace (`EBUSY`), so a `git clean` or a checkout that
   replaces it fails. While a setup container with `Unprivileged` runs, a mount below
-  `Dir` that it can write is an error: call `RemoveSetup` first. In a run whose policy
-  sets its image by name, a step that can write a folder above `Dir` in the image can
-  rename it, and every bind moves with it. `Join` returns `mount_mode_conflict` for such
-  a read-only mount, as before.
+  `Dir` that it can write is an error: call `RemoveSetup` first. A step's `Dir` and its
+  mounts below it are always shown below `/workspace`, whatever the policy sets for the
+  image, so the step can rename no folder above `Dir`; a mount with a `Target` at or
+  below `/workspace` is `mount_target_conflict`. `Join` returns `mount_mode_conflict`
+  for such a read-only mount, as before.
 - `SetupSpec.Unprivileged`: a setup container with no credential and no run API, which
   steps may run beside. A join while it runs returns "Call RemoveSetup before the join:
   the setup container runs with Unprivileged."
