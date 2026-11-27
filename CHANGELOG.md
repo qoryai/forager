@@ -3422,6 +3422,14 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `TestDockerNodeUsesTheRunsProxy` runs Node 24 behind the wall in the image of
+  `QORY_WALL_NODE_IMAGE`, and fails under `QORY_WALL_REQUIRE` without it. In a setup
+  container, a step container and a session, Node's built-in `fetch` gets `200` from
+  an origin container that the policy allows, and the proxy's `403` to its tunnel for
+  `denied.invalid`. In the session, `npm view` prints a package's version from the
+  same origin, used as the registry. CI's Wall conformance jobs build the image from
+  `node:24-slim`, pinned by digest, and run the test.
+
 - `TestDockerConforms` has the case "a read-only file at /etc/codex/hooks.json stays
   as it is": in busybox, with the file at mode `0666` on this machine, the agent reads
   it exactly, cannot write, append to, chmod, remove, rename or replace it, cannot add a

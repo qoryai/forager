@@ -196,6 +196,18 @@ jobs:
             | docker build --tag "qory-walltest-codex:$CODEX_VERSION" --file - "$dir"
           echo "QORY_WALL_CODEX_IMAGE=qory-walltest-codex:$CODEX_VERSION" >> "$GITHUB_ENV"
 
+      - name: Build an image with Node
+        # TestDockerNodeUsesTheRunsProxy runs Node's fetch and npm behind the wall in this
+        # image, Node 24 with npm, whose HOME others can write.
+        env:
+          BASE_IMAGE: docker.io/library/node:24-slim@sha256:873f586f3794f52281bd039bf02c048a0be08fde619338f9941bad1eb6b34530
+        run: |
+          printf '%s\n' "FROM $BASE_IMAGE" \
+            'RUN node --version && npm --version && mkdir -p /home/agent && chmod 1777 /home/agent' \
+            'ENV HOME=/home/agent' \
+            | docker build --tag qory-walltest-node -
+          echo "QORY_WALL_NODE_IMAGE=qory-walltest-node" >> "$GITHUB_ENV"
+
       - name: Run the suite against Docker
         # The test binary is the relay, the forwarder and the probe inside the enclosure,
         # so it is built static. QORY_WALL_REQUIRE turns a skip into a failure: this job
@@ -213,13 +225,14 @@ jobs:
         # TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey, and the hook check,
         # TestDockerClaudeCodeHooksReachTheSessionBehindTheWall, need Docker, the image
         # for Claude Code and the folder Claude Code is installed in, and the tests of
-        # Codex need Docker and the image of Codex; they are listed for the same reason.
+        # Codex need Docker and the image of Codex, and TestDockerNodeUsesTheRunsProxy
+        # Docker and the image with Node; they are listed for the same reason.
         # TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey needs no Docker, but
         # Claude Code's installed folder, which the part job does not have.
         env:
           CGO_ENABLED: "0"
           QORY_WALL_REQUIRE: "1"
-        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey|TestDockerCodexThroughTheWall|TestDockerCodexPausesOnAUsageLimit|TestDockerCodexEndsOrSwitchesOnARejectedKey|TestDockerCodexRefusesAnArgumentThatSetsASessionSetting|TestDockerCodexResumesAPausedRunUnderAnotherKey|TestDockerCodexCountsItsChildAgentsInTheResult)$'
+        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey|TestDockerCodexThroughTheWall|TestDockerCodexPausesOnAUsageLimit|TestDockerCodexEndsOrSwitchesOnARejectedKey|TestDockerCodexRefusesAnArgumentThatSetsASessionSetting|TestDockerCodexResumesAPausedRunUnderAnotherKey|TestDockerCodexCountsItsChildAgentsInTheResult|TestDockerNodeUsesTheRunsProxy)$'
 
       - name: Read the qory commit
         # The tests of qory's transcript link run qory's agent-env verb behind the wall.
@@ -355,6 +368,18 @@ jobs:
             | docker build --tag "qory-walltest-codex:$CODEX_VERSION" --file - "$dir"
           echo "QORY_WALL_CODEX_IMAGE=qory-walltest-codex:$CODEX_VERSION" >> "$GITHUB_ENV"
 
+      - name: Build an image with Node
+        # TestDockerNodeUsesTheRunsProxy runs Node's fetch and npm behind the wall in this
+        # image, Node 24 with npm, whose HOME others can write.
+        env:
+          BASE_IMAGE: docker.io/library/node:24-slim@sha256:873f586f3794f52281bd039bf02c048a0be08fde619338f9941bad1eb6b34530
+        run: |
+          printf '%s\n' "FROM $BASE_IMAGE" \
+            'RUN node --version && npm --version && mkdir -p /home/agent && chmod 1777 /home/agent' \
+            'ENV HOME=/home/agent' \
+            | docker build --tag qory-walltest-node -
+          echo "QORY_WALL_NODE_IMAGE=qory-walltest-node" >> "$GITHUB_ENV"
+
       - name: Run the suite against Docker
         # The test binary is the relay, the forwarder and the probe inside the enclosure,
         # so it is built static. QORY_WALL_REQUIRE turns a skip into a failure: this job
@@ -372,13 +397,14 @@ jobs:
         # TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey, and the hook check,
         # TestDockerClaudeCodeHooksReachTheSessionBehindTheWall, need Docker, the image
         # for Claude Code and the folder Claude Code is installed in, and the tests of
-        # Codex need Docker and the image of Codex; they are listed for the same reason.
+        # Codex need Docker and the image of Codex, and TestDockerNodeUsesTheRunsProxy
+        # Docker and the image with Node; they are listed for the same reason.
         # TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey needs no Docker, but
         # Claude Code's installed folder, which the part job does not have.
         env:
           CGO_ENABLED: "0"
           QORY_WALL_REQUIRE: "1"
-        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey|TestDockerCodexThroughTheWall|TestDockerCodexPausesOnAUsageLimit|TestDockerCodexEndsOrSwitchesOnARejectedKey|TestDockerCodexRefusesAnArgumentThatSetsASessionSetting|TestDockerCodexResumesAPausedRunUnderAnotherKey|TestDockerCodexCountsItsChildAgentsInTheResult)$'
+        run: go test ./e2e -count=1 -v -run '^(TestDockerConforms|TestAnUnwalledRunsValueReachesTheOriginThroughTheProxy|TestTheGatewaySetsTheCredentialOnAHostProxyRequest|TestAHarnessCredentialReachesItsOriginThroughTheStackProxy|TestDockerSealedCredentialThroughTheWall|TestDockerHarnessCredentialThroughTheStackProxy|TestDockerClaudeCodeHooksReachTheSessionBehindTheWall|TestDockerModelKeySwitchesOnACapAndSendsTheRequestAgain|TestDockerModelKeySwitchesWhenAStreamEndsInARateLimitError|TestDockerModelKeysAllCoolingStopTheSession|TestDockerModelKeysAtTheirUseUpToPercentPauseTheRun|TestDockerModelKeysReportAndTakeTheControlPlanesCooldown|TestDockerClaudeCodeResumesAPausedRunUnderAnotherKey|TestUnwalledClaudeCodeResumesAPausedRunUnderAnotherKey|TestDockerCodexThroughTheWall|TestDockerCodexPausesOnAUsageLimit|TestDockerCodexEndsOrSwitchesOnARejectedKey|TestDockerCodexRefusesAnArgumentThatSetsASessionSetting|TestDockerCodexResumesAPausedRunUnderAnotherKey|TestDockerCodexCountsItsChildAgentsInTheResult|TestDockerNodeUsesTheRunsProxy)$'
 
   e2e-docker:
     name: Wall conformance, nested Docker
