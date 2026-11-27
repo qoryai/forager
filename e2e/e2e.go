@@ -289,7 +289,7 @@ func Main() {
 	case modeStep:
 		os.Exit(stepProbe(os.Args[2:]))
 	case modeStepBinds:
-		os.Exit(stepBindsProbe(os.Args[2:]))
+		os.Exit(stepBindsProbe())
 	case modeService:
 		err := http.ListenAndServe(":"+setupServicePort, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			io.WriteString(w, setupServiceLine)
