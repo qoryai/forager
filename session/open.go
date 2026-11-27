@@ -171,6 +171,9 @@ type Run struct {
 	stepKept bool
 	// route is the run's route to OpenSpec.QoryRoute, nil for a run with none.
 	route *qoryRoute
+	// setupEnvReported is true once a [Run.SetupEnv] of a walled run reported its lines:
+	// a later call reports none, as each would repeat them.
+	setupEnvReported bool
 }
 
 // Open opens a run at its gateway and returns it once dev.qory.run.started and the
@@ -694,8 +697,8 @@ func (r *Run) AgentEnv(spec SessionSpec) ([]string, error) {
 // set. The server's QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES are in it when the server
 // sets them, and Setup accepts both. For a variable of those three sources passed by a
 // name without AGENT_ that denied-variables.json lists as a forge token or a model key,
-// SetupEnv reports the fix through OpenSpec.Report, as Join does for the agent's
-// values. The errors are AgentEnv's.
+// the first SetupEnv of the run that returns no error reports the fix through
+// OpenSpec.Report, as Join does for the agent's values. The errors are AgentEnv's.
 func (r *Run) SetupEnv(spec SessionSpec) ([]string, error) {
 	return r.containerEnv(spec, variables.Setup, "SetupEnv", "the setup's environment")
 }
@@ -787,7 +790,8 @@ func (r *Run) containerEnv(spec SessionSpec, kind variables.Kind, call, what str
 	// The agent's container gets no value of these sources passed by a name without
 	// AGENT_, so Join reports none of them: the setup's resolution reports the
 	// credentials the deny list leaves out of them.
-	if kind == variables.Setup && s.Wall != nil {
+	if kind == variables.Setup && s.Wall != nil && !r.setupEnvReported {
+		r.setupEnvReported = true
 		var unprefixed []variables.Entry
 		for _, e := range vars.Applied {
 			e.Lost = slices.DeleteFunc(slices.Clone(e.Lost), func(l variables.Loss) bool {

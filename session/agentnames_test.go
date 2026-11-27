@@ -54,7 +54,8 @@ var agentNames = []string{"ONLY", "AGENT_ONLY", "TARGET", "AGENT_TARGET", "DEPLO
 // without the prefix, agent_lower among them, but the server's QORY_RUN_SYSTEM and
 // QORY_RUN_REPOSITORIES. The setup container gets every name as passed, and AGENT_X as
 // X when X is not set: the server's TARGET wins over its AGENT_TARGET. The forge
-// token is left out under both names, and AGENT_9X reaches neither. The join request
+// token is left out under both names, and AGENT_9X reaches neither; the fix for the
+// forge token is reported once however often SetupEnv is called. The join request
 // passes the run's and the machine's AGENT_ names by both names, and policy_applied
 // records the names as passed in given and the names left out as not_agent.
 func TestTheAgentGetsOnlyAgentNamesAndTheSetupEveryName(t *testing.T) {
@@ -97,6 +98,12 @@ func TestTheAgentGetsOnlyAgentNamesAndTheSetupEveryName(t *testing.T) {
 	defineSetup := "Define GH_TOKEN as a credential in the run configuration, not as a variable: the run leaves out the value that the server passes, since denied-variables.json lists it as a forge token."
 	if !slices.Equal(reported, []string{defineSetup}) {
 		t.Errorf("SetupEnv reported %q, want %q", reported, defineSetup)
+	}
+	if again, err := r.SetupEnv(sp.SessionSpec); err != nil || !slices.Equal(again, setupEnv) {
+		t.Errorf("a second SetupEnv: %q, %v; want %q", again, err, setupEnv)
+	}
+	if len(reported) != 1 {
+		t.Errorf("two SetupEnv calls reported %q, want %q once", reported, defineSetup)
 	}
 	reported = nil
 	res, err := r.Join(ctx, sp.SessionSpec)
