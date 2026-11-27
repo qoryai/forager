@@ -533,9 +533,9 @@ const workspaceInside = "/workspace"
 func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
 	if p.root == "" || p.root == string(filepath.Separator) {
 		if p.stepBinds {
-			return mountPlan{}, nil, fmt.Errorf("Choose a working folder below /: a step shows its working folder at %s.\n"+
-				"The working folder %s is reached through the bind of %s", workspaceInside, pathShown(p.workspace),
-				accesskey.ShownValue(p.root, true))
+			return mountPlan{}, nil, fmt.Errorf("Remove the mount of / from Mounts: a step shows its working folder at %s.\n"+
+				"The working folder %s lies inside the mount of /, which cannot be shown at %s", workspaceInside,
+				pathShown(p.workspace), workspaceInside)
 		}
 		return mountPlan{}, nil, fmt.Errorf("the workspace is reached through %s, which cannot be shown at %s", accesskey.ShownValue(p.root, true), workspaceInside)
 	}
