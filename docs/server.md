@@ -185,6 +185,16 @@ and for each name the run takes the value of the highest that sets it:
 - The server's value of a variable the runtime declares or reserves, or one a
   credential is read from, is left out. A node's value of a declared one reaches the
   runtime.
+- In a walled run, a variable of the server, the run or the machine reaches the agent
+  only when its name starts with `AGENT_`, in exact case, with that prefix removed once:
+  `AGENT_LOG_LEVEL` arrives as `LOG_LEVEL`, and `AGENT_AGENT_X` as `AGENT_X`. The rest of
+  the name must be a variable name, and is checked like any name, so `AGENT_GH_TOKEN` is
+  denied as `GH_TOKEN`. Every other name of those sources reaches the setup container
+  and not the agent, but the server's `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`,
+  which reach both. The setup container also gets `AGENT_X` as `X`; a value of `X` wins
+  there. The record lists the agent's name, with `given`, the name as passed, and a
+  value the agent does not get as `not_agent`. The contract's
+  [variables](../contracts/forager/v1/README.md#variables) has the whole rule.
 - A run without a wall takes none of the server's variables, unless
   `SessionSpec.Variables.Unwalled` is `session.UnwalledAccept`. The run's variables,
   `qory run --env`, apply with or without a wall.
@@ -196,7 +206,7 @@ spec.LaunchFixed = []string{"CODEX_HOME=/home/agent/.codex"} // what the harness
 spec.LaunchDefaults = []string{"HARNESS_PROFILE=nextjs"}     // what its author wrote as defaults
 spec.HarnessHome = "/home/agent/.qory/harness"               // QORY_HARNESS_HOME
 spec.Variables = session.Variables{
-	Run:      []string{"LOG_LEVEL=debug"},          // --env; the server's win
+	Run:      []string{"AGENT_LOG_LEVEL=debug"},    // --env; the server's win
 	Machine:  []string{"BUILD_NUMBER=42"},          // wall.env
 	Deny:     []string{"LEGACY_SETTING", "ACME_*"}, // names and patterns, in any case
 	Unwalled: session.UnwalledIgnore,               // or UnwalledAccept

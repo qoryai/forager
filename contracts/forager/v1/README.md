@@ -1778,9 +1778,33 @@ from inside, which an image by reference can change (§Images).
 
 ## Variables
 
-A run's variables reach the agent's process alone. The session adds them to the launch's
-environment; the tools, the relay, the agent's Docker daemon and the wall's `docker`
-command keep their environment.
+A run's variables reach the agent's process and, in a walled run, the setup container.
+The session adds them to the launch's environment; the tools, the relay, the agent's
+Docker daemon and the wall's `docker` command keep their environment.
+
+**The agent's names.** In a walled run, the name of a variable of the server, the run or
+the machine decides which containers get it. This is the one rule:
+
+- A name that starts with `AGENT_`, in exact case, reaches the agent's container with
+  that prefix removed once. `AGENT_AGENT_X` arrives as `AGENT_X`.
+- The rest of the name must be a variable name: a letter or `_`, then letters, digits or
+  `_`.
+- The rest is then checked like any name: `AGENT_QORY_X` becomes `QORY_X`. From the
+  server it is recorded as `denied`; from `--env` or `wall.env` it is
+  `variable_reserved`. Either way, the record cites `AGENT_QORY_X`.
+
+Every other name of those sources stays out of the agent's container, recorded as
+`not_agent`, but the server's `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`, which
+reach it by these names. The setup container gets each value under its name, and each
+`AGENT_X` as `X`; when both are set, the value of `X` wins there. A setup whose commands
+run in the agent's container gets the agent's variables alone, and the session reports
+the names to prefix. A server's name that starts with `AGENT_` and has no variable name
+after it, such as `AGENT_` or `AGENT_9X`, reaches no container: it is recorded as
+`not_agent`, and the session reports the name to change. From `--env` or `wall.env`
+such a name stops the run, with the fix first: `Rename AGENT_9X: the agent's container
+would get 9X, which is not a variable's name.` The fixed names, the harness's defaults
+and the environment the run inherits are not split. An unwalled run takes each name as
+it is. In Go, `AgentEnv` returns the agent's set and `SetupEnv` the setup container's.
 
 **The order.** Several sources may set one name. For each name the run takes the value
 of the highest source that sets it:
@@ -1793,6 +1817,11 @@ of the highest source that sets it:
 | `machine` | the machine's variables, the `wall.env` of `forager.yaml` | `SessionSpec.Variables.Machine` |
 | `harness` | the harness's written defaults | `SessionSpec.LaunchDefaults` |
 | `shell` | the environment the run inherits | `SessionSpec.Env` |
+
+Behind a wall the server's, the run's and the machine's values come twice in this
+order: first under their names as passed, then their values of `AGENT_` names by the
+rest of the name, before the harness's defaults. So the server's `AGENT_X` wins over
+`--env AGENT_X`, and in the setup container a value of `X` wins over any `AGENT_X`.
 
 The server resolves its variables among its levels, a lock included, and sends the
 resolved values alone, a name and a value each; Forager reads no level. So the server's
@@ -1810,7 +1839,10 @@ and the machine's variables. They keep the node's secrets and the stand-ins out 
 enclosure. A walled run that passes a `QORY_` variable, or a variable a value of the
 machine's is read from, into the enclosure is no run, `variable_reserved`; `QORY_RUN_ID`
 and `QORY_RUN_SOCKET` are exempt, and `QORY_SESSION` is refused like any other `QORY_`
-name. So `--env QORY_X` or `wall.env: [QORY_X]` behind a wall stops the run. A session
+name. So `--env QORY_X` or `wall.env: [QORY_X]` behind a wall stops the run, and so
+does `--env AGENT_QORY_RUN_ID`: the two names are exempt only when passed as they are.
+Behind a wall the checks read the name a container gets, and a refusal cites the name as
+passed, such as `AGENT_QORY_RUN_ID` or `AGENT_GITHUB_TOKEN`. A session
 that passes a value for a placeholder does not start, with or without a wall: its join
 fails, `placeholder_conflict`, and the run stays open. Without a wall, a value of a
 placeholder the run inherits is not passed: the placeholder wins over it. Without a
@@ -1973,8 +2005,9 @@ refusal is posted on the link, as the session's other refusals are.
 
 **The run's system and repositories.** The server's variables may set two `QORY_`
 names, `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`: the system and the repositories a
-session's setup commands may use (§The wall), as the server sets them. Forager reads nothing
-into their values. The built-in `QORY_*` entry leaves the server's values of them in,
+session's setup commands may use (§The wall), as the server sets them. Behind a wall
+they reach the agent's container and the setup container by these names, with no
+`AGENT_` prefix. Forager reads nothing into their values. The built-in `QORY_*` entry leaves the server's values of them in,
 by these names exactly, in upper case: a name that only begins with one, such as
 `QORY_RUN_SYSTEMX`, or one in lower case, is denied as any `QORY_` name. The runtime's
 `denies` and the node's entries still apply to them, and an unwalled run takes them as
@@ -2019,20 +2052,26 @@ developer's shell to the server. The run's variables, `qory run --env`, apply wi
 without a wall.
 
 **The record of the variables.** `dev.qory.run.policy_applied`'s `variables` lists the
-run's variables by name, never a value, sorted by name: each `name`, `from`, the source
-whose value the run applies, and `lost`, the values left out, the highest source first,
-each with its source, `from`, and the reason, `why`: `overridden`, `denied`, `fixed`,
-`unwalled`, `endpoint_uncovered`, the endpoint's host is none of the hosts of the run's
-model credential, or `endpoint_unreadable`, the value is not an `https` URL with a host
-Forager reads. An entry has `kept`, behind a wall, when the value that applies is one of
+run's variables by name, never a value, sorted by name: each `name`, as the agent's
+container gets it, `from`, the source whose value the run applies, `given`, the name
+that value was passed by when it differs from `name`, and `lost`, the values left out,
+in the order of the sources (The order, above), each with its source, `from`, `given`
+when the name it was passed by differs, and the reason, `why`: `overridden`, `denied`,
+`fixed`, `unwalled`, `not_agent`, the value does not reach the agent's container (The
+agent's names, above), `endpoint_uncovered`, the endpoint's host is none of the hosts of
+the run's model credential, or `endpoint_unreadable`, the value is not an `https` URL
+with a host Forager reads. An entry has `kept`, behind a wall, when the value that applies is one of
 the model endpoint's variable whose host is a host of the run's model credential: `why`
 `endpoint_covered` and the credential's name, `credential`. A run with a default model
 provider credential has no `kept`: the default model provider credential's endpoint is a
 fixed value.
 
 ```json
-[{"name": "HARNESS_PROFILE", "from": "harness", "lost": []},
- {"name": "LOG_LEVEL", "from": "apiary", "lost": [{"from": "run", "why": "overridden"}]},
+[{"name": "DEPLOY_TARGET", "given": "AGENT_DEPLOY_TARGET", "from": "apiary",
+  "lost": [{"from": "apiary", "why": "not_agent"}]},
+ {"name": "HARNESS_PROFILE", "from": "harness", "lost": []},
+ {"name": "LOG_LEVEL", "given": "AGENT_LOG_LEVEL", "from": "apiary",
+  "lost": [{"from": "run", "why": "overridden", "given": "AGENT_LOG_LEVEL"}]},
  {"name": "PATH", "lost": [{"from": "machine", "why": "denied"}]}]
 ```
 

@@ -1576,7 +1576,7 @@ func (r *Run) launchLine(spec runSpec, n int, prepared runtimes.Launch) string {
 // is in the run configuration, and one for the node's sources, whose fix is in
 // forager.yaml; each line has its sources in the record's order, then the env of
 // --settings. A line cites the name the value was passed by: for AGENT_GH_TOKEN, which
-// the agent's container would get as GH_TOKEN, the server's line says so. A placeholder
+// the agent's container would get as GH_TOKEN, the server's line has both names. A placeholder
 // of the run, and a model key's variable the session sets or leaves out for the default
 // model provider credential, model, have no line: the gateway already has the
 // credential.

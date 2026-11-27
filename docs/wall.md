@@ -1127,8 +1127,10 @@ if err := run.RemoveSetup(ctx); err != nil {
   relay. It gets the working folder, writable, and the helper and the run's bundle,
   read-only: no home, run directory, hook socket or engine socket. It gets no host
   proxy's URL or password.
-- Fill `Env` from `run.AgentEnv(sessionSpec)`, the session's full spec, so the setup
-  container gets the agent's variables. The result has `QORY_RUN_SYSTEM` and
+- Fill `Env` from `run.SetupEnv(sessionSpec)`, the session's full spec. The setup
+  container gets each variable of the server, `--env` and `wall.env` under its name,
+  and each `AGENT_X` as `X` when no value of `X` is set; the agent gets only the
+  `AGENT_` ones ([variables](server.md#variables)). The result has `QORY_RUN_SYSTEM` and
   `QORY_RUN_REPOSITORIES` when the server sets them, and `Setup` accepts both. `Setup`
   refuses, before any step, a value for one of the run's placeholders
   (`placeholder_conflict`), any other `QORY_` name, `QORY_RUN_ID`, `QORY_SESSION` and

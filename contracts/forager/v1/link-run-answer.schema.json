@@ -32,7 +32,7 @@
       "$ref": "events/run.policy_applied.schema.json#/properties/digest"
     },
     "variables": {
-      "description": "The variables the agent's process receives, as a run configuration contains them.",
+      "description": "The run's variables, as a run configuration contains them: in a walled run, only those whose name starts with AGENT_ reach the agent's container, by the rest of the name (run-configuration.schema.json).",
       "$ref": "run-configuration.schema.json#/properties/variables"
     },
     "placeholders": {

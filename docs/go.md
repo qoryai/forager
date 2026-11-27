@@ -1971,13 +1971,15 @@ credential the join request asks the gateway for, for this session.
     run directory and `HarnessHome`.
   - `OnVariables` receives each name, its source and the values that lost, once, before
     the agent starts.
+  - In a walled run, only a variable of the server, `Variables.Run` or
+    `Variables.Machine` whose name starts with `AGENT_`, in exact case, reaches the
+    agent, by the rest of its name, with the server's `QORY_RUN_SYSTEM` and
+    `QORY_RUN_REPOSITORIES`. See [variables](server.md#variables).
   - `(*session.Run).AgentEnv(spec)` returns the environment a session of `spec` gets
     from the server's variables, `Variables.Run`, `Variables.Machine`,
     `LaunchDefaults` and `Env`, `NAME=value`, sorted by name, in a new slice on every
-    call. To give the setup container the agent's environment, call it before `Setup`
-    with the session's full spec, and pass the result as `SetupSpec.Env`. The result
-    has `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` when the server sets them, and
-    `Setup` accepts both. It resolves the variables as `Join` does, with the deny
+    call. The result has `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` when the server
+    sets them. It resolves the variables as `Join` does, with the deny
     lists and the placeholders, and leaves out the names Forager, the proxy, the wall,
     the bundle and `LaunchFixed` set, the placeholders, and a name of
     `denied-variables.json` that `Env` has, such as `PATH`, which `Join` passes to the
@@ -1991,6 +1993,12 @@ credential the join request asks the gateway for, for this session.
     checks the places of a run whose image is a reference, or as it resolves the
     variables, such as `variable_reserved` or `placeholder_conflict`, or that the run
     is closed, or that another call of the run is running.
+  - `(*session.Run).SetupEnv(spec)` returns the setup container's environment, as
+    `AgentEnv` does, but with each value of those three sources under its name, and
+    each `AGENT_X` as `X` when no value of `X` is set. Call it before `Setup` with the
+    session's full spec, and pass the result as `SetupSpec.Env`; `Setup` accepts
+    `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`. For a forge token or a model key
+    passed by a name without `AGENT_`, it reports the fix through `OpenSpec.Report`.
 - `SocketGrace` is how long the run socket keeps accepting after the runtime exits, so
   a hook on its last event is still read. Zero or less means 200 ms. It is for tests:
   production leaves it zero.

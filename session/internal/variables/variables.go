@@ -1,11 +1,15 @@
-// Package variables resolves the variables a run's agent receives, name by name, from
-// the sources that set them, and records where each came from and what lost.
+// Package variables resolves the variables a container of a run receives, name by
+// name, from the sources that set them, and records where each came from and what lost.
 //
 // The sources form rungs, the highest first: the run's fixed names, Forager's, the
 // wall's, the runtime preparation's, the placeholders and the values the harness
 // computes; the server's, which it resolved among its own levels; the run's own, --env
 // for qory; the machine's, wall.env; the harness's written defaults; and the
 // environment the run inherits. For each name the highest rung that sets it wins.
+// Behind a wall the server's, the run's and the machine's values are split by the
+// container ([Kind]): the agent's container gets only a value whose name starts with
+// AGENT_, by the rest of the name, and the setup container gets each value under its
+// name, then each AGENT_ value by the rest of the name, a rung below.
 //
 // [Resolve] refuses first what must stay outside the enclosure, [Check], over every
 // value the node passes. The deny list then leaves out a value of the server, the run,
@@ -250,7 +254,7 @@ type value struct {
 // whose rest is not a variable's name is in plain under the name as passed, lost as
 // [WhyNotAgent]: no container gets it. For [Agent], every other value of plain is lost
 // as WhyNotAgent too, but the server's QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES, by
-// these names exactly; server says m is the server's.
+// these names exactly; server is true when m is the server's.
 func split(kind Kind, walled, server bool, m map[string]string) (plain, agent map[string]value) {
 	plain, agent = map[string]value{}, map[string]value{}
 	for given, v := range m {
@@ -271,7 +275,7 @@ func split(kind Kind, walled, server bool, m map[string]string) (plain, agent ma
 	return plain, agent
 }
 
-// checkAgentNames refuses a value of env, NAME=value, whose name starts with
+// checkAgentNames returns an error for a value of env, NAME=value, whose name starts with
 // [AgentPrefix] and whose rest is not a variable's name: no container would get it.
 func checkAgentNames(env []string) error {
 	for _, kv := range env {
@@ -323,6 +327,13 @@ func checkAgentNames(env []string) error {
 // ones included, is left out as [WhyFixed]. Every value of a name of in.KeysFixed is
 // left out as [WhyFixed] too, the inherited one included, and the entry has no from:
 // the caller sets none of them.
+//
+// Behind a wall, the server's, the run's and the machine's values are first split by
+// in.Kind ([split]), and every rule above reads the name the container gets. A run's or
+// a machine's value whose name starts with AGENT_ and whose rest is not a variable's
+// name is an error, with the fix first; the server's such value is left out as
+// [WhyNotAgent]. The exemptions of QORY_RUN_SYSTEM, QORY_RUN_REPOSITORIES, QORY_RUN_ID
+// and QORY_RUN_SOCKET hold only for a value passed by these names.
 func Resolve(in Inputs) (Resolved, error) {
 	if err := CheckDeny(in.Deny); err != nil {
 		return Resolved{}, err
@@ -579,15 +590,15 @@ func byName(env []string) map[string]string {
 	return out
 }
 
-// Check refuses a run whose environment, env and split, NAME=value, passes into the
-// enclosure what stays outside. In a walled run, the name of a value of split, the run's
-// and the machine's values, is checked as a container gets it, the rest of an AGENT_
-// name ([AgentName]); a name whose rest is not a variable's name is not checked. A
-// refusal cites each name as passed. In a walled run, a QORY_ variable, in any case, or
-// a variable a machine value is read from, is [refusal.VariableReserved]; QORY_RUN_ID
-// and QORY_RUN_SOCKET, the two Forager sets for the session, are not refused when passed
-// by these names. In any run, a value for a placeholder is
-// [refusal.PlaceholderConflict].
+// Check returns a refusal for a run whose environment, env and split, NAME=value,
+// passes into the enclosure what stays outside. In a walled run, the name of a value of
+// split, the run's and the machine's values, is checked as a container gets it, the
+// rest of an AGENT_ name ([AgentName]); a name whose rest is not a variable's name is
+// not checked. A refusal cites each name as passed. In a walled run, a QORY_ variable,
+// in any case, or a variable a machine value is read from, is
+// [refusal.VariableReserved]; QORY_RUN_ID and QORY_RUN_SOCKET, the two Forager sets for
+// the session, pass when passed by these names. In any run, a value for a placeholder
+// is [refusal.PlaceholderConflict].
 func Check(env, split []string, walled bool, placeholders, machine []string) error {
 	// checked is each name as a container gets it, and the names it was passed by.
 	checked := map[string][]string{}

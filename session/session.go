@@ -361,8 +361,8 @@ func loopback(addr string) bool {
 
 // shownVariables are the run's variables as its dev.qory.run.policy_applied sends them:
 // each entry as it is, with its name, and each name a value was passed by, as
-// accesskey.ShownName shows it, bare, in the order of the names before. Two names that give one phrase are two entries with that
-// phrase.
+// accesskey.ShownName shows it, bare, in the order of the names before. Two names that
+// give one phrase are two entries with that phrase.
 func shownVariables(applied []variables.Entry) []variables.Entry {
 	out := make([]variables.Entry, len(applied))
 	for i, e := range applied {
