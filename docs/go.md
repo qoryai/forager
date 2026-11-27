@@ -550,7 +550,7 @@ and the bind moves with it. Otherwise `RunStep` returns `mount_mode_conflict`: `
 mount: the step can rename <folder>, and the bind moves with it`. A writable mount below
 a read-only one is `mount_mode_conflict`, a symbolic link on the way from `Dir` to a
 mount below it is `mount_target_conflict`, and a mount with a `Target` whose path lies
-below `Dir` is refused as for a session. A run whose image is by reference shows each
+below `Dir` is `mount_mode_conflict` or `mount_target_conflict`, as for a session. A run whose image is by reference shows each
 such mount at its names below `/workspace`. `Join` keeps its checks: a read-only mount
 below the workspace is `mount_mode_conflict` there.
 
