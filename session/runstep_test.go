@@ -172,7 +172,7 @@ func TestRunStepRunsTheCommandInAStepContainer(t *testing.T) {
 		t.Errorf("Output %q", out)
 	}
 	l := w.steps[0]
-	if l.Command != "/bin/sh" || !slices.Equal(l.Args, []string{"-c", "echo out; echo err >&2"}) || l.Dir != sp.Dir || !slices.Equal(l.Mounts, []wall.Mount{{Path: sp.Dir}}) {
+	if l.Command != "/bin/sh" || !slices.Equal(l.Args, []string{"-c", "echo out; echo err >&2"}) || l.Dir != "/workspace" || !slices.Equal(l.Mounts, []wall.Mount{{Path: sp.Dir, Target: "/workspace"}}) {
 		t.Errorf("the step container's launch %+v", l)
 	}
 	if len(l.Env) != 0 || l.ProxyToken == "" {
@@ -764,6 +764,21 @@ func stepPlaces(t *testing.T, dir string) []wall.Mount {
 	}
 }
 
+// stepPlacesShown are the binds of [stepPlaces] below dir, in the order a step container
+// gets them: dir at /workspace first, and each place after the one it lies in, at its
+// names below /workspace.
+func stepPlacesShown(dir string) []wall.Mount {
+	checks := filepath.Join(dir, "checks")
+	return []wall.Mount{
+		{Path: dir, Target: "/workspace"},
+		{Path: filepath.Join(dir, "top.txt"), ReadOnly: true, Target: "/workspace/top.txt"},
+		{Path: checks, Target: "/workspace/checks"},
+		{Path: filepath.Join(checks, "locked"), ReadOnly: true, Target: "/workspace/checks/locked"},
+		{Path: filepath.Join(checks, "run"), Target: "/workspace/checks/run"},
+		{Path: filepath.Join(checks, "run", "check.sh"), ReadOnly: true, Target: "/workspace/checks/run/check.sh"},
+	}
+}
+
 // TestRunStepBindsPlacesOverItsWorkingFolder pins a step's places below its working
 // folder: a read-only file one name below it, a read-only folder and file below writable
 // folders listed at their paths, and those folders are each bound, the working folder
@@ -783,17 +798,9 @@ func TestRunStepBindsPlacesOverItsWorkingFolder(t *testing.T) {
 	if res, err := r.Join(ctx, sp.SessionSpec); err != nil || res.ExitCode != 0 {
 		t.Fatalf("the join after the steps: %v, %+v", err, res)
 	}
-	checks := filepath.Join(sp.Dir, "checks")
-	want := []wall.Mount{
-		{Path: sp.Dir},
-		{Path: filepath.Join(sp.Dir, "top.txt"), ReadOnly: true},
-		{Path: checks},
-		{Path: filepath.Join(checks, "locked"), ReadOnly: true},
-		{Path: filepath.Join(checks, "run")},
-		{Path: filepath.Join(checks, "run", "check.sh"), ReadOnly: true},
-	}
+	want := stepPlacesShown(sp.Dir)
 	for _, l := range w.steps {
-		if !slices.Equal(l.Mounts, want) || l.Dir != sp.Dir {
+		if !slices.Equal(l.Mounts, want) || l.Dir != "/workspace" {
 			t.Errorf("the step container's mounts %+v in %s\nwant %+v", l.Mounts, l.Dir, want)
 		}
 	}
@@ -897,7 +904,7 @@ func TestRunStepBindsAWritableFileAndMergesReadOnlyPlaces(t *testing.T) {
 	if _, err := r.RunStep(context.Background(), session.StepSpec{Name: "x", Command: []string{"true"}, Dir: sp.Dir, Mounts: mounts}); err != nil {
 		t.Fatal(err)
 	}
-	want := []wall.Mount{{Path: sp.Dir}, {Path: out}, {Path: ro, ReadOnly: true}}
+	want := []wall.Mount{{Path: sp.Dir, Target: "/workspace"}, {Path: out, Target: "/workspace/out.txt"}, {Path: ro, ReadOnly: true, Target: "/workspace/ro"}}
 	if l := w.steps[0]; !slices.Equal(l.Mounts, want) {
 		t.Errorf("the step container's mounts %+v\nwant %+v", l.Mounts, want)
 	}
@@ -972,38 +979,48 @@ type pullingStepWall struct{ *stepWall }
 
 func (pullingStepWall) Pull(context.Context, wall.Request, []byte, []string) error { return nil }
 
-// TestAStepByReferenceBindsItsPlacesUnderTheWorkspace pins a step of a run whose policy
-// sets its image by reference: the working folder is shown at /workspace, and each
-// place over it at the same names below /workspace, in the same order.
-func TestAStepByReferenceBindsItsPlacesUnderTheWorkspace(t *testing.T) {
+// TestAStepBindsItsPlacesUnderTheWorkspace pins a step of a run whose policy sets its
+// image by name, and of one that sets it by reference: in both, the working folder is
+// shown at /workspace, each place over it at the same names below /workspace, in the
+// same order, and a path of the working folder in the command is written as
+// /workspace. A mount with a Target below /workspace is mount_target_conflict in both.
+func TestAStepBindsItsPlacesUnderTheWorkspace(t *testing.T) {
 	ctx := context.Background()
-	sp, g := specGateway(t, "FAKE_EXIT=0")
-	byReference(g)
-	w := pullingStepWall{newStepWall(t)}
-	w.exit = wall.StepExit{Started: true}
-	sp.Wall = w
-	r, err := session.Open(ctx, opened(sp))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
-	if err := r.FetchImage(ctx); err != nil {
-		t.Fatal(err)
-	}
-	mounts := stepPlaces(t, sp.Dir)
-	if _, err := r.RunStep(ctx, session.StepSpec{Name: "x", Command: []string{"true"}, Dir: sp.Dir, Mounts: mounts}); err != nil {
-		t.Fatal(err)
-	}
-	checks := filepath.Join(sp.Dir, "checks")
-	want := []wall.Mount{
-		{Path: sp.Dir, Target: "/workspace"},
-		{Path: filepath.Join(sp.Dir, "top.txt"), ReadOnly: true, Target: "/workspace/top.txt"},
-		{Path: checks, Target: "/workspace/checks"},
-		{Path: filepath.Join(checks, "locked"), ReadOnly: true, Target: "/workspace/checks/locked"},
-		{Path: filepath.Join(checks, "run"), Target: "/workspace/checks/run"},
-		{Path: filepath.Join(checks, "run", "check.sh"), ReadOnly: true, Target: "/workspace/checks/run/check.sh"},
-	}
-	if l := w.steps[0]; !slices.Equal(l.Mounts, want) || l.Dir != "/workspace" {
-		t.Errorf("the step container's mounts %+v in %s\nwant %+v", l.Mounts, l.Dir, want)
+	for _, byRef := range []bool{false, true} {
+		t.Run(fmt.Sprint("by reference ", byRef), func(t *testing.T) {
+			sp, g := specGateway(t, "FAKE_EXIT=0")
+			w := pullingStepWall{newStepWall(t)}
+			w.exit = wall.StepExit{Started: true}
+			sp.Wall = w
+			if byRef {
+				byReference(g)
+			} else {
+				sp.Image = "example.com/agent:1"
+			}
+			r, err := session.Open(ctx, opened(sp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
+			if byRef {
+				if err := r.FetchImage(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			mounts := stepPlaces(t, sp.Dir)
+			command := []string{"/bin/sh", "-c", "test -f " + filepath.Join(sp.Dir, "top.txt")}
+			if _, err := r.RunStep(ctx, session.StepSpec{Name: "x", Command: command, Dir: sp.Dir, Mounts: mounts}); err != nil {
+				t.Fatal(err)
+			}
+			want := stepPlacesShown(sp.Dir)
+			if l := w.steps[0]; !slices.Equal(l.Mounts, want) || l.Dir != "/workspace" || l.Args[1] != "test -f /workspace/top.txt" {
+				t.Errorf("the step container's launch %+v in %s\nwant %+v", l, l.Dir, want)
+			}
+			_, err = r.RunStep(ctx, session.StepSpec{Name: "x", Command: []string{"true"}, Dir: sp.Dir,
+				Mounts: []wall.Mount{{Path: t.TempDir(), ReadOnly: true, Target: "/workspace/tools"}}})
+			if refusalOf(t, "mount_target_conflict", err); w.started() != 1 {
+				t.Errorf("a refused step made a step container")
+			}
+		})
 	}
 }

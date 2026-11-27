@@ -35,14 +35,16 @@ type StepSpec struct {
 	// empty.
 	Command []string
 	// Dir is the working folder, bound writable and the working directory inside, as
-	// SetupSpec.Dir is. Empty is the working directory of this process.
+	// SetupSpec.Dir is, and shown at /workspace in every run. Empty is the working
+	// directory of this process.
 	Dir string
 	// Mounts are further places of this machine the step container binds, each at its
 	// path or at its Target, read-only or writable, with the checks of
 	// SessionSpec.Mounts but one. A mount with no Target below Dir, such as a file of a
-	// check in a clone, is bound over the bind it lies in, at its path. Dir must not lie
-	// inside another writable mount or be listed as one: a read-only mount below it is
-	// then mount_mode_conflict.
+	// check in a clone, is bound over the bind it lies in, at its names below
+	// /workspace. A mount with a Target at or below /workspace is mount_target_conflict.
+	// Dir must not lie inside another writable mount or be listed as one: a read-only
+	// mount below it is then mount_mode_conflict.
 	//
 	// A read-only mount is mount_mode_conflict unless it lies one name below Dir or each
 	// folder between Dir and it is a mount too: the step can rename any other folder
@@ -57,10 +59,8 @@ type StepSpec struct {
 	//
 	// Each writable mount below Dir, a file too, is a mount point in the step container,
 	// so the step cannot rename, delete or replace it (EBUSY): a git clean or a checkout
-	// that replaces it fails. In a run whose policy sets its image by name, Dir is shown
-	// at its path: if the image lets the step's user write a folder above Dir, the step
-	// can rename that folder, and every bind moves with it. A run whose policy sets its
-	// image by reference shows Dir at /workspace, which the step cannot rename.
+	// that replaces it fails. Dir is the mount point at /workspace, whose parent is
+	// root's, so the step can rename no folder above Dir.
 	Mounts []wall.Mount
 	// Timeout is how long the command may run, from the container's start. When it
 	// passes, the container gets SIGTERM, then SIGKILL 5 seconds later, and the result
@@ -116,8 +116,9 @@ type runningStep struct {
 
 // RunStep runs spec.Command in a step container: a new container of the run's image on
 // the run's inside network, as the wall's user with the flags of the setup container,
-// with the working folder writable, spec.Mounts and, for a run with an authority, the
-// bundle. Its environment is the relay's proxy variables and the
+// with the working folder writable at /workspace, spec.Mounts and, for a run with an
+// authority, the bundle. The paths of the working folder in spec.Command are written as
+// /workspace. Its environment is the relay's proxy variables and the
 // bundle's: no run secret, no placeholder and no QORY_RUN_API. It has no nested Docker
 // daemon, no hook socket and no home. While a step container may run, every connection
 // of the wall's relay is unprivileged: the gateway's proxy applies the run's allow list
@@ -218,11 +219,11 @@ func (r *Run) RunStep(ctx context.Context, spec StepSpec) (res *StepResult, err 
 			return nil, err
 		}
 	}
-	shown, inside := plan, func(s string) string { return s }
-	if r.byReference {
-		if shown, inside, err = plan.atWorkspace(); err != nil {
-			return nil, err
-		}
+	// Every step sees its working folder at /workspace, whose parent is root's: the step
+	// can rename no folder above it, so no bind moves.
+	shown, inside, err := plan.atWorkspace()
+	if err != nil {
+		return nil, err
 	}
 	if r.listed != nil {
 		if err := r.listed.update(append(slices.Clone(r.openBinds), plan.sources...)); err != nil {
