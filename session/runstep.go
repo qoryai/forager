@@ -43,7 +43,9 @@ type StepSpec struct {
 	// check in a clone, is bound over Dir's bind at its path, after the bind that holds
 	// it. A read-only one is mount_mode_conflict unless it lies one name below
 	// Dir or each folder between Dir and it is a mount too: the step can rename any other
-	// folder there, and the bind moves with it. A writable mount below a read-only one is
+	// folder there, and the bind moves with it. When a writable mount holds Dir, Dir is
+	// no mount point: the rule counts from that mount, and Dir and each folder above it
+	// up to that mount must be mounts too. A writable mount below a read-only one is
 	// mount_mode_conflict, a symbolic link on the way from Dir to a mount below it is
 	// mount_target_conflict, and a mount with a Target whose path lies below Dir is
 	// mount_mode_conflict or mount_target_conflict, as for a session.

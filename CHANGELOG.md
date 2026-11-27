@@ -378,7 +378,8 @@ release may change what an existing document does, and says so under Upgrading.
   `StepSpec.Mounts`. A mount with no `Target` below `StepSpec.Dir` is bound over the
   working folder's bind at its path, so a check's files stay read-only in a clone the
   step otherwise writes; a read-only one lies one name below `Dir`, or each folder
-  between them is a mount too, else `mount_mode_conflict`. `Join` returns
+  between them is a mount too, else `mount_mode_conflict`. When a writable mount holds
+  `Dir`, the rule counts from that mount, and `Dir` must be a mount too. `Join` returns
   `mount_mode_conflict` for such a read-only mount, as before.
 - `SetupSpec.Unprivileged`: a setup container with no credential and no run API, which
   steps may run beside. A join while it runs returns "Call RemoveSetup before the join:

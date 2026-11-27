@@ -803,8 +803,8 @@ func TestRunStepBindsPlacesOverItsWorkingFolder(t *testing.T) {
 // places below its working folder: a read-only file two names below it, with no mount of
 // the folder between; one reached through a link inside the working folder; a writable
 // folder inside a read-only one; a read-only mount with a Target whose path lies inside
-// the working folder; and a read-only file in a working folder that lies inside a
-// writable mount, which is no mount point. No step container starts.
+// the working folder; and a read-only file one name below a working folder that lies
+// inside a writable mount and is no mount itself. No step container starts.
 func TestRunStepRefusesAPlaceItCannotBindOverItsWorkingFolder(t *testing.T) {
 	w := newStepWall(t)
 	sp, r := openStepRun(t, w)
@@ -831,7 +831,8 @@ func TestRunStepRefusesAPlaceItCannotBindOverItsWorkingFolder(t *testing.T) {
 		detail string
 	}{
 		{"a working folder inside a writable mount", app, []wall.Mount{{Path: dir}, {Path: inApp, ReadOnly: true}}, "mount_mode_conflict",
-			"the mount " + inApp + " (read-only) lies inside the mount " + dir + " (writable): a part of a writable mount can't be read-only"},
+			"Show the mount " + inApp + " one name below the mount " + dir + ", or list each directory between them as a mount: " +
+				"the step can rename " + app + ", and the bind moves with it"},
 		{"two names below", "", []wall.Mount{{Path: deep, ReadOnly: true}}, "mount_mode_conflict",
 			"Show the mount " + deep + " one name below the workspace " + dir + ", or list each directory between them as a mount: " +
 				"the step can rename " + filepath.Join(dir, "a") + ", and the bind moves with it"},
@@ -858,6 +859,28 @@ func TestRunStepRefusesAPlaceItCannotBindOverItsWorkingFolder(t *testing.T) {
 	}
 	if w.started() != 0 {
 		t.Errorf("a refused step made %d step containers", w.started())
+	}
+}
+
+// TestAStepInAWritableMountBindsItsWorkingFolder pins a step whose working folder lies
+// inside a writable mount: with the working folder listed as a mount too, a read-only
+// file one name below it is bound over it, after the mount and the working folder.
+func TestAStepInAWritableMountBindsItsWorkingFolder(t *testing.T) {
+	w := newStepWall(t)
+	w.exit = wall.StepExit{Started: true}
+	sp, r := openStepRun(t, w)
+	app := mkdirs(t, filepath.Join(sp.Dir, "app"))
+	file := filepath.Join(app, "c.txt")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mounts := []wall.Mount{{Path: sp.Dir}, {Path: file, ReadOnly: true}, {Path: app}}
+	if _, err := r.RunStep(context.Background(), session.StepSpec{Name: "x", Command: []string{"true"}, Dir: app, Mounts: mounts}); err != nil {
+		t.Fatal(err)
+	}
+	want := []wall.Mount{{Path: sp.Dir}, {Path: app}, {Path: file, ReadOnly: true}}
+	if l := w.steps[0]; !slices.Equal(l.Mounts, want) || l.Dir != app {
+		t.Errorf("the step container's mounts %+v in %s\nwant %+v", l.Mounts, l.Dir, want)
 	}
 }
 
