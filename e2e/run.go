@@ -19,6 +19,9 @@ type runSpec struct {
 	setup       []session.SetupCommand
 	onSetup     func(error)
 	removeSetup bool
+	// setupEnv fills the setup's SetupSpec.Env from (*session.Run).SetupEnv for the
+	// session's spec, as qory does.
+	setupEnv bool
 	// runAPICheck, when set, is the run's check of its run API, which runOne sets with
 	// (*session.Run).SetRunAPICheck once the run opens, before anything else.
 	runAPICheck func(ctx context.Context, req session.RunAPIRequest) (*session.RunAPIRefusal, error)
@@ -59,7 +62,14 @@ func runOne(ctx context.Context, sp runSpec) (*session.Result, error) {
 		}
 	}
 	if len(sp.setup) > 0 {
-		err := r.Setup(ctx, session.SetupSpec{Dir: sp.SessionSpec.Dir, Commands: sp.setup})
+		setup := session.SetupSpec{Dir: sp.SessionSpec.Dir, Commands: sp.setup}
+		var err error
+		if sp.setupEnv {
+			setup.Env, err = r.SetupEnv(sp.SessionSpec)
+		}
+		if err == nil {
+			err = r.Setup(ctx, setup)
+		}
 		if sp.onSetup != nil {
 			sp.onSetup(err)
 		}

@@ -58,6 +58,7 @@ type report struct {
 	Sockets        []string          `json:"sockets"`
 	HostEnv        bool              `json:"host_env"`
 	PassedEnv      bool              `json:"passed_env"`
+	Split          map[string]string `json:"split"` // the value of each of splitNames the probe has
 	EnvNames       []string          `json:"env_names"`
 	HostFile       bool              `json:"host_file"`
 	SettingsWrite  string            `json:"settings_write"`
@@ -594,6 +595,12 @@ func probe(args []string) int {
 		r.SessionEnv = err.Error()
 	}
 	r.PassedEnv = os.Getenv("PROBE_PASSED") == "yes"
+	r.Split = map[string]string{}
+	for _, name := range splitNames {
+		if v, ok := os.LookupEnv(name); ok {
+			r.Split[name] = v
+		}
+	}
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
 		r.EnvNames = append(r.EnvNames, name)

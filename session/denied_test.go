@@ -224,14 +224,16 @@ func TestAWalledRunDropsTheModelOverrides(t *testing.T) {
 				passed = append(passed, name+"=passed-by-"+source)
 				vars[name] = map[string]any{"value": "passed-by-" + source}
 			}
+			// The server's, the run's and the machine's values reach the agent by AGENT_
+			// names alone, so the test passes each of their names with the prefix.
 			switch source {
 			case "apiary":
 				doc, _ := json.Marshal(map[string]any{"variables": vars})
-				answerVariables(g, string(doc))
+				answerVariables(g, agentDoc(string(doc)))
 			case "run":
-				sp.Variables.Run = passed
+				sp.Variables.Run = agentPrefixed(passed)
 			case "machine":
-				sp.Variables.Machine = passed
+				sp.Variables.Machine = agentPrefixed(passed)
 			case "harness":
 				sp.LaunchDefaults = passed
 			case "fixed":

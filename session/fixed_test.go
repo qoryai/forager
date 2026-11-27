@@ -46,19 +46,22 @@ func TestEveryClaudeCodeLaunchSetsTheFixedVariables(t *testing.T) {
 			out := dumpsEnv(t, &sp)
 			sp.Wall, sp.Image = w, "example.com/agent:1"
 			passed := []string{nonessential + "=0"}
+			// The server's, the run's and the machine's values reach the agent by AGENT_
+			// names alone; the harness's defaults and the inherited environment are not
+			// split.
 			switch c.source {
 			case "apiary":
-				doc, _ := json.Marshal(map[string]any{"variables": map[string]any{nonessential: map[string]any{"value": "0"}}})
+				doc, _ := json.Marshal(map[string]any{"variables": map[string]any{"AGENT_" + nonessential: map[string]any{"value": "0"}}})
 				answerVariables(g, string(doc))
 			case "run":
-				sp.Variables.Run = passed
+				sp.Variables.Run = agentPrefixed(passed)
 			case "machine":
-				sp.Variables.Machine = passed
+				sp.Variables.Machine = agentPrefixed(passed)
 			case "harness":
 				sp.LaunchDefaults = passed
 			case "shell":
 				sp.Env = append(sp.Env, passed...)
-				sp.Variables.Run = passed
+				sp.Variables.Run = agentPrefixed(passed)
 			case "computed":
 				sp.LaunchFixed = passed
 			}

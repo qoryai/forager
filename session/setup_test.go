@@ -1538,7 +1538,7 @@ func TestASetupVariableTheAgentCannotGetIsRefused(t *testing.T) {
 		sp := spec(t)
 		w := &setupWall{}
 		sp.Wall, sp.Image = w, "example.com/agent:1"
-		sp.Variables.Machine = []string{"LD_PRELOAD=/lib/inject.so", "APP_ENV=test"}
+		sp.Variables.Machine = []string{"AGENT_LD_PRELOAD=/lib/inject.so", "AGENT_APP_ENV=test"}
 		r, err := session.Open(ctx, opened(sp))
 		if err != nil {
 			t.Fatal(err)
@@ -1563,7 +1563,7 @@ func TestASetupVariableTheAgentCannotGetIsRefused(t *testing.T) {
 			sp := spec(t)
 			w := &setupWall{}
 			sp.Wall, sp.Image = w, "example.com/agent:1"
-			sp.Variables.Machine = []string{name + "=fake-credential-value", "APP_ENV=test"}
+			sp.Variables.Machine = []string{"AGENT_" + name + "=fake-credential-value", "AGENT_APP_ENV=test"}
 			r, err := session.Open(ctx, opened(sp))
 			if err != nil {
 				t.Fatal(err)

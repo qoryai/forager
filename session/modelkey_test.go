@@ -172,6 +172,13 @@ func TestTheDefaultCredentialChoosesTheVariable(t *testing.T) {
 				sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 			}
 			sp.Variables.Run = []string{endpointVariable + "=https://evil.example"}
+			// Behind a wall the run's value reaches the agent by an AGENT_ name alone,
+			// and the record has the name as passed in given.
+			given := ""
+			if tc.walled {
+				sp.Variables.Run = agentPrefixed(sp.Variables.Run)
+				given = `"given":"AGENT_` + endpointVariable + `",`
+			}
 			answeringWith(g, []map[string]any{apiKey("model", "anthropic-messages", modelEndpoint, tc.auth)}, nil)
 			res, err := run(context.Background(), sp)
 			if err != nil {
@@ -191,7 +198,7 @@ func TestTheDefaultCredentialChoosesTheVariable(t *testing.T) {
 				t.Errorf("%s=%q; want the key's endpoint", endpointVariable, got)
 			}
 			b, _ := json.Marshal(endpointEntry(t, res))
-			if want := `{"from":"fixed","lost":[{"from":"run","why":"fixed"}],"name":"` + endpointVariable + `"}`; string(b) != want {
+			if want := `{"from":"fixed","lost":[{"from":"run",` + given + `"why":"fixed"}],"name":"` + endpointVariable + `"}`; string(b) != want {
 				t.Errorf("the record's entry %s, want %s", b, want)
 			}
 			if got, want := credentialVariables(t, res), []string{"model=" + tc.want}; !slices.Equal(got, want) {
@@ -215,17 +222,23 @@ func TestTheKeysEndpointTakesThePlaceOfEveryOther(t *testing.T) {
 			sp.Wall, sp.Image = w, "example.com/agent:1"
 			passed := []string{endpointVariable + "=https://api.model.example/other"}
 			var vars map[string]any
+			// The server's, the run's and the machine's values reach the agent by AGENT_
+			// names alone, and the record has the name as passed in given.
+			given := `"given":"AGENT_` + endpointVariable + `",`
 			switch source {
 			case "apiary":
-				vars = map[string]any{endpointVariable: map[string]any{"value": "https://api.model.example/other"}}
+				vars = map[string]any{"AGENT_" + endpointVariable: map[string]any{"value": "https://api.model.example/other"}}
 			case "run":
-				sp.Variables.Run = passed
+				sp.Variables.Run = agentPrefixed(passed)
 			case "machine":
-				sp.Variables.Machine = passed
+				sp.Variables.Machine = agentPrefixed(passed)
 			case "harness":
 				sp.LaunchDefaults = passed
 			case "fixed":
 				sp.LaunchFixed = passed
+			}
+			if source == "harness" || source == "fixed" {
+				given = ""
 			}
 			answering(g, []map[string]any{model()}, vars)
 			res, err := run(context.Background(), sp)
@@ -239,7 +252,7 @@ func TestTheKeysEndpointTakesThePlaceOfEveryOther(t *testing.T) {
 				t.Errorf("the wall's environment has %q; want the key's endpoint alone", got)
 			}
 			b, _ := json.Marshal(endpointEntry(t, res))
-			if want := `{"from":"fixed","lost":[{"from":"` + source + `","why":"fixed"}],"name":"` + endpointVariable + `"}`; string(b) != want {
+			if want := `{"from":"fixed","lost":[{"from":"` + source + `",` + given + `"why":"fixed"}],"name":"` + endpointVariable + `"}`; string(b) != want {
 				t.Errorf("the record's entry %s, want %s", b, want)
 			}
 		})
@@ -860,16 +873,23 @@ func TestOtherKeyVariablesDoNotReachTheRuntime(t *testing.T) {
 						sp.Wall, sp.Image = w, "example.com/agent:1"
 					}
 					var vars map[string]any
+					// Behind a wall the server's, the run's and the machine's values reach
+					// the agent by AGENT_ names alone, and the record has the name as
+					// passed in given.
+					prefix, passed := "", withValue()
+					if walled && (source == "apiary" || source == "run" || source == "machine") {
+						prefix, passed = "AGENT_", agentPrefixed(passed)
+					}
 					switch source {
 					case "apiary":
 						vars = map[string]any{}
 						for _, k := range others {
-							vars[k] = map[string]any{"value": value}
+							vars[prefix+k] = map[string]any{"value": value}
 						}
 					case "run":
-						sp.Variables.Run = withValue()
+						sp.Variables.Run = passed
 					case "machine":
-						sp.Variables.Machine = withValue()
+						sp.Variables.Machine = passed
 					case "harness":
 						sp.LaunchDefaults = withValue()
 					case "fixed":
@@ -898,8 +918,12 @@ func TestOtherKeyVariablesDoNotReachTheRuntime(t *testing.T) {
 						if source == "image" {
 							continue
 						}
+						given := ""
+						if prefix != "" {
+							given = `"given":"` + prefix + k + `",`
+						}
 						b, _ := json.Marshal(variableEntry(t, res, k))
-						if want := `{"lost":[{"from":"` + source + `","why":"fixed"}],"name":"` + k + `"}`; string(b) != want {
+						if want := `{"lost":[{"from":"` + source + `",` + given + `"why":"fixed"}],"name":"` + k + `"}`; string(b) != want {
 							t.Errorf("the record's entry %s, want %s", b, want)
 						}
 					}

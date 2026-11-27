@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -715,6 +716,7 @@ func Run(t *testing.T, o Options) {
 	readOnlyWorkspace(t, o, origin, outside)
 	setupRemoved(t, o, origin, outside)
 	setupRemovedAfterSession(t, o, origin, outside)
+	agentVariables(t, o, origin, outside)
 	afterJoinFreshHome(t, o, origin, outside)
 	sessionNumbers(t, o, origin, outside)
 	afterStep(t, o, origin, outside)
@@ -1549,6 +1551,103 @@ func setupRemovedAfterSession(t *testing.T, o Options, h hosts, outside string) 
 	})
 }
 
+// splitNames are the variables the agent's names cases pass, by the names a container
+// may get them by: the probe reports the value of each it has, and a setup command
+// prints them.
+var splitNames = []string{"PROBE_A", "PROBE_B", "PROBE_C", "AGENT_PROBE_A", "AGENT_PROBE_C"}
+
+// splitVariables are the run's variables of the agent's names cases: AGENT_PROBE_A and
+// AGENT_PROBE_C, which the agent gets as PROBE_A and PROBE_C, and PROBE_B and PROBE_C,
+// which only the setup container gets, PROBE_C over AGENT_PROBE_C.
+var splitVariables = session.Variables{Run: []string{"AGENT_PROBE_A=a", "PROBE_B=b", "AGENT_PROBE_C=agent"}, Machine: []string{"PROBE_C=setup"}}
+
+// printSplit is a setup command that prints the value of each of splitNames, as
+// NAME=value, in order, with - for a name it does not have.
+var printSplit = session.SetupCommand{Name: "print the variables", Args: []string{"sh", "-c",
+	`for n in ` + strings.Join(splitNames, " ") + `; do eval "v=\${$n-'-'}"; printf '%s=%s\n' "$n" "$v"; done`}}
+
+// splitLines are the lines printSplit writes in a container that has values, by name.
+func splitLines(values map[string]string) string {
+	var b strings.Builder
+	for _, name := range splitNames {
+		v, ok := values[name]
+		if !ok {
+			v = "-"
+		}
+		fmt.Fprintf(&b, "%s=%s\n", name, v)
+	}
+	return b.String()
+}
+
+// stepLines are the lines of the first step of kind named name in the record, of
+// session when it is above zero, or of no session.
+func stepLines(events []map[string]any, kind, name string, session float64) string {
+	var lines bytes.Buffer
+	step := 0.0
+	for _, e := range events {
+		d, _ := e["data"].(map[string]any)
+		switch e["type"] {
+		case "dev.qory.run.step_started":
+			if d["kind"] == kind && d["name"] == name && step == 0 {
+				step = d["step"].(float64)
+			}
+		case "dev.qory.run.log":
+			s, _ := d["session"].(float64)
+			if step != 0 && d["step"] == step && s == session && d["stream"] == "stdout" {
+				b, _ := base64.StdEncoding.DecodeString(d["bytes"].(string))
+				lines.Write(b)
+			}
+		}
+	}
+	return lines.String()
+}
+
+// agentVariables checks the agent's names in a walled run: of the run's and the
+// machine's variables, the agent gets only AGENT_ names, by the rest of the name, and
+// the setup container, filled from (*session.Run).SetupEnv, gets every name, and each
+// AGENT_ name by the rest when no value of that name is set. A setup command in the
+// agent's container gets the agent's variables, and the run reports the names to
+// prefix.
+func agentVariables(t *testing.T, o Options, h hosts, outside string) {
+	names := []string{"the agent gets only AGENT_ names and the setup container every name",
+		"a setup command in the agent's container gets the agent's variables"}
+	t.Run(names[0], func(t *testing.T) {
+		if !o.Setup {
+			t.Skip("the adapter starts no setup container")
+		}
+		var setupErr error
+		r, err := runIn(t, o, variant{runID: event.NewRunID(), setup: []session.SetupCommand{printSplit}, setupEnv: true,
+			variables: splitVariables, onSetup: func(err error) { setupErr = err }}, false, h, outside)
+		if err != nil || setupErr != nil {
+			t.Fatalf("the setup: %v; the run: %v", setupErr, err)
+		}
+		if want := map[string]string{"PROBE_A": "a", "PROBE_C": "agent"}; !maps.Equal(r.probe.Split, want) {
+			t.Errorf("the agent has %v, want %v", r.probe.Split, want)
+		}
+		if got, want := stepLines(r.events, "setup", printSplit.Name, 0), splitLines(map[string]string{"PROBE_A": "a", "PROBE_B": "b", "PROBE_C": "setup"}); got != want {
+			t.Errorf("the setup container printed %q, want %q", got, want)
+		}
+	})
+	t.Run(names[1], func(t *testing.T) {
+		if !o.Hooks {
+			t.Skip("the run socket does not cross into the enclosure on this machine, and a setup command reports on it")
+		}
+		r, err := runIn(t, o, variant{runID: event.NewRunID(), inside: []session.SetupCommand{printSplit},
+			variables: splitVariables}, false, h, outside)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := stepLines(r.events, "setup", printSplit.Name, 1), splitLines(map[string]string{"PROBE_A": "a", "PROBE_C": "agent"}); got != want {
+			t.Errorf("the setup command in the agent's container printed %q, want %q", got, want)
+		}
+		// PROBE_C is not listed: the value of AGENT_PROBE_C reaches the agent's container
+		// as PROBE_C.
+		if want := "Prefix PROBE_B with AGENT_ for the setup in the agent's container.\nThat setup gets only the agent's variables, so the run leaves PROBE_B out of it.\n"; !strings.Contains(r.reports, want) {
+			t.Errorf("the run reported %q, want a line %q", r.reports, want)
+		}
+	})
+}
+
 // stackFetch fetches the stack host through a stack proxy of the run, as qory fetches
 // the harness definition before the first join, and returns the status.
 func stackFetch(r *session.Run) (int, error) {
@@ -1585,7 +1684,13 @@ type variant struct {
 	setup       []session.SetupCommand
 	onSetup     func(error)
 	removeSetup bool
-	env         []string
+	// setupEnv fills the setup's SetupSpec.Env from (*session.Run).SetupEnv.
+	setupEnv bool
+	env      []string
+	// variables are the session's SessionSpec.Variables.
+	variables session.Variables
+	// inside are setup commands that run in the agent's container, after the suite's.
+	inside []session.SetupCommand
 	// opened, when set, is called with the run once it opens.
 	opened func(*session.Run)
 	// afterSession, when set, is called with the run and its workspace after its session,
@@ -1777,8 +1882,9 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 			WorkspaceReadOnly: v.readOnly,
 			After:             v.after,
 			AfterTimeout:      v.afterTimeout,
+			Variables:         v.variables,
 		},
-		fetch: v.fetch, setup: v.setup, onSetup: v.onSetup, removeSetup: v.removeSetup, opened: v.opened,
+		fetch: v.fetch, setup: v.setup, setupEnv: v.setupEnv, onSetup: v.onSetup, removeSetup: v.removeSetup, opened: v.opened,
 		runAPICheck: v.runAPICheck,
 	}
 	if v.afterSession != nil {
@@ -1792,6 +1898,7 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 	if o.Hooks && !v.readOnly {
 		spec.SessionSpec.Setup = []session.SetupCommand{{Name: "install", Args: append([]string{o.Probe, modePrepare}, preparationWords...)}}
 	}
+	spec.SessionSpec.Setup = append(spec.SessionSpec.Setup, v.inside...)
 	if v.cancelAfter > 0 {
 		timer := time.AfterFunc(v.cancelAfter, func() {
 			if v.cancelledAt != nil {
