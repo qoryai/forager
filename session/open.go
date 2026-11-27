@@ -690,15 +690,16 @@ func (r *Run) AgentEnv(spec SessionSpec) ([]string, error) {
 // SetupEnv is the environment the setup container gets from the server's variables,
 // Variables.Run, Variables.Machine, LaunchDefaults and SessionSpec.Env, for a session of
 // spec: NAME=value, sorted by name, in a new slice on every call. A caller that runs the
-// setup passes the result as [SetupSpec.Env]. It differs from [Run.AgentEnv] in a
-// walled run: each value of the server's variables, Variables.Run and Variables.Machine
-// whose name does not start with AGENT_ reaches the setup under its name, and a value
-// of a name that starts with AGENT_, in exact case, by the rest of the name alone, when
-// no value under that name is set. The server's QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES are in it when the server
-// sets them, and Setup accepts both. For a variable of those three sources passed by a
-// name without AGENT_ that denied-variables.json lists as a forge token or a model key,
-// the first SetupEnv of the run that returns no error reports the fix through
-// OpenSpec.Report, as Join does for the agent's values. The errors are AgentEnv's.
+// setup passes the result as [SetupSpec.Env]. It differs from [Run.AgentEnv] in a walled
+// run: each value of the server's variables, Variables.Run and Variables.Machine whose
+// name does not start with AGENT_ reaches the setup under its name, and a value of a
+// name that starts with AGENT_, in exact case, by the rest of the name alone, when no
+// value under that name is set. The server's QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES
+// are in it when the server sets them, and Setup accepts both. For a variable of those
+// three sources passed by a name without AGENT_ that denied-variables.json lists as a
+// forge token or a model key, the first SetupEnv of the run that returns no error
+// reports the fix through OpenSpec.Report, as Join does for the agent's values. The
+// errors are AgentEnv's.
 func (r *Run) SetupEnv(spec SessionSpec) ([]string, error) {
 	return r.containerEnv(spec, variables.Setup, "SetupEnv", "the setup's environment")
 }

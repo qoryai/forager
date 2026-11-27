@@ -113,20 +113,19 @@ func passes(spec runSpec) []string {
 // what the run inherits, after refusing what the run passes into the enclosure:
 // placeholders are the variables the agent sees in place of what the gateway holds, and
 // reserved the names the gateway sets for the run, what a value of the machine's is read
-// from. Behind a wall, and
-// without one for a run whose answer has credential_hosts, the endpoint rule checks
-// each value of the runtime's model endpoint variable against credentials, the run
-// answer's credential_hosts after [chosen]. It returns the resolution and, for a walled
-// run, the names to unset inside, which [Exec] takes out of the launch's environment:
-// the runtime's declared and reserved variables and the names the runtime denies, lists
-// in its model overrides or as its model endpoint, or the node's deny list removes,
-// that nothing sets. Forager, the wall and the preparation set names too, [wall.Nest]
-// among them for a run with nested Docker, docker, so none of theirs is ever unset; the
-// wall's names for a run with an authority count as set only when the run has one,
-// authority. Without a wall, bundle are the names Forager sets to the run's bundle.
-// When the run has a default model provider credential, key, its endpoint variable is
-// one of the run's fixed names: every other value of it is left out, the harness's
-// computed ones included, and the endpoint rule does not apply.
+// from. Behind a wall, and without one for a run whose answer has credential_hosts, the
+// endpoint rule checks each value of the runtime's model endpoint variable against
+// credentials, the run answer's credential_hosts after [chosen]. It returns the
+// resolution and, for a walled run, the names to unset inside, which [Exec] takes out of
+// the launch's environment: the runtime's declared and reserved variables and the names
+// the runtime denies, lists in its model overrides or as its model endpoint, or the
+// node's deny list removes, that nothing sets. Forager, the wall and the preparation set
+// names too, [wall.Nest] among them for a run with nested Docker, docker, so none of
+// theirs is ever unset; the wall's names for a run with an authority count as set only
+// when the run has one, authority. Without a wall, bundle are the names Forager sets to
+// the run's bundle. When the run has a default model provider credential, key, its
+// endpoint variable is one of the run's fixed names: every other value of it is left
+// out, the harness's computed ones included, and the endpoint rule does not apply.
 func resolve(spec runSpec, kind variables.Kind, rt runtimes.Runtime, served map[string]string, credentials []server.LinkCredentialHosts, prepared runtimes.Launch, placeholderNames, reserved []string, docker, authority bool, bundle []string, key keyed) (variables.Resolved, []string, error) {
 	var decl runtimes.Declarations
 	if s, ok := rt.(runtimes.Secrets); ok {
