@@ -1486,7 +1486,7 @@ func TestTheRunsEntryListsTheSetupFolderAfterTheRemoval(t *testing.T) {
 // could reach the setup container while the agent gets no such value, each refused
 // before any step and before the setup container starts. A value for TOOL_TOKEN, a
 // placeholder of a separate gateway's run answer, is placeholder_conflict, from
-// AgentEnv for --env and from Setup. LD_PRELOAD from wall.env is left out by AgentEnv,
+// AgentEnv for --env and from Setup. LD_PRELOAD from wall.env is left out by SetupEnv,
 // as by the join, and refused by Setup. A QORY_ name other than QORY_RUN_SYSTEM and
 // QORY_RUN_REPOSITORIES, in any case, is variable_reserved, QORY_RUN_ID, QORY_SESSION
 // and QORY_RUN_SOCKET among them, and so is a name the machine's credentials are read
@@ -1538,18 +1538,18 @@ func TestASetupVariableTheAgentCannotGetIsRefused(t *testing.T) {
 		sp := spec(t)
 		w := &setupWall{}
 		sp.Wall, sp.Image = w, "example.com/agent:1"
-		sp.Variables.Machine = []string{"AGENT_LD_PRELOAD=/lib/inject.so", "AGENT_APP_ENV=test"}
+		sp.Variables.Machine = []string{"LD_PRELOAD=/lib/inject.so", "APP_ENV=test"}
 		r, err := session.Open(ctx, opened(sp))
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
-		env, err := r.AgentEnv(sp.SessionSpec)
+		env, err := r.SetupEnv(sp.SessionSpec)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !slices.Contains(env, "APP_ENV=test") || slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "LD_PRELOAD=") }) {
-			t.Errorf("AgentEnv %q, want APP_ENV and no LD_PRELOAD", env)
+			t.Errorf("SetupEnv %q, want APP_ENV and no LD_PRELOAD", env)
 		}
 		w.got.Dir = sp.Dir
 		err = setupRefused(t, r, w, append(env, "LD_PRELOAD=/lib/inject.so"))
@@ -1563,18 +1563,18 @@ func TestASetupVariableTheAgentCannotGetIsRefused(t *testing.T) {
 			sp := spec(t)
 			w := &setupWall{}
 			sp.Wall, sp.Image = w, "example.com/agent:1"
-			sp.Variables.Machine = []string{"AGENT_" + name + "=fake-credential-value", "AGENT_APP_ENV=test"}
+			sp.Variables.Machine = []string{name + "=fake-credential-value", "APP_ENV=test"}
 			r, err := session.Open(ctx, opened(sp))
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer r.Close(ctx, session.Outcome{State: event.StateSucceeded})
-			env, err := r.AgentEnv(sp.SessionSpec)
+			env, err := r.SetupEnv(sp.SessionSpec)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if !slices.Contains(env, "APP_ENV=test") || slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, name+"=") }) {
-				t.Errorf("AgentEnv %q, want APP_ENV and no %s", env, name)
+				t.Errorf("SetupEnv %q, want APP_ENV and no %s", env, name)
 			}
 			w.got.Dir = sp.Dir
 			err = setupRefused(t, r, w, append(env, strings.ToLower(name)+"=fake-credential-value"))

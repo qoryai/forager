@@ -720,10 +720,10 @@ func TestAWalledRunNeedsAModelKey(t *testing.T) {
 		{"walled, no credential_hosts", true, nil, nil, false},
 		{"walled, an API credential", true, []map[string]any{forge, model()}, nil, false},
 		{"walled, a value from the machine", true, []map[string]any{forge}, func(sp *runSpec) {
-			sp.Variables.Machine = []string{apiKeyVariable + "=sk-ant-a-key-of-the-test"}
+			sp.Variables.Machine = []string{"AGENT_" + apiKeyVariable + "=sk-ant-a-key-of-the-test"}
 		}, true},
 		{"walled, a value from the run", true, []map[string]any{forge}, func(sp *runSpec) {
-			sp.Variables.Run = []string{oauthVariable + "=sk-ant-oat-a-key-of-the-test"}
+			sp.Variables.Run = []string{"AGENT_" + oauthVariable + "=sk-ant-oat-a-key-of-the-test"}
 		}, true},
 	} {
 		t.Run(tc.what, func(t *testing.T) {

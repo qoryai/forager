@@ -14,7 +14,7 @@
       "const": 1
     },
     "passes": {
-      "description": "The names of the variables the session passes a value for: what it inherits, what the harness sets and its variables. Names alone, never a value. The gateway answers the join with placeholder_conflict, a 403, when a placeholder of a credential or a tool it holds for the run is among them. An empty list passes none.",
+      "description": "The names of the variables the session passes a value for: what it inherits, what the harness sets and its variables. Behind a wall, a variable of the run or the machine whose name starts with AGENT_ is listed by that name and by the rest of it, the name the agent's container gets. Names alone, never a value. The gateway answers the join with placeholder_conflict, a 403, when a placeholder of a credential or a tool it holds for the run is among them. An empty list passes none.",
       "type": "array",
       "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}
     },
