@@ -350,6 +350,7 @@ func TestFixedIsChecked(t *testing.T) {
 	for _, tc := range []struct{ what, fixed, want string }{
 		{"a name of the deny list", "{PATH: /bin}", "amp.yaml: fixed: remove PATH: denied-variables.json lists it, and a descriptor sets no such variable"},
 		{"a pattern of the deny list, lower case", "{https_proxy: x}", "amp.yaml: fixed: remove https_proxy: denied-variables.json lists it, and a descriptor sets no such variable"},
+		{"the variable that turns on Node's proxy", "{NODE_USE_ENV_PROXY: \"1\"}", "amp.yaml: fixed: remove NODE_USE_ENV_PROXY: denied-variables.json lists it, and a descriptor sets no such variable"},
 		{"a denied name", "{AMP_URL: x}", "amp.yaml: fixed: remove AMP_URL from fixed or from secrets.denies: a variable that fixed sets is in no other list of the descriptor"},
 		{"a declared secret", "{AMP_SECRET: x}", "amp.yaml: fixed: remove AMP_SECRET from fixed or from secrets.declares: a variable that fixed sets is in no other list of the descriptor"},
 		{"a reserved name", "{AMP_OTHER: x}", "amp.yaml: fixed: remove AMP_OTHER from fixed or from secrets.reserves: a variable that fixed sets is in no other list of the descriptor"},

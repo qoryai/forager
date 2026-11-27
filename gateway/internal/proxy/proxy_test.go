@@ -219,7 +219,8 @@ func TestSetPolicyDecidesNewConnectionsAndClosesDeniedTunnels(t *testing.T) {
 	}
 }
 
-// TestEnvNamesTheProxyInBothCases pins the six variables and the loopback exemption.
+// TestEnvNamesTheProxyInBothCases pins the six proxy variables, the loopback exemption
+// and NODE_USE_ENV_PROXY=1.
 func TestEnvNamesTheProxyInBothCases(t *testing.T) {
 	p, err := proxy.Listen("", policy.Observe, nil, nil, func(proxy.Decision) {})
 	if err != nil {
@@ -227,7 +228,7 @@ func TestEnvNamesTheProxyInBothCases(t *testing.T) {
 	}
 	defer p.Close()
 	env := strings.Join(p.Env(), "\n")
-	for _, want := range []string{"HTTP_PROXY=" + p.URL(), "http_proxy=" + p.URL(), "HTTPS_PROXY=" + p.URL(), "https_proxy=" + p.URL(), "NO_PROXY=localhost,127.0.0.1,::1", "no_proxy=localhost,127.0.0.1,::1"} {
+	for _, want := range []string{"HTTP_PROXY=" + p.URL(), "http_proxy=" + p.URL(), "HTTPS_PROXY=" + p.URL(), "https_proxy=" + p.URL(), "NO_PROXY=localhost,127.0.0.1,::1", "no_proxy=localhost,127.0.0.1,::1", "NODE_USE_ENV_PROXY=1"} {
 		if !strings.Contains(env, want) {
 			t.Errorf("missing %s", want)
 		}

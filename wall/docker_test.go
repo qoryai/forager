@@ -1553,7 +1553,8 @@ func TestTheRelayURLHasTheLaunchsPassword(t *testing.T) {
 
 // TestTheAgentsProxyVariablesHaveThePassword pins Wrap with Launch.ProxyPassword: each
 // of HTTP_PROXY, HTTPS_PROXY, http_proxy and https_proxy in the agent's environment file
-// is the relay's URL with the password, and the password is on no command line.
+// is the relay's URL with the password, NODE_USE_ENV_PROXY is 1, and the password is on
+// no command line.
 func TestTheAgentsProxyVariablesHaveThePassword(t *testing.T) {
 	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
 	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, sys: rec}
@@ -1585,6 +1586,9 @@ func TestTheAgentsProxyVariablesHaveThePassword(t *testing.T) {
 		if got := env[name]; got != "http://qory:pass-word@qory-proxy:3128" {
 			t.Errorf("%s=%q", name, got)
 		}
+	}
+	if got := env["NODE_USE_ENV_PROXY"]; got != "1" {
+		t.Errorf("NODE_USE_ENV_PROXY=%q, want 1", got)
 	}
 	if strings.Contains(strings.Join(rec.lines, "\n")+strings.Join(wrapped.Args, " "), "pass-word") {
 		t.Error("the password is on a command line")

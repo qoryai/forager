@@ -1102,12 +1102,13 @@ func TestAWrapThatFailsPrintsAPhraseForASecretInAPath(t *testing.T) {
 }
 
 // agentEnvVariables is serverVariables with the server's QORY_RUN_SYSTEM, which the
-// agent gets, and three names it never gets from the server: an access key's
-// variable, one of Forager's names and a proxy name.
+// agent gets, and four names it never gets from the server: an access key's
+// variable, one of Forager's names and two proxy names.
 const agentEnvVariables = `{"variables":{"NODE_ENV":{"value":"test"},"APP_REGION":{"value":"eu-west-1"},` +
 	`"ANTHROPIC_BASE_URL":{"value":"https://elsewhere.example"},"PATH":{"value":"/nowhere"},"LOG_LEVEL":{"value":"server"},` +
 	`"CODEX_HOME":{"value":"/server/home"},"ANTHROPIC_AUTH_TOKEN":{"value":"server-credential"},` +
-	`"QORY_RUN_SYSTEM":{"value":"tickets"},"QORY_ACCESS_KEY_SECRET":{"value":"x"},"QORY_RUN_ID":{"value":"x"},"HTTPS_PROXY":{"value":"http://x.example"}}}`
+	`"QORY_RUN_SYSTEM":{"value":"tickets"},"QORY_ACCESS_KEY_SECRET":{"value":"x"},"QORY_RUN_ID":{"value":"x"},"HTTPS_PROXY":{"value":"http://x.example"},` +
+	`"NODE_USE_ENV_PROXY":{"value":"0"}}}`
 
 // answerAgentEnv sets the fake gateway's run answer to one with agentEnvVariables
 // and the placeholder TOOL_TOKEN, and with byRef, the image by reference, as
@@ -1232,7 +1233,7 @@ func TestAgentEnvIsWhatTheAgentGets(t *testing.T) {
 					t.Errorf("AgentEnv has %s=%q, want %q", name, has[name], value)
 				}
 			}
-			for _, name := range []string{"LD_PRELOAD", "APP_REGION", "TOOL_TOKEN", "CODEX_HOME", "ANTHROPIC_AUTH_TOKEN", "QORY_ACCESS_KEY_SECRET", "QORY_RUN_ID", "HTTPS_PROXY"} {
+			for _, name := range []string{"LD_PRELOAD", "APP_REGION", "TOOL_TOKEN", "CODEX_HOME", "ANTHROPIC_AUTH_TOKEN", "QORY_ACCESS_KEY_SECRET", "QORY_RUN_ID", "HTTPS_PROXY", "NODE_USE_ENV_PROXY"} {
 				if value, ok := has[name]; ok {
 					t.Errorf("AgentEnv has %s=%q, a name the agent does not get from these sources", name, value)
 				}
@@ -1261,6 +1262,11 @@ func TestAgentEnvIsWhatTheAgentGets(t *testing.T) {
 			}
 			if res.ExitCode != 0 {
 				t.Fatalf("exit %d", res.ExitCode)
+			}
+			// Without a wall the session sets NODE_USE_ENV_PROXY, a fixed name, and the
+			// server's 0 does not apply.
+			if got := envOf(t, out)["NODE_USE_ENV_PROXY"]; !tc.walled && got != "1" {
+				t.Errorf("the agent has NODE_USE_ENV_PROXY=%q, want 1", got)
 			}
 			// What AgentEnv leaves out: the fixed names, as the record lists them,
 			// Forager's and the proxy's names, the placeholder, the preparation's names,

@@ -25,6 +25,7 @@ HTTPS_PROXY=http://qory-proxy:3128
 https_proxy=http://qory-proxy:3128
 NO_PROXY=localhost,127.0.0.1,::1
 no_proxy=localhost,127.0.0.1,::1
+NODE_USE_ENV_PROXY=1
 SSL_CERT_FILE=/qory/ca-bundle.pem
 GIT_SSL_CAINFO=/qory/ca-bundle.pem
 NODE_EXTRA_CA_CERTS=/qory/ca-bundle.pem

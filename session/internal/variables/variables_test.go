@@ -162,7 +162,7 @@ func TestTheDenyListCoversEverySourceBelowTheFixedNames(t *testing.T) {
 	in := claude
 	in.Walled = true
 	in.Deny = []string{"LEGACY_SETTING", "ACME_*_KEY"}
-	in.Server = map[string]string{"PATH": "/srv", "no_proxy": "x", "QORY_ANYTHING": "x", "ANTHROPIC_BASE_URL": "x", "legacy_setting": "x", "ACME_SIGNING_KEY": "x", "NODE_ENV": "test"}
+	in.Server = map[string]string{"PATH": "/srv", "no_proxy": "x", "NODE_USE_ENV_PROXY": "0", "QORY_ANYTHING": "x", "ANTHROPIC_BASE_URL": "x", "legacy_setting": "x", "ACME_SIGNING_KEY": "x", "NODE_ENV": "test"}
 	in.Run = []string{"PATH=/run", "DOCKER_HOST=x", "CLAUDE_CONFIG_DIR=x", "ACME__KEY=x", "PATHS=kept"}
 	in.Machine = []string{"PATH=/machine", "SSL_CERT_DIR=x", "anthropic_base_url=x", "LEGACY_SETTING=x"}
 	in.Defaults = []string{"PATH=/harness", "Http_Proxy=x", "CLAUDE_CONFIG_DIR=x", "ACME_SIGNING_KEY=x"}
@@ -178,6 +178,7 @@ func TestTheDenyListCoversEverySourceBelowTheFixedNames(t *testing.T) {
 		"Http_Proxy harness:denied",
 		"LEGACY_SETTING machine:denied",
 		"NODE_ENV<-apiary",
+		"NODE_USE_ENV_PROXY apiary:denied",
 		"PATH<-shell apiary:denied run:denied machine:denied harness:denied",
 		"PATHS<-run",
 		"QORY_ANYTHING apiary:denied",

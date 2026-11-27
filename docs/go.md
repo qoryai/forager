@@ -228,8 +228,8 @@ for every run, walled or not, and returns a `session.HostProxy`:
   run key. The run's policy and credentials apply, so the gateway sets the token of a
   fetch, and no token is on the machine.
 - `Env` is `HTTP_PROXY`, `HTTPS_PROXY`, their lower-case forms and `NO_PROXY`, set to
-  `ProxyURL` as for an unwalled session, then each variable of `CAEnv` set to
-  `CABundle` when the run has a certificate authority.
+  `ProxyURL` as for an unwalled session, and `NODE_USE_ENV_PROXY=1`, then each
+  variable of `CAEnv` set to `CABundle` when the run has a certificate authority.
 - `CABundle` is the path of `ca-bundle.pem` in the run directory, the machine's
   authorities and then the run's certificate, no key; empty for a run with no
   authority. `Open` writes the file for every run with an authority, walled or not.

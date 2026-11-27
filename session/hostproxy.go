@@ -28,8 +28,8 @@ import (
 type HostProxy struct {
 	// Env is the variables that point a program at the forwarder: HTTP_PROXY,
 	// HTTPS_PROXY, their lower-case forms and NO_PROXY, as [link.ProxyEnv] sets them to
-	// ProxyURL, then, when CABundle is set, each variable of OpenSpec.CAEnv set to its
-	// path.
+	// ProxyURL, and NODE_USE_ENV_PROXY=1, then, when CABundle is set, each variable of
+	// OpenSpec.CAEnv set to its path.
 	Env []string
 	// ProxyURL is the forwarder's URL with its password,
 	// http://qory:<password>@127.0.0.1:<port>.

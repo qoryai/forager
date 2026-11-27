@@ -12,6 +12,31 @@ placeholders (see [credentials](credentials.md#without-a-wall)). Without a wall,
 program that ignores the proxy sends only the placeholder; behind one, its connection
 fails. Tools, path rules and images need a wall.
 
+## The proxy variables
+
+The runtime's environment has `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`, in upper and
+lower case, and `NODE_USE_ENV_PROXY=1`, with or without a wall. Behind a wall, every
+container the wall starts has them too: setup, steps and After. `NO_PROXY` is
+`localhost,127.0.0.1,::1`.
+
+Without `NODE_USE_ENV_PROXY=1`, Node's built-in `fetch` and `https` connect directly and
+ignore the other variables, so behind a wall their requests to outside hosts fail. With
+it, they use the proxy in Node 24.0 and later and in Node 22.21 and later, with these
+limits:
+
+- Node before 22.21 ignores the variable.
+- Node 24.0 to 24.4 sends `fetch` through the proxy, and not `https`.
+- Bun's `node:https` ignores the variable.
+- A program that passes an agent of its choice to `https` uses that agent's proxy
+  setting, not the variable.
+- A container that the agent starts with nested Docker gets `HTTP_PROXY`, `HTTPS_PROXY`
+  and `NO_PROXY` from the docker command's configuration, and not `NODE_USE_ENV_PROXY`:
+  pass `--env NODE_USE_ENV_PROXY=1` to `docker run`.
+
+A value that the server, the run, the machine or the harness passes for any of these
+names is denied: see the contract's
+[denied names](../contracts/forager/v1/README.md#variables).
+
 ## How it works
 
 ```
