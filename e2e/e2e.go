@@ -28,7 +28,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,9 +55,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/receiver"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/session/runtimes/claude"
@@ -1561,6 +1565,68 @@ var splitNames = []string{"PROBE_A", "PROBE_B", "PROBE_C", "AGENT_PROBE_A", "AGE
 // which only the setup container gets, PROBE_C over AGENT_PROBE_C.
 var splitVariables = session.Variables{Run: []string{"AGENT_PROBE_A=a", "PROBE_B=b", "AGENT_PROBE_C=agent"}, Machine: []string{"PROBE_C=setup"}}
 
+// splitServer are the server's variables of the agent's names case with a run
+// configuration: the same names and values as splitVariables.
+var splitServer = map[string]string{"AGENT_PROBE_A": "a", "PROBE_B": "b", "AGENT_PROBE_C": "agent", "PROBE_C": "setup"}
+
+// The ids of variablesServer's access key, node and workspace.
+const (
+	variablesKey       = "ak_f1xt0re00000000v"
+	variablesNode      = "nd_f1xt0re00000000v"
+	variablesWorkspace = "ws_f1xt0re00000000v"
+)
+
+// variablesServer is a stand-in control plane, the reference receiver, whose run
+// configuration of every run has vars as the run's variables: the run answer passes
+// them to the session as the server's variables. The gateway reaches it as the
+// gateway.Server it returns.
+func variablesServer(t *testing.T, vars map[string]string) *gateway.Server {
+	t.Helper()
+	accessKey, err := accesskey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := accesskey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := receiver.OpenFile(filepath.Join(t.TempDir(), "received.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	values := map[string]any{}
+	for name, v := range vars {
+		values[name] = map[string]string{"value": v}
+	}
+	doc, err := json.Marshal(map[string]any{"version": 1, "variables": values})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := accesskey.Pin{{Alg: "ed25519", PublicKey: signer.PublicKey().String()}}
+	pinJSON, _ := json.Marshal(pin)
+	var srv *httptest.Server
+	h := &receiver.Handler{
+		Keys: func(id string) (receiver.AccessKey, bool) {
+			return receiver.AccessKey{PublicKey: accessKey.PublicKey(), StoredSecrets: true}, id == variablesKey
+		},
+		Signer:        signer,
+		Store:         store,
+		Workspaces:    map[string]receiver.Workspace{variablesWorkspace: {Organisation: "org_walltest"}},
+		Organisations: map[string]receiver.Organisation{"org_walltest": {}},
+		Configuration: func() ([]byte, string) {
+			d := []byte(`{"version":1,"node_id":"` + variablesNode + `","workspaces":["` + variablesWorkspace + `"],"apiary_public_key":` + string(pinJSON) +
+				`,"events":{"url":"` + srv.URL + receiver.DefaultEventsPath + `","types":["*"]},"run":{"url":"` + srv.URL + receiver.DefaultRunPath + `"}}`)
+			sum := sha256.Sum256(d)
+			return d, "sha256=" + hex.EncodeToString(sum[:])
+		},
+		RunConfiguration: func(receiver.Run) ([]byte, string, *receiver.Refusal) { return doc, "", nil },
+	}
+	srv = httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return &gateway.Server{Version: 1, URL: srv.URL, AccessKeyID: variablesKey, ApiaryPublicKey: pin, AccessKey: accessKey, InstanceID: "i_walltest_variables"}
+}
+
 // printSplit is a setup command that prints the value of each of splitNames, as
 // NAME=value, in order, with - for a name it does not have.
 var printSplit = session.SetupCommand{Name: "print the variables", Args: []string{"sh", "-c",
@@ -1603,21 +1669,23 @@ func stepLines(events []map[string]any, kind, name string, session float64) stri
 }
 
 // agentVariables checks the agent's names in a walled run: of the run's and the
-// machine's variables, the agent gets only AGENT_ names, by the rest of the name, and
-// the setup container, filled from (*session.Run).SetupEnv, gets every name, and each
+// machine's variables, and of the server's from a stand-in run configuration, the
+// agent gets only AGENT_ names, by the rest of the name, and the setup container,
+// filled from (*session.Run).SetupEnv, gets every name without the prefix, and each
 // AGENT_ name by the rest when no value of that name is set. A setup command in the
 // agent's container gets the agent's variables, and the run reports the names to
 // prefix.
 func agentVariables(t *testing.T, o Options, h hosts, outside string) {
 	names := []string{"the agent gets only AGENT_ names and the setup container every name",
-		"a setup command in the agent's container gets the agent's variables"}
-	t.Run(names[0], func(t *testing.T) {
+		"a setup command in the agent's container gets the agent's variables",
+		"the agent gets only the server's AGENT_ names and the setup container every name"}
+	split := func(t *testing.T, v variant) {
 		if !o.Setup {
 			t.Skip("the adapter starts no setup container")
 		}
 		var setupErr error
-		r, err := runIn(t, o, variant{runID: event.NewRunID(), setup: []session.SetupCommand{printSplit}, setupEnv: true,
-			variables: splitVariables, onSetup: func(err error) { setupErr = err }}, false, h, outside)
+		v.runID, v.setup, v.setupEnv, v.onSetup = event.NewRunID(), []session.SetupCommand{printSplit}, true, func(err error) { setupErr = err }
+		r, err := runIn(t, o, v, false, h, outside)
 		if err != nil || setupErr != nil {
 			t.Fatalf("the setup: %v; the run: %v", setupErr, err)
 		}
@@ -1627,7 +1695,9 @@ func agentVariables(t *testing.T, o Options, h hosts, outside string) {
 		if got, want := stepLines(r.events, "setup", printSplit.Name, 0), splitLines(map[string]string{"PROBE_A": "a", "PROBE_B": "b", "PROBE_C": "setup"}); got != want {
 			t.Errorf("the setup container printed %q, want %q", got, want)
 		}
-	})
+	}
+	t.Run(names[0], func(t *testing.T) { split(t, variant{variables: splitVariables}) })
+	t.Run(names[2], func(t *testing.T) { split(t, variant{server: variablesServer(t, splitServer)}) })
 	t.Run(names[1], func(t *testing.T) {
 		if !o.Hooks {
 			t.Skip("the run socket does not cross into the enclosure on this machine, and a setup command reports on it")
