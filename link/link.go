@@ -29,8 +29,8 @@ const ProxyUser = "qory"
 // ProxyEnv returns the variables that point a program at the proxy at u, in both cases,
 // because curl reads http_proxy in lower case only and other programs document the
 // upper case, and NODE_USE_ENV_PROXY=1, without which Node's fetch and https connect
-// directly and ignore the others. A wall names the proxy by the address the enclosure
-// reaches it on.
+// directly and ignore the others. Behind a wall, u is the address the enclosure
+// reaches the proxy on.
 func ProxyEnv(u string) []string {
 	return []string{
 		"HTTP_PROXY=" + u, "http_proxy=" + u,

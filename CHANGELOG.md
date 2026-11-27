@@ -10,6 +10,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Allow in the policy each host that a Node program reaches in a run with no wall: its
+  fetch and https requests go through the run's proxy, where before they connected
+  directly. In enforce mode, a host that the policy does not list now gets `403`.
 - Rename `model_credential`: in a run configuration and in the run answer it is
   `default_model_provider_credential_name`, and in a join request and a join answer it
   is `model_provider_credential_name`. The Go fields follow:
@@ -1213,8 +1216,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
-- Containers get NODE_USE_ENV_PROXY=1, so Node's fetch and https use the run's proxy
-  (Node 24.0 and later, 22.21 and later). `link.ProxyEnv` returns it last, and
+- Every session, with or without a wall, and every container the wall starts get
+  NODE_USE_ENV_PROXY=1, so Node's fetch and https use the run's proxy (Node 24.0 and
+  later, 22.21 and later). `link.ProxyEnv` returns it last, and
   `denied-variables.json` lists it in `names`. The limits are in
   [docs/wall.md](docs/wall.md#the-proxy-variables).
 - An `auth` (`auth.schema.json`), an adapter's answer (`credential.schema.json`) with
@@ -3427,8 +3431,9 @@ release may change what an existing document does, and says so under Upgrading.
   container, a step container and a session, Node's built-in `fetch` gets `200` from
   an origin container that the policy allows, and the proxy's `403` to its tunnel for
   `denied.invalid`. In the session, `npm view` prints a package's version from the
-  same origin, used as the registry. CI's Wall conformance jobs build the image from
-  `node:24-slim`, pinned by digest, and run the test.
+  same origin, used as the registry. CI's Wall conformance jobs fetch nodejs.org's
+  linux-x64 tarball of Node 24.22.3, check it against its SHA-256, build the image
+  with it, and run the test.
 
 - `TestDockerConforms` has the case "a read-only file at /etc/codex/hooks.json stays
   as it is": in busybox, with the file at mode `0666` on this machine, the agent reads

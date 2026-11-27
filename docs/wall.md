@@ -29,9 +29,13 @@ limits:
 - Bun's `node:https` ignores the variable.
 - A program that passes an agent of its choice to `https` uses that agent's proxy
   setting, not the variable.
+- A container that the agent starts with nested Docker gets `HTTP_PROXY`, `HTTPS_PROXY`
+  and `NO_PROXY` from the docker command's configuration, and not `NODE_USE_ENV_PROXY`:
+  pass `--env NODE_USE_ENV_PROXY=1` to `docker run`.
 
 A value that the server, the run, the machine or the harness passes for any of these
-names is denied: see the contract's [denied names](../contracts/forager/v1/README.md).
+names is denied: see the contract's
+[denied names](../contracts/forager/v1/README.md#variables).
 
 ## How it works
 

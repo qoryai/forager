@@ -19,8 +19,8 @@ import (
 )
 
 // What the Node test's origin serves: a package document at /nodePackage, whose latest
-// version is nodeVersion, and "ok" at every other path. nodeLine opens the line the
-// Node script prints.
+// version is nodeVersion, and "ok" at every other path. nodeLine is the start of the
+// line that the Node script prints.
 const (
 	nodePackage = "walltest-node-pkg"
 	nodeVersion = "1.2.3"
@@ -64,7 +64,7 @@ const nodeFetch = `const [allowed, denied] = process.argv.slice(2);
   process.exit(out.allowed === 200 && refused ? 0 : 1);
 })();`
 
-// nodeReport is what nodeFetch found.
+// nodeReport is the JSON that nodeFetch prints after nodeLine.
 type nodeReport struct {
 	Allowed     int    `json:"allowed"`
 	AllowedBody string `json:"allowed_body"`
@@ -79,10 +79,15 @@ type nodeReport struct {
 // image, is the one host the policy allows; denied.invalid is not allowed. In a setup
 // container, a step container and the session, Node's built-in fetch gets 200 and "ok"
 // from the origin, and the proxy's 403 to its tunnel for denied.invalid: the container
-// has no route out and no resolver, so both answers come through the proxy, which Node
-// uses only with NODE_USE_ENV_PROXY=1. In the session, npm view, with the origin as its registry,
-// prints the package's version. The record lists each fetch of the origin as allowed,
-// and each of denied.invalid as denied.
+// has no route out and no resolver, so both responses come through the proxy, which
+// Node uses only with NODE_USE_ENV_PROXY=1. In the session, npm view, with the origin
+// as its registry, prints the package's version. The record lists each fetch of the
+// origin as allowed, and each of denied.invalid as denied.
+//
+// The test covers Node's fetch, not Node's http and https modules. HTTPS through the
+// proxy is covered by the suite's probe, a Go program, in TestDockerConforms. npm reads
+// the proxy variables without NODE_USE_ENV_PROXY, so npm view shows only that npm works
+// with the variable set.
 //
 // The test is skipped without QORY_WALL_NODE_IMAGE, without an engine the docker
 // command reaches, and, off Linux, without a Linux build of the test binary in
@@ -108,7 +113,7 @@ func TestDockerNodeUsesTheRunsProxy(t *testing.T) {
 	ready := `fetch("http://127.0.0.1:8080/").then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))`
 	for i := 0; exec.Command(command, "exec", name, "node", "-e", ready).Run() != nil; i++ {
 		if i == 30 {
-			t.Fatal("the origin did not answer on port 8080 within 30 seconds")
+			t.Fatal("the origin returned no response on port 8080 within 30 seconds")
 		}
 		time.Sleep(time.Second)
 	}

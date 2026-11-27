@@ -263,8 +263,8 @@ One run, on a developer machine, with a server configured:
    `NO_PROXY=localhost,127.0.0.1,::1` so a local MCP server or model endpoint still
    answers. It sets `NODE_USE_ENV_PROXY=1` as well, without which Node's `fetch` and
    `https` connect directly and ignore the other variables. Without a wall the proxy
-   URL carries a password of the run's forwarder alone, which the forwarder checks
-   (§The gateway's link, Agent traffic). It opens the
+   URL contains a password that only the run's forwarder has, which the forwarder
+   checks (§The gateway's link, Agent traffic). It opens the
    local socket and sets `QORY_RUN_SOCKET` to its path, `QORY_RUN_ID` to the run id,
    `QORY_SESSION` to the join answer's `session`, `QORY_RUN_API` to the run API's base
    URL for a run with a control plane (§The run API), `QORY_HOST_URL` to

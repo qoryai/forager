@@ -196,17 +196,26 @@ jobs:
             | docker build --tag "qory-walltest-codex:$CODEX_VERSION" --file - "$dir"
           echo "QORY_WALL_CODEX_IMAGE=qory-walltest-codex:$CODEX_VERSION" >> "$GITHUB_ENV"
 
-      - name: Build an image with Node
+      - name: Fetch Node and build an image with it
         # TestDockerNodeUsesTheRunsProxy runs Node's fetch and npm behind the wall in this
-        # image, Node 24 with npm, whose HOME others can write.
+        # image. The tarball is nodejs.org's linux-x64 build of Node 24.22.3, with npm,
+        # checked against its SHA-256 in the release's SHASUMS256.txt. The image makes
+        # /home/agent, its HOME, writable.
         env:
-          BASE_IMAGE: docker.io/library/node:24-slim@sha256:873f586f3794f52281bd039bf02c048a0be08fde619338f9941bad1eb6b34530
+          NODE_VERSION: 24.22.3
+          NODE_SHA256_AMD64: 4f2b175a6d53a5c617a80dba2676238a0688cef28c6da4eba35c7d844e66fcfb
+          BASE_IMAGE: ghcr.io/qoryai/ci-images:debian-trixie-20260918-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
         run: |
-          printf '%s\n' "FROM $BASE_IMAGE" \
+          dir="$RUNNER_TEMP/node-image"
+          mkdir -p "$dir/node"
+          curl -fsSLo "$RUNNER_TEMP/node.tar.xz" "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz"
+          echo "${NODE_SHA256_AMD64}  $RUNNER_TEMP/node.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/node.tar.xz" -C "$dir/node" --strip-components=1
+          printf '%s\n' "FROM $BASE_IMAGE" 'COPY node /usr/local' \
             'RUN node --version && npm --version && mkdir -p /home/agent && chmod 1777 /home/agent' \
             'ENV HOME=/home/agent' \
-            | docker build --tag qory-walltest-node -
-          echo "QORY_WALL_NODE_IMAGE=qory-walltest-node" >> "$GITHUB_ENV"
+            | docker build --tag "qory-walltest-node:$NODE_VERSION" --file - "$dir"
+          echo "QORY_WALL_NODE_IMAGE=qory-walltest-node:$NODE_VERSION" >> "$GITHUB_ENV"
 
       - name: Run the suite against Docker
         # The test binary is the relay, the forwarder and the probe inside the enclosure,
@@ -368,17 +377,26 @@ jobs:
             | docker build --tag "qory-walltest-codex:$CODEX_VERSION" --file - "$dir"
           echo "QORY_WALL_CODEX_IMAGE=qory-walltest-codex:$CODEX_VERSION" >> "$GITHUB_ENV"
 
-      - name: Build an image with Node
+      - name: Fetch Node and build an image with it
         # TestDockerNodeUsesTheRunsProxy runs Node's fetch and npm behind the wall in this
-        # image, Node 24 with npm, whose HOME others can write.
+        # image. The tarball is nodejs.org's linux-x64 build of Node 24.22.3, with npm,
+        # checked against its SHA-256 in the release's SHASUMS256.txt. The image makes
+        # /home/agent, its HOME, writable.
         env:
-          BASE_IMAGE: docker.io/library/node:24-slim@sha256:873f586f3794f52281bd039bf02c048a0be08fde619338f9941bad1eb6b34530
+          NODE_VERSION: 24.22.3
+          NODE_SHA256_AMD64: 4f2b175a6d53a5c617a80dba2676238a0688cef28c6da4eba35c7d844e66fcfb
+          BASE_IMAGE: ghcr.io/qoryai/ci-images:debian-trixie-20260918-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
         run: |
-          printf '%s\n' "FROM $BASE_IMAGE" \
+          dir="$RUNNER_TEMP/node-image"
+          mkdir -p "$dir/node"
+          curl -fsSLo "$RUNNER_TEMP/node.tar.xz" "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz"
+          echo "${NODE_SHA256_AMD64}  $RUNNER_TEMP/node.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/node.tar.xz" -C "$dir/node" --strip-components=1
+          printf '%s\n' "FROM $BASE_IMAGE" 'COPY node /usr/local' \
             'RUN node --version && npm --version && mkdir -p /home/agent && chmod 1777 /home/agent' \
             'ENV HOME=/home/agent' \
-            | docker build --tag qory-walltest-node -
-          echo "QORY_WALL_NODE_IMAGE=qory-walltest-node" >> "$GITHUB_ENV"
+            | docker build --tag "qory-walltest-node:$NODE_VERSION" --file - "$dir"
+          echo "QORY_WALL_NODE_IMAGE=qory-walltest-node:$NODE_VERSION" >> "$GITHUB_ENV"
 
       - name: Run the suite against Docker
         # The test binary is the relay, the forwarder and the probe inside the enclosure,
