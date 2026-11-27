@@ -983,7 +983,8 @@ func (pullingStepWall) Pull(context.Context, wall.Request, []byte, []string) err
 // image by name, and of one that sets it by reference: in both, the working folder is
 // shown at /workspace, each place over it at the same names below /workspace, in the
 // same order, and a path of the working folder in the command is written as
-// /workspace. A mount with a Target below /workspace is mount_target_conflict in both.
+// /workspace. A mount with a Target below /workspace is mount_target_conflict in both,
+// and a mount at its path below /workspace an error, each with the step's text.
 func TestAStepBindsItsPlacesUnderTheWorkspace(t *testing.T) {
 	ctx := context.Background()
 	for _, byRef := range []bool{false, true} {
@@ -1016,9 +1017,23 @@ func TestAStepBindsItsPlacesUnderTheWorkspace(t *testing.T) {
 			if l := w.steps[0]; !slices.Equal(l.Mounts, want) || l.Dir != "/workspace" || l.Args[1] != "test -f /workspace/top.txt" {
 				t.Errorf("the step container's launch %+v in %s\nwant %+v", l, l.Dir, want)
 			}
+			tools := t.TempDir()
 			_, err = r.RunStep(ctx, session.StepSpec{Name: "x", Command: []string{"true"}, Dir: sp.Dir,
-				Mounts: []wall.Mount{{Path: t.TempDir(), ReadOnly: true, Target: "/workspace/tools"}}})
-			if refusalOf(t, "mount_target_conflict", err); w.started() != 1 {
+				Mounts: []wall.Mount{{Path: tools, ReadOnly: true, Target: "/workspace/tools"}}})
+			wantTarget := "Set the target of the mount " + tools + " outside /workspace.\nA step shows its working folder " +
+				sp.Dir + " at /workspace, and the target /workspace/tools overlaps it"
+			if got := refusalOf(t, "mount_target_conflict", err); got.Detail != wantTarget {
+				t.Errorf("detail %q\nwant   %q", got.Detail, wantTarget)
+			}
+			// A mount shown at its path, which lies below /workspace.
+			_, err = r.RunStep(ctx, session.StepSpec{Name: "x", Command: []string{"true"}, Dir: sp.Dir,
+				Mounts: []wall.Mount{{Path: "/workspace/tools", ReadOnly: true}}})
+			wantPath := "Give the mount /workspace/tools a target outside /workspace.\nA step shows its working folder " +
+				sp.Dir + " at /workspace, and the mount is shown at its path, which overlaps it"
+			if err == nil || err.Error() != wantPath {
+				t.Errorf("a mount at its path below /workspace: %v\nwant %q", err, wantPath)
+			}
+			if w.started() != 1 {
 				t.Errorf("a refused step made a step container")
 			}
 		})

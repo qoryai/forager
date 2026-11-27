@@ -528,7 +528,8 @@ const workspaceInside = "/workspace"
 // Every other bind stays at its place inside, its Target or its path; one whose place
 // is, holds or lies under workspaceInside is
 // refused: mount_target_conflict for a mount with a Target, and with no code for one
-// shown at its path, the session's directory among them.
+// shown at its path, the session's directory among them. A step's plan words the cause
+// as the step's working folder shown at workspaceInside.
 func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
 	if p.root == "" || p.root == string(filepath.Separator) {
 		return mountPlan{}, nil, fmt.Errorf("the workspace is reached through %s, which cannot be shown at %s", accesskey.ShownValue(p.root, true), workspaceInside)
@@ -551,13 +552,24 @@ func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
 			continue
 		}
 		if m.Target != "" {
-			return mountPlan{}, nil, &Refusal{
-				Code:  refusal.MountTargetConflict,
-				Names: pathsShown(m.Path, p.workspace),
-				Detail: fmt.Sprintf("Set the target of the mount %s outside %s, the workspace inside: a run whose policy "+
-					"sets its image by reference shows the workspace %s there, and the target %s overlaps it",
-					pathShown(m.Path), workspaceInside, pathShown(p.workspace), pathShown(m.Target)),
+			detail := fmt.Sprintf("Set the target of the mount %s outside %s, the workspace inside: a run whose policy "+
+				"sets its image by reference shows the workspace %s there, and the target %s overlaps it",
+				pathShown(m.Path), workspaceInside, pathShown(p.workspace), pathShown(m.Target))
+			if p.stepBinds {
+				detail = fmt.Sprintf("Set the target of the mount %s outside %s.\nA step shows its working folder %s at %s, "+
+					"and the target %s overlaps it", pathShown(m.Path), workspaceInside, pathShown(p.workspace), workspaceInside,
+					pathShown(m.Target))
 			}
+			return mountPlan{}, nil, &Refusal{
+				Code:   refusal.MountTargetConflict,
+				Names:  pathsShown(m.Path, p.workspace),
+				Detail: detail,
+			}
+		}
+		if p.stepBinds {
+			return mountPlan{}, nil, fmt.Errorf("Give the mount %s a target outside %s.\nA step shows its working folder %s "+
+				"at %s, and the mount is shown at its path, which overlaps it", pathShown(m.Path), workspaceInside,
+				pathShown(p.workspace), workspaceInside)
 		}
 		return mountPlan{}, nil, fmt.Errorf("Give the mount %s a target outside %s: the mount is shown at its path, which "+
 			"overlaps the workspace inside of a run whose policy sets its image by reference", pathShown(m.Path), workspaceInside)
