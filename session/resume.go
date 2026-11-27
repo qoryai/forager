@@ -81,7 +81,7 @@ func (r *Run) resumeLaunch(ctx context.Context, rs *sessionResume, sessionDir st
 	// session's, and the run answer stays as the gateway sent it.
 	want := *r.answer.Resume
 	failed := func(fix, cause string) (runtimes.Launch, string, *restored, error) {
-		return launch, resumeFailed(want.RunID, fix, cause), nil, nil
+		return launch, resumeFailed(fix, cause), nil, nil
 	}
 	r.resumeTried = true
 	if u := rs.unset; u != nil {
@@ -223,18 +223,26 @@ func fetchFix(runID string) string {
 	return "Check that the control plane has the transcript of run " + runID
 }
 
-// resumeFailed is the line of a resume that failed: fix, the change that lets it
-// resume, then that the transcript of run runID could not be restored, for cause.
-func resumeFailed(runID, fix, cause string) string {
-	return fmt.Sprintf("%s. The runtime starts without a resume: the transcript of run %s could not be restored: %s", fix, runID, cause)
+// resumeFailedFirst is the first line of a resume that failed.
+const resumeFailedFirst = "This run starts without its earlier conversation, which could not be restored."
+
+// resumeFailed is the two lines of a resume that failed: [resumeFailedFirst], then fix,
+// the change that lets it resume, a colon and cause.
+func resumeFailed(fix, cause string) string {
+	return resumeFailedFirst + "\n" + resumeFailedFix(fix, cause)
+}
+
+// resumeFailedFix is the second line of [resumeFailed].
+func resumeFailedFix(fix, cause string) string {
+	return fix + ": " + cause
 }
 
 // resumeScript is the text of [ResumeScript]: it copies transcript, a path as the
 // runtime reads it, to dst, the run configuration's resume.path: below $HOME, the
 // runtime's home, for one that starts with ~/, else the absolute path. Then it starts
 // its arguments, the runtime's command and arguments, with args added at the end; when
-// the copy fails, it writes the line of a failed resume on stderr and starts them
-// without args.
+// the copy fails, it writes the two lines of a failed resume on stderr, each a quoted
+// argument of printf, and starts them without args.
 func resumeScript(runID, transcript, dst string, args []string) string {
 	return resumeScriptAt(runID, transcript, dst, args, 0)
 }
@@ -274,7 +282,7 @@ func resumeScriptAt(runID, transcript, dst string, args []string, head int) stri
 		b.WriteString("\texec \"$@\"\n")
 	}
 	b.WriteString("fi\n")
-	fmt.Fprintf(&b, "echo %s >&2\n", quote(resumeFailed(runID, fix, "the copy to "+dst+" failed")))
+	fmt.Fprintf(&b, "printf '%%s\\n' %s %s >&2\n", quote(resumeFailedFirst), quote(resumeFailedFix(fix, "the copy to "+dst+" failed")))
 	b.WriteString("exec \"$@\"\n")
 	return b.String()
 }

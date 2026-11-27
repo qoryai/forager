@@ -6047,11 +6047,11 @@ the wall does not bind, or whose absolute `resume.prefix` lies inside a read-onl
 `resume.session_id` that starts with `-`, which the runtime would read as an option, is
 a failed resume, with the cause `its session id <id> starts with -, so the runtime
 would read it as an option`. When the read or the write
-fails, the session starts the runtime without a resume and writes one `dev.qory.run.log`
-line of the session, with `stream: stderr`, that starts with the fix: `<fix>. The
-runtime starts without a resume: the transcript of run <run id> could not be restored:
-<cause>`, such as `Check that the control plane has the transcript of run <run id>` for
-a read that failed.
+fails, the session starts the runtime without a resume and writes two lines of the
+session to `dev.qory.run.log`, with `stream: stderr`: `This run starts without its
+earlier conversation, which could not be restored.`, then `<fix>: <cause>`, with a fix
+such as `Check that the control plane has the transcript of run <run id>` for a read
+that failed.
 
 `resume.runs`, optional, lists the paused runs this run continues, oldest first, through
 each run's continuation: a run that ended `paused` queued a continuation, which may end
@@ -6691,9 +6691,9 @@ the prompt. Codex's descriptor sets it: `codex exec --json --add-dir <dir> "<pro
 resumes as `codex exec --json --add-dir <dir> resume <session id> "<prompt>"`, and
 `codex exec --json -- "<prompt>"` as `codex exec --json resume <session id> --
 "<prompt>"`. With no argument after `after`, or none equal to it, the runtime starts
-without a resume and the session writes one line, `Put the prompt as the launch's last
-argument, after exec. The runtime starts without a resume: the transcript of run <run
-id> could not be restored: the launch has no argument after exec, and resume.place
+without a resume and the session writes two lines, `This run starts without its earlier
+conversation, which could not be restored.`, then `Put the prompt as the launch's last
+argument, after exec: the launch has no argument after exec, and resume.place
 before_last puts resume.args before the last one`. The session places `args` by
 `after` and `place` with a wall and without one, and searches for the file of a `path`
 with a `*` (§The events, A session's transcript). The session sends the transcript as `dev.qory.session.transcript`

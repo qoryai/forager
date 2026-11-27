@@ -228,8 +228,8 @@ func TestAPausedRunsPathOutsideTheHomesNamesFails(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := "Check resume.path in the run configuration. The runtime starts without a resume: the transcript of run " + pausedRun +
-			" could not be restored: its path " + paused + " is not an absolute path that ends in sessions/ followed by the names of resume.path below it\n"
+		want := "This run starts without its earlier conversation, which could not be restored.\nCheck resume.path in the run configuration:" +
+			" its path " + paused + " is not an absolute path that ends in sessions/ followed by the names of resume.path below it\n"
 		if out := runLogText(t, events(t, res)); !strings.Contains(out, want) || !strings.Contains(out, "args: exec --json\n") {
 			t.Errorf("the runtime's output %q; want %q", out, want)
 		}
@@ -252,8 +252,8 @@ func TestResumeBeforeLastGoesBeforeThePrompt(t *testing.T) {
 		}{
 			{[]string{"exec", "--json", "--add-dir", "/in", "Say hi"}, "args: exec --json --add-dir /in resume " + rolloutID + " Say hi\n"},
 			{[]string{"exec", "--json", "--", "Say hi"}, "args: exec --json resume " + rolloutID + " -- Say hi\n"},
-			{[]string{"--json", "exec"}, "Put the prompt as the launch's last argument, after exec. The runtime starts without a resume: the transcript of run " + pausedRun +
-				" could not be restored: the launch has no argument after exec, and resume.place before_last puts resume.args before the last one\n"},
+			{[]string{"--json", "exec"}, "This run starts without its earlier conversation, which could not be restored.\nPut the prompt as the launch's last argument, after exec:" +
+				" the launch has no argument after exec, and resume.place before_last puts resume.args before the last one\n"},
 		} {
 			t.Run(fmt.Sprint("walled ", walled, " ", c.args), func(t *testing.T) {
 				home := t.TempDir()
@@ -399,7 +399,7 @@ func TestAHomeVariableWithNoUsableValueGetsNoResume(t *testing.T) {
 				evs := events(t, res)
 				out := runLogText(t, evs)
 				cause := c.cause + ", so resume.prefix ${HOMER_HOME}/sessions/ has no value"
-				failed := fix + ". The runtime starts without a resume: the transcript of run " + pausedRun + " could not be restored: " + cause + "\n"
+				failed := "This run starts without its earlier conversation, which could not be restored.\n" + fix + ": " + cause + "\n"
 				none := fix + ". A continuation of this run starts the runtime without a resume: " + cause + "\n"
 				if i, j := strings.Index(out, failed), strings.Index(out, none); i < 0 || j < i || !strings.Contains(out, "args: exec --json\n") || strings.Contains(out, "restored: ok") {
 					t.Errorf("the runtime's output %q\nwant %q, then %q", out, failed, none)

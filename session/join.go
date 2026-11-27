@@ -1076,8 +1076,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// Behind a wall the enclosure works out, once the image is there, whether it binds
 	// the session's transcript directory where the agent's user can write it. When it
 	// does not, the session binds no directory, takes off the resume arguments it added,
-	// sends no transcript and writes one line, and with a restored transcript a second
-	// one: the runtime starts without a resume.
+	// sends no transcript and writes the line of a continuation, and with a restored
+	// transcript the two lines of a failed resume first: the runtime starts without a
+	// resume.
 	if checker, ok := enclosure.(wall.TranscriptChecker); ok && transcriptAt.bind != "" {
 		unbound, err := checker.CheckTranscript(runCtx, wrapEnv, transcriptAt.wallTranscript())
 		if err != nil {
@@ -1092,7 +1093,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 					return fail(errors.New(resumeArgsKept(unbound.Fix, unbound.Cause)))
 				}
 				prepared.Args = slices.Delete(slices.Clone(prepared.Args), end-len(added), end)
-				r.writeLog("stderr", n, 0, []byte(neutral(resumeFailed(r.answer.Resume.RunID, unbound.Fix, unbound.Cause))+"\n"))
+				r.writeLog("stderr", n, 0, []byte(neutral(resumeFailed(unbound.Fix, unbound.Cause))+"\n"))
 				restore = nil
 			}
 			r.writeLog("stderr", n, 0, []byte(neutral(noResume(unbound.Fix, unbound.Cause))+"\n"))
