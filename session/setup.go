@@ -419,6 +419,7 @@ func (r *Run) Setup(ctx context.Context, spec SetupSpec) (err error) {
 	// The engine may have started the setup container also when StartSetup returns an
 	// error, as when ctx ends after docker run reached it, so RemoveSetup removes it.
 	r.setupUp, r.setupUnprivileged = container, spec.Unprivileged
+	r.setupPlaces = again.sources
 	err = container.StartSetup(ctx, wall.Launch{
 		Dir: shown.Dir, Env: env, CA: r.authority, Mounts: shown.Mounts,
 		Limits: spec.Limits, Proxy: r.wallFwd.Addr(), ProxyToken: r.relayToken, ProxyPeer: r.route != nil,

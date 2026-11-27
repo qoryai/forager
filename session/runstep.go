@@ -35,11 +35,36 @@ type StepSpec struct {
 	// empty.
 	Command []string
 	// Dir is the working folder, bound writable and the working directory inside, as
-	// SetupSpec.Dir is. Empty is the working directory of this process.
+	// SetupSpec.Dir is, and shown at /workspace in every run. Empty is the working
+	// directory of this process.
 	Dir string
 	// Mounts are further places of this machine the step container binds, each at its
 	// path or at its Target, read-only or writable, with the checks of
-	// SessionSpec.Mounts.
+	// SessionSpec.Mounts but one. A mount with no Target below Dir, such as a file of a
+	// check in a clone, is bound over the bind it lies in, at its names below
+	// /workspace. A mount with a Target at or below /workspace is mount_target_conflict.
+	// Dir must not lie inside another writable mount or be listed as one: a read-only
+	// mount below it is then mount_mode_conflict.
+	//
+	// A read-only mount is mount_mode_conflict unless it lies one name below Dir or each
+	// folder between Dir and it is a mount too: the step can rename any other folder
+	// there, and the bind moves with it. A read-only file with more than one hard link is
+	// mount_mode_conflict too; the files inside a read-only folder are not checked for
+	// hard links. A mount inside a read-only mount is reached through it, and a writable
+	// one there is mount_mode_conflict. A symbolic link on the way from Dir to a mount,
+	// the mount's last name included, is mount_target_conflict. A mount with a Target
+	// whose path lies below Dir is mount_mode_conflict or mount_target_conflict, as for a
+	// session. While a setup container with Unprivileged runs, a mount below Dir that the
+	// setup container can write is an error: call RemoveSetup first.
+	//
+	// Each writable mount below Dir, a file too, is a mount point in the step container,
+	// so the step cannot rename, delete or replace it (EBUSY): a git clean or a checkout
+	// that replaces it fails. When Dir is part of no other mount, Dir is the mount point
+	// at /workspace, which the step cannot rename (EBUSY), so no bind below it moves.
+	// When Dir lies inside a writable mount, that mount is at /workspace and Dir below
+	// it, where the step can rename Dir; no bind moves then either, since a read-only
+	// mount below Dir is mount_mode_conflict and a writable one is reached through the
+	// outer mount.
 	Mounts []wall.Mount
 	// Timeout is how long the command may run, from the container's start. When it
 	// passes, the container gets SIGTERM, then SIGKILL 5 seconds later, and the result
@@ -95,8 +120,9 @@ type runningStep struct {
 
 // RunStep runs spec.Command in a step container: a new container of the run's image on
 // the run's inside network, as the wall's user with the flags of the setup container,
-// with the working folder writable, spec.Mounts and, for a run with an authority, the
-// bundle. Its environment is the relay's proxy variables and the
+// with the working folder writable at /workspace, spec.Mounts and, for a run with an
+// authority, the bundle. The paths of the working folder in spec.Command are written as
+// /workspace. Its environment is the relay's proxy variables and the
 // bundle's: no run secret, no placeholder and no QORY_RUN_API. It has no nested Docker
 // daemon, no hook socket and no home. While a step container may run, every connection
 // of the wall's relay is unprivileged: the gateway's proxy applies the run's allow list
@@ -128,8 +154,9 @@ type runningStep struct {
 // does not implement step containers; another call of the run runs; a host step is
 // open; the run is closed; the setup failed; the setup container runs without
 // Unprivileged; a container of the run may still run (ContainerKept); the run's image
-// by reference was not fetched; spec is refused; or a place fails a check. A failure of
-// the wall after the step's start ends the step failed, or cancelled when ctx ended,
+// by reference was not fetched; spec is refused; a place fails a check; or a place
+// bound over the working folder lies in or contains a place that an unprivileged setup
+// container still running can write. A failure of the wall after the step's start ends the step failed, or cancelled when ctx ended,
 // with -1, after its line, and is the error. A step container that could not be
 // removed may still run: ContainerKept is true from then on, and no session joins.
 // The run's masker replaces the run's secrets in the error, as in Open's.
@@ -185,16 +212,22 @@ func (r *Run) RunStep(ctx context.Context, spec StepSpec) (res *StepResult, err 
 	if spec.Dir == "" {
 		spec.Dir, _ = os.Getwd()
 	}
-	ws := runSpec{OpenSpec: r.open, SessionSpec: SessionSpec{Dir: spec.Dir, Mounts: spec.Mounts, ForagerFiles: spec.ForagerFiles, Written: spec.Written}}
+	ws := runSpec{OpenSpec: r.open, SessionSpec: SessionSpec{Dir: spec.Dir, Mounts: spec.Mounts, ForagerFiles: spec.ForagerFiles, Written: spec.Written},
+		stepBinds: true}
 	plan, err := checkMounts(ws, r.dir, "")
 	if err != nil {
 		return nil, err
 	}
-	shown, inside := plan, func(s string) string { return s }
-	if r.byReference {
-		if shown, inside, err = plan.atWorkspace(); err != nil {
+	if r.setupUp != nil {
+		if err := besideSetup(r.setupPlaces, plan.sources); err != nil {
 			return nil, err
 		}
+	}
+	// Every step sees the bind its working folder lies in at /workspace, a mount point
+	// that the step cannot rename.
+	shown, inside, err := plan.atWorkspace()
+	if err != nil {
+		return nil, err
 	}
 	if r.listed != nil {
 		if err := r.listed.update(append(slices.Clone(r.openBinds), plan.sources...)); err != nil {
@@ -357,6 +390,30 @@ func (r *Run) checkStep(spec StepSpec) error {
 		return fmt.Errorf("Give the step a time limit of 0 or more, not %s.", spec.Timeout)
 	case spec.Image != "" && spec.Image != r.img.Name && spec.Image != r.img.Ref:
 		return fmt.Errorf("Leave Image empty: a step runs in the run's image %s alone.", accesskey.ShownName(r.imageShown(), false))
+	}
+	return nil
+}
+
+// besideSetup fails a step whose place bound over its working folder's bind is, contains
+// or lies inside a writable place of the setup container that runs beside it, setup:
+// the setup container's processes can then write a read-only one, or replace a name on
+// the way to one with a link.
+func besideSetup(setup, step []bindSource) error {
+	for _, s := range step {
+		if !s.over {
+			continue
+		}
+		for _, b := range setup {
+			if !b.Writable || b.readOnly {
+				continue
+			}
+			in, _ := holds(b.at, s.at)
+			holding, _ := holds(s.at, b.at)
+			if in || holding {
+				return fmt.Errorf("Call RemoveSetup before the step: the setup container can write %s, where the step binds %s.",
+					pathShown(b.Path), pathShown(s.Path))
+			}
+		}
 	}
 	return nil
 }

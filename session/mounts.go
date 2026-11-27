@@ -443,11 +443,12 @@ type bindSource struct {
 	// are its lookups: for this run's own checks alone. readOnly says the agent's
 	// container binds a writable place read-only: the workspace of a join with
 	// SessionSpec.WorkspaceReadOnly, which the host steps write, and setup is true while
-	// the setup container runs, which writes it too.
-	what            string
-	at              splitPath
-	looks           []lookup
-	readOnly, setup bool
+	// the setup container runs, which writes it too. over is true for a step's place
+	// bound over the workspace's bind ([checkMounts]).
+	what                  string
+	at                    splitPath
+	looks                 []lookup
+	readOnly, setup, over bool
 }
 
 // shownMode is how a refusal words the mode of this run's bind: read-only for the
@@ -509,6 +510,9 @@ type mountPlan struct {
 	root, workspace string
 	// sources are the binds as the registry of walled runs lists them.
 	sources []bindSource
+	// stepBinds is true for a step container's plan, whose places below the workspace
+	// are bound over the workspace's bind.
+	stepBinds bool
 }
 
 // workspaceInside is where a run whose policy names its image by its reference sees the
@@ -519,12 +523,20 @@ const workspaceInside = "/workspace"
 // atWorkspace is the plan of a run whose policy names its image by its reference: the
 // bind that holds the workspace shown at [workspaceInside], the working directory under
 // it, and inside, which writes a path of that bind's as the enclosure sees it, at
-// whole components ([translate]). Every other bind stays at its place inside, its
-// Target or its path; one whose place is, holds or lies under workspaceInside is
+// whole components ([translate]). In a step container's plan, a bind with no Target
+// whose path lies below that bind's is shown at the same names below workspaceInside.
+// Every other bind stays at its place inside, its Target or its path; one whose place
+// is, holds or lies under workspaceInside is
 // refused: mount_target_conflict for a mount with a Target, and with no code for one
-// shown at its path, the session's directory among them.
+// shown at its path, the session's directory among them. A step's plan words the cause
+// as the step's working folder shown at workspaceInside.
 func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
 	if p.root == "" || p.root == string(filepath.Separator) {
+		if p.stepBinds {
+			return mountPlan{}, nil, fmt.Errorf("Remove the mount of / from Mounts: a step shows its working folder at %s.\n"+
+				"The working folder %s lies inside the mount of /, which cannot be shown at %s", workspaceInside,
+				pathShown(p.workspace), workspaceInside)
+		}
 		return mountPlan{}, nil, fmt.Errorf("the workspace is reached through %s, which cannot be shown at %s", accesskey.ShownValue(p.root, true), workspaceInside)
 	}
 	out := p
@@ -534,18 +546,35 @@ func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
 			out.Mounts[i].Target = workspaceInside
 			continue
 		}
+		// A step container's bind over the root's is shown at its place below
+		// workspaceInside.
+		if rel, err := filepath.Rel(p.root, m.Path); p.stepBinds && m.Target == "" && err == nil && under(p.root, m.Path) {
+			out.Mounts[i].Target = filepath.Join(workspaceInside, rel)
+			continue
+		}
 		place := placeInside(m)
 		if !under(workspaceInside, place) && !under(place, workspaceInside) {
 			continue
 		}
 		if m.Target != "" {
-			return mountPlan{}, nil, &Refusal{
-				Code:  refusal.MountTargetConflict,
-				Names: pathsShown(m.Path, p.workspace),
-				Detail: fmt.Sprintf("Set the target of the mount %s outside %s, the workspace inside: a run whose policy "+
-					"sets its image by reference shows the workspace %s there, and the target %s overlaps it",
-					pathShown(m.Path), workspaceInside, pathShown(p.workspace), pathShown(m.Target)),
+			detail := fmt.Sprintf("Set the target of the mount %s outside %s, the workspace inside: a run whose policy "+
+				"sets its image by reference shows the workspace %s there, and the target %s overlaps it",
+				pathShown(m.Path), workspaceInside, pathShown(p.workspace), pathShown(m.Target))
+			if p.stepBinds {
+				detail = fmt.Sprintf("Set the target of the mount %s outside %s.\nA step shows its working folder %s at %s, "+
+					"and the target %s overlaps it", pathShown(m.Path), workspaceInside, pathShown(p.workspace), workspaceInside,
+					pathShown(m.Target))
 			}
+			return mountPlan{}, nil, &Refusal{
+				Code:   refusal.MountTargetConflict,
+				Names:  pathsShown(m.Path, p.workspace),
+				Detail: detail,
+			}
+		}
+		if p.stepBinds {
+			return mountPlan{}, nil, fmt.Errorf("Give the mount %s a target outside %s.\nA step shows its working folder %s "+
+				"at %s, and the mount is shown at its path, which overlaps it", pathShown(m.Path), workspaceInside,
+				pathShown(p.workspace), workspaceInside)
 		}
 		return mountPlan{}, nil, fmt.Errorf("Give the mount %s a target outside %s: the mount is shown at its path, which "+
 			"overlaps the workspace inside of a run whose policy sets its image by reference", pathShown(m.Path), workspaceInside)
@@ -710,6 +739,15 @@ func replacePaths(s string, pairs []pathPair, rule pathRule) string {
 // SessionSpec.WorkspaceReadOnly, and mount_mode_conflict compares that mode with the
 // other places' modes.
 //
+// A step container's places, spec.stepBinds, differ in one way. A place with no Target
+// that lies below the workspace, by its names and as it resolves, in the workspace or
+// in a writable place below it, is bound apart, over the bind it lies in and at its
+// path, of either mode: a read-only one is not mount_mode_conflict there. A place in a
+// read-only place below the workspace is reached through that place's bind, and a
+// writable one there is still mount_mode_conflict. [checkOver] checks the places bound
+// apart: the names on the way to each, each directory between the workspace and a
+// read-only one, and the hard links of a read-only file.
+//
 // A Target that is not absolute or clean, that is, contains or lies inside the wall's
 // /qory, or that contains a comma, a double quote or a newline, fails the join with no
 // code.
@@ -812,6 +850,17 @@ func checkMounts(spec runSpec, runDir, sessionDir string) (mountPlan, error) {
 			}
 		}
 	}
+	// The workspace is the last place. In a step container, over[i] is true when place i
+	// lies below the workspace, by its names and as it resolves, with no Target: it is
+	// bound over the workspace's bind, at its path.
+	ws := len(places) - 1
+	over := make([]bool, len(places))
+	if spec.stepBinds {
+		for i, p := range places[:ws] {
+			ok, same := holds(places[ws].at, p.at)
+			over[i] = ok && !same && p.target == "" && p.place != places[ws].place && under(places[ws].place, p.place)
+		}
+	}
 	// outer[i] is the place i is bound through: the first other place that holds it, or
 	// the earlier one of two that are the same; -1 when none is.
 	outer := make([]int, len(places))
@@ -828,6 +877,12 @@ func checkMounts(spec runSpec, runDir, sessionDir string) (mountPlan, error) {
 			if in.target != "" || out.target != "" {
 				return mountPlan{}, hostConflict(in, out, same)
 			}
+			// A place over the workspace's bind is bound apart from the writable place it
+			// lies in: the workspace or another such place. In a read-only one it is
+			// reached through that place's bind, as for a join.
+			if over[i] && !same && (j == ws || over[j]) && out.bindsWritable() {
+				continue
+			}
 			if in.bindsWritable() != out.bindsWritable() {
 				return mountPlan{}, modeConflict(in, out, same)
 			}
@@ -839,24 +894,25 @@ func checkMounts(spec runSpec, runDir, sessionDir string) (mountPlan, error) {
 	if err := checkPlaces(places, sessionDir); err != nil {
 		return mountPlan{}, err
 	}
-	var plan mountPlan
+	if err := checkOver(places, over, outer, ws); err != nil {
+		return mountPlan{}, err
+	}
+	plan := mountPlan{stepBinds: spec.stepBinds}
 	for i, p := range places {
 		if outer[i] >= 0 {
 			continue
 		}
 		plan.Mounts = append(plan.Mounts, wall.Mount{Path: p.bound, ReadOnly: !p.bindsWritable(), Target: p.target})
 		b := bindSource{Path: p.path, Resolved: p.at.String(), Writable: p.writable,
-			what: p.what + " " + pathShown(p.path), at: p.at, looks: p.looks, readOnly: p.readOnly}
+			what: p.what + " " + pathShown(p.path), at: p.at, looks: p.looks, readOnly: p.readOnly, over: over[i]}
 		for _, l := range p.looks {
 			b.Lookups = append(b.Lookups, l.entry())
 		}
 		plan.sources = append(plan.sources, b)
 	}
 	sortByPlace(&plan)
-	// The workspace is the last place: its root is the outermost place that holds it,
-	// and inside it is the path that place is bound at with the names of the workspace
-	// below it.
-	ws := len(places) - 1
+	// The workspace's root is the outermost place that holds it, and inside it is the
+	// path that place is bound at with the names of the workspace below it.
 	root, seen := ws, map[int]bool{}
 	for outer[root] >= 0 {
 		if seen[root] {
@@ -1063,6 +1119,111 @@ func movable(places []shown, outer, inner string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// checkOver checks the places of a step container bound over the workspace's bind,
+// places[ws]: those of over that are bound apart, by outer.
+//
+//   - A symbolic link among the names from the workspace down to one of them is
+//     mount_target_conflict: the engine follows it, and the step can change it.
+//   - A read-only one is mount_mode_conflict unless each directory between the
+//     workspace and it is one of them: the step can rename any other directory there,
+//     and the bind moves with it.
+//   - A read-only file with more than one hard link is mount_mode_conflict: the step
+//     can write it through another name. The files in a read-only folder are not
+//     checked.
+func checkOver(places []shown, over []bool, outer []int, ws int) error {
+	var bound []shown
+	for i, p := range places {
+		if over[i] && outer[i] < 0 {
+			bound = append(bound, p)
+		}
+	}
+	top := places[ws]
+	for i, p := range places {
+		if !over[i] || outer[i] >= 0 {
+			continue
+		}
+		names := parts(p.place)[len(parts(top.place)):]
+		fi, err := linkOnTheWay(p, top, names)
+		if err != nil {
+			return err
+		}
+		if p.bindsWritable() {
+			continue
+		}
+		for k := 1; k < len(names); k++ {
+			dir := filepath.Join(append([]string{top.place}, names[:k]...)...)
+			if slices.ContainsFunc(bound, func(q shown) bool { return q.place == dir }) {
+				continue
+			}
+			fix := fmt.Sprintf("List %s as a mount, or move %s one name below %s.", pathShown(dir), p.shownAs(), top.shownAs())
+			if q, ok := listedAs(bound, filepath.Join(append([]string{top.at.String()}, names[:k]...)...)); ok {
+				fix = fmt.Sprintf("List the mount %s as %s, as %s spells it.", pathShown(q.path), pathShown(dir), p.shownAs())
+			}
+			return &Refusal{
+				Code:   refusal.MountModeConflict,
+				Names:  pathsShown(p.path, top.path),
+				Detail: fix + "\nThe step can rename " + pathShown(dir) + ", and the bind moves with it",
+			}
+		}
+		if fi == nil || !fi.Mode().IsRegular() {
+			continue
+		}
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
+			return &Refusal{
+				Code:  refusal.MountModeConflict,
+				Names: pathsShown(p.path, top.path),
+				Detail: fmt.Sprintf("Remove the other hard links to %s, or write it again as a new file.\n"+
+					"It has %d names, and a process can write it through one that is not read-only", p.shownAs(), st.Nlink),
+			}
+		}
+	}
+	return nil
+}
+
+// linkOnTheWay fails the place p, which lies below top by names, when a name from top's
+// path on this machine down to p's is a symbolic link, and returns what Lstat read of
+// p's last name, nil when a name does not exist: the engine makes it.
+func linkOnTheWay(p, top shown, names []string) (fs.FileInfo, error) {
+	at, named := top.at.String(), top.path
+	var fi fs.FileInfo
+	for _, name := range names {
+		at, named = filepath.Join(at, name), filepath.Join(named, name)
+		var err error
+		fi, err = os.Lstat(at)
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("Fix the error at the end of this message, then run the step again: checking %s "+
+				"failed: %w", pathShown(named), accesskey.ShownError(err))
+		}
+		if fi.Mode()&fs.ModeSymlink != 0 {
+			return nil, &Refusal{
+				Code:  refusal.MountTargetConflict,
+				Names: pathsShown(p.path, top.path),
+				Detail: fmt.Sprintf("Remove the symbolic link %s from %s, or list the path it resolves to.\n"+
+					"The step can change the link, and %s is then shown at another path", pathShown(named), top.shownAs(), p.shownAs()),
+			}
+		}
+	}
+	return fi, nil
+}
+
+// listedAs is the place of bound that is the directory dir on this machine, listed with
+// other names, such as in another case, and whether there is one.
+func listedAs(bound []shown, dir string) (shown, bool) {
+	want, err := os.Stat(dir)
+	if err != nil {
+		return shown{}, false
+	}
+	for _, q := range bound {
+		if info, err := os.Stat(q.at.String()); err == nil && os.SameFile(want, info) {
+			return q, true
+		}
+	}
+	return shown{}, false
 }
 
 // linkBelow fails the place in, whose place inside lies inside the place out's, of
