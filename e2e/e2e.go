@@ -19,8 +19,9 @@
 //
 // The tests of a real runtime take its image from a variable: QORY_WALL_CLAUDE_IMAGE,
 // an image with Claude Code 2.1.316 at claude on its PATH, and QORY_WALL_CODEX_IMAGE,
-// an image with Codex 0.167.2 at codex on its PATH. Without the variable a test skips;
-// QORY_WALL_REQUIRE turns that skip into a failure for every such test but
+// an image with Codex 0.167.2 at codex on its PATH. TestDockerNodeUsesTheRunsProxy
+// takes QORY_WALL_NODE_IMAGE, an image with Node 24 and npm. Without the variable a test
+// skips; QORY_WALL_REQUIRE turns that skip into a failure for every such test but
 // TestDockerClaudeCodeThroughTheWall.
 package e2e
 
