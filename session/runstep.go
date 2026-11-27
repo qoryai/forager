@@ -59,8 +59,12 @@ type StepSpec struct {
 	//
 	// Each writable mount below Dir, a file too, is a mount point in the step container,
 	// so the step cannot rename, delete or replace it (EBUSY): a git clean or a checkout
-	// that replaces it fails. Dir is the mount point at /workspace, whose parent is
-	// root's, so the step can rename no folder above Dir.
+	// that replaces it fails. When Dir is part of no other mount, Dir is the mount point
+	// at /workspace, which the step cannot rename (EBUSY), so no bind below it moves.
+	// When Dir lies inside a writable mount, that mount is at /workspace and Dir below
+	// it, where the step can rename Dir; no bind moves then either, since a read-only
+	// mount below Dir is mount_mode_conflict and a writable one is reached through the
+	// outer mount.
 	Mounts []wall.Mount
 	// Timeout is how long the command may run, from the container's start. When it
 	// passes, the container gets SIGTERM, then SIGKILL 5 seconds later, and the result
@@ -219,8 +223,8 @@ func (r *Run) RunStep(ctx context.Context, spec StepSpec) (res *StepResult, err 
 			return nil, err
 		}
 	}
-	// Every step sees its working folder at /workspace, whose parent is root's: the step
-	// can rename no folder above it, so no bind moves.
+	// Every step sees the bind its working folder lies in at /workspace, a mount point
+	// that the step cannot rename.
 	shown, inside, err := plan.atWorkspace()
 	if err != nil {
 		return nil, err

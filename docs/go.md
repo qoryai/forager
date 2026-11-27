@@ -575,10 +575,14 @@ Each writable mount below `Dir`, a file too, is a mount point in the step contai
 the step cannot rename, delete or replace it: the call fails with `EBUSY`, and a `git
 clean` or a checkout that replaces it fails. A step's `Dir` and each mount below it are
 shown below `/workspace` in every run, whatever the policy sets for the image, and the
-paths of `Dir` in `Command` are written as `/workspace`. `/workspace` is the mount point
-of `Dir`'s bind, and its parent `/` is root's, so the step can rename no folder above
-`Dir`. `Join` keeps its checks: a read-only mount below the workspace is
-`mount_mode_conflict` there.
+paths of the bind that `Dir` lies in are written in `Command` below `/workspace`. When
+`Dir` is part of no other mount, `/workspace` is the mount point of `Dir`'s bind, so the
+step cannot rename it (`EBUSY`), and no bind below `Dir` moves. When `Dir` lies inside a
+writable mount, that mount is at `/workspace` and `Dir` below it, where the step can
+rename `Dir`; no bind moves then either, since a read-only mount below `Dir` is
+`mount_mode_conflict` there and a writable one is reached through the outer mount.
+`Join` keeps its checks: a read-only mount below the workspace is `mount_mode_conflict`
+there.
 
 Known limit: on a disk that ignores the case of names, shared into the engine's virtual
 machine as with Docker Desktop on macOS, the step can reach a read-only file through

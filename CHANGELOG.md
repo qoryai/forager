@@ -389,6 +389,10 @@ release may change what an existing document does, and says so under Upgrading.
   image, so the step can rename no folder above `Dir`; a mount with a `Target` at or
   below `/workspace` is `mount_target_conflict`. `Join` returns `mount_mode_conflict`
   for such a read-only mount, as before.
+- A step in a run whose policy sets its image by name sees `/workspace` too: its output
+  and the paths it writes use `/workspace`, and `StepResult.Output` is not written back
+  to paths of this machine. The image's files at `/workspace` are hidden during a step,
+  and the Docker wall refuses an image whose `/workspace` is a symbolic link.
 - `SetupSpec.Unprivileged`: a setup container with no credential and no run API, which
   steps may run beside. A join while it runs returns "Call RemoveSetup before the join:
   the setup container runs with Unprivileged."
