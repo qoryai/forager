@@ -378,8 +378,16 @@ release may change what an existing document does, and says so under Upgrading.
   `StepSpec.Mounts`. A mount with no `Target` below `StepSpec.Dir` is bound over the
   working folder's bind at its path, so a check's files stay read-only in a clone the
   step otherwise writes; a read-only one lies one name below `Dir`, or each folder
-  between them is a mount too, else `mount_mode_conflict`. `Join` returns
-  `mount_mode_conflict` for such a read-only mount, as before.
+  between them is a mount too, else `mount_mode_conflict`. `Dir` must not lie inside
+  another writable mount or be listed as one. A read-only file with more than one hard
+  link is `mount_mode_conflict`; the files inside a read-only folder mount are not
+  checked. Each writable mount below `Dir`, a file too, is a mount point that the step
+  cannot rename, delete or replace (`EBUSY`), so a `git clean` or a checkout that
+  replaces it fails. While a setup container with `Unprivileged` runs, a mount below
+  `Dir` that it can write is an error: call `RemoveSetup` first. In a run whose policy
+  sets its image by name, a step that can write a folder above `Dir` in the image can
+  rename it, and every bind moves with it. `Join` returns `mount_mode_conflict` for such
+  a read-only mount, as before.
 - `SetupSpec.Unprivileged`: a setup container with no credential and no run API, which
   steps may run beside. A join while it runs returns "Call RemoveSetup before the join:
   the setup container runs with Unprivileged."

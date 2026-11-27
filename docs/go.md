@@ -532,9 +532,8 @@ has the relay's proxy variables and the bundle's variables: no run secret, no
 placeholder and no `QORY_RUN_API`. It has no nested Docker daemon and no hook socket.
 
 `Mounts` differ from a session's in one way: a mount with no `Target` whose path lies
-below `Dir` is bound over `Dir`'s bind at its path, read-only or writable, after the bind
-that holds it. Use it to keep the files of a check read-only in a clone that the step
-otherwise writes:
+below `Dir` is bound over the bind it lies in, at its path, read-only or writable. Use it
+to keep the files of a check read-only in a clone that the step otherwise writes:
 
 ```go
 mounts := []wall.Mount{
@@ -543,16 +542,41 @@ mounts := []wall.Mount{
 }
 ```
 
-A read-only mount must lie one name below `Dir`, or each folder between `Dir` and it
-must be a mount too, as `checks` is here: the step can rename any other folder there,
-and the bind moves with it. Otherwise `RunStep` returns `mount_mode_conflict`: `Show the mount
-<path> one name below the workspace <Dir>, or list each directory between them as a
-mount: the step can rename <folder>, and the bind moves with it`. A writable mount below
-a read-only one is `mount_mode_conflict`, a symbolic link on the way from `Dir` to a
-mount below it is `mount_target_conflict`, and a mount with a `Target` whose path lies
-below `Dir` is `mount_mode_conflict` or `mount_target_conflict`, as for a session. A run whose image is by reference shows each
-such mount at its names below `/workspace`. `Join` keeps its checks: a read-only mount
-below the workspace is `mount_mode_conflict` there.
+`Dir` must not lie inside another writable mount or be listed as one: a read-only mount
+below it is then `mount_mode_conflict`, as for a session. A read-only mount must lie one
+name below `Dir`, or each folder between `Dir` and it must be a mount too, as `checks` is
+here: the step can rename any other folder there, and the bind moves with it. Otherwise
+`RunStep` returns `mount_mode_conflict` with the text `List <folder> as a mount, or move
+the mount <path> one name below the workspace <Dir>.` and, on its second line, `The step
+can rename <folder>, and the bind moves with it`.
+
+`RunStep` also returns these:
+
+- A read-only file with more than one hard link: `mount_mode_conflict`, `Remove the other
+  hard links to the mount <path>, or write it again as a new file.` The step could write
+  it through another name. The files inside a read-only folder mount are not checked for
+  hard links: write each of them as a new file.
+- A symbolic link on the way from `Dir` to a mount, the mount's last name included:
+  `mount_target_conflict`, `Remove the symbolic link <link> from the workspace <Dir>, or
+  list the path it resolves to.`
+- A mount inside a read-only mount is reached through that mount's bind, as for a
+  session, and a writable one there is `mount_mode_conflict`.
+- A mount with a `Target` whose path lies below `Dir`: `mount_mode_conflict` or
+  `mount_target_conflict`, as for a session.
+- While a setup container with `Unprivileged` runs, a mount below `Dir` that the setup
+  container can write: `Call RemoveSetup before the step: the setup container can write
+  <place>, where the step binds <path>.` A step with no mount below `Dir` runs beside it.
+
+Each writable mount below `Dir`, a file too, is a mount point in the step container, so
+the step cannot rename, delete or replace it: the call fails with `EBUSY`, and a `git
+clean` or a checkout that replaces it fails. A run whose policy sets its image by
+reference shows each mount below `Dir` at its names below `/workspace`. `Join` keeps its
+checks: a read-only mount below the workspace is `mount_mode_conflict` there.
+
+Known limit: in a run whose policy sets its image by name, `Dir` is shown at its path. If
+the image lets the step's user write a folder above `Dir`, the step can rename that
+folder, and every bind moves with it. A run whose policy sets its image by reference
+shows `Dir` at `/workspace`, which the step cannot rename.
 
 While a step container may run, the run's forwarder marks every connection of the wall's
 relay as unprivileged. The gateway's proxy applies the run's allow list to each request
