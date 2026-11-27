@@ -659,7 +659,10 @@ func (r *Run) Image() Image { return r.img }
 
 // AgentEnv is the environment a session of spec gets from the server's variables,
 // Variables.Run, Variables.Machine, LaunchDefaults and SessionSpec.Env, as [Run.Join]
-// resolves it for spec: NAME=value, sorted by name, in a new slice on every call. The
+// resolves it for spec: NAME=value, sorted by name, in a new slice on every call. In a
+// walled run, of the server's variables, Variables.Run and Variables.Machine, only a
+// variable whose name starts with AGENT_, in exact case, reaches the agent, by the rest
+// of its name, with the server's QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES. The
 // deny lists, the endpoint rule and the run's placeholders apply as in Join. It leaves
 // out the names Forager, the proxy, the wall and the bundle set, LaunchFixed, the
 // placeholders and the access key's variables. The result matches what the agent gets
@@ -671,20 +674,39 @@ func (r *Run) Image() Image { return r.img }
 // the workspace in LaunchDefaults is written at /workspace, as Join writes it.
 // AgentEnv masks no value: apart from that rewrite, it returns each value as the
 // server, the caller or the machine passed it, and no value the gateway holds for a
-// placeholder. A caller that runs the setup passes the result as [SetupSpec.Env]. The
-// result has QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES when the server sets them, and
-// Setup accepts both. The error is the one Join returns for spec before its join
+// placeholder. The result has QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES when the
+// server sets them. The error is the one Join returns for spec before its join
 // request, as it checks the places of a run whose image is a reference, or as it
 // resolves the variables, the same [refusal.VariableReserved] or
 // [refusal.PlaceholderConflict] among them, or that the run is closed or another call
 // of the run is running.
 func (r *Run) AgentEnv(spec SessionSpec) ([]string, error) {
+	return r.containerEnv(spec, variables.Agent, "AgentEnv", "the agent's environment")
+}
+
+// SetupEnv is the environment the setup container gets from the server's variables,
+// Variables.Run, Variables.Machine, LaunchDefaults and SessionSpec.Env, for a session of
+// spec: NAME=value, sorted by name, in a new slice on every call. A caller that runs the
+// setup passes the result as [SetupSpec.Env]. It is what [Run.AgentEnv] returns, but
+// that in a walled run each value of the server's variables, Variables.Run and
+// Variables.Machine reaches the setup under its name, and a value of a name that starts
+// with AGENT_, in exact case, by the rest of the name when no value under that name is
+// set. The server's QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES are in it when the server
+// sets them, and Setup accepts both. The errors are AgentEnv's.
+func (r *Run) SetupEnv(spec SessionSpec) ([]string, error) {
+	return r.containerEnv(spec, variables.Setup, "SetupEnv", "the setup's environment")
+}
+
+// containerEnv is [Run.AgentEnv] for kind [variables.Agent] and [Run.SetupEnv] for
+// [variables.Setup]; call and what are the call's name and what it returns, as its errors
+// name them.
+func (r *Run) containerEnv(spec SessionSpec, kind variables.Kind, call, what string) ([]string, error) {
 	if !r.joining.TryLock() {
-		return nil, errors.New("call AgentEnv after the run's other call returns: another call of the run is running")
+		return nil, fmt.Errorf("call %s after the run's other call returns: another call of the run is running", call)
 	}
 	defer r.joining.Unlock()
 	if r.closed {
-		return nil, errors.New("open a new run for the agent's environment: the run is closed")
+		return nil, fmt.Errorf("open a new run for %s: the run is closed", what)
 	}
 	s, rt, err := r.checkSession(spec)
 	if err != nil {
@@ -724,7 +746,7 @@ func (r *Run) AgentEnv(spec SessionSpec) ([]string, error) {
 	}
 	prepared := runtimes.Launch{Command: s.Command, Args: s.Args}
 	bundle := names(r.caVars)
-	vars, _, err := resolve(s, rt, r.answer.Values(), credentialHosts, prepared, placeholderNames, r.reserved, r.img.Docker, r.authority != nil, bundle, key)
+	vars, _, err := resolve(s, kind, rt, r.answer.Values(), credentialHosts, prepared, placeholderNames, r.reserved, r.img.Docker, r.authority != nil, bundle, key)
 	if err != nil {
 		return nil, err
 	}

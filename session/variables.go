@@ -79,10 +79,13 @@ func checkInputsDir(dir string) error {
 
 // passes are the names of the variables the run passes a value for from the node: in
 // what it inherits, what the harness sets, or the run's or the machine's variables,
-// sorted, each once. A name outside the grammar of a variable's name is left out: it
-// can match no placeholder. The run request carries them, names alone, so the gateway
-// refuses a placeholder the run passes a value for, as the session did. Without a wall
-// what the run inherits is left out: a placeholder wins over an inherited value.
+// sorted, each once. Behind a wall, a run's or a machine's variable whose name starts
+// with AGENT_ is passed by both names, the name as passed and the rest of it, which the
+// agent's container gets. A name outside the grammar of a variable's name is left out:
+// it can match no placeholder. The join request carries them, names alone, so the
+// gateway refuses a placeholder the run passes a value for, as the session did.
+// Without a wall what the run inherits is left out: a placeholder wins over an
+// inherited value.
 func passes(spec runSpec) []string {
 	seen := map[string]bool{}
 	inherited := spec.Env
@@ -95,11 +98,19 @@ func passes(spec runSpec) []string {
 			seen[name] = true
 		}
 	}
+	if spec.Wall != nil {
+		for _, kv := range slices.Concat(spec.Variables.Run, spec.Variables.Machine) {
+			given, _, ok := strings.Cut(kv, "=")
+			if name, prefixed, valid := variables.AgentName(given); ok && prefixed && valid && variableShape.MatchString(given) {
+				seen[name] = true
+			}
+		}
+	}
 	return slices.Sorted(maps.Keys(seen))
 }
 
-// resolve resolves the run's variables, from the fixed names to what the run inherits,
-// after refusing what the run passes into the enclosure: placeholders are the variables
+// resolve resolves the run's variables for a container of kind, from the fixed names to
+// what the run inherits, after refusing what the run passes into the enclosure: placeholders are the variables
 // the agent sees in place of what the gateway holds, and reserved the names the gateway
 // sets for the run, what a value of the machine's is read from. Behind a wall, and
 // without one for a run whose answer has credential_hosts, the endpoint rule checks
@@ -115,7 +126,7 @@ func passes(spec runSpec) []string {
 // When the run has a default model provider credential, key, its endpoint variable is
 // one of the run's fixed names: every other value of it is left out, the harness's
 // computed ones included, and the endpoint rule does not apply.
-func resolve(spec runSpec, rt runtimes.Runtime, served map[string]string, credentials []server.LinkCredentialHosts, prepared runtimes.Launch, placeholderNames, reserved []string, docker, authority bool, bundle []string, key keyed) (variables.Resolved, []string, error) {
+func resolve(spec runSpec, kind variables.Kind, rt runtimes.Runtime, served map[string]string, credentials []server.LinkCredentialHosts, prepared runtimes.Launch, placeholderNames, reserved []string, docker, authority bool, bundle []string, key keyed) (variables.Resolved, []string, error) {
 	var decl runtimes.Declarations
 	if s, ok := rt.(runtimes.Secrets); ok {
 		decl = s.Secrets()
@@ -173,7 +184,7 @@ func resolve(spec runSpec, rt runtimes.Runtime, served map[string]string, creden
 	vars, err := variables.Resolve(variables.Inputs{
 		Fixed: spec.LaunchFixed, Server: served, Run: spec.Variables.Run, Machine: spec.Variables.Machine,
 		Defaults: spec.LaunchDefaults, Shell: spec.Env,
-		Walled: spec.Wall != nil, Unwalled: spec.Variables.Unwalled,
+		Walled: spec.Wall != nil, Unwalled: spec.Variables.Unwalled, Kind: kind,
 		Deny: spec.Variables.Deny, RuntimeDenies: decl.Denies, Overrides: overrides, Runtime: runtimeNames,
 		Placeholders: placeholderNames, ReadFrom: readFrom, Own: own,
 		Endpoint: endpoint, EndpointFixed: key.Endpoint != "", KeysFixed: key.Others, Credentials: creds,

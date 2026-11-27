@@ -474,7 +474,7 @@ func TestCheckRefusesWhatStaysOutside(t *testing.T) {
 		{[]string{"QORY_RUN_ID=x", "QORY_RUN_SOCKET=x", "NODE_ENV=test"}, true, "", nil},
 		{[]string{"QORY_SERVER_SECRET=" + secret, "ANTHROPIC_API_KEY=" + secret, "SENTRY_AUTH_SOURCE=" + secret}, false, "", nil},
 	} {
-		err := variables.Check(tc.env, tc.walled, placeholders, machine)
+		err := variables.Check(tc.env, nil, tc.walled, placeholders, machine)
 		if tc.code == "" {
 			if err != nil {
 				t.Errorf("%q, walled %v: %v", tc.env, tc.walled, err)
