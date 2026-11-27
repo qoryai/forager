@@ -209,6 +209,11 @@ type Resolved struct {
 	// set, sorted by name. The inherited environment's value of a name is in it only
 	// when such a source set the name too.
 	Applied []Entry
+	// ToPrefix is, for kind [Agent] in a walled run, the names, sorted, whose value of
+	// the server, the run or the machine is left out as [WhyNotAgent] and would apply
+	// under AGENT_ followed by the name: no rule but the split leaves it out, and no
+	// value of an AGENT_ name applies to the name.
+	ToPrefix []string
 }
 
 // Entry is one name of the record: the name the container gets, the source whose value
@@ -484,7 +489,7 @@ func Resolve(in Inputs) (Resolved, error) {
 				e.Kept = &Kept{KeptEndpointCovered, keptFixed}
 			}
 		}
-		applies := ""
+		applies, prefixable := "", false
 		// given is the name a value was passed by when it differs from name.
 		given := func(v value) string {
 			if v.given == name {
@@ -533,7 +538,15 @@ func Resolve(in Inputs) (Resolved, error) {
 			default:
 				why, credential = left(name, v.v)
 			}
+			// The rule for the value under AGENT_ followed by name is the rule for it here,
+			// as the split leaves out only a value passed by name.
+			if ok && v.why == WhyNotAgent && v.given == name && why == "" && !fixed[name] && !slices.Contains(in.KeysFixed, name) {
+				prefixable = true
+			}
 			take(r.from, v, ok, why, credential)
+		}
+		if _, _, valid := AgentName(name); prefixable && valid && e.Given == "" {
+			out.ToPrefix = append(out.ToPrefix, name)
 		}
 		v, ok := shell[name]
 		take(FromShell, value{v: v, given: name}, ok, "", "")

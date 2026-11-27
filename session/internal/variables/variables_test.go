@@ -928,3 +928,28 @@ func TestAgentName(t *testing.T) {
 		}
 	}
 }
+
+// TestToPrefixListsOnlyNamesAPrefixBringsIn pins Resolved.ToPrefix of a walled agent:
+// DEPLOY and SETUP_ONLY, which apply under AGENT_ followed by the name. Not TARGET,
+// whose AGENT_ value applies; not the fixed CODEX_HOME, the model key name of KeysFixed,
+// the runtime's RUNTIME_SET or the read-from MACHINE_SECRET of the server, all left out
+// under AGENT_ too; not the denied GH_TOKEN nor the server's malformed AGENT_9X. A setup
+// resolution lists none.
+func TestToPrefixListsOnlyNamesAPrefixBringsIn(t *testing.T) {
+	in := variables.Inputs{
+		Walled: true, Kind: variables.Agent,
+		Fixed:     []string{"CODEX_HOME=/harness"},
+		KeysFixed: []string{"OTHER_KEY"},
+		Runtime:   []string{"RUNTIME_SET"},
+		ReadFrom:  []string{"MACHINE_SECRET"},
+		Server: map[string]string{"AGENT_TARGET": "agent", "DEPLOY": "d", "CODEX_HOME": "/server", "OTHER_KEY": "k",
+			"RUNTIME_SET": "r", "MACHINE_SECRET": "m", "GH_TOKEN": "a-fake-token", "AGENT_9X": "x"},
+		Run: []string{"TARGET=setup", "SETUP_ONLY=s"},
+	}
+	got := resolveAsPassed(t, in)
+	want(t, "agent", got.ToPrefix, []string{"DEPLOY", "SETUP_ONLY"})
+	in.Kind = variables.Setup
+	if got := resolveAsPassed(t, in); len(got.ToPrefix) != 0 {
+		t.Errorf("the setup's ToPrefix %q, want none", got.ToPrefix)
+	}
+}

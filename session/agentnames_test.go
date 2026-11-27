@@ -302,18 +302,24 @@ func TestAnAgentNameIsRefusedByTheNameAsPassed(t *testing.T) {
 // TestASetupInTheAgentsContainerListsTheNamesToPrefix pins the line of a walled join
 // whose setup commands run in the agent's container: the command gets the agent's
 // variables alone, and the run lists the names the server, --env and wall.env pass
-// without AGENT_, but one whose AGENT_ value applies and one the deny list leaves out.
+// without AGENT_, but one whose AGENT_ value applies, one the deny list leaves out, and
+// one whose AGENT_ value would be left out too: the harness's CODEX_HOME, a fixed name.
 func TestASetupInTheAgentsContainerListsTheNamesToPrefix(t *testing.T) {
+	codexHome := strings.Replace(agentNamesVariables, `{"variables":{`, `{"variables":{"CODEX_HOME":{"value":"/server"},`, 1)
 	for _, tc := range []struct {
+		server  string
+		fixed   []string
 		machine []string
 		want    string
 	}{
-		{nil, "Prefix DEPLOY with AGENT_ for the setup in the agent's container.\nThat setup gets only the agent's variables, so the run leaves DEPLOY out of it."},
-		{[]string{"MACHINE_PLAIN=x"}, "Prefix these with AGENT_ for the setup in the agent's container: DEPLOY and MACHINE_PLAIN.\nThat setup sees only the agent's variables, so these are left out of it."},
+		{agentNamesVariables, nil, nil, "Prefix DEPLOY with AGENT_ for the setup in the agent's container.\nThat setup gets only the agent's variables, so the run leaves DEPLOY out of it."},
+		{agentNamesVariables, nil, []string{"MACHINE_PLAIN=x"}, "Prefix these with AGENT_ for the setup in the agent's container: DEPLOY and MACHINE_PLAIN.\nThat setup sees only the agent's variables, so these are left out of it."},
+		{codexHome, []string{"CODEX_HOME=/harness"}, []string{"CODEX_HOME=/machine"}, "Prefix DEPLOY with AGENT_ for the setup in the agent's container.\nThat setup gets only the agent's variables, so the run leaves DEPLOY out of it."},
 	} {
 		sp, g := specGateway(t)
-		answerVariables(g, agentNamesVariables)
+		answerVariables(g, tc.server)
 		sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+		sp.LaunchFixed = tc.fixed
 		sp.Variables.Machine = tc.machine
 		prepared := filepath.Join(sp.Dir, "prepared-env")
 		sp.SetupRunner = setupRunner

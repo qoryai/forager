@@ -828,11 +828,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	}
 	// Setup commands in the agent's container get the agent's variables alone.
 	if spec.Wall != nil && len(spec.SessionSpec.Setup) > 0 {
-		deny, err := variables.List(slices.Concat(spec.Variables.Deny, denied))
-		if err != nil {
-			return fail(err)
-		}
-		if line := insideSetupLine(vars.Applied, deny, slices.Concat(placeholderNames, key.modelVariables())); line != "" {
+		if line := insideSetupLine(vars.ToPrefix, slices.Concat(placeholderNames, key.modelVariables())); line != "" {
 			r.open.Report(line)
 		}
 	}
@@ -1672,22 +1668,14 @@ func unnamedLines(entries []variables.Entry) []string {
 }
 
 // insideSetupLine is the line for a walled session whose setup commands run in the
-// agent's container, and so get only the agent's variables: it lists the names of
-// entries, the agent's record, whose value of the server, the run or the machine the
-// run leaves out as not_agent and that an AGENT_ name would bring in. A name whose value
-// of an AGENT_ name applies, whose rest is not a variable's name, that deny matches,
-// or that is one of fixed is not listed. Empty when no name is listed.
-func insideSetupLine(entries []variables.Entry, deny *variables.Deny, fixed []string) string {
+// agent's container, and so get only the agent's variables: it lists toPrefix, the
+// names the agent's resolution lists in [variables.Resolved.ToPrefix], but those of
+// fixed. Empty when no name is listed.
+func insideSetupLine(toPrefix, fixed []string) string {
 	var names []string
-	for _, e := range entries {
-		if e.Given != "" || deny.Matches(e.Name) || slices.Contains(fixed, e.Name) {
-			continue
-		}
-		if _, _, ok := variables.AgentName(e.Name); !ok {
-			continue
-		}
-		if slices.ContainsFunc(e.Lost, func(l variables.Loss) bool { return l.Why == variables.WhyNotAgent && l.Given == "" }) {
-			names = append(names, accesskey.ShownName(e.Name, false))
+	for _, name := range toPrefix {
+		if !slices.Contains(fixed, name) {
+			names = append(names, accesskey.ShownName(name, false))
 		}
 	}
 	switch len(names) {
