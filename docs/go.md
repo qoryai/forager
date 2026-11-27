@@ -547,9 +547,7 @@ A read-only mount must lie one name below `Dir`, or each folder between `Dir` an
 must be a mount too, as `checks` is here: the step can rename any other folder there,
 and the bind moves with it. Otherwise `RunStep` returns `mount_mode_conflict`: `Show the mount
 <path> one name below the workspace <Dir>, or list each directory between them as a
-mount: the step can rename <folder>, and the bind moves with it`. When a writable mount
-holds `Dir`, `Dir` is no mount point: the rule counts from that mount, so `Dir` and each
-folder between that mount and `Dir` must be mounts too. A writable mount below
+mount: the step can rename <folder>, and the bind moves with it`. A writable mount below
 a read-only one is `mount_mode_conflict`, a symbolic link on the way from `Dir` to a
 mount below it is `mount_target_conflict`, and a mount with a `Target` whose path lies
 below `Dir` is `mount_mode_conflict` or `mount_target_conflict`, as for a session. A run whose image is by reference shows each

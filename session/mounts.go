@@ -721,17 +721,14 @@ func replacePaths(s string, pairs []pathPair, rule pathRule) string {
 // SessionSpec.WorkspaceReadOnly, and mount_mode_conflict compares that mode with the
 // other places' modes.
 //
-// A step container's places, spec.stepBinds, differ in one way. Its top place is the
-// workspace, or the outermost writable place with no Target that holds the workspace
-// by its names and as it resolves. A place other than the workspace with no Target that
-// lies below the top place, the same way, is bound apart, over the top place's bind and
-// at its path, of either mode: a read-only one is not mount_mode_conflict for lying
-// inside the top place, the workspace, or a writable place below them. A writable one
-// inside a read-only one still is. Such a read-only place needs each directory between
-// the top place and it to be such a place too, or it is mount_mode_conflict: the step
-// can rename any other directory there, and the bind moves with it. With a writable
-// place that holds the workspace, the workspace is one of those directories, so it must
-// be a mount too. A symbolic link among the names from the top place down to such a
+// A step container's places, spec.stepBinds, differ in one way. A place with no Target
+// that lies below the workspace, by its names and as it resolves, is bound apart, over
+// the workspace's bind and at its path, of either mode: a read-only one is not
+// mount_mode_conflict for lying inside the workspace, or inside a writable place below
+// it. A writable one inside a read-only one still is. Such a read-only place needs each
+// directory between the workspace and it to be such a place too, or it is
+// mount_mode_conflict: the step can rename any other directory there, and the bind
+// moves with it. A symbolic link among the names from the workspace down to such a
 // place is mount_target_conflict ([checkOver]).
 //
 // A Target that is not absolute or clean, that is, contains or lies inside the wall's
@@ -836,20 +833,15 @@ func checkMounts(spec runSpec, runDir, sessionDir string) (mountPlan, error) {
 			}
 		}
 	}
-	// The workspace is the last place. In a step container, top is the outermost place
-	// bound at the workspace: the workspace, or the outermost writable place below which
-	// it lies. over[i] says place i, not the workspace, lies below top: it is bound over
-	// top's bind, at its path.
-	ws, top := len(places)-1, len(places)-1
+	// The workspace is the last place. In a step container, over[i] says place i lies
+	// below the workspace, by its names and as it resolves, with no Target: it is bound
+	// over the workspace's bind, at its path.
+	ws := len(places) - 1
 	over := make([]bool, len(places))
 	if spec.stepBinds {
-		for j, p := range places[:ws] {
-			if p.bindsWritable() && below(p, places[ws]) && (top == ws || len(parts(p.place)) < len(parts(places[top].place))) {
-				top = j
-			}
-		}
 		for i, p := range places[:ws] {
-			over[i] = i != top && below(places[top], p)
+			ok, same := holds(places[ws].at, p.at)
+			over[i] = ok && !same && p.target == "" && p.place != places[ws].place && under(places[ws].place, p.place)
 		}
 	}
 	// outer[i] is the place i is bound through: the first other place that holds it, or
@@ -868,9 +860,10 @@ func checkMounts(spec runSpec, runDir, sessionDir string) (mountPlan, error) {
 			if in.target != "" || out.target != "" {
 				return mountPlan{}, hostConflict(in, out, same)
 			}
-			// A place over top's bind is bound apart from top, the workspace, or another such
-			// place that holds it, unless it is a writable part of a read-only one.
-			if over[i] && !same && (j == ws || j == top || over[j]) && (!in.bindsWritable() || out.bindsWritable()) {
+			// A place over the workspace's bind is bound apart from the workspace, or from
+			// another such place that holds it, unless it is a writable part of a read-only
+			// one.
+			if over[i] && !same && (j == ws || over[j]) && (!in.bindsWritable() || out.bindsWritable()) {
 				continue
 			}
 			if in.bindsWritable() != out.bindsWritable() {
@@ -884,7 +877,7 @@ func checkMounts(spec runSpec, runDir, sessionDir string) (mountPlan, error) {
 	if err := checkPlaces(places, sessionDir); err != nil {
 		return mountPlan{}, err
 	}
-	if err := checkOver(places, over, outer, top); err != nil {
+	if err := checkOver(places, over, outer, ws); err != nil {
 		return mountPlan{}, err
 	}
 	plan := mountPlan{stepBinds: spec.stepBinds}
@@ -1111,21 +1104,20 @@ func movable(places []shown, outer, inner string) (string, bool) {
 	return "", false
 }
 
-// checkOver checks the places of a step container bound over the bind of places[at],
-// the workspace or the outermost writable place that holds it: those of over that are
-// bound apart, by outer. A symbolic link among the names from places[at] down to one of
-// them is mount_target_conflict ([linkBelow]), since the engine would bind it at another
-// place inside. A read-only one is mount_mode_conflict unless each directory between
-// places[at] and it is one of them: the step can rename any other directory there, and
-// the bind moves with it.
-func checkOver(places []shown, over []bool, outer []int, at int) error {
+// checkOver checks the places of a step container bound over the workspace's bind,
+// places[ws]: those of over that are bound apart, by outer. A symbolic link among the
+// names from the workspace down to one of them is mount_target_conflict ([linkBelow]),
+// since the engine would bind it at another place inside. A read-only one is
+// mount_mode_conflict unless each directory between the workspace and it is one of
+// them: the step can rename any other directory there, and the bind moves with it.
+func checkOver(places []shown, over []bool, outer []int, ws int) error {
 	bound := map[string]bool{}
 	for i, p := range places {
 		if over[i] && outer[i] < 0 {
 			bound[p.place] = true
 		}
 	}
-	top := places[at]
+	top := places[ws]
 	for i, p := range places {
 		if !over[i] || outer[i] >= 0 {
 			continue
@@ -1150,13 +1142,6 @@ func checkOver(places []shown, over []bool, outer []int, at int) error {
 		}
 	}
 	return nil
-}
-
-// below reports whether the place in lies below the place out, by its names and as it
-// resolves, neither with a Target.
-func below(out, in shown) bool {
-	ok, same := holds(out.at, in.at)
-	return ok && !same && in.target == "" && out.target == "" && in.place != out.place && under(out.place, in.place)
 }
 
 // linkBelow fails the place in, whose place inside lies inside the place out's, of
