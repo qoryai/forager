@@ -312,7 +312,7 @@ func TestAPlaceholderTheDenyListCoversIsRefused(t *testing.T) {
 		return `{"version":1,"credentials":[{"name":"model","apply":[{"hosts":["api.model.example"],"scheme":"bearer"}],"placeholders":["MODEL_API_KEY","` + placeholder + `"]}]}`
 	}
 	v := newVerified(t)
-	for _, p := range []string{"GIT_SSL_CAINFO", "git_ssl_cainfo", "HTTPS_PROXY", "no_proxy", "QORY_RUN_ID", "PATH", "NODE_OPTIONS", "ld_preload", "BASH_ENV", "HOME"} {
+	for _, p := range []string{"GIT_SSL_CAINFO", "git_ssl_cainfo", "HTTPS_PROXY", "no_proxy", "NODE_USE_ENV_PROXY", "node_use_env_proxy", "QORY_RUN_ID", "PATH", "NODE_OPTIONS", "ld_preload", "BASH_ENV", "HOME"} {
 		v.runDoc = doc(p)
 		_, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)
 		want := "Give the credential \"model\" a placeholder other than \"" + p + "\".\nThe built-in deny list, denied-variables.json, covers that variable"

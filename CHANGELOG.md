@@ -1213,6 +1213,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- Containers get NODE_USE_ENV_PROXY=1, so Node's fetch and https use the run's proxy
+  (Node 24.0 and later, 22.21 and later). `link.ProxyEnv` returns it last, and
+  `denied-variables.json` lists it in `names`. The limits are in
+  [docs/wall.md](docs/wall.md#the-proxy-variables).
 - An `auth` (`auth.schema.json`), an adapter's answer (`credential.schema.json`) with
   its `apply` items, and the data of a `dev.qory.run.exited` accept a member that their
   schema does not define. The member is ignored and the rest is read. Each has an

@@ -261,8 +261,10 @@ One run, on a developer machine, with a server configured:
 5. It starts the proxy on a loopback port and sets `HTTP_PROXY`, `HTTPS_PROXY` and
    `NO_PROXY` in the session's environment, in upper and lower case, with
    `NO_PROXY=localhost,127.0.0.1,::1` so a local MCP server or model endpoint still
-   answers. Without a wall the proxy URL carries a password of the run's forwarder
-   alone, which the forwarder checks (§The gateway's link, Agent traffic). It opens the
+   answers. It sets `NODE_USE_ENV_PROXY=1` as well, without which Node's `fetch` and
+   `https` connect directly and ignore the other variables. Without a wall the proxy
+   URL carries a password of the run's forwarder alone, which the forwarder checks
+   (§The gateway's link, Agent traffic). It opens the
    local socket and sets `QORY_RUN_SOCKET` to its path, `QORY_RUN_ID` to the run id,
    `QORY_SESSION` to the join answer's `session`, `QORY_RUN_API` to the run API's base
    URL for a run with a control plane (§The run API), `QORY_HOST_URL` to
@@ -1874,6 +1876,7 @@ node and the run: the names the wall sets for the run's bundle, and the runtime'
 |---|---|
 | `QORY_*`, apart from the server's values of `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` | Forager's names |
 | `*_PROXY`, `NO_PROXY` included, in any case | the session sets the proxy variables (§Sequence step 5), and any other routes around the proxy |
+| `NODE_USE_ENV_PROXY` | the session sets it to `1` (§Sequence step 5); `*_PROXY` covers it already, and `names` lists it so that a reader of the file finds it |
 | `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `AWS_CA_BUNDLE`, `GIT_SSL_CAINFO` | the wall points them at the run's bundle (§The wall), and another value would replace it |
 | `SSL_CERT_DIR`, `GIT_SSL_CAPATH` | they point the same programs at another store beside the bundle the wall sets |
 | every name the wall sets for the run's bundle | the node's names for the run's bundle |

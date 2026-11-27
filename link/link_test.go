@@ -85,6 +85,22 @@ func must(b []byte, err error) []byte {
 	return b
 }
 
+// TestProxyEnvPointsEveryProgramAtTheProxy pins the whole list: the proxy in both cases,
+// NO_PROXY with loopback in both cases, and NODE_USE_ENV_PROXY=1 for Node's fetch and
+// https.
+func TestProxyEnvPointsEveryProgramAtTheProxy(t *testing.T) {
+	const u = "http://qory-proxy:3128"
+	want := []string{
+		"HTTP_PROXY=" + u, "http_proxy=" + u,
+		"HTTPS_PROXY=" + u, "https_proxy=" + u,
+		"NO_PROXY=localhost,127.0.0.1,::1", "no_proxy=localhost,127.0.0.1,::1",
+		"NODE_USE_ENV_PROXY=1",
+	}
+	if got := link.ProxyEnv(u); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("ProxyEnv:\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 // TestTheRelayPreamble pins the line the wall's relay writes and the proxy reads: read
 // in exactly its length, and true only for the word, the secret and the newline.
 func TestTheRelayPreamble(t *testing.T) {
