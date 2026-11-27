@@ -151,7 +151,7 @@ func TestAResumeThatFailsStartsTheRuntimeWithoutIt(t *testing.T) {
 	if strings.Contains(out, "restored: ok") || !strings.Contains(out, "args: \n") {
 		t.Errorf("the runtime's output %q", out)
 	}
-	want := "Check that the control plane has the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d. The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: the gateway returned 404 not_found to the transcript request\n"
+	want := "This run starts without its earlier conversation, which could not be restored.\nCheck that the control plane has the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d: the gateway returned 404 not_found to the transcript request\n"
 	if !strings.Contains(out, want) {
 		t.Errorf("no line %q in %q", want, out)
 	}
@@ -247,7 +247,7 @@ func TestAWalledResumeOfAnotherShapeFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := runLogText(t, events(t, res))
-	want := "Check resume.session_id in the run configuration. The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: its session id s-1 is not a UUID in lower case\n"
+	want := "This run starts without its earlier conversation, which could not be restored.\nCheck resume.session_id in the run configuration: its session id s-1 is not a UUID in lower case\n"
 	if !strings.Contains(out, want) || !strings.Contains(out, "args: \n") {
 		t.Errorf("the runtime's output %q; want %q", out, want)
 	}
@@ -278,7 +278,7 @@ func TestAResumeWhoseSessionIdStartsWithADashFails(t *testing.T) {
 				t.Fatal(err)
 			}
 			out := runLogText(t, events(t, res))
-			want := "Check resume.session_id in the run configuration. The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: its session id --help starts with -, so the runtime would read it as an option\n"
+			want := "This run starts without its earlier conversation, which could not be restored.\nCheck resume.session_id in the run configuration: its session id --help starts with -, so the runtime would read it as an option\n"
 			if !strings.Contains(out, want) || !strings.Contains(out, "args: \n") {
 				t.Errorf("the runtime's output %q; want %q", out, want)
 			}
@@ -550,7 +550,7 @@ func TestAnUnboundWallTakesTheInsertedArgumentsOff(t *testing.T) {
 	out := runLogText(t, events(t, res))
 	for _, want := range []string{
 		"args: exec --json\n",
-		"Set HOME in the image. The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: the home is a file in the image\n",
+		"This run starts without its earlier conversation, which could not be restored.\nSet HOME in the image: the home is a file in the image\n",
 		"Set HOME in the image. A continuation of this run starts the runtime without a resume: the home is a file in the image\n",
 	} {
 		if !strings.Contains(out, want) {
@@ -578,7 +578,7 @@ func TestAnUnwalledResumeChecksThePathAgainstThePattern(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := runLogText(t, events(t, res))
-	want := "Check resume.path in the run configuration. The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: its path " + deeper + " does not match ~/.resumer/{cwd_slug}/0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e.jsonl, with {cwd_slug} a slug\n"
+	want := "This run starts without its earlier conversation, which could not be restored.\nCheck resume.path in the run configuration: its path " + deeper + " does not match ~/.resumer/{cwd_slug}/0b5f4c1e-2d3a-4b6c-8d7e-9f0a1b2c3d4e.jsonl, with {cwd_slug} a slug\n"
 	if !strings.Contains(out, want) || !strings.Contains(out, "args: \n") {
 		t.Errorf("the runtime's output %q; want %q", out, want)
 	}
@@ -724,7 +724,7 @@ func TestAWalledAbsolutePrefixInAReadOnlyMountGetsNoTranscript(t *testing.T) {
 	out := runLogText(t, evs)
 	fix := "Show resume.prefix in a writable mount, or use a descriptor whose resume.prefix lies outside read-only mounts"
 	cause := "resume.prefix " + prefix + " lies inside the mount " + home + ", shown at " + homeInside + ", read-only, so the runtime cannot write its transcript there"
-	failed := fix + ". The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: " + cause + "\n"
+	failed := "This run starts without its earlier conversation, which could not be restored.\n" + fix + ": " + cause + "\n"
 	none := fix + ". A continuation of this run starts the runtime without a resume: " + cause + "\n"
 	if i, j := strings.Index(out, failed), strings.Index(out, none); i < 0 || j < i || !strings.Contains(out, "args: \n") || strings.Contains(out, "restored: ok") {
 		t.Errorf("the runtime's output %q\nwant %q, then %q", out, failed, none)

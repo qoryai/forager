@@ -1681,7 +1681,8 @@ the gateway passed it:
 - `dev.qory.run.built`'s `image`, `environment_image`, `base` and `commit`.
 - `dev.qory.run.exited`'s `reason`, and `dev.qory.run.refused`'s `names`.
 - The errors the run's other methods return, such as `HostProxy`, `StackProxy`,
-  `EngineProxy`, `AgentEnv` and `Built`, apart from the engine proxy's password.
+  `EngineProxy`, `AgentEnv`, `SetupEnv` and `Built`, apart from the engine proxy's
+  password.
 - A value split across two calls of `Step.Log`.
 - The files the run writes for the runtime to read, such as the setup script in the
   session's directory, which has the setup commands as given.
@@ -1860,8 +1861,8 @@ credential the join request asks the gateway for, for this session.
   setup container remains. The host steps still write the workspace, so it keeps the
   checks of a writable place, and a settings file in it is refused as in a writable one. A writable
   mount that holds `Dir` is `mount_mode_conflict`; a read-only one is the one
-  bind. `Join` and `AgentEnv` return an error before the join request, and write
-  nothing, in a run with no `Wall`: `Open the run with a wall to mount the workspace
+  bind. `Join`, `AgentEnv` and `SetupEnv` return an error before the join request,
+  and write nothing, in a run with no `Wall`: `Open the run with a wall to mount the workspace
   read-only: a run with no wall starts the agent on this machine.` They do the same
   beside `Setup`, which runs in the agent's container: `Run the setup with Run.Setup, or
   leave SessionSpec.WorkspaceReadOnly unset: SessionSpec.Setup runs in the agent's
@@ -1971,13 +1972,15 @@ credential the join request asks the gateway for, for this session.
     run directory and `HarnessHome`.
   - `OnVariables` receives each name, its source and the values that lost, once, before
     the agent starts.
+  - In a walled run, only a variable of the server, `Variables.Run` or
+    `Variables.Machine` whose name starts with `AGENT_`, in exact case, reaches the
+    agent, by the rest of its name, with the server's `QORY_RUN_SYSTEM` and
+    `QORY_RUN_REPOSITORIES`. See [variables](server.md#variables).
   - `(*session.Run).AgentEnv(spec)` returns the environment a session of `spec` gets
     from the server's variables, `Variables.Run`, `Variables.Machine`,
     `LaunchDefaults` and `Env`, `NAME=value`, sorted by name, in a new slice on every
-    call. To give the setup container the agent's environment, call it before `Setup`
-    with the session's full spec, and pass the result as `SetupSpec.Env`. The result
-    has `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` when the server sets them, and
-    `Setup` accepts both. It resolves the variables as `Join` does, with the deny
+    call. The result has `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` when the server
+    sets them. It resolves the variables as `Join` does, with the deny
     lists and the placeholders, and leaves out the names Forager, the proxy, the wall,
     the bundle and `LaunchFixed` set, the placeholders, and a name of
     `denied-variables.json` that `Env` has, such as `PATH`, which `Join` passes to the
@@ -1991,6 +1994,13 @@ credential the join request asks the gateway for, for this session.
     checks the places of a run whose image is a reference, or as it resolves the
     variables, such as `variable_reserved` or `placeholder_conflict`, or that the run
     is closed, or that another call of the run is running.
+  - `(*session.Run).SetupEnv(spec)` returns the setup container's environment, as
+    `AgentEnv` does, but with each value of those three sources without the prefix
+    under its name, and each `AGENT_X` as `X`, not as `AGENT_X`, when no value of `X`
+    is set. Call it before `Setup` with the session's full spec, and pass the result as
+    `SetupSpec.Env`; `Setup` accepts `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`. For
+    a forge token or a model key passed by a name without `AGENT_`, it reports the fix
+    through `OpenSpec.Report` once per run, on the first call that returns no error.
 - `SocketGrace` is how long the run socket keeps accepting after the runtime exits, so
   a hook on its last event is still read. Zero or less means 200 ms. It is for tests:
   production leaves it zero.

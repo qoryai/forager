@@ -92,7 +92,7 @@ func TestARunInAnImageByReference(t *testing.T) {
 	sp.HarnessHome = dir + "/home"
 	sp.LaunchFixed = []string{"TOOLS_DIR=" + dir + "/tools"}
 	sp.LaunchDefaults = []string{"CACHE_PATH=" + dir + "/cache:" + dir + "x"}
-	sp.Variables.Run = []string{"MINE=" + dir}
+	sp.Variables.Run = []string{"AGENT_MINE=" + dir}
 	sp.Env = append(sp.Env, "INHERITED="+dir)
 	sp.SetupRunner = setupRunner
 	sp.SessionSpec.Setup = []session.SetupCommand{{Name: "install", Args: []string{"true", dir + "/prepare.sh"}}}

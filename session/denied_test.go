@@ -126,7 +126,7 @@ func TestADeniedNameIsUnsetBehindAWall(t *testing.T) {
 	hasRunAPI(g)
 	sp.Wall, sp.Image = w, "example.com/agent:1"
 	sp.Variables.Deny = []string{"APP_SECRET", "APP_*", "INHERITED_DENIED", "HTTPS_PROXY", session.EnvRunID, session.EnvSession, session.EnvRunAPI}
-	sp.Variables.Machine = []string{"APP_SECRET=the-machines"}
+	sp.Variables.Machine = []string{"AGENT_APP_SECRET=the-machines"}
 	if _, err := run(context.Background(), sp); err != nil {
 		t.Fatal(err)
 	}
@@ -175,8 +175,8 @@ func TestAFixedValueOfADeniedNameStays(t *testing.T) {
 			sp.LaunchFixed = []string{tc.fixed}
 		}
 		if tc.passed {
-			answerVariables(g, `{"variables":{"`+name+`":{"value":"/server/config"}}}`)
-			sp.Variables.Run = []string{name + "=/run/config"}
+			answerVariables(g, `{"variables":{"AGENT_`+name+`":{"value":"/server/config"}}}`)
+			sp.Variables.Run = []string{"AGENT_" + name + "=/run/config"}
 		}
 		if _, err := run(context.Background(), sp); err != nil {
 			t.Fatalf("%s: %v", tc.what, err)
@@ -224,14 +224,16 @@ func TestAWalledRunDropsTheModelOverrides(t *testing.T) {
 				passed = append(passed, name+"=passed-by-"+source)
 				vars[name] = map[string]any{"value": "passed-by-" + source}
 			}
+			// The server's, the run's and the machine's values reach the agent by AGENT_
+			// names alone, so the test passes each of their names with the prefix.
 			switch source {
 			case "apiary":
 				doc, _ := json.Marshal(map[string]any{"variables": vars})
-				answerVariables(g, string(doc))
+				answerVariables(g, agentDoc(string(doc)))
 			case "run":
-				sp.Variables.Run = passed
+				sp.Variables.Run = agentPrefixed(passed)
 			case "machine":
-				sp.Variables.Machine = passed
+				sp.Variables.Machine = agentPrefixed(passed)
 			case "harness":
 				sp.LaunchDefaults = passed
 			case "fixed":
@@ -406,9 +408,9 @@ func TestAVariableThatAddsPluginsOrDirectoriesIsDenied(t *testing.T) {
 			w := &openWall{}
 			sp, g := specGateway(t)
 			sp.Wall, sp.Image = w, "example.com/agent:1"
-			answerVariables(g, `{"variables":{"`+name+`":{"value":"/server/plugins"}}}`)
-			sp.Variables.Run = []string{name + "=/run/plugins"}
-			sp.Variables.Machine = []string{name + "=/machine/plugins"}
+			answerVariables(g, `{"variables":{"AGENT_`+name+`":{"value":"/server/plugins"}}}`)
+			sp.Variables.Run = []string{"AGENT_" + name + "=/run/plugins"}
+			sp.Variables.Machine = []string{"AGENT_" + name + "=/machine/plugins"}
 			if _, err := run(context.Background(), sp); err != nil {
 				t.Fatal(err)
 			}

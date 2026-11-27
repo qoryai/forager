@@ -1,11 +1,15 @@
-// Package variables resolves the variables a run's agent receives, name by name, from
-// the sources that set them, and records where each came from and what lost.
+// Package variables resolves the variables a container of a run receives, name by
+// name, from the sources that set them, and records where each came from and what lost.
 //
 // The sources form rungs, the highest first: the run's fixed names, Forager's, the
 // wall's, the runtime preparation's, the placeholders and the values the harness
 // computes; the server's, which it resolved among its own levels; the run's own, --env
 // for qory; the machine's, wall.env; the harness's written defaults; and the
 // environment the run inherits. For each name the highest rung that sets it wins.
+// Behind a wall the server's, the run's and the machine's values are split by the
+// container ([Kind]): the agent's container gets only a value whose name starts with
+// AGENT_, by the rest of the name, and the setup container gets each value under its
+// name, then each AGENT_ value by the rest of the name, a rung below.
 //
 // [Resolve] refuses first what must stay outside the enclosure, [Check], over every
 // value the node passes. The deny list then leaves out a value of the server, the run,
@@ -73,17 +77,53 @@ const (
 
 // Why a source's value of a name lost: another source's value won, the deny list
 // matched it, the name is one of the run's fixed names, the run has no wall and takes
-// none of the server's, or, of the endpoint's variable under the endpoint rule, the value's host
-// is none of the hosts of the run's model credential or the value is not an https URL
-// with a host [policy.EndpointHost] reads.
+// none of the server's, the value does not reach the agent's container, or, of the
+// endpoint's variable under the endpoint rule, the value's host is none of the hosts of
+// the run's model credential or the value is not an https URL with a host
+// [policy.EndpointHost] reads.
 const (
 	WhyOverridden         = "overridden"
 	WhyDenied             = "denied"
 	WhyFixed              = "fixed"
 	WhyUnwalled           = "unwalled"
+	WhyNotAgent           = "not_agent"
 	WhyEndpointUncovered  = "endpoint_uncovered"
 	WhyEndpointUnreadable = "endpoint_unreadable"
 )
+
+// AgentPrefix starts the name of a variable of the server, the run or the machine that
+// reaches the agent's container of a walled run, in exact case. The container gets the
+// variable by the rest of the name, the prefix removed once.
+const AgentPrefix = "AGENT_"
+
+// Kind is the container of a walled run whose variables a resolution is for.
+type Kind int
+
+// The two kinds of container. Agent, the zero Kind, is the agent's container: of the
+// server's, the run's and the machine's values, only those whose name starts with
+// [AgentPrefix] reach it, by the rest of the name, with the server's QORY_RUN_SYSTEM and
+// QORY_RUN_REPOSITORIES. Setup is the setup container: it gets those values under their
+// names, and each value of an AGENT_ name by the rest of the name, which a value under
+// that name wins over.
+const (
+	Agent Kind = iota
+	Setup
+)
+
+// nameShape is a variable's name: a letter or an underscore, then letters, digits and
+// underscores.
+var nameShape = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// AgentName is the name the agent's container gets for name, given, and true when given
+// starts with [AgentPrefix]; prefixed is false otherwise. A rest that is not a
+// variable's name is returned with ok false: no container gets the value.
+func AgentName(given string) (name string, prefixed, ok bool) {
+	rest, prefixed := strings.CutPrefix(given, AgentPrefix)
+	if !prefixed {
+		return given, false, true
+	}
+	return rest, true, nameShape.MatchString(rest)
+}
 
 // KeptEndpointCovered is why a value of the endpoint's variable applies under the
 // endpoint rule: its host is a host of the run's model credential.
@@ -106,6 +146,10 @@ type Inputs struct {
 	Shell []string
 	// Walled says the run has a wall.
 	Walled bool
+	// Kind is the container of a walled run the resolution is for; an unwalled run
+	// ignores it. The server's, the run's and the machine's values are split by it
+	// ([split]); the fixed names, Defaults and Shell are not.
+	Kind Kind
 	// Unwalled is how an unwalled run takes the server's variables: [Accept], or
 	// [Ignore], which empty means.
 	Unwalled string
@@ -165,17 +209,25 @@ type Resolved struct {
 	// set, sorted by name. The inherited environment's value of a name is in it only
 	// when such a source set the name too.
 	Applied []Entry
+	// ToPrefix is, for kind [Agent] in a walled run, the names, sorted, whose value of
+	// the server, the run or the machine is left out as [WhyNotAgent] and would apply
+	// under AGENT_ followed by the name: no rule but the split leaves it out, and no
+	// value of an AGENT_ name applies to the name.
+	ToPrefix []string
 }
 
-// Entry is one name of the record: the source whose value the run applies, empty when
-// none, and the values that lost, the highest rung first. A fixed name's From is
-// [FromFixed]. Kept is set when the value that applies is a value of the endpoint's
-// variable that the endpoint rule checked.
+// Entry is one name of the record: the name the container gets, the source whose value
+// the run applies, empty when none, and the values that lost, in the order of the
+// rungs. A fixed name's From is [FromFixed]. Given is the name the value that applies
+// was passed by, set only when it differs from Name, as for AGENT_X applied as X. Kept
+// is set when the value that applies is a value of the endpoint's variable that the
+// endpoint rule checked.
 type Entry struct {
-	Name string `json:"name"`
-	From string `json:"from,omitempty"`
-	Lost []Loss `json:"lost"`
-	Kept *Kept  `json:"kept,omitempty"`
+	Name  string `json:"name"`
+	Given string `json:"given,omitempty"`
+	From  string `json:"from,omitempty"`
+	Lost  []Loss `json:"lost"`
+	Kept  *Kept  `json:"kept,omitempty"`
 }
 
 // Kept is why the endpoint rule kept a value: [KeptEndpointCovered], and the name of
@@ -186,10 +238,63 @@ type Kept struct {
 	Credential string `json:"credential"`
 }
 
-// Loss is one source's value that lost, and why.
+// Loss is one source's value that lost, and why. Given is the name the value was
+// passed by, set only when it differs from the entry's name.
 type Loss struct {
-	From string `json:"from"`
-	Why  string `json:"why"`
+	From  string `json:"from"`
+	Why   string `json:"why"`
+	Given string `json:"given,omitempty"`
+}
+
+// value is one source's value of a name: the value, the name it was passed by, and why
+// it loses before any rule applies, empty when no such reason applies.
+type value struct {
+	v, given, why string
+}
+
+// split is the values of m, a source's values by the name passed, that a container of
+// kind may get, by the name the container gets them: plain, each value under its name
+// as passed, and agent, each value of a name that starts with [AgentPrefix] under the
+// rest of the name. Without a wall plain is m and agent is empty. Behind one, a name
+// whose rest is not a variable's name is in plain under the name as passed, lost as
+// [WhyNotAgent]: no container gets it. For [Agent], every other value of plain is lost
+// as WhyNotAgent too, but the server's QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES, by
+// these names exactly; server is true when m is the server's.
+func split(kind Kind, walled, server bool, m map[string]string) (plain, agent map[string]value) {
+	plain, agent = map[string]value{}, map[string]value{}
+	for given, v := range m {
+		name, prefixed, ok := AgentName(given)
+		switch {
+		case !walled:
+			plain[given] = value{v: v, given: given}
+		case !ok:
+			plain[given] = value{v: v, given: given, why: WhyNotAgent}
+		case prefixed:
+			agent[name] = value{v: v, given: given}
+		case kind == Agent && !(server && (given == envRunSystem || given == envRunRepositories)):
+			plain[given] = value{v: v, given: given, why: WhyNotAgent}
+		default:
+			plain[given] = value{v: v, given: given}
+		}
+	}
+	return plain, agent
+}
+
+// checkAgentNames returns an error for a value of env, NAME=value, whose name starts with
+// [AgentPrefix] and whose rest is not a variable's name: no container would get it.
+func checkAgentNames(env []string) error {
+	for _, kv := range env {
+		given, _, _ := strings.Cut(kv, "=")
+		name, _, ok := AgentName(given)
+		switch {
+		case ok:
+		case name == "":
+			return fmt.Errorf("Rename %s: the agent's container would get no name after the prefix.", accesskey.ShownName(given, false))
+		default:
+			return fmt.Errorf("Rename %s: the agent's container would get %s, which is not a variable's name.", accesskey.ShownName(given, false), accesskey.ShownName(name, false))
+		}
+	}
+	return nil
 }
 
 // Resolve resolves a run's variables. It checks the node's deny entries and the
@@ -227,6 +332,13 @@ type Loss struct {
 // ones included, is left out as [WhyFixed]. Every value of a name of in.KeysFixed is
 // left out as [WhyFixed] too, the inherited one included, and the entry has no from:
 // the caller sets none of them.
+//
+// Behind a wall, the server's, the run's and the machine's values are first split by
+// in.Kind ([split]), and every rule above reads the name the container gets. A run's or
+// a machine's value whose name starts with AGENT_ and whose rest is not a variable's
+// name is an error, with the fix first; the server's such value is left out as
+// [WhyNotAgent]. The exemptions of QORY_RUN_SYSTEM, QORY_RUN_REPOSITORIES, QORY_RUN_ID
+// and QORY_RUN_SOCKET hold only for a value passed by these names.
 func Resolve(in Inputs) (Resolved, error) {
 	if err := CheckDeny(in.Deny); err != nil {
 		return Resolved{}, err
@@ -236,11 +348,14 @@ func Resolve(in Inputs) (Resolved, error) {
 	}
 	// Without a wall what the run inherits is the developer's environment, and a
 	// placeholder wins over a value of it: it passes nothing into an enclosure.
-	passed := slices.Concat(in.Fixed, in.Run, in.Machine, in.Defaults)
+	passed := slices.Concat(in.Fixed, in.Defaults)
 	if in.Walled {
 		passed = append(passed, in.Shell...)
+		if err := checkAgentNames(slices.Concat(in.Run, in.Machine)); err != nil {
+			return Resolved{}, err
+		}
 	}
-	if err := Check(passed, in.Walled, in.Placeholders, in.ReadFrom); err != nil {
+	if err := Check(passed, slices.Concat(in.Run, in.Machine), in.Walled, in.Placeholders, in.ReadFrom); err != nil {
 		return Resolved{}, err
 	}
 	added := append(slices.Clone(in.Deny), in.RuntimeDenies...)
@@ -332,13 +447,28 @@ func Resolve(in Inputs) (Resolved, error) {
 		out.Fixed = append(out.Fixed, kv)
 		fixed[name] = true
 	}
-	run, machine, defaults, shell := byName(in.Run), byName(in.Machine), byName(in.Defaults), byName(in.Shell)
+	// The rungs below the fixed names, the highest first: the server's, the run's and
+	// the machine's values under their names as passed, then the values of their AGENT_
+	// names by the rest of the name, then the harness's defaults and the inherited
+	// environment, which are not split.
+	serverPlain, serverAgent := split(in.Kind, in.Walled, true, in.Server)
+	runPlain, runAgent := split(in.Kind, in.Walled, false, byName(in.Run))
+	machinePlain, machineAgent := split(in.Kind, in.Walled, false, byName(in.Machine))
+	defaults, shell := byName(in.Defaults), byName(in.Shell)
+	rungs := []struct {
+		from string
+		m    map[string]value
+	}{
+		{FromApiary, serverPlain}, {FromRun, runPlain}, {FromMachine, machinePlain},
+		{FromApiary, serverAgent}, {FromRun, runAgent}, {FromMachine, machineAgent},
+		{FromHarness, unsplit(defaults)},
+	}
 	names := map[string]bool{}
 	for name := range deniedFixed {
 		names[name] = true
 	}
-	for _, m := range []map[string]string{in.Server, run, machine, defaults} {
-		for name := range m {
+	for _, r := range rungs {
+		for name := range r.m {
 			names[name] = true
 		}
 	}
@@ -351,7 +481,7 @@ func Resolve(in Inputs) (Resolved, error) {
 	for _, name := range slices.Sorted(maps.Keys(names)) {
 		e := Entry{Name: name, Lost: []Loss{}}
 		if why := deniedFixed[name]; why != "" {
-			e.Lost = append(e.Lost, Loss{FromFixed, why})
+			e.Lost = append(e.Lost, Loss{From: FromFixed, Why: why})
 		}
 		if fixed[name] {
 			e.From = FromFixed
@@ -359,53 +489,70 @@ func Resolve(in Inputs) (Resolved, error) {
 				e.Kept = &Kept{KeptEndpointCovered, keptFixed}
 			}
 		}
-		value := ""
-		take := func(from string, v string, ok bool, why, credential string) {
+		applies, prefixable := "", false
+		// given is the name a value was passed by when it differs from name.
+		given := func(v value) string {
+			if v.given == name {
+				return ""
+			}
+			return v.given
+		}
+		take := func(from string, v value, ok bool, why, credential string) {
 			switch {
 			case !ok:
+			case v.why != "":
+				e.Lost = append(e.Lost, Loss{from, v.why, given(v)})
 			case slices.Contains(in.KeysFixed, name):
-				e.Lost = append(e.Lost, Loss{from, WhyFixed})
+				e.Lost = append(e.Lost, Loss{from, WhyFixed, given(v)})
 			case why != "":
-				e.Lost = append(e.Lost, Loss{from, why})
+				e.Lost = append(e.Lost, Loss{from, why, given(v)})
 			case fixed[name]:
-				e.Lost = append(e.Lost, Loss{from, WhyFixed})
+				e.Lost = append(e.Lost, Loss{from, WhyFixed, given(v)})
 			case e.From != "":
-				e.Lost = append(e.Lost, Loss{from, WhyOverridden})
+				e.Lost = append(e.Lost, Loss{from, WhyOverridden, given(v)})
 			default:
-				e.From, value = from, v
+				e.From, e.Given, applies = from, given(v), v.v
 				if credential != "" {
 					e.Kept = &Kept{KeptEndpointCovered, credential}
 				}
 			}
 		}
-		v, ok := in.Server[name]
-		why, credential := "", ""
-		switch {
-		case !in.Walled && in.Unwalled != Accept:
-			why = WhyUnwalled
-		case slices.Contains(setOtherwise, name):
-			why = WhyDenied
-		case name == envRunSystem || name == envRunRepositories:
-			if serverDeny.Matches(name) {
+		for _, r := range rungs {
+			v, ok := r.m[name]
+			why, credential := "", ""
+			switch {
+			case !ok:
+			case r.from != FromApiary:
+				why, credential = left(name, v.v)
+			case !in.Walled && in.Unwalled != Accept:
+				why = WhyUnwalled
+			case slices.Contains(setOtherwise, name):
 				why = WhyDenied
+			case v.given == envRunSystem || v.given == envRunRepositories:
+				// The exemption holds for the names as the server passes them: an
+				// AGENT_ name whose rest is one of them is held to the rules of any
+				// QORY_ name.
+				if serverDeny.Matches(name) {
+					why = WhyDenied
+				}
+			default:
+				why, credential = left(name, v.v)
 			}
-		default:
-			why, credential = left(name, v)
+			// The rule for the value under AGENT_ followed by name is the rule for it here,
+			// as the split leaves out only a value passed by name.
+			if ok && v.why == WhyNotAgent && v.given == name && why == "" && !fixed[name] && !slices.Contains(in.KeysFixed, name) {
+				prefixable = true
+			}
+			take(r.from, v, ok, why, credential)
 		}
-		take(FromApiary, v, ok, why, credential)
-		for _, s := range []struct {
-			from string
-			m    map[string]string
-		}{{FromRun, run}, {FromMachine, machine}, {FromHarness, defaults}} {
-			v, ok := s.m[name]
-			why, credential := left(name, v)
-			take(s.from, v, ok, why, credential)
+		if _, _, valid := AgentName(name); prefixable && valid && e.Given == "" {
+			out.ToPrefix = append(out.ToPrefix, name)
 		}
-		v, ok = shell[name]
-		take(FromShell, v, ok, "", "")
+		v, ok := shell[name]
+		take(FromShell, value{v: v, given: name}, ok, "", "")
 		switch e.From {
 		case FromApiary, FromRun, FromMachine, FromHarness:
-			out.Env = append(out.Env, name+"="+value)
+			out.Env = append(out.Env, name+"="+applies)
 		}
 		out.Applied = append(out.Applied, e)
 	}
@@ -437,6 +584,15 @@ func endpointRule(credentials []Credential, runtime []string) func(v string) (wh
 	}
 }
 
+// unsplit is the values of m, by name, each under its name.
+func unsplit(m map[string]string) map[string]value {
+	out := make(map[string]value, len(m))
+	for name, v := range m {
+		out[name] = value{v: v, given: name}
+	}
+	return out
+}
+
 // byName are NAME=value entries by name, a later one replacing an earlier one.
 func byName(env []string) map[string]string {
 	out := map[string]string{}
@@ -447,39 +603,92 @@ func byName(env []string) map[string]string {
 	return out
 }
 
-// Check refuses a run whose own environment, env, NAME=value, passes into the
-// enclosure what stays outside. In a walled run, a QORY_ variable other than the two
-// Forager sets for the session, or a variable a machine value is read from, is
-// [refusal.VariableReserved]. In any run, a value for a placeholder is
-// [refusal.PlaceholderConflict].
-func Check(env []string, walled bool, placeholders, machine []string) error {
-	names := map[string]bool{}
+// Check returns a refusal for a run whose environment, env and split, NAME=value,
+// passes into the enclosure what stays outside. In a walled run, the name of a value of
+// split, the run's and the machine's values, is checked as a container gets it, the
+// rest of an AGENT_ name ([AgentName]); a name whose rest is not a variable's name is
+// not checked. A refusal cites each name as passed. In a walled run, a QORY_ variable,
+// in any case, or a variable a machine value is read from, is
+// [refusal.VariableReserved]; QORY_RUN_ID and QORY_RUN_SOCKET, the two Forager sets for
+// the session, pass when passed by these names. In any run, a value for a placeholder
+// is [refusal.PlaceholderConflict].
+func Check(env, split []string, walled bool, placeholders, machine []string) error {
+	// checked is each name as a container gets it, and the names it was passed by.
+	checked := map[string][]string{}
+	add := func(name, given string) {
+		if !slices.Contains(checked[name], given) {
+			checked[name] = append(checked[name], given)
+		}
+	}
 	for _, kv := range env {
 		name, _, _ := strings.Cut(kv, "=")
-		names[name] = true
+		add(name, name)
 	}
-	sorted := slices.Sorted(maps.Keys(names))
-	pick := func(keep func(string) bool) []string {
+	for _, kv := range split {
+		given, _, _ := strings.Cut(kv, "=")
+		name, _, ok := AgentName(given)
+		switch {
+		case !walled:
+			add(given, given)
+		case ok:
+			add(name, given)
+		}
+	}
+	pick := func(keep func(name, given string) bool) []string {
 		var out []string
-		for _, name := range sorted {
-			if keep(name) {
-				out = append(out, name)
+		for name, givens := range checked {
+			for _, given := range givens {
+				if keep(name, given) {
+					out = append(out, given)
+				}
 			}
 		}
-		return out
+		slices.Sort(out)
+		return slices.Compact(out)
 	}
 	if walled {
-		if reserved := accesskey.ShownNames(pick(func(n string) bool {
-			own := strings.HasPrefix(strings.ToUpper(n), "QORY_") && n != envRunID && n != envSocket
+		if reserved := accesskey.ShownNames(pick(func(n, given string) bool {
+			own := strings.HasPrefix(strings.ToUpper(n), "QORY_") && !(given == n && (n == envRunID || n == envSocket))
 			return own || slices.Contains(machine, n)
 		})); len(reserved) > 0 {
 			return refusal.New(refusal.VariableReserved, reserved, "the run passes %s into the enclosure, Forager's names or what a value of the machine's is read from", strings.Join(reserved, ", "))
 		}
 	}
-	if conflict := accesskey.ShownNames(pick(func(n string) bool { return slices.Contains(placeholders, n) })); len(conflict) > 0 {
+	return placeholderConflict(pick(func(n, _ string) bool { return slices.Contains(placeholders, n) }))
+}
+
+// placeholderConflict is the [refusal.PlaceholderConflict] that cites names, the names
+// as passed of values for a placeholder; nil when names is empty.
+func placeholderConflict(names []string) error {
+	if conflict := accesskey.ShownNames(names); len(conflict) > 0 {
 		return refusal.New(refusal.PlaceholderConflict, conflict, "the run passes a value for %s, a placeholder of what the gateway holds outside the enclosure", strings.Join(conflict, ", "))
 	}
 	return nil
+}
+
+// CheckAgentPlaceholders returns [Check]'s refusal for a walled run when a value of
+// split, the run's and the machine's values, has a name that starts with AGENT_ and
+// whose rest is one of placeholders: the refusal cites every name of split for a
+// placeholder, with AGENT_ or without, as Check does. The session runs it before the
+// join request: the gateway checks the names a join request passes, and for such a
+// value it would cite the rest alone.
+func CheckAgentPlaceholders(split, placeholders []string) error {
+	var names []string
+	prefixed := false
+	for _, kv := range split {
+		given, _, _ := strings.Cut(kv, "=")
+		name, agent, ok := AgentName(given)
+		if !ok || !slices.Contains(placeholders, name) {
+			continue
+		}
+		names = append(names, given)
+		prefixed = prefixed || agent
+	}
+	if !prefixed {
+		return nil
+	}
+	slices.Sort(names)
+	return placeholderConflict(slices.Compact(names))
 }
 
 // entryShape is a deny entry's form: a name or a pattern of at most 128 characters

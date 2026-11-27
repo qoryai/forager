@@ -129,8 +129,10 @@ type LinkJoinRequest struct {
 	Version int `json:"version"`
 	// Passes are the names of the variables the session passes a value for, in what it
 	// inherits, what the harness sets and its variables: names alone, never a value.
-	// The gateway answers 403 placeholder_conflict to a join whose Passes contain a
-	// placeholder of a credential or a tool it holds for the run.
+	// Behind a wall, a run's or a machine's variable whose name starts with AGENT_ is
+	// listed by that name and by the rest of it. The gateway answers 403
+	// placeholder_conflict to a join whose Passes contain a placeholder of a credential
+	// or a tool it holds for the run.
 	Passes []string `json:"passes"`
 	// ModelKey is whether the gateway sets a model key for this session's requests.
 	// When it is false, the gateway's proxy sets none from the join's 200 until the

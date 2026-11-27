@@ -17,7 +17,44 @@ var claude = variables.Inputs{
 	Runtime:       []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"},
 }
 
+// resolve resolves in for the agent's container. Behind a wall, each name of the
+// server's, the run's and the machine's values is passed as AGENT_ and the name, as a
+// walled run passes a variable for the agent, but the server's QORY_RUN_SYSTEM and
+// QORY_RUN_REPOSITORIES, which reach the agent by these names: the agent gets each
+// value by the name the test writes. Without a wall the names are passed as they are.
 func resolve(t *testing.T, in variables.Inputs) variables.Resolved {
+	t.Helper()
+	return resolveAsPassed(t, forAgent(in))
+}
+
+// forAgent is in with the names a walled run passes for the agent ([resolve]).
+func forAgent(in variables.Inputs) variables.Inputs {
+	if !in.Walled {
+		return in
+	}
+	if in.Server != nil {
+		server := map[string]string{}
+		for name, v := range in.Server {
+			if name != "QORY_RUN_SYSTEM" && name != "QORY_RUN_REPOSITORIES" {
+				name = variables.AgentPrefix + name
+			}
+			server[name] = v
+		}
+		in.Server = server
+	}
+	prefixed := func(env []string) []string {
+		var out []string
+		for _, kv := range env {
+			out = append(out, variables.AgentPrefix+kv)
+		}
+		return out
+	}
+	in.Run, in.Machine = prefixed(in.Run), prefixed(in.Machine)
+	return in
+}
+
+// resolveAsPassed resolves in with each name as the test writes it.
+func resolveAsPassed(t *testing.T, in variables.Inputs) variables.Resolved {
 	t.Helper()
 	got, err := variables.Resolve(in)
 	if err != nil {
@@ -37,16 +74,24 @@ func want(t *testing.T, what string, got, want []string) {
 }
 
 // record is the record of a resolution, one line per name: the name, the source that
-// won after <- when one did, and each loss as source:why.
+// won after <- when one did, and each loss as source:why. A name a value was passed by
+// follows its source after ~, unless it is AGENT_ and the entry's name, as [resolve]
+// passes it.
 func record(applied []variables.Entry) []string {
 	out := []string{}
 	for _, e := range applied {
+		given := func(g string) string {
+			if g == "" || g == variables.AgentPrefix+e.Name {
+				return ""
+			}
+			return "~" + g
+		}
 		line := e.Name
 		if e.From != "" {
-			line += "<-" + e.From
+			line += "<-" + e.From + given(e.Given)
 		}
 		for _, l := range e.Lost {
-			line += " " + l.From + ":" + l.Why
+			line += " " + l.From + ":" + l.Why + given(l.Given)
 		}
 		if e.Kept != nil {
 			line += " " + e.Kept.Why + ":" + e.Kept.Credential
@@ -475,7 +520,7 @@ func TestCheckRefusesWhatStaysOutside(t *testing.T) {
 		{[]string{"QORY_RUN_ID=x", "QORY_RUN_SOCKET=x", "NODE_ENV=test"}, true, "", nil},
 		{[]string{"QORY_SERVER_SECRET=" + secret, "ANTHROPIC_API_KEY=" + secret, "SENTRY_AUTH_SOURCE=" + secret}, false, "", nil},
 	} {
-		err := variables.Check(tc.env, tc.walled, placeholders, machine)
+		err := variables.Check(tc.env, nil, tc.walled, placeholders, machine)
 		if tc.code == "" {
 			if err != nil {
 				t.Errorf("%q, walled %v: %v", tc.env, tc.walled, err)
@@ -680,4 +725,262 @@ func TestWithoutAWallTheEndpointRuleNeedsCredentials(t *testing.T) {
 	got = resolve(t, in)
 	want(t, "fixed", got.Fixed, []string{name + "=https://evil.example"})
 	want(t, "record", record(got.Applied), nil)
+}
+
+// fullRecord is the record of a resolution as [record] writes it, with every name a
+// value was passed by after ~.
+func fullRecord(applied []variables.Entry) []string {
+	out := []string{}
+	for _, e := range applied {
+		line := e.Name
+		if e.From != "" {
+			line += "<-" + e.From
+			if e.Given != "" {
+				line += "~" + e.Given
+			}
+		}
+		for _, l := range e.Lost {
+			line += " " + l.From + ":" + l.Why
+			if l.Given != "" {
+				line += "~" + l.Given
+			}
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// TestAWalledAgentGetsOnlyItsPrefixedNames pins the split of a walled run's server, run
+// and machine values for the agent's container: AGENT_X from each source arrives as X,
+// with the name as passed in the record; every other name of those sources is left out
+// as not_agent; agent_x, in another case, is an ordinary name; AGENT_AGENT_X arrives as
+// AGENT_X, the prefix removed once; and the server's AGENT_X wins over --env AGENT_X, as
+// the server's value of a name wins today. The harness's defaults and the inherited
+// environment are not split.
+func TestAWalledAgentGetsOnlyItsPrefixedNames(t *testing.T) {
+	in := variables.Inputs{
+		Walled:   true,
+		Server:   map[string]string{"AGENT_FROM_SERVER": "s", "PLAIN": "s", "AGENT_BOTH": "server"},
+		Run:      []string{"AGENT_FROM_RUN=r", "AGENT_BOTH=run", "agent_lower=r", "AGENT_AGENT_TWICE=r"},
+		Machine:  []string{"AGENT_FROM_MACHINE=m", "PLAIN=m"},
+		Defaults: []string{"HARNESS_PROFILE=nextjs", "AGENT_FROM_HARNESS=h"},
+		Shell:    []string{"AGENT_FROM_SHELL=x"},
+	}
+	got := resolveAsPassed(t, in)
+	want(t, "env", got.Env, []string{"AGENT_FROM_HARNESS=h", "AGENT_TWICE=r", "BOTH=server", "FROM_MACHINE=m", "FROM_RUN=r", "FROM_SERVER=s", "HARNESS_PROFILE=nextjs"})
+	want(t, "record", fullRecord(got.Applied), []string{
+		"AGENT_FROM_HARNESS<-harness",
+		"AGENT_TWICE<-run~AGENT_AGENT_TWICE",
+		"BOTH<-apiary~AGENT_BOTH run:overridden~AGENT_BOTH",
+		"FROM_MACHINE<-machine~AGENT_FROM_MACHINE",
+		"FROM_RUN<-run~AGENT_FROM_RUN",
+		"FROM_SERVER<-apiary~AGENT_FROM_SERVER",
+		"HARNESS_PROFILE<-harness",
+		"PLAIN apiary:not_agent machine:not_agent",
+		"agent_lower run:not_agent",
+	})
+}
+
+// TestTheSetupGetsEveryNameAndTheAgentsByTheRest pins the split for the setup
+// container: each value of the server, the run and the machine under its name, then
+// each AGENT_X as X a rung below, so an unprefixed X wins over any AGENT_X, and AGENT_X
+// alone arrives as X. For the same values the agent's container gets AGENT_X's value
+// and no unprefixed one.
+func TestTheSetupGetsEveryNameAndTheAgentsByTheRest(t *testing.T) {
+	in := variables.Inputs{
+		Walled: true,
+		Server: map[string]string{"AGENT_TARGET": "agent", "DEPLOY": "setup", "AGENT_ONLY": "a"},
+		Run:    []string{"TARGET=setup", "SETUP_ONLY=s"},
+	}
+	in.Kind = variables.Setup
+	got := resolveAsPassed(t, in)
+	want(t, "setup env", got.Env, []string{"DEPLOY=setup", "ONLY=a", "SETUP_ONLY=s", "TARGET=setup"})
+	want(t, "setup record", fullRecord(got.Applied), []string{
+		"DEPLOY<-apiary",
+		"ONLY<-apiary~AGENT_ONLY",
+		"SETUP_ONLY<-run",
+		"TARGET<-run apiary:overridden~AGENT_TARGET",
+	})
+	in.Kind = variables.Agent
+	got = resolveAsPassed(t, in)
+	want(t, "agent env", got.Env, []string{"ONLY=a", "TARGET=agent"})
+	want(t, "agent record", fullRecord(got.Applied), []string{
+		"DEPLOY apiary:not_agent",
+		"ONLY<-apiary~AGENT_ONLY",
+		"SETUP_ONLY run:not_agent",
+		"TARGET<-apiary~AGENT_TARGET run:not_agent",
+	})
+}
+
+// TestTheRunsSystemAndRepositoriesReachTheAgent pins the server's QORY_RUN_SYSTEM by
+// that name, with no prefix, in the agent's and the setup container's environment,
+// and AGENT_QORY_RUN_SYSTEM held to the rules of any QORY_ name.
+func TestTheRunsSystemAndRepositoriesReachTheAgent(t *testing.T) {
+	for _, kind := range []variables.Kind{variables.Agent, variables.Setup} {
+		got := resolveAsPassed(t, variables.Inputs{Walled: true, Kind: kind, Server: map[string]string{"QORY_RUN_SYSTEM": "web", "AGENT_QORY_RUN_SYSTEM": "x"}})
+		want(t, "env", got.Env, []string{"QORY_RUN_SYSTEM=web"})
+		want(t, "record", fullRecord(got.Applied), []string{"QORY_RUN_SYSTEM<-apiary apiary:denied~AGENT_QORY_RUN_SYSTEM"})
+	}
+}
+
+// TestTheRunsRepositoriesReachTheAgent pins the server's QORY_RUN_REPOSITORIES by that
+// name, with no prefix, in the agent's and the setup container's environment: qory run
+// prepare in the setup reads it.
+func TestTheRunsRepositoriesReachTheAgent(t *testing.T) {
+	for _, kind := range []variables.Kind{variables.Agent, variables.Setup} {
+		got := resolveAsPassed(t, variables.Inputs{Walled: true, Kind: kind, Server: map[string]string{"QORY_RUN_REPOSITORIES": "github.com/example-org/app"}})
+		want(t, "env", got.Env, []string{"QORY_RUN_REPOSITORIES=github.com/example-org/app"})
+	}
+}
+
+// TestTheRestOfAnAgentNameIsCheckedAsAnyName pins the checks on the name a container
+// gets, each refusal citing the name as passed: --env AGENT_QORY_RUN_ID is
+// variable_reserved, since QORY_RUN_ID is exempt only by that name; a value for a
+// placeholder or a name a machine value is read from by AGENT_ is refused too; the
+// server's AGENT_QORY_RUN_ID and AGENT_GH_TOKEN are left out as denied, the record
+// citing them.
+func TestTheRestOfAnAgentNameIsCheckedAsAnyName(t *testing.T) {
+	for _, tc := range []struct {
+		in    variables.Inputs
+		code  string
+		names []string
+	}{
+		{variables.Inputs{Run: []string{"AGENT_QORY_RUN_ID=x"}}, refusal.VariableReserved, []string{"AGENT_QORY_RUN_ID"}},
+		{variables.Inputs{Machine: []string{"AGENT_QORY_RUN_SOCKET=x", "QORY_RUN_SOCKET=x"}}, refusal.VariableReserved, []string{"AGENT_QORY_RUN_SOCKET"}},
+		{variables.Inputs{Run: []string{"AGENT_SENTRY_AUTH_SOURCE=x"}, ReadFrom: []string{"SENTRY_AUTH_SOURCE"}}, refusal.VariableReserved, []string{"AGENT_SENTRY_AUTH_SOURCE"}},
+		{variables.Inputs{Run: []string{"AGENT_GITHUB_TOKEN=x"}, Placeholders: []string{"GITHUB_TOKEN"}}, refusal.PlaceholderConflict, []string{"AGENT_GITHUB_TOKEN"}},
+		{variables.Inputs{Run: []string{"AGENT_GITHUB_TOKEN=x", "GITHUB_TOKEN=x"}, Placeholders: []string{"GITHUB_TOKEN"}}, refusal.PlaceholderConflict, []string{"AGENT_GITHUB_TOKEN", "GITHUB_TOKEN"}},
+	} {
+		for _, kind := range []variables.Kind{variables.Agent, variables.Setup} {
+			tc.in.Walled, tc.in.Kind = true, kind
+			_, err := variables.Resolve(tc.in)
+			var r *accesskey.Refusal
+			if !errors.As(err, &r) || r.Code != tc.code || !slices.Equal(r.Names, tc.names) {
+				t.Errorf("%+v: %#v, want %s %q", tc.in, err, tc.code, tc.names)
+				continue
+			}
+			for _, name := range tc.names {
+				if !strings.Contains(err.Error(), name) {
+					t.Errorf("%+v: the text %q does not cite %s", tc.in, err, name)
+				}
+			}
+		}
+	}
+	got := resolveAsPassed(t, variables.Inputs{Walled: true, Server: map[string]string{"AGENT_QORY_RUN_ID": "x", "AGENT_GH_TOKEN": "x"}})
+	want(t, "env", got.Env, nil)
+	want(t, "record", fullRecord(got.Applied), []string{"GH_TOKEN apiary:denied~AGENT_GH_TOKEN", "QORY_RUN_ID apiary:denied~AGENT_QORY_RUN_ID"})
+}
+
+// TestAnAgentNameWithNoVariableAfterThePrefix pins a name that starts with AGENT_ and
+// has no variable's name after it: from --env or wall.env it is an error that starts
+// with the fix, and the server's is left out of every container as not_agent, the
+// record citing it as passed.
+func TestAnAgentNameWithNoVariableAfterThePrefix(t *testing.T) {
+	for _, tc := range []struct {
+		in   variables.Inputs
+		text string
+	}{
+		{variables.Inputs{Run: []string{"AGENT_=x"}}, "Rename AGENT_: the agent's container would get no name after the prefix."},
+		{variables.Inputs{Machine: []string{"AGENT_9X=x"}}, "Rename AGENT_9X: the agent's container would get 9X, which is not a variable's name."},
+	} {
+		for _, kind := range []variables.Kind{variables.Agent, variables.Setup} {
+			tc.in.Walled, tc.in.Kind = true, kind
+			if _, err := variables.Resolve(tc.in); err == nil || err.Error() != tc.text {
+				t.Errorf("%+v: %v, want %q", tc.in, err, tc.text)
+			}
+		}
+	}
+	for _, kind := range []variables.Kind{variables.Agent, variables.Setup} {
+		got := resolveAsPassed(t, variables.Inputs{Walled: true, Kind: kind, Server: map[string]string{"AGENT_": "x", "AGENT_9X": "x"}})
+		want(t, "env", got.Env, nil)
+		want(t, "record", fullRecord(got.Applied), []string{"AGENT_ apiary:not_agent", "AGENT_9X apiary:not_agent"})
+	}
+}
+
+// TestAnUnwalledRunPassesEveryNameAsItIs pins an unwalled run to the names as passed,
+// whatever the kind: AGENT_X stays AGENT_X, X stays X, and AGENT_9X is no error.
+func TestAnUnwalledRunPassesEveryNameAsItIs(t *testing.T) {
+	for _, kind := range []variables.Kind{variables.Agent, variables.Setup} {
+		got := resolveAsPassed(t, variables.Inputs{Kind: kind, Unwalled: variables.Accept,
+			Server: map[string]string{"AGENT_X": "a", "X": "x"}, Run: []string{"AGENT_9X=r", "AGENT_QORY_RUN_ID=r"}})
+		want(t, "env", got.Env, []string{"AGENT_9X=r", "AGENT_QORY_RUN_ID=r", "AGENT_X=a", "X=x"})
+		want(t, "record", fullRecord(got.Applied), []string{"AGENT_9X<-run", "AGENT_QORY_RUN_ID<-run", "AGENT_X<-apiary", "X<-apiary"})
+	}
+}
+
+// TestAgentName pins the rule for a name: the prefix in exact case, removed once, and a
+// rest that must be a variable's name.
+func TestAgentName(t *testing.T) {
+	for _, tc := range []struct {
+		given, name  string
+		prefixed, ok bool
+	}{
+		{"AGENT_X", "X", true, true},
+		{"AGENT_AGENT_X", "AGENT_X", true, true},
+		{"AGENT__X", "_X", true, true},
+		{"AGENT_", "", true, false},
+		{"AGENT_9X", "9X", true, false},
+		{"agent_x", "agent_x", false, true},
+		{"Agent_X", "Agent_X", false, true},
+		{"X", "X", false, true},
+	} {
+		if name, prefixed, ok := variables.AgentName(tc.given); name != tc.name || prefixed != tc.prefixed || ok != tc.ok {
+			t.Errorf("%s: %q %v %v, want %q %v %v", tc.given, name, prefixed, ok, tc.name, tc.prefixed, tc.ok)
+		}
+	}
+}
+
+// TestToPrefixListsOnlyNamesAPrefixBringsIn pins Resolved.ToPrefix of a walled agent:
+// DEPLOY and SETUP_ONLY, which apply under AGENT_ followed by the name. Not TARGET,
+// whose AGENT_ value applies; not the fixed CODEX_HOME, the model key name of KeysFixed,
+// the runtime's RUNTIME_SET or the read-from MACHINE_SECRET of the server, all left out
+// under AGENT_ too; not the denied GH_TOKEN nor the server's malformed AGENT_9X. A setup
+// resolution lists none.
+func TestToPrefixListsOnlyNamesAPrefixBringsIn(t *testing.T) {
+	in := variables.Inputs{
+		Walled: true, Kind: variables.Agent,
+		Fixed:     []string{"CODEX_HOME=/harness"},
+		KeysFixed: []string{"OTHER_KEY"},
+		Runtime:   []string{"RUNTIME_SET"},
+		ReadFrom:  []string{"MACHINE_SECRET"},
+		Server: map[string]string{"AGENT_TARGET": "agent", "DEPLOY": "d", "CODEX_HOME": "/server", "OTHER_KEY": "k",
+			"RUNTIME_SET": "r", "MACHINE_SECRET": "m", "GH_TOKEN": "a-fake-token", "AGENT_9X": "x"},
+		Run: []string{"TARGET=setup", "SETUP_ONLY=s"},
+	}
+	got := resolveAsPassed(t, in)
+	want(t, "agent", got.ToPrefix, []string{"DEPLOY", "SETUP_ONLY"})
+	in.Kind = variables.Setup
+	if got := resolveAsPassed(t, in); len(got.ToPrefix) != 0 {
+		t.Errorf("the setup's ToPrefix %q, want none", got.ToPrefix)
+	}
+}
+
+// TestCheckAgentPlaceholdersCitesEveryName pins the check before the join request: no
+// refusal without an AGENT_ name for a placeholder, and with one, a refusal that cites
+// every name for a placeholder as passed, AGENT_PH and PH, as Check does.
+func TestCheckAgentPlaceholdersCitesEveryName(t *testing.T) {
+	ph := []string{"PH"}
+	for _, tc := range []struct {
+		split []string
+		names []string
+	}{
+		{[]string{"PH=y", "AGENT_OTHER=z"}, nil},
+		{[]string{"AGENT_PH=x"}, []string{"AGENT_PH"}},
+		{[]string{"PH=y", "AGENT_PH=x", "AGENT_9X=w"}, []string{"AGENT_PH", "PH"}},
+	} {
+		err := variables.CheckAgentPlaceholders(tc.split, ph)
+		var r *accesskey.Refusal
+		if tc.names == nil {
+			if err != nil {
+				t.Errorf("%q: %v, want none", tc.split, err)
+			}
+			continue
+		}
+		if !errors.As(err, &r) || r.Code != refusal.PlaceholderConflict || !slices.Equal(r.Names, tc.names) {
+			t.Errorf("%q: %#v, want placeholder_conflict for %q", tc.split, err, tc.names)
+		}
+		if want := variables.Check(nil, tc.split, true, ph, nil); err.Error() != want.Error() {
+			t.Errorf("%q: %v, want Check's %v", tc.split, err, want)
+		}
+	}
 }

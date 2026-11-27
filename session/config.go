@@ -54,11 +54,14 @@ type Variables struct {
 // environment the run inherits, only beside one of those.
 type Applied []AppliedVariable
 
-// AppliedVariable is one name: the source whose value the run applies, empty when none
-// does, the values that lost, the highest source first, and, behind a wall, why the
-// endpoint rule kept the value of the runtime's model endpoint variable, nil otherwise.
+// AppliedVariable is one name, as the container gets it: the source whose value the run
+// applies, empty when none does, the name that value was passed by when it differs
+// from Name, as AGENT_X for X, the values that lost, in the order of the sources, and,
+// behind a wall, why the endpoint rule kept the value of the runtime's model endpoint
+// variable, nil otherwise.
 type AppliedVariable struct {
 	Name, From string
+	Given      string
 	Lost       []Loss
 	Kept       *Kept
 }
@@ -69,9 +72,10 @@ type Kept struct {
 	Why, Credential string
 }
 
-// Loss is one source's value that lost, and why.
+// Loss is one source's value that lost, and why: Given is the name the value was passed
+// by when it differs from the variable's name.
 type Loss struct {
-	From, Why string
+	From, Why, Given string
 }
 
 // The sources of a variable, the highest first, and why a value lost, as
@@ -88,6 +92,7 @@ const (
 	WhyDenied     = variables.WhyDenied
 	WhyFixed      = variables.WhyFixed
 	WhyUnwalled   = variables.WhyUnwalled
+	WhyNotAgent   = variables.WhyNotAgent
 
 	WhyEndpointUncovered  = variables.WhyEndpointUncovered
 	WhyEndpointUnreadable = variables.WhyEndpointUnreadable
@@ -100,9 +105,9 @@ func applied(entries []variables.Entry) Applied {
 	for i, e := range entries {
 		lost := make([]Loss, len(e.Lost))
 		for j, l := range e.Lost {
-			lost[j] = Loss{From: l.From, Why: l.Why}
+			lost[j] = Loss{From: l.From, Why: l.Why, Given: l.Given}
 		}
-		out[i] = AppliedVariable{Name: e.Name, From: e.From, Lost: lost}
+		out[i] = AppliedVariable{Name: e.Name, From: e.From, Given: e.Given, Lost: lost}
 		if e.Kept != nil {
 			out[i].Kept = &Kept{Why: e.Kept.Why, Credential: e.Kept.Credential}
 		}

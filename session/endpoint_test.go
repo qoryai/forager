@@ -115,17 +115,23 @@ func TestAWalledRunKeepsACoveredEndpoint(t *testing.T) {
 				sp.Wall, sp.Image = w, "example.com/agent:1"
 				passed := []string{endpointVariable + "=" + tc.value}
 				var vars map[string]any
+				// The server's, the run's and the machine's values reach the agent by
+				// AGENT_ names alone, and the record has the name as passed in given.
+				given := ""
 				switch source {
 				case "apiary":
-					vars = map[string]any{endpointVariable: map[string]any{"value": tc.value}}
+					vars = map[string]any{"AGENT_" + endpointVariable: map[string]any{"value": tc.value}}
 				case "run":
-					sp.Variables.Run = passed
+					sp.Variables.Run = agentPrefixed(passed)
 				case "machine":
-					sp.Variables.Machine = passed
+					sp.Variables.Machine = agentPrefixed(passed)
 				case "harness":
 					sp.LaunchDefaults = passed
 				case "fixed":
 					sp.LaunchFixed = passed
+				}
+				if source == "apiary" || source == "run" || source == "machine" {
+					given = `"given":"AGENT_` + endpointVariable + `",`
 				}
 				answering(g, tc.hosts, vars)
 				res, err := run(context.Background(), sp)
@@ -150,7 +156,7 @@ func TestAWalledRunKeepsACoveredEndpoint(t *testing.T) {
 						return
 					}
 					b, _ := json.Marshal(entry)
-					if want := `{"from":"` + source + `","kept":{"credential":"model","why":"endpoint_covered"},"lost":[],"name":"` + endpointVariable + `"}`; string(b) != want {
+					if want := `{"from":"` + source + `",` + given + `"kept":{"credential":"model","why":"endpoint_covered"},"lost":[],"name":"` + endpointVariable + `"}`; string(b) != want {
 						t.Errorf("the record's entry %s, want %s", b, want)
 					}
 					return
@@ -159,7 +165,7 @@ func TestAWalledRunKeepsACoveredEndpoint(t *testing.T) {
 					t.Errorf("%s=%q reached the agent %v, unset %q; want it unset", endpointVariable, value, reached, names)
 				}
 				b, _ := json.Marshal(entry)
-				if want := `{"lost":[{"from":"` + source + `","why":"` + tc.why + `"}],"name":"` + endpointVariable + `"}`; string(b) != want {
+				if want := `{"lost":[{"from":"` + source + `",` + given + `"why":"` + tc.why + `"}],"name":"` + endpointVariable + `"}`; string(b) != want {
 					t.Errorf("the record's entry %s, want %s", b, want)
 				}
 			})
@@ -204,7 +210,7 @@ func TestAWalledRunChecksEveryComputedEndpoint(t *testing.T) {
 			[]string{endpointVariable + "=https://api.anthropic.com"}, "null"},
 		{"a kept one over the run's", []string{endpointVariable + "=https://api.anthropic.com"}, "https://evil.example",
 			[]string{endpointVariable + "=https://api.anthropic.com"},
-			`{"from":"fixed","kept":{"credential":"model","why":"endpoint_covered"},"lost":[{"from":"run","why":"endpoint_uncovered"}],"name":"` + endpointVariable + `"}`},
+			`{"from":"fixed","kept":{"credential":"model","why":"endpoint_covered"},"lost":[{"from":"run","given":"AGENT_` + endpointVariable + `","why":"endpoint_uncovered"}],"name":"` + endpointVariable + `"}`},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			w := &imageWall{env: []string{endpointVariable + "=https://image.invalid/"}}
@@ -213,7 +219,7 @@ func TestAWalledRunChecksEveryComputedEndpoint(t *testing.T) {
 			sp.Wall, sp.Image = w, "example.com/agent:1"
 			sp.LaunchFixed = tc.fixed
 			if tc.run != "" {
-				sp.Variables.Run = []string{endpointVariable + "=" + tc.run}
+				sp.Variables.Run = []string{"AGENT_" + endpointVariable + "=" + tc.run}
 			}
 			answering(g, tokenAndForge, nil)
 			res, err := run(context.Background(), sp)
@@ -242,7 +248,7 @@ func TestAWalledRunChecksEveryComputedEndpoint(t *testing.T) {
 func TestTheEndpointsCredentialIsShownByName(t *testing.T) {
 	sp, g := tokenSpec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
-	sp.Variables.Run = []string{endpointVariable + "=https://api.anthropic.com"}
+	sp.Variables.Run = []string{"AGENT_" + endpointVariable + "=https://api.anthropic.com"}
 	answering(g, []map[string]any{{"name": "qak_model", "hosts": []string{"api.anthropic.com"}, "placeholders": []string{"MODEL_TOKEN"}}}, nil)
 	res, err := run(context.Background(), sp)
 	if err != nil {

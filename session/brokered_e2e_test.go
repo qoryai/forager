@@ -3,9 +3,11 @@ package session_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -150,4 +152,26 @@ func TestAnUnwalledRunThroughARealSeparateGatewayIsBrokered(t *testing.T) {
 		t.Errorf("policy_applied %v", pa)
 	}
 	checkBrokered(t, env, res.Dir, records)
+}
+
+// TestARealGatewaysPlaceholderIsRefusedByTheNameAsPassed pins a walled run whose
+// wall.env passes AGENT_API_TOKEN, a value for the placeholder API_TOKEN of a credential
+// the gateway holds once the prefix is removed: the join is placeholder_conflict and
+// cites AGENT_API_TOKEN, the name as passed, not the name the agent would get.
+func TestARealGatewaysPlaceholderIsRefusedByTheNameAsPassed(t *testing.T) {
+	t.Setenv(brokeredSource, brokeredValue)
+	sp := spec(t)
+	sp.RunID = event.NewRunID()
+	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+	sp.Variables.Machine = []string{"AGENT_API_TOKEN=x"}
+	startGateway(t, &sp, gateway.Config{Version: "test", Heartbeat: time.Second,
+		Credentials: []gateway.Credential{{Name: "api", Env: brokeredSource, Hosts: []string{"api.example"}, Scheme: "bearer", Placeholders: []string{"API_TOKEN"}}},
+		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}},
+			Credentials: []gateway.PolicyCredential{{Name: "api"}}}})
+	_, err := run(context.Background(), sp)
+	var r *session.Refusal
+	if !errors.As(err, &r) || r.Code != "placeholder_conflict" || !slices.Equal(r.Names, []string{"AGENT_API_TOKEN"}) ||
+		!strings.Contains(err.Error(), "AGENT_API_TOKEN") {
+		t.Fatalf("%#v (%v), want placeholder_conflict for AGENT_API_TOKEN", err, err)
+	}
 }

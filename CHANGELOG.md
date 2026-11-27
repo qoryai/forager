@@ -10,6 +10,14 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Rename a variable to `AGENT_<name>` for the agent: walled agents get no other server,
+  `--env` or `wall.env` value. The agent's container gets `AGENT_X` as `X`; the setup
+  container gets each name without the prefix under that name and each `AGENT_X` as
+  `X`, not as `AGENT_X`, and a value of `X` wins there. The server's `QORY_RUN_SYSTEM`
+  and `QORY_RUN_REPOSITORIES` reach both containers as they are. Fill `SetupSpec.Env`
+  from the new `(*session.Run).SetupEnv`; `AgentEnv` returns the agent's set.
+  `dev.qory.run.policy_applied` records the name as passed in `given` and the loss
+  reason `not_agent`. Unwalled runs are unchanged.
 - Allow in the policy each host that a Node program reaches in a run with no wall: its
   fetch and https requests go through the run's proxy, where before they connected
   directly. In enforce mode, a host that the policy does not list now gets `403`.
@@ -1216,6 +1224,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- A failed resume prints two lines: `This run starts without its earlier conversation,
+  which could not be restored.`, then the fix, a colon and the cause.
 - Every session, with or without a wall, and every container the wall starts get
   NODE_USE_ENV_PROXY=1, so Node's fetch and https use the run's proxy (Node 24.0 and
   later, 22.21 and later). `link.ProxyEnv` returns it last, and

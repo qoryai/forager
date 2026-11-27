@@ -117,6 +117,47 @@ func answerVariables(g *linktest.Fake, doc string) {
 	})
 }
 
+// agentDoc is doc, a JSON object with the member variables as a run configuration has
+// it, with AGENT_ before each variable's name but QORY_RUN_SYSTEM and
+// QORY_RUN_REPOSITORIES: behind a wall the agent gets each value by the name in doc.
+func agentDoc(doc string) string {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(doc), &top); err != nil {
+		panic(err)
+	}
+	var vars map[string]json.RawMessage
+	if err := json.Unmarshal(top["variables"], &vars); err != nil {
+		panic(err)
+	}
+	prefixed := map[string]json.RawMessage{}
+	for name, v := range vars {
+		if name != "QORY_RUN_SYSTEM" && name != "QORY_RUN_REPOSITORIES" {
+			name = "AGENT_" + name
+		}
+		prefixed[name] = v
+	}
+	b, err := json.Marshal(prefixed)
+	if err != nil {
+		panic(err)
+	}
+	top["variables"] = b
+	b, err = json.Marshal(top)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
+
+// agentPrefixed is env, NAME=value entries, with AGENT_ before each name: behind a
+// wall the agent gets each value of --env or wall.env by the name in env.
+func agentPrefixed(env []string) []string {
+	out := make([]string, len(env))
+	for i, kv := range env {
+		out[i] = "AGENT_" + kv
+	}
+	return out
+}
+
 // TestVariablesReachTheAgentByRung runs the sources of the variables end to end:
 // behind a wall, and without one when the node accepts the server's, the value of the
 // highest source of each name is in the agent's environment and every value that lost
@@ -138,7 +179,7 @@ func TestVariablesReachTheAgentByRung(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sp, g := specGateway(t, "EDITOR=shell", "SHELL_ONLY=kept")
-			answerVariables(g, serverVariables)
+			doc := serverVariables
 			out := dumpsEnv(t, &sp)
 			sp.LaunchFixed = []string{"CODEX_HOME=/computed/home", "DOCKER_HOST=unix:///computed/docker.sock"}
 			sp.LaunchDefaults = []string{"HARNESS_PROFILE=nextjs", "BUILD_NUMBER=0", "LOG_LEVEL=harness"}
@@ -147,6 +188,13 @@ func TestVariablesReachTheAgentByRung(t *testing.T) {
 				Machine: []string{"EDITOR=nano", "BUILD_NUMBER=7"},
 				Deny:    []string{"APP_*"}, Unwalled: tc.unwalled,
 			}
+			// Behind a wall the agent gets the server's, the run's and the machine's
+			// values of AGENT_ names alone, by the rest of the name.
+			if tc.walled {
+				doc = agentDoc(doc)
+				sp.Variables.Run, sp.Variables.Machine = agentPrefixed(sp.Variables.Run), agentPrefixed(sp.Variables.Machine)
+			}
+			answerVariables(g, doc)
 			var calls []session.Applied
 			sp.OnVariables = func(a session.Applied) {
 				if _, err := os.Stat(out); err == nil {
@@ -445,7 +493,7 @@ func TestAWalledRunLeavesOutTheRuntimesKeyFromTheMachine(t *testing.T) {
 	sp := spec(t)
 	out := dumpsEnv(t, &sp)
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
-	sp.Variables.Machine = []string{"CLAUDE_CODE_OAUTH_TOKEN=a-fake-credential"}
+	sp.Variables.Machine = []string{"AGENT_CLAUDE_CODE_OAUTH_TOKEN=a-fake-credential"}
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
@@ -467,15 +515,20 @@ func TestAWalledRunLeavesOutTheRuntimesKeyFromTheMachine(t *testing.T) {
 // TestALeftOutCredentialHasALine pins the lines the run reports for each forge token's
 // or model key's variable whose value the deny list leaves out, walled, with no value:
 // for the server's value, the fix in the run configuration; for wall.env, --env and the
-// harness, the fix in forager.yaml with the sources; a name from both gets both lines. A name the deny
+// harness, the fix in forager.yaml, with the sources for a name without AGENT_ and the
+// name the agent's container would get for one with it; a name from both gets both
+// lines. A name the deny
 // list leaves out that is no credential's, and a credential's name no source passes,
-// have no line.
+// have no line. Each line cites the name as passed: the server's, --env's and
+// wall.env's names start with AGENT_, so the agent's container would get the rest of
+// the name, and the harness's defaults are not split.
 func TestALeftOutCredentialHasALine(t *testing.T) {
 	sp, g := specGateway(t)
-	answerVariables(g, serverVariables)
+	answerVariables(g, agentDoc(serverVariables))
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
-	sp.Variables.Machine = []string{"GH_TOKEN=ghp_" + strings.Repeat("x", 36), "APP_NAME=app", "ANTHROPIC_AUTH_TOKEN=a-fake-machine-token"}
-	sp.Variables.Run = []string{"GITLAB_TOKEN=a-fake-token"}
+	sp.Variables.Machine = []string{"AGENT_GH_TOKEN=ghp_" + strings.Repeat("x", 36), "AGENT_APP_NAME=app", "AGENT_ANTHROPIC_AUTH_TOKEN=a-fake-machine-token",
+		"AGENT_GITLAB_TOKEN=a-fake-machine-gitlab-token"}
+	sp.Variables.Run = []string{"AGENT_GITLAB_TOKEN=a-fake-token"}
 	sp.Variables.Deny = []string{"APP_*"}
 	sp.LaunchDefaults = []string{"GITLAB_TOKEN=another-fake-token"}
 	var reported []string
@@ -488,10 +541,11 @@ func TestALeftOutCredentialHasALine(t *testing.T) {
 		t.Fatalf("exit %d", res.ExitCode)
 	}
 	want := []string{
-		"Define ANTHROPIC_AUTH_TOKEN as a credential in the run configuration, not as a variable: the run leaves out the value that the server passes, since denied-variables.json lists it as a model key.",
-		"Move ANTHROPIC_AUTH_TOKEN to the gateway's credentials in forager.yaml: the run leaves out the value that wall.env passes, since denied-variables.json lists it as a model key.",
-		"Move GH_TOKEN to the gateway's credentials in forager.yaml: the run leaves out the value that wall.env passes, since denied-variables.json lists it as a forge token.",
-		"Move GITLAB_TOKEN to the gateway's credentials in forager.yaml: the run leaves out the values that --env and the harness's defaults pass, since denied-variables.json lists it as a forge token.",
+		"Define AGENT_ANTHROPIC_AUTH_TOKEN as a credential in the run configuration, not as a variable.\nThe agent's container would get it as ANTHROPIC_AUTH_TOKEN, which denied-variables.json lists as a model key.",
+		"Move AGENT_ANTHROPIC_AUTH_TOKEN to the gateway's credentials in forager.yaml.\nWithout the AGENT_ prefix it is ANTHROPIC_AUTH_TOKEN, a model key, and no container gets model keys as variables.",
+		"Move AGENT_GH_TOKEN to the gateway's credentials in forager.yaml.\nWithout the AGENT_ prefix it is GH_TOKEN, a forge token, and no container gets forge tokens as variables.",
+		"Move AGENT_GITLAB_TOKEN to the gateway's credentials in forager.yaml.\nWithout the AGENT_ prefix it is GITLAB_TOKEN, a forge token, and no container gets forge tokens as variables.",
+		"Move GITLAB_TOKEN to the gateway's credentials in forager.yaml: the run leaves out the value that the harness's defaults passes, since denied-variables.json lists it as a forge token.",
 	}
 	var got []string
 	for _, l := range reported {
@@ -527,7 +581,7 @@ func TestWhatThePreparationSetsIsNotUnset(t *testing.T) {
 	sp.Runtime = preparing{claudeCode(t)}
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 	sp.LaunchFixed = []string{"ANTHROPIC_AUTH_TOKEN=computed-by-the-harness"}
-	sp.Variables.Machine = []string{"ANTHROPIC_AUTH_TOKEN=the-machines"}
+	sp.Variables.Machine = []string{"AGENT_ANTHROPIC_AUTH_TOKEN=the-machines"}
 	res, err := run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
@@ -582,11 +636,11 @@ func TestTheRunsAndTheMachinesVariablesAreChecked(t *testing.T) {
 // TestTheServersSystemAndRepositoriesReachTheAgent pins the two QORY_ names the
 // server's variables may set, end to end: behind a wall the server's QORY_RUN_SYSTEM
 // and QORY_RUN_REPOSITORIES are in the agent's environment, and the session's setup command
-// sees them, while the server's QORY_RUN_KEY, a near miss and an access key's variable
-// are not; the run's or the machine's value of either is variable_reserved.
+// sees them, while the server's QORY_RUN_KEY, a near miss and an access key's variable,
+// each passed with AGENT_ so the deny list applies, are not; the run's or the machine's value of either is variable_reserved.
 func TestTheServersSystemAndRepositoriesReachTheAgent(t *testing.T) {
 	const doc = `{"variables":{"QORY_RUN_SYSTEM":{"value":"a system"},"QORY_RUN_REPOSITORIES":{"value":"one two"},` +
-		`"QORY_RUN_KEY":{"value":"x"},"QORY_RUN_SYSTEMX":{"value":"x"},"QORY_ACCESS_KEY_SECRET":{"value":"x"}}}`
+		`"AGENT_QORY_RUN_KEY":{"value":"x"},"AGENT_QORY_RUN_SYSTEMX":{"value":"x"},"AGENT_QORY_ACCESS_KEY_SECRET":{"value":"x"}}}`
 	sp, g := specGateway(t)
 	answerVariables(g, doc)
 	out := dumpsEnv(t, &sp)
@@ -1060,10 +1114,16 @@ const agentEnvVariables = `{"variables":{"NODE_ENV":{"value":"test"},"APP_REGION
 // and the placeholder TOOL_TOKEN, and with byRef, the image by reference, as
 // byReference answers it.
 func answerAgentEnv(g *linktest.Fake, byRef bool) {
+	answerAgentEnvOf(g, agentEnvVariables, byRef)
+}
+
+// answerAgentEnvOf is answerAgentEnv with the variables of doc in place of
+// agentEnvVariables.
+func answerAgentEnvOf(g *linktest.Fake, doc string, byRef bool) {
 	var vars struct {
 		Variables map[string]any `json:"variables"`
 	}
-	if err := json.Unmarshal([]byte(agentEnvVariables), &vars); err != nil {
+	if err := json.Unmarshal([]byte(doc), &vars); err != nil {
 		panic(err)
 	}
 	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
@@ -1126,7 +1186,6 @@ func TestAgentEnvIsWhatTheAgentGets(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			sp, g := specGateway(t, "EDITOR=shell", "SHELL_ONLY=kept")
-			answerAgentEnv(g, tc.byRef)
 			out := dumpsEnv(t, &sp)
 			var prepared []string
 			sp.Runtime = recordingPrep{sp.Runtime, &prepared}
@@ -1138,6 +1197,14 @@ func TestAgentEnvIsWhatTheAgentGets(t *testing.T) {
 				Machine: []string{"EDITOR=nano", "BUILD_NUMBER=7", "LD_PRELOAD=/lib/inject.so"},
 				Deny:    []string{"APP_*"}, Unwalled: tc.unwalled,
 			}
+			// Behind a wall the agent gets the server's, the run's and the machine's
+			// values of AGENT_ names alone, by the rest of the name.
+			doc := agentEnvVariables
+			if tc.walled {
+				doc = agentDoc(doc)
+				sp.Variables.Run, sp.Variables.Machine = agentPrefixed(sp.Variables.Run), agentPrefixed(sp.Variables.Machine)
+			}
+			answerAgentEnvOf(g, doc, tc.byRef)
 			switch {
 			case tc.byRef:
 				sp.Wall, sp.Image, sp.Images, sp.ImagesAllow = &targetWall{}, "base", images, []string{"registry.example/agents/"}

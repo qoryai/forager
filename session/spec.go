@@ -332,7 +332,10 @@ type SessionSpec struct {
 	// access key's variables, QORY_ACCESS_KEY_SECRET, QORY_ACCESS_KEY_ID and
 	// QORY_APIARY_PUBLIC_KEY, are left out of what the session gets from any of them.
 	// Without a Wall the variables the machine's credentials are read from are left out
-	// of it too, and a placeholder wins over a value of it.
+	// of it too, and a placeholder wins over a value of it. Under a Wall, Env reaches the
+	// agent's container without the AGENT_ rule of Variables and the server's variables:
+	// put no variable of the machine's environment in it for a walled run, as each one
+	// reaches the agent.
 	Env []string
 	Dir string
 	// LaunchFixed is the values the harness computes, NAME=value. They are fixed names
@@ -366,7 +369,7 @@ type SessionSpec struct {
 	// ModelProviderCredentialName is the name of the model key the session starts with,
 	// one of the model keys the gateway holds for the run; empty means the run's
 	// default model provider credential. The join request contains it. A session with
-	// no Runtime starts with no model key: Join and AgentEnv refuse
+	// no Runtime starts with no model key: Join, AgentEnv and SetupEnv refuse
 	// ModelProviderCredentialName beside a nil Runtime before any request.
 	ModelProviderCredentialName string
 	// OnVariables, when not nil, is called once the session's variables are resolved,
@@ -441,12 +444,11 @@ type SessionSpec struct {
 	// Nested Docker). Dir keeps the checks of a writable place, and stays among the
 	// places a file the Runtime reads is checked against (Written), since the host steps
 	// still write it, and a setup command may have written it: [Run.Setup] binds it
-	// writable until [Run.RemoveSetup] removes the setup container. A
-	// writable mount that contains Dir is a refused join, mount_mode_conflict; a
-	// read-only one is the one bind. Join and
-	// AgentEnv return an error before the join request, and write nothing, for
-	// WorkspaceReadOnly in a run with no Wall and beside Setup, which runs in the
-	// agent's container.
+	// writable until [Run.RemoveSetup] removes the setup container. A writable mount
+	// that contains Dir is a refused join, mount_mode_conflict; a read-only one is the
+	// one bind. Join, AgentEnv and SetupEnv return an error before the join request, and
+	// write nothing, for WorkspaceReadOnly in a run with no Wall and beside Setup, which
+	// runs in the agent's container.
 	WorkspaceReadOnly bool
 	// ForagerFiles are the absolute paths of the caller's files that are Forager's,
 	// such as the directory of qory's forager.yaml with the access key secret. A walled

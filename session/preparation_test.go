@@ -183,7 +183,9 @@ func TestSetupCommandsRunBeforeTheRuntime(t *testing.T) {
 	sp.Forwarder = nil
 	sp.Command, sp.Args = installedShell, []string{"-c", `cp prepared.json runtime-saw.json && cat > runtime-input; exit 5`}
 	sp.Stdin = strings.NewReader("for the runtime\n")
-	sp.Variables.Run = []string{"PREP_VARIABLE=from the run"}
+	// The setup in the agent's container gets the agent's variables, so the run passes
+	// PREP_VARIABLE by its AGENT_ name.
+	sp.Variables.Run = []string{"AGENT_PREP_VARIABLE=from the run"}
 	sp.SetupRunner = setupRunner
 	sp.SessionSpec.Setup = []session.SetupCommand{
 		{Name: "install", Args: append([]string{"env", "FAKE_PREPARATION=1", os.Args[0]}, awkward...)},

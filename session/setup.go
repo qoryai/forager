@@ -245,7 +245,7 @@ func eachNoContainerKept(err error) bool {
 // or engine socket. Its environment is the relay's proxy variables, the bundle's
 // variables, QORY_RUN_API for a run with a control plane and a setup without
 // Unprivileged, the run's placeholders, and then Env, which a caller fills from
-// [Run.AgentEnv]. Env is refused before any step when it has a value for one of the
+// [Run.SetupEnv]. Env is refused before any step when it has a value for one of the
 // run's placeholders, [refusal.PlaceholderConflict]; a QORY_ name other than
 // QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES, or a name the machine's credentials are
 // read from, [refusal.VariableReserved]; or a name the built-in deny list matches, such
@@ -579,7 +579,7 @@ func (r *Run) setupEnv(env []string, unprivileged bool) ([]string, error) {
 // built-in deny list, denied-variables.json, matches is refused with no code, such as
 // LD_PRELOAD or HTTPS_PROXY; a credential's name of that list, such as GH_TOKEN, with
 // the fix of moving it to the gateway's credentials. The deny entries of a session,
-// Variables.Deny and the runtime's denies, apply in [Run.AgentEnv].
+// Variables.Deny and the runtime's denies, apply in [Run.SetupEnv].
 func checkSetupEnv(env, placeholders, reserved []string) error {
 	checked := names(withoutNames(env, []string{envRunSystem, envRunRepositories}))
 	slices.Sort(checked)

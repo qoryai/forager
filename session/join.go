@@ -199,6 +199,14 @@ func (r *Run) checkSession(spec SessionSpec) (runSpec, runtimes.Runtime, error) 
 	if err := checkVariables(spec.Variables); err != nil {
 		return runSpec{}, nil, err
 	}
+	// Behind a wall the join request passes AGENT_X by both names, and the gateway's
+	// refusal of X would not cite AGENT_X: the session returns placeholder_conflict for
+	// such a value before the join request.
+	if s.Wall != nil {
+		if err := variables.CheckAgentPlaceholders(slices.Concat(spec.Variables.Run, spec.Variables.Machine), r.answer.Placeholders); err != nil {
+			return runSpec{}, nil, err
+		}
+	}
 	if err := checkHarnessHome(spec.HarnessHome); err != nil {
 		return runSpec{}, nil, err
 	}
@@ -727,7 +735,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// The harness's values are Forager's to write as the enclosure sees them.
 	harness := spec
 	harness.LaunchFixed, harness.LaunchDefaults = insideValues(spec.LaunchFixed, inside), insideValues(spec.LaunchDefaults, inside)
-	vars, unset, err := resolve(harness, rt, r.answer.Values(), credentialHosts, prepared, placeholderNames, r.reserved, r.img.Docker, r.authority != nil, names(r.caVars), key)
+	vars, unset, err := resolve(harness, variables.Agent, rt, r.answer.Values(), credentialHosts, prepared, placeholderNames, r.reserved, r.img.Docker, r.authority != nil, names(r.caVars), key)
 	if err != nil {
 		return fail(err)
 	}
@@ -816,8 +824,14 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	if spec.OnVariables != nil {
 		spec.OnVariables(applied(vars.Applied))
 	}
-	for _, line := range leftOutCredentials(vars.Applied, prepared.LeftOut, placeholderNames, key.modelVariables()) {
+	for _, line := range slices.Concat(leftOutCredentials(vars.Applied, prepared.LeftOut, placeholderNames, key.modelVariables()), unnamedLines(vars.Applied)) {
 		r.open.Report(line)
+	}
+	// Setup commands in the agent's container get the agent's variables alone.
+	if spec.Wall != nil && len(spec.SessionSpec.Setup) > 0 {
+		if line := insideSetupLine(vars.ToPrefix, slices.Concat(placeholderNames, key.modelVariables())); line != "" {
+			r.open.Report(line)
+		}
 	}
 	// password is what the first request of every connection to an unwalled forwarder
 	// must contain, the password of the agent's proxy URL, a secret of this session's
@@ -1062,8 +1076,9 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 	// Behind a wall the enclosure works out, once the image is there, whether it binds
 	// the session's transcript directory where the agent's user can write it. When it
 	// does not, the session binds no directory, takes off the resume arguments it added,
-	// sends no transcript and writes one line, and with a restored transcript a second
-	// one: the runtime starts without a resume.
+	// sends no transcript and writes the line of a continuation, and with a restored
+	// transcript the two lines of a failed resume first: the runtime starts without a
+	// resume.
 	if checker, ok := enclosure.(wall.TranscriptChecker); ok && transcriptAt.bind != "" {
 		unbound, err := checker.CheckTranscript(runCtx, wrapEnv, transcriptAt.wallTranscript())
 		if err != nil {
@@ -1078,7 +1093,7 @@ func (r *Run) session(ctx, runCtx context.Context, spec runSpec, rt runtimes.Run
 					return fail(errors.New(resumeArgsKept(unbound.Fix, unbound.Cause)))
 				}
 				prepared.Args = slices.Delete(slices.Clone(prepared.Args), end-len(added), end)
-				r.writeLog("stderr", n, 0, []byte(neutral(resumeFailed(r.answer.Resume.RunID, unbound.Fix, unbound.Cause))+"\n"))
+				r.writeLog("stderr", n, 0, []byte(neutral(resumeFailed(unbound.Fix, unbound.Cause))+"\n"))
 				restore = nil
 			}
 			r.writeLog("stderr", n, 0, []byte(neutral(noResume(unbound.Fix, unbound.Cause))+"\n"))
@@ -1564,43 +1579,53 @@ func (r *Run) launchLine(spec runSpec, n int, prepared runtimes.Launch) string {
 // value of the record the deny list left out, and a name of settings, what the runtime
 // left out of the file it copied. A name has a line for the server's value, whose fix
 // is in the run configuration, and one for the node's sources, whose fix is in
-// forager.yaml; each line has its sources in the record's order, the highest source
-// first, then the env of --settings. A placeholder of the run, and a model key's
-// variable the session sets or leaves out for the default model provider credential,
-// model, have no line: the gateway already has the credential.
+// forager.yaml; each line has its sources in the record's order, then the env of
+// --settings. A line cites the name the value was passed by: for AGENT_GH_TOKEN, which
+// the agent's container would get as GH_TOKEN, the server's line has both names. A placeholder
+// of the run, and a model key's variable the session sets or leaves out for the default
+// model provider credential, model, have no line: the gateway already has the
+// credential.
 func leftOutCredentials(entries []variables.Entry, settings, placeholderNames, model []string) []string {
 	builtin, err := variables.Builtin()
 	if err != nil {
 		return nil
 	}
-	server, node := map[string]bool{}, map[string][]string{}
+	// Each name as passed, the name the container would get, and its sources.
+	server, node, as := map[string]bool{}, map[string][]string{}, map[string]string{}
 	var names []string
-	add := func(name, from string) {
+	add := func(name, given, from string) {
 		if slices.Contains(placeholderNames, name) || slices.Contains(model, name) {
 			return
 		}
-		if !server[name] && node[name] == nil {
-			names = append(names, name)
+		if !server[given] && node[given] == nil {
+			names = append(names, given)
 		}
+		as[given] = name
 		if from == variables.FromApiary {
-			server[name] = true
-		} else if source := sourceOf(from); !slices.Contains(node[name], source) {
-			node[name] = append(node[name], source)
+			server[given] = true
+		} else if source := sourceOf(from); !slices.Contains(node[given], source) {
+			node[given] = append(node[given], source)
 		}
 	}
 	for _, e := range entries {
 		for _, l := range e.Lost {
-			if l.Why == variables.WhyDenied {
-				add(e.Name, l.From)
+			if l.Why != variables.WhyDenied {
+				continue
 			}
+			given := l.Given
+			if given == "" {
+				given = e.Name
+			}
+			add(e.Name, given, l.From)
 		}
 	}
 	for _, name := range settings {
-		add(name, fromSettings)
+		add(name, name, fromSettings)
 	}
 	slices.Sort(names)
 	var lines []string
-	for _, name := range names {
+	for _, given := range names {
+		name := as[given]
 		kind := "forge token"
 		if !slices.ContainsFunc(builtin.ForgeTokens, func(c string) bool { return strings.EqualFold(c, name) }) {
 			if !slices.ContainsFunc(builtin.ModelKeys, func(c string) bool { return strings.EqualFold(c, name) }) {
@@ -1608,11 +1633,16 @@ func leftOutCredentials(entries []variables.Entry, settings, placeholderNames, m
 			}
 			kind = "model key"
 		}
-		shown := accesskey.ShownName(name, false)
-		if server[name] {
+		shown := accesskey.ShownName(given, false)
+		switch {
+		case server[given] && given != name:
+			lines = append(lines, fmt.Sprintf("Define %s as a credential in the run configuration, not as a variable.\nThe agent's container would get it as %s, which denied-variables.json lists as a %s.", shown, accesskey.ShownName(name, false), kind))
+		case server[given]:
 			lines = append(lines, fmt.Sprintf("Define %s as a credential in the run configuration, not as a variable: the run leaves out the value that the server passes, since denied-variables.json lists it as a %s.", shown, kind))
 		}
-		if from := node[name]; len(from) > 0 {
+		if from := node[given]; len(from) > 0 && given != name {
+			lines = append(lines, fmt.Sprintf("Move %s to the gateway's credentials in forager.yaml.\nWithout the AGENT_ prefix it is %s, a %s, and no container gets %ss as variables.", shown, accesskey.ShownName(name, false), kind, kind))
+		} else if len(from) > 0 {
 			what := "the value that " + from[0] + " passes"
 			if len(from) > 1 {
 				what = "the values that " + strings.Join(from, " and ") + " pass"
@@ -1625,6 +1655,44 @@ func leftOutCredentials(entries []variables.Entry, settings, placeholderNames, m
 
 // fromSettings is the source of a name the runtime left out of the file it copied.
 const fromSettings = "settings"
+
+// unnamedLines is a line for each server's variable of entries whose name starts with
+// AGENT_ and whose rest is not a variable's name, which no container gets. The prefix
+// is removed once, so the server's AGENT_AGENT_9X applies as AGENT_9X: no line is
+// written for the server's AGENT_9X then, as every container has a variable of that
+// name.
+func unnamedLines(entries []variables.Entry) []string {
+	var lines []string
+	for _, e := range entries {
+		if _, prefixed, ok := variables.AgentName(e.Name); !prefixed || ok || e.From != "" {
+			continue
+		}
+		if slices.Contains(e.Lost, variables.Loss{From: variables.FromApiary, Why: variables.WhyNotAgent}) {
+			lines = append(lines, fmt.Sprintf("Rename %s in the run configuration's variables: the run leaves it out of every container.", accesskey.ShownName(e.Name, false)))
+		}
+	}
+	return lines
+}
+
+// insideSetupLine is the line for a walled session whose setup commands run in the
+// agent's container, and so get only the agent's variables: it lists toPrefix, the
+// names the agent's resolution lists in [variables.Resolved.ToPrefix], but those of
+// fixed. Empty when no name is listed.
+func insideSetupLine(toPrefix, fixed []string) string {
+	var names []string
+	for _, name := range toPrefix {
+		if !slices.Contains(fixed, name) {
+			names = append(names, accesskey.ShownName(name, false))
+		}
+	}
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return fmt.Sprintf("Prefix %s with AGENT_ for the setup in the agent's container.\nThat setup gets only the agent's variables, so the run leaves %s out of it.", names[0], names[0])
+	}
+	return fmt.Sprintf("Prefix these with AGENT_ for the setup in the agent's container: %s.\nThat setup sees only the agent's variables, so these are left out of it.", orList(names, ", ", " and "))
+}
 
 // sourceOf is how a line names a source of the record.
 func sourceOf(from string) string {

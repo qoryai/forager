@@ -1,7 +1,6 @@
 package session
 
 import (
-	"bufio"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,8 +13,8 @@ import (
 
 // TestTheResumeScriptWritesTheTranscriptThenResumes pins the script's two ends: with a
 // home it can write, the transcript at its path under the home and the runtime started
-// with the resume arguments added; with a home it cannot write, the line of a failed
-// resume on stderr and the runtime started without them.
+// with the resume arguments added; with a home it cannot write, the two lines of a
+// failed resume on stderr and the runtime started without them.
 func TestTheResumeScriptWritesTheTranscriptThenResumes(t *testing.T) {
 	dir := t.TempDir()
 	transcript := filepath.Join(dir, ResumeTranscript)
@@ -56,13 +55,10 @@ func TestTheResumeScriptWritesTheTranscriptThenResumes(t *testing.T) {
 	if out != "[--print]\n" {
 		t.Errorf("the runtime got %q; want no resume arguments", out)
 	}
-	want := "Check that HOME inside is writable. The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: the copy to ~/" + rel + " failed"
-	last := ""
-	for sc := bufio.NewScanner(strings.NewReader(stderr)); sc.Scan(); {
-		last = sc.Text()
-	}
-	if last != want {
-		t.Errorf("stderr %q; want its last line %q", stderr, want)
+	// rel has a quote: the script prints the cause as it is, on the second line.
+	want := "This run starts without its earlier conversation, which could not be restored.\nCheck that HOME inside is writable: the copy to ~/" + rel + " failed\n"
+	if !strings.HasSuffix(stderr, want) {
+		t.Errorf("stderr %q; want its last two lines %q", stderr, want)
 	}
 }
 
@@ -149,7 +145,7 @@ func TestTheResumeScriptWritesAnAbsolutePath(t *testing.T) {
 	if out != "" {
 		t.Errorf("the runtime got %q; want no resume arguments", out)
 	}
-	want := "Check that " + blocked + " is writable. The runtime starts without a resume: the transcript of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d could not be restored: the copy to " + dst + " failed"
+	want := "This run starts without its earlier conversation, which could not be restored.\nCheck that " + blocked + " is writable: the copy to " + dst + " failed"
 	if !strings.HasSuffix(strings.TrimSuffix(stderr, "\n"), want) {
 		t.Errorf("stderr %q; want its last line %q", stderr, want)
 	}
