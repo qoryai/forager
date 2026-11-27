@@ -1639,7 +1639,9 @@ func leftOutCredentials(entries []variables.Entry, settings, placeholderNames, m
 		case server[given]:
 			lines = append(lines, fmt.Sprintf("Define %s as a credential in the run configuration, not as a variable: the run leaves out the value that the server passes, since denied-variables.json lists it as a %s.", shown, kind))
 		}
-		if from := node[given]; len(from) > 0 {
+		if from := node[given]; len(from) > 0 && given != name {
+			lines = append(lines, fmt.Sprintf("Move %s to the gateway's credentials in forager.yaml.\nWithout the AGENT_ prefix it is %s, a %s, and no container gets %ss as variables.", shown, accesskey.ShownName(name, false), kind, kind))
+		} else if len(from) > 0 {
 			what := "the value that " + from[0] + " passes"
 			if len(from) > 1 {
 				what = "the values that " + strings.Join(from, " and ") + " pass"

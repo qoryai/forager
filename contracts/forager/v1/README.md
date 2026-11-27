@@ -1897,7 +1897,10 @@ not as a variable: the run leaves out the value that the server passes, ...` for
 server's value, and `Move <NAME> to the gateway's credentials in forager.yaml: the run
 leaves out the value that <SOURCE> passes, since denied-variables.json lists it as a
 forge token.` (or `a model key`) for the node's sources; a placeholder of the run has no
-line. `model_keys` has every variable a runtime descriptor's `model.keys` lists, and
+line. For a node's name passed with the prefix, such as `AGENT_GH_TOKEN`, the line is
+`Move AGENT_GH_TOKEN to the gateway's credentials in forager.yaml.`, then `Without the
+AGENT_ prefix it is GH_TOKEN, a forge token, and no container gets forge tokens as
+variables.` `model_keys` has every variable a runtime descriptor's `model.keys` lists, and
 `CODEX_API_KEY`, which Codex reads a key from beside `OPENAI_API_KEY` and which its
 descriptor denies. It contains every row of the table but the rows that depend on the
 node and the run: the names the wall sets for the run's bundle, and the runtime's

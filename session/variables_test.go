@@ -515,7 +515,9 @@ func TestAWalledRunLeavesOutTheRuntimesKeyFromTheMachine(t *testing.T) {
 // TestALeftOutCredentialHasALine pins the lines the run reports for each forge token's
 // or model key's variable whose value the deny list leaves out, walled, with no value:
 // for the server's value, the fix in the run configuration; for wall.env, --env and the
-// harness, the fix in forager.yaml with the sources; a name from both gets both lines. A name the deny
+// harness, the fix in forager.yaml, with the sources for a name without AGENT_ and the
+// name the agent's container would get for one with it; a name from both gets both
+// lines. A name the deny
 // list leaves out that is no credential's, and a credential's name no source passes,
 // have no line. Each line cites the name as passed: the server's, --env's and
 // wall.env's names start with AGENT_, so the agent's container would get the rest of
@@ -540,9 +542,9 @@ func TestALeftOutCredentialHasALine(t *testing.T) {
 	}
 	want := []string{
 		"Define AGENT_ANTHROPIC_AUTH_TOKEN as a credential in the run configuration, not as a variable.\nThe agent's container would get it as ANTHROPIC_AUTH_TOKEN, which denied-variables.json lists as a model key.",
-		"Move AGENT_ANTHROPIC_AUTH_TOKEN to the gateway's credentials in forager.yaml: the run leaves out the value that wall.env passes, since denied-variables.json lists it as a model key.",
-		"Move AGENT_GH_TOKEN to the gateway's credentials in forager.yaml: the run leaves out the value that wall.env passes, since denied-variables.json lists it as a forge token.",
-		"Move AGENT_GITLAB_TOKEN to the gateway's credentials in forager.yaml: the run leaves out the values that --env and wall.env pass, since denied-variables.json lists it as a forge token.",
+		"Move AGENT_ANTHROPIC_AUTH_TOKEN to the gateway's credentials in forager.yaml.\nWithout the AGENT_ prefix it is ANTHROPIC_AUTH_TOKEN, a model key, and no container gets model keys as variables.",
+		"Move AGENT_GH_TOKEN to the gateway's credentials in forager.yaml.\nWithout the AGENT_ prefix it is GH_TOKEN, a forge token, and no container gets forge tokens as variables.",
+		"Move AGENT_GITLAB_TOKEN to the gateway's credentials in forager.yaml.\nWithout the AGENT_ prefix it is GITLAB_TOKEN, a forge token, and no container gets forge tokens as variables.",
 		"Move GITLAB_TOKEN to the gateway's credentials in forager.yaml: the run leaves out the value that the harness's defaults passes, since denied-variables.json lists it as a forge token.",
 	}
 	var got []string
