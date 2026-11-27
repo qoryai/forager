@@ -578,6 +578,12 @@ the image lets the step's user write a folder above `Dir`, the step can rename t
 folder, and every bind moves with it. A run whose policy sets its image by reference
 shows `Dir` at `/workspace`, which the step cannot rename.
 
+Known limit: on a disk that ignores the case of names, shared into the engine's virtual
+machine as with Docker Desktop on macOS, the step can reach a read-only file through
+the same name in another case, such as `CHECK.SH` for `check.sh`. That name is not the
+mount point, so a write through it changes the file. Keep `Dir` on a disk that keeps
+the case of names, as on Linux, when a step must not change its read-only mounts.
+
 While a step container may run, the run's forwarder marks every connection of the wall's
 relay as unprivileged. The gateway's proxy applies the run's allow list to each request
 and records it, sets no credential on it, sends none to a tool, which gets `403` with
