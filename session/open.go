@@ -692,7 +692,10 @@ func (r *Run) AgentEnv(spec SessionSpec) ([]string, error) {
 // Variables.Machine reaches the setup under its name, and a value of a name that starts
 // with AGENT_, in exact case, by the rest of the name when no value under that name is
 // set. The server's QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES are in it when the server
-// sets them, and Setup accepts both. The errors are AgentEnv's.
+// sets them, and Setup accepts both. For a variable of those three sources passed by a
+// name without AGENT_ that denied-variables.json lists as a forge token or a model key,
+// SetupEnv reports the fix through OpenSpec.Report, as Join does for the agent's
+// values. The errors are AgentEnv's.
 func (r *Run) SetupEnv(spec SessionSpec) ([]string, error) {
 	return r.containerEnv(spec, variables.Setup, "SetupEnv", "the setup's environment")
 }
@@ -780,6 +783,21 @@ func (r *Run) containerEnv(spec SessionSpec, kind variables.Kind, call, what str
 	out := make([]string, 0, len(last))
 	for _, name := range slices.Sorted(maps.Keys(last)) {
 		out = append(out, name+"="+last[name])
+	}
+	// The agent's container gets no value of these sources passed by a name without
+	// AGENT_, so Join reports none of them: the setup's resolution reports the
+	// credentials the deny list leaves out of them.
+	if kind == variables.Setup && s.Wall != nil {
+		var unprefixed []variables.Entry
+		for _, e := range vars.Applied {
+			e.Lost = slices.DeleteFunc(slices.Clone(e.Lost), func(l variables.Loss) bool {
+				return l.Given != "" || (l.From != variables.FromApiary && l.From != variables.FromRun && l.From != variables.FromMachine)
+			})
+			unprefixed = append(unprefixed, e)
+		}
+		for _, line := range leftOutCredentials(unprefixed, nil, placeholderNames, key.modelVariables()) {
+			r.open.Report(line)
+		}
 	}
 	return out, nil
 }
