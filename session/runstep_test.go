@@ -853,7 +853,7 @@ func TestRunStepRefusesAPlaceItCannotBindOverItsWorkingFolder(t *testing.T) {
 				"The step can change the link, and the mount " + isLink + " is then shown at another path"},
 		{"a hard link", "", []wall.Mount{{Path: hard, ReadOnly: true}}, "mount_mode_conflict",
 			"Remove the other hard links to the mount " + hard + ", or write it again as a new file.\n" +
-				"It has 2 names, and the step can write it through one that is not read-only"},
+				"It has 2 names, and a process can write it through one that is not read-only"},
 		{"writable inside read-only", "", []wall.Mount{{Path: ro, ReadOnly: true}, {Path: filepath.Join(ro, "w")}}, "mount_mode_conflict",
 			"the mount " + filepath.Join(ro, "w") + " (writable) lies inside the mount " + ro + " (read-only): a part of a read-only mount can't be writable"},
 		{"a target", "", []wall.Mount{{Path: deep, ReadOnly: true, Target: "/opt/b.txt"}}, "mount_mode_conflict",

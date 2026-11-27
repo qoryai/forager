@@ -1158,7 +1158,7 @@ func checkOver(places []shown, over []bool, outer []int, ws int) error {
 				Code:  refusal.MountModeConflict,
 				Names: pathsShown(p.path, top.path),
 				Detail: fmt.Sprintf("Remove the other hard links to %s, or write it again as a new file.\n"+
-					"It has %d names, and the step can write it through one that is not read-only", p.shownAs(), st.Nlink),
+					"It has %d names, and a process can write it through one that is not read-only", p.shownAs(), st.Nlink),
 			}
 		}
 	}

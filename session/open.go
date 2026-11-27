@@ -160,7 +160,7 @@ type Run struct {
 	// setup started with SetupSpec.Unprivileged.
 	setupUp           setupContainer
 	setupUnprivileged bool
-	// setupPlaces are the places the setup container that setupUp is binds, as its
+	// setupPlaces are the places that the setup container in setupUp binds, as its
 	// plan lists them.
 	setupPlaces []bindSource
 	// stepping is the step that [Run.RunStep] runs, nil for none, which stepMu guards:

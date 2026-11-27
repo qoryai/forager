@@ -150,9 +150,8 @@ type runningStep struct {
 // open; the run is closed; the setup failed; the setup container runs without
 // Unprivileged; a container of the run may still run (ContainerKept); the run's image
 // by reference was not fetched; spec is refused; a place fails a check; or a place
-// bound over the working folder lies in a place that an unprivileged setup container
-// still running can write. A failure of
-// the wall after the step's start ends the step failed, or cancelled when ctx ended,
+// bound over the working folder lies in or contains a place that an unprivileged setup
+// container still running can write. A failure of the wall after the step's start ends the step failed, or cancelled when ctx ended,
 // with -1, after its line, and is the error. A step container that could not be
 // removed may still run: ContainerKept is true from then on, and no session joins.
 // The run's masker replaces the run's secrets in the error, as in Open's.
@@ -390,7 +389,7 @@ func (r *Run) checkStep(spec StepSpec) error {
 	return nil
 }
 
-// besideSetup fails a step whose place bound over its working folder's bind is, holds
+// besideSetup fails a step whose place bound over its working folder's bind is, contains
 // or lies inside a writable place of the setup container that runs beside it, setup:
 // the setup container's processes can then write a read-only one, or replace a name on
 // the way to one with a link.
