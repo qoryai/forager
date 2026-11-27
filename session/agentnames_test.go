@@ -244,7 +244,8 @@ func TestAnUnwalledRunsSetupEnvIsItsAgentEnv(t *testing.T) {
 // TestAnAgentNameIsRefusedByTheNameAsPassed pins the refusals of a walled run's --env
 // and wall.env on the name a container gets, each citing the name as passed, in
 // AgentEnv, SetupEnv and the join alike: AGENT_QORY_RUN_ID is variable_reserved, a
-// value for the placeholder TOOL_TOKEN by AGENT_TOOL_TOKEN is placeholder_conflict, and
+// value for the placeholder TOOL_TOKEN by AGENT_TOOL_TOKEN is placeholder_conflict, with
+// TOOL_TOKEN too when the run passes it, and
 // AGENT_ and AGENT_9X are errors whose first words are the fix.
 func TestAnAgentNameIsRefusedByTheNameAsPassed(t *testing.T) {
 	ctx := context.Background()
@@ -255,6 +256,7 @@ func TestAnAgentNameIsRefusedByTheNameAsPassed(t *testing.T) {
 	}{
 		{[]string{"AGENT_QORY_RUN_ID=x"}, nil, "variable_reserved", []string{"AGENT_QORY_RUN_ID"}},
 		{nil, []string{"AGENT_TOOL_TOKEN=x"}, "placeholder_conflict", []string{"AGENT_TOOL_TOKEN"}},
+		{[]string{"TOOL_TOKEN=y"}, []string{"AGENT_TOOL_TOKEN=x"}, "placeholder_conflict", []string{"AGENT_TOOL_TOKEN", "TOOL_TOKEN"}},
 		{[]string{"AGENT_=x"}, nil, "Rename AGENT_: the agent's container would get no name after the prefix.", nil},
 		{nil, []string{"AGENT_9X=x"}, "Rename AGENT_9X: the agent's container would get 9X, which is not a variable's name.", nil},
 	} {

@@ -666,17 +666,26 @@ func placeholderConflict(names []string) error {
 	return nil
 }
 
-// CheckAgentPlaceholders returns [Check]'s refusal for a walled run's value of split,
-// the run's and the machine's values, whose name starts with AGENT_ and whose rest is
-// one of placeholders. The session runs it before the join request: the gateway checks
-// the names a join request passes, and for such a value it would cite the rest alone.
+// CheckAgentPlaceholders returns [Check]'s refusal for a walled run when a value of
+// split, the run's and the machine's values, has a name that starts with AGENT_ and
+// whose rest is one of placeholders: the refusal cites every name of split for a
+// placeholder, with AGENT_ or without, as Check does. The session runs it before the
+// join request: the gateway checks the names a join request passes, and for such a
+// value it would cite the rest alone.
 func CheckAgentPlaceholders(split, placeholders []string) error {
 	var names []string
+	prefixed := false
 	for _, kv := range split {
 		given, _, _ := strings.Cut(kv, "=")
-		if name, prefixed, ok := AgentName(given); prefixed && ok && slices.Contains(placeholders, name) {
-			names = append(names, given)
+		name, agent, ok := AgentName(given)
+		if !ok || !slices.Contains(placeholders, name) {
+			continue
 		}
+		names = append(names, given)
+		prefixed = prefixed || agent
+	}
+	if !prefixed {
+		return nil
 	}
 	slices.Sort(names)
 	return placeholderConflict(slices.Compact(names))

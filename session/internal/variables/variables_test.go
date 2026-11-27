@@ -953,3 +953,33 @@ func TestToPrefixListsOnlyNamesAPrefixBringsIn(t *testing.T) {
 		t.Errorf("the setup's ToPrefix %q, want none", got.ToPrefix)
 	}
 }
+
+// TestCheckAgentPlaceholdersCitesEveryName pins the check before the join request: no
+// refusal without an AGENT_ name for a placeholder, and with one, a refusal that cites
+// every name for a placeholder as passed, AGENT_PH and PH, as Check does.
+func TestCheckAgentPlaceholdersCitesEveryName(t *testing.T) {
+	ph := []string{"PH"}
+	for _, tc := range []struct {
+		split []string
+		names []string
+	}{
+		{[]string{"PH=y", "AGENT_OTHER=z"}, nil},
+		{[]string{"AGENT_PH=x"}, []string{"AGENT_PH"}},
+		{[]string{"PH=y", "AGENT_PH=x", "AGENT_9X=w"}, []string{"AGENT_PH", "PH"}},
+	} {
+		err := variables.CheckAgentPlaceholders(tc.split, ph)
+		var r *accesskey.Refusal
+		if tc.names == nil {
+			if err != nil {
+				t.Errorf("%q: %v, want none", tc.split, err)
+			}
+			continue
+		}
+		if !errors.As(err, &r) || r.Code != refusal.PlaceholderConflict || !slices.Equal(r.Names, tc.names) {
+			t.Errorf("%q: %#v, want placeholder_conflict for %q", tc.split, err, tc.names)
+		}
+		if want := variables.Check(nil, tc.split, true, ph, nil); err.Error() != want.Error() {
+			t.Errorf("%q: %v, want Check's %v", tc.split, err, want)
+		}
+	}
+}
